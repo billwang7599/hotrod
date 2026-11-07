@@ -15,6 +15,15 @@ import { basename, dirname, isAbsolute, join } from 'node:path'
 import { openAccounts } from './accounts.ts'
 import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
+  MEMORY_INSTRUCTIONS,
+  memoryPrompt,
+  messagesOf,
+  openCompactor,
+  openSummaries,
+  withAttachments,
+  type Summaries,
+} from './memory.ts'
+import {
   CONTEXT_SECTIONS,
   DEFAULT_SUBAGENT_LIMIT,
   IMAGE_TYPES,
@@ -22,6 +31,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
+  pickMemory,
   pickModel,
   pickThinking,
   WORKSHOP_ID,
@@ -40,6 +50,7 @@ import {
   type EngineInfo,
   type EngineStatus,
   type Machine,
+  type MemorySettings,
   type ModelLists,
   type ModelRole,
   type Mods,
@@ -70,6 +81,7 @@ type Chat = {
   pendingRequests: Set<string>
   mcpToken?: string
   queue: QueuedMessage[]
+  summaries: Summaries
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -80,8 +92,9 @@ export function openCore(options: {
   defaultEngine: string
   machine: Machine
   stopGraceMs?: number
+  compactDebounceMs?: number
 }) {
-  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
+  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
   // Context paths are saved resolved, so attachment paths must be too for a pin to match its file.
   const garage = realpathSync(options.garage)
@@ -99,6 +112,7 @@ export function openCore(options: {
     mods?: Partial<Mods>
     models?: Record<string, Partial<ModelLists>>
     defaultThinking?: Record<string, string>
+    memory?: MemorySettings
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -124,6 +138,7 @@ export function openCore(options: {
     const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
     return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
   }
+  const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const offered = (engine: string) => {
     const { models = [], thinking = [] } = detected.get(engine) ?? {}
     return { models, thinking }
@@ -177,6 +192,20 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
+  const setMemory = (engine?: string, model?: string) => {
+    if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
+    if (engine !== undefined) {
+      checkEngine(engine)
+      if (!adapterFor(engine)?.complete) throw new Error(`Engine "${engine}" can't write summaries`)
+      checkEnabled(engine)
+      if (model !== undefined && !offersModel(engine, model)) {
+        throw new Error(`Engine "${engine}" offers no model "${model}"`)
+      }
+    }
+    settings.memory = { ...(engine && { engine }), ...(model && { model }) }
+    saveSettings()
+    broadcast({ type: 'memory.updated', memory: settings.memory })
+  }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
     writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
@@ -203,6 +232,21 @@ export function openCore(options: {
     isBusy: (engine) => [...chats.values()].some((chat) => chat.info.engine === engine && chat.status !== 'idle'),
   })
   void accounts.refresh()
+
+  const compactor = openCompactor({
+    chat: (chatId) => {
+      const chat = chats.get(chatId)
+      return chat && { messages: messagesOf(chat.entries), summaries: chat.summaries }
+    },
+    async complete(request) {
+      const { engine, model } = pickMemory(engineInfos(), settings.memory ?? {})
+      const adapter = engine === undefined ? undefined : adapterFor(engine)
+      if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
+      checkEnabled(adapter.id)
+      return adapter.complete(machine, { ...request, cwd: homeDir, model, ...accounts.sessionFor(adapter.id) })
+    },
+    ...(compactDebounceMs !== undefined && { debounceMs: compactDebounceMs }),
+  })
 
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
@@ -258,6 +302,7 @@ export function openCore(options: {
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
+    compactor.touch(chat.info.id)
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
@@ -300,6 +345,7 @@ export function openCore(options: {
       unsavedText: '',
       pendingRequests: new Set(),
       queue: [],
+      summaries: openSummaries(join(dir, 'summaries.jsonl')),
     }
     if (!existsSync(file) || info.id === WORKSHOP_ID) saveChat(chat)
     chats.set(info.id, chat)
@@ -511,9 +557,7 @@ export function openCore(options: {
     }
     checkEnabled(adapter.id)
     const message = withAttachments(text, attachments)
-    const prompt = chat.entries.length
-      ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${message}`
-      : message
+    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: false })
     const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
     append(chat, { at: new Date().toISOString(), ...sent })
     setStatus(chat, 'running')
@@ -527,7 +571,8 @@ export function openCore(options: {
       return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
     })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
-    const instructions = [...(isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []), ...contextText].join('\n\n')
+    const role = isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []
+    const instructions = [...role, MEMORY_INSTRUCTIONS, ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
@@ -689,7 +734,7 @@ export function openCore(options: {
   }
 
   return {
-    engines: () => adapters.map((adapter) => engineInfo(adapter.id)),
+    engines: engineInfos,
     async refreshEngines() {
       await Promise.all(
         adapters.map(async (adapter) => {
@@ -702,11 +747,16 @@ export function openCore(options: {
           broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
         }),
       )
+      const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
+      // Summaries need a detected engine, so the backlog waits for this; the latest chat goes first.
+      const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
+      for (const chat of byActivity) compactor.touch(chat.info.id)
     },
     setEngineEnabled,
     contextDefaults,
     mods,
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
+    memory: () => settings.memory ?? {},
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
@@ -777,6 +827,8 @@ export function openCore(options: {
           return setContextDefault(message.section, message.enabled === true)
         case 'subagents.set':
           return setSubagents(message.enabled === true, message.limit)
+        case 'memory.set':
+          return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':
           return setModelList(String(message.engine), message.role, message.models)
         case 'permission.respond':
@@ -799,6 +851,7 @@ export function openCore(options: {
     },
     async close(force = false) {
       quitting = true
+      compactor.close()
       for (const chat of chats.values()) {
         if (chat.status === 'idle') stopSession(chat)
         else interrupt(chat, force)
@@ -843,34 +896,3 @@ const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
   }
   return realpathSync(path)
 }
-
-function withAttachments(text: string, attachments: Attachment[] = []) {
-  if (!attachments.length) return text
-  const list = ['Attached files:', ...attachments.map((a) => `- ${a.path} (${a.mimeType})`)].join('\n')
-  return text ? `${text}\n\n${list}` : list
-}
-
-function transcript(entries: ChatEntry[]) {
-  const results = new Map<string, { output: string; isError: boolean }>()
-  for (const entry of entries) {
-    if (entry.type === 'tool.completed') results.set(entry.toolId, entry)
-  }
-  const lines: string[] = []
-  for (const entry of entries) {
-    if (entry.type === 'user.message') lines.push(`User: ${withAttachments(entry.text, entry.attachments)}`)
-    if (entry.type === 'text.completed') lines.push(`Assistant: ${entry.text}`)
-    if (entry.type === 'tool.started') {
-      const call = `<tool_call name="${entry.name}">${escapeClosingTags(JSON.stringify(entry.input) ?? '')}</tool_call>`
-      const result = results.get(entry.toolId)
-      if (!result) lines.push(`${call}\n<tool_result status="none" />`)
-      else {
-        const status = result.isError ? 'error' : 'ok'
-        lines.push(`${call}\n<tool_result status="${status}">\n${escapeClosingTags(result.output)}\n</tool_result>`)
-      }
-    }
-    if (entry.type === 'turn.completed' && entry.error) lines.push(`[Turn ended early: ${entry.error}]`)
-  }
-  return `This is the conversation so far:\n\n${lines.join('\n\n')}`
-}
-
-const escapeClosingTags = (text: string) => text.replace(/<\/(tool_call|tool_result)/gi, '<\\/$1')

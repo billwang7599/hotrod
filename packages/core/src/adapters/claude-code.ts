@@ -1,4 +1,4 @@
-import type { AccountStatus, Adapter, Machine, ToolKind } from '../types.ts'
+import { COMPLETE_TIMEOUT_MS, type AccountStatus, type Adapter, type Machine, type ToolKind } from '../types.ts'
 import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
@@ -25,6 +25,15 @@ const MODELS = CLAUDE_MODELS.map((id) => ({ id, label: claudeLabel(id) ?? id }))
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
 const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
+const CHEAP_MODEL = CLAUDE_MODELS.find((id) => id.startsWith('claude-haiku-'))
+
+const CLEAN_ARGS = [
+  '--no-session-persistence',
+  '--setting-sources', '',
+  '--strict-mcp-config',
+  '--disable-slash-commands',
+  '--settings', '{"autoMemoryEnabled":false}',
+]
 
 const OUTPUT_TAIL_CHARS = 2000
 // Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
@@ -64,7 +73,9 @@ export const claudeCode: Adapter = {
     const version = await machine.run('claude', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
-    return { installed: true, signedIn, detail: version.stdout.trim(), models: MODELS, thinking: EFFORTS, ...DEFAULTS }
+    const detail = version.stdout.trim()
+    const offers = { models: MODELS, thinking: EFFORTS, ...DEFAULTS, cheapModel: CHEAP_MODEL }
+    return { installed: true, signedIn, detail, ...offers }
   },
 
   accounts: {
@@ -102,6 +113,22 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
+  async complete(machine, { cwd, system, prompt, schema, model, accountDir, apiKey }) {
+    const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
+    args.push('--system-prompt', system)
+    if (schema) args.push('--json-schema', JSON.stringify(schema))
+    const options = { cwd, input: prompt, timeoutMs: COMPLETE_TIMEOUT_MS, ...accountEnv(accountDir, apiKey) }
+    const { code, stdout, stderr } = await machine.run('claude', args, options)
+    let reply: any
+    try {
+      reply = JSON.parse(stdout)
+    } catch {}
+    if (code !== 0 || !reply || reply.is_error) {
+      throw new Error(reply?.result || stderr.trim() || `Claude Code exited with code ${code}`)
+    }
+    return reply.structured_output === undefined ? String(reply.result ?? '') : JSON.stringify(reply.structured_output)
+  },
+
   start(machine, options, emit) {
     const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking } = options
     const args = [
@@ -111,11 +138,7 @@ export const claudeCode: Adapter = {
       '--verbose',
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
-      '--no-session-persistence',
-      '--setting-sources', '',
-      '--strict-mcp-config',
-      '--disable-slash-commands',
-      '--settings', '{"autoMemoryEnabled":false}',
+      ...CLEAN_ARGS,
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
     ]

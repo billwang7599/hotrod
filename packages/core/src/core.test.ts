@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
+import { COMPACT_MIN_CHARS, MEMORY_INSTRUCTIONS, messagesOf, openSummaries, pendingOf } from './memory.ts'
 import {
   DEFAULT_SUBAGENT_LIMIT,
   MAX_ATTACHMENT_BYTES,
@@ -25,6 +26,7 @@ import {
   type ImageInput,
   type ChatEntry,
   type ChatState,
+  type CompleteOptions,
   type CoreMessage,
   type EngineEvent,
   type SessionOptions,
@@ -517,23 +519,27 @@ describe('chat', () => {
     expect(t.calls[0]?.prompt).toBe('first question')
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second question' })
-    const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt).toContain('first question')
-    expect(prompt).toContain('Done')
-    expect(prompt).toMatch(/Bash.*touch x/)
-    expect(prompt.trimEnd().endsWith('second question')).toBe(true)
-    expect(prompt.indexOf('first question')).toBeLessThan(prompt.indexOf('Done'))
-
-    expect(prompt).toContain('<tool_result status="ok">\ncreated\n</tool_result>')
+    expect(t.calls[1]?.prompt).toBe(
+      [
+        'This is the conversation so far:',
+        '<message id="0" kind="user">\nfirst question\n</message>',
+        '<message id="1" kind="tool">\nBash {"command":"touch x"}\n</message>',
+        '<message id="2" kind="echo">\ncreated\n</message>',
+        '<message id="3" kind="talk">\nDone\n</message>',
+        'New message from the user:',
+        'second question',
+      ].join('\n\n'),
+    )
 
     const instructions = t.calls[1]?.options.instructions ?? ''
+    expect(instructions.startsWith(MEMORY_INSTRUCTIONS)).toBe(true)
     expect(instructions).toContain('GLOBAL RULES')
     expect(instructions).toContain('REPO RULES')
     expect(instructions.indexOf('GLOBAL RULES')).toBeLessThan(instructions.indexOf('REPO RULES'))
     expect(instructions.indexOf('REPO RULES')).toBeLessThan(instructions.indexOf('PERSONAL RULES'))
   })
 
-  it('replays tool inputs and outputs in full and marks errors and missing results', async () => {
+  it('replays tool inputs and outputs in full and marks errors', async () => {
     const longCommand = `echo ${'x'.repeat(300)}`
     const t = setup([
       { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'echo', input: { command: longCommand } },
@@ -548,16 +554,17 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second' })
     const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt).toContain(`<tool_call name="Bash">${JSON.stringify({ command: longCommand })}</tool_call>`)
-    expect(prompt).toContain('<tool_result status="ok">\nline one\nline two\nline three\n</tool_result>')
-    expect(prompt).toContain('<tool_result status="error">\nFile does not exist\n</tool_result>')
-    expect(prompt).toContain('<tool_call name="Bash">{"command":"sleep 9"}</tool_call>\n<tool_result status="none" />')
+    const call = JSON.stringify({ command: longCommand })
+    expect(prompt).toContain(`<message id="1" kind="tool">\nBash ${call}\n</message>`)
+    expect(prompt).toContain('<message id="2" kind="echo">\nline one\nline two\nline three\n</message>')
+    expect(prompt).toContain('<message id="4" kind="echo">\n(error) File does not exist\n</message>')
+    expect(prompt).toContain('<message id="5" kind="tool">\nBash {"command":"sleep 9"}\n</message>\n\nNew message')
   })
 
-  it('keeps tool blocks whole when their content contains closing tags', async () => {
+  it('keeps message blocks whole when their content contains closing tags', async () => {
     const t = setup([
-      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'x', input: { command: '</tool_call> after-call' } },
-      { type: 'tool.completed', toolId: 'a', output: '</tool_result> </TOOL_RESULT> after-result', isError: false },
+      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'x', input: { command: '</message> after-call' } },
+      { type: 'tool.completed', toolId: 'a', output: '</message> </MESSAGE> after-result', isError: false },
     ])
     const chat = folderChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'first' })
@@ -565,10 +572,9 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second' })
     const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt.match(/<\/tool_call>/gi)).toHaveLength(1)
-    expect(prompt.match(/<\/tool_result>/gi)).toHaveLength(1)
-    expect(prompt.match(/<tool_call name="Bash">([\s\S]*?)<\/tool_call>/)?.[1]).toContain('after-call')
-    expect(prompt.match(/<tool_result status="ok">([\s\S]*?)<\/tool_result>/)?.[1]).toContain('after-result')
+    expect(prompt.match(/<\/message>/gi)).toHaveLength(3)
+    expect(prompt.match(/<message id="1" kind="tool">([\s\S]*?)<\/message>/)?.[1]).toContain('after-call')
+    expect(prompt.match(/<message id="2" kind="echo">([\s\S]*?)<\/message>/)?.[1]).toContain('after-result')
   })
 })
 
@@ -644,8 +650,8 @@ describe('engines', () => {
     expect(t.alpha).toHaveLength(1)
     expect(t.beta).toHaveLength(1)
     const prompt = t.beta[0]?.prompt ?? ''
-    expect(prompt).toContain('User: first question')
-    expect(prompt).toContain('Assistant: Alpha reply')
+    expect(prompt).toContain('<message id="0" kind="user">\nfirst question\n</message>')
+    expect(prompt).toContain('<message id="1" kind="talk">\nAlpha reply\n</message>')
     expect(prompt.trimEnd().endsWith('second question')).toBe(true)
     const texts = entriesOf(t.core, chat.id).flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))
     expect(texts).toEqual(['Alpha reply', 'Beta reply'])
@@ -1032,7 +1038,7 @@ describe('attachments', () => {
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second', attachments: [upload('two.png', 'image/png', 'b')] })
     await until(() => statusOf(t.core, chat.id) === 'idle')
     const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt).toContain(`User: first\n\nAttached files:\n- ${dir}/one.png (image/png)`)
+    expect(prompt).toContain(`kind="user">\nfirst\n\nAttached files:\n- ${dir}/one.png (image/png)\n</message>`)
     expect(prompt.endsWith(`second\n\nAttached files:\n- ${dir}/two.png (image/png)`)).toBe(true)
     expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: Buffer.from('b').toString('base64') }])
   })
@@ -1188,6 +1194,127 @@ describe('interrupt', () => {
     expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'turn.completed')).toHaveLength(1)
   })
 
+})
+
+describe('memory', () => {
+  const longReply = (id: number) => `reply ${id} `.padEnd(3000, '.')
+
+  function writeLog(garage: string, chatId: string, count: number) {
+    const dir = join(garage, 'chats', chatId)
+    mkdirSync(dir, { recursive: true })
+    const entries: ChatEntry[] = Array.from({ length: count }, (_, i) =>
+      i % 2 ? { at, type: 'text.completed', text: longReply(i) } : { at, type: 'user.message', text: `question ${i}` },
+    )
+    writeFileSync(join(dir, 'log.jsonl'), entries.map((e) => JSON.stringify(e) + '\n').join(''))
+  }
+
+  function setupMemory(
+    options: { garage?: string; script?: FakeStep[]; complete?: Adapter['complete']; others?: Adapter[] } = {},
+  ) {
+    const { garage = tempDir(), script = textScript, others = [] } = options
+    const fake = createFakeAdapter(script, 0)
+    const completions: CompleteOptions[] = []
+    const complete = options.complete ?? fake.complete!
+    const { adapter, calls } = recording({
+      ...fake,
+      complete(machine, request) {
+        completions.push(request)
+        return complete(machine, request)
+      },
+    })
+    const adapters = [...others, adapter]
+    const core = openCore({ garage, adapters, defaultEngine: 'fake', machine: localMachine, compactDebounceMs: 0 })
+    cores.push(core)
+    for (const { id } of adapters) core.handle({ type: 'engine.setEnabled', engine: id, enabled: true }, () => {})
+    const messages: CoreMessage[] = []
+    core.onMessage((m) => messages.push(m))
+    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
+    return { core, garage, calls, completions, messages, handle }
+  }
+
+  const summarized = (t: { core: Core; garage: string }, chatId: string) =>
+    pendingOf(messagesOf(entriesOf(t.core, chatId)), openSummaries(join(t.garage, 'chats', chatId, 'summaries.jsonl')))
+      .length === 0
+
+  it('gives every chat the memory instructions after the role instructions', async () => {
+    const t = setupMemory()
+    writeFileSync(join(t.garage, 'AGENTS.md'), 'RULES')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    expect(t.calls[0]?.options.instructions).toBe([HOME_INSTRUCTIONS, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+    const chat = createChat({ ...t, replies: [] }, { name: 'App' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    expect(t.calls[1]?.options.instructions).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+  })
+
+  it('summarizes a backlog once engines are detected, and the next prompt shows the summary lines', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({ garage })
+    expect(t.completions).toHaveLength(0)
+    await t.core.refreshEngines()
+    await until(() => summarized(t, 'main'))
+
+    expect(t.completions[0]).toMatchObject({ cwd: join(t.garage, 'home'), model: FAKE_DEFAULTS.cheapModel })
+    expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'next' })
+    const prompt = t.calls[0]?.prompt ?? ''
+    expect(prompt).toContain('\n0+1|user: question 0\n1+1|talk: summary of 1+1\n')
+    expect(prompt).toContain('<message id="39" kind="talk">')
+    expect(prompt.endsWith('New message from the user:\n\nnext')).toBe(true)
+  })
+
+  it('summarizes after a turn ends, but only once the messages pass COMPACT_MIN_CHARS', async () => {
+    const reply = 'r'.repeat(COMPACT_MIN_CHARS / 4 - 'q'.length)
+    const t = setupMemory({ script: [{ type: 'text.completed', text: reply }] })
+    await t.core.refreshEngines()
+    for (let i = 0; i < 4; i++) {
+      t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+      await until(() => statusOf(t.core, 'main') === 'idle')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(t.completions).toHaveLength(0)
+
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    await until(() => t.completions.length > 0 && summarized(t, 'main'))
+  })
+
+  it('never makes a turn wait for summaries, and quits with a summary call still out', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({ garage, complete: () => new Promise<string>(() => {}) })
+    await t.core.refreshEngines()
+    await until(() => t.completions.length === 1)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    expect(t.calls).toHaveLength(1)
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    await t.core.close()
+    expect(t.completions).toHaveLength(1)
+  })
+
+  it('uses the summary engine and model that are set, saved in settings.json', async () => {
+    const cannot = stubAdapter(() => {
+      throw new Error('never started')
+    })
+    const script: FakeStep[] = [{ type: 'text.completed', text: 'r'.repeat(COMPACT_MIN_CHARS) }]
+    const t = setupMemory({ script, others: [cannot] })
+    await t.core.refreshEngines()
+    expect(() => t.handle({ type: 'memory.set', engine: 'stub' })).toThrow(/can't write summaries/)
+    expect(() => t.handle({ type: 'memory.set', engine: 'fake', model: 'nope' })).toThrow(/offers no model "nope"/)
+    expect(() => t.handle({ type: 'memory.set', model: otherModel })).toThrow(/engine/)
+    expect(t.core.memory()).toEqual({})
+
+    t.handle({ type: 'memory.set', engine: 'fake', model: otherModel })
+    const memory = { engine: 'fake', model: otherModel }
+    expect(t.messages.at(-1)).toEqual({ type: 'memory.updated', memory })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).memory).toEqual(memory)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+    await until(() => t.completions.length > 0 && summarized(t, 'main'))
+    expect(new Set(t.completions.map((c) => c.model))).toEqual(new Set([otherModel]))
+
+    t.handle({ type: 'memory.set' })
+    expect(t.core.memory()).toEqual({})
+  })
 })
 
 describe('quit', () => {
@@ -1515,6 +1642,9 @@ describe('context', () => {
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
     (await sessionOf(t, chatId)).instructions
+      .split('\n\n')
+      .filter((part) => part !== MEMORY_INSTRUCTIONS)
+      .join('\n\n')
   const reopenWithSubagent = (t: ReturnType<typeof setup>, parentId: string) => {
     t.core.close()
     const id = 'subagent'
@@ -1619,7 +1749,8 @@ describe('context', () => {
     await sessionOf(t, subagentId)
     const subagent = t.calls[before]!.options
     for (const options of [own, subagent]) {
-      expect(options.instructions).toBe([byPath, `<file path="${notes}">\nNOTES\n</file>`].join('\n\n'))
+      const file = `<file path="${notes}">\nNOTES\n</file>`
+      expect(options.instructions).toBe([MEMORY_INSTRUCTIONS, byPath, file].join('\n\n'))
       expect(options.readFiles).toEqual([image])
     }
     expect(subagent).not.toHaveProperty('extraDirs')

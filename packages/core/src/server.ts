@@ -90,6 +90,7 @@ export async function startServer(options: {
       contextDefaults: core.contextDefaults(),
       mods: core.mods(),
       modelLists: core.modelLists(),
+      memory: core.memory(),
     })
     socket.on('message', (data) => {
       try {

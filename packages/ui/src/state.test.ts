@@ -50,7 +50,7 @@ const mods = { subagents: { enabled: false, limit: 4 } }
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
 const snapshot = (chats: ChatState[]): Action =>
-  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists })
+  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists, memory: {} })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -147,7 +147,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists, memory: {} },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -159,7 +159,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists, memory: {} },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )

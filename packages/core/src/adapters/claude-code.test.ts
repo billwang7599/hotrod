@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, LoginEvent, SessionOptions } from '../types.ts'
+import { COMPLETE_TIMEOUT_MS, type EngineEvent, type LoginEvent, type SessionOptions } from '../types.ts'
 import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -347,6 +347,59 @@ describe('claudeCode adapter', () => {
   })
 })
 
+describe('claudeCode.complete', () => {
+  const request = {
+    cwd: '/tmp/home',
+    system: 'Summarize.',
+    prompt: 'the items',
+    schema: { type: 'object' },
+    model: 'claude-haiku-5-5',
+  }
+  const reply = (fields: Record<string, unknown>, code = 0) => ({
+    claude: { code, stdout: JSON.stringify({ type: 'result', is_error: false, result: '', ...fields }), stderr: '' },
+  })
+
+  it('runs one clean prompt with no tools, the system prompt and the schema, prompt on stdin', async () => {
+    const fake = fakeMachine(reply({ structured_output: { summaries: [] } }))
+    expect(await claudeCode.complete!(fake.machine, request)).toBe('{"summaries":[]}')
+    expect(fake.ran).toEqual([
+      {
+        command: 'claude',
+        args: [
+          '-p',
+          '--no-session-persistence',
+          '--setting-sources', '',
+          '--strict-mcp-config',
+          '--disable-slash-commands',
+          '--settings', '{"autoMemoryEnabled":false}',
+          '--tools', '',
+          '--output-format', 'json',
+          '--model', 'claude-haiku-5-5',
+          '--system-prompt', 'Summarize.',
+          '--json-schema', '{"type":"object"}',
+        ],
+        input: 'the items',
+        timeoutMs: COMPLETE_TIMEOUT_MS,
+      },
+    ])
+  })
+
+  it('returns the text without a schema, and uses the account', async () => {
+    const fake = fakeMachine(reply({ result: 'plain text' }))
+    const { schema, ...plain } = request
+    expect(await claudeCode.complete!(fake.machine, { ...plain, accountDir: '/acct', apiKey: 'k' })).toBe('plain text')
+    expect(fake.ran[0]?.args).not.toContain('--json-schema')
+    expect(fake.ran[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/acct', ANTHROPIC_API_KEY: 'k' })
+  })
+
+  it('fails with what Claude Code said, such as a usage limit', async () => {
+    const limited = reply({ is_error: true, result: "You've hit your 5-hour limit" }, 1)
+    await expect(claudeCode.complete!(fakeMachine(limited).machine, request)).rejects.toThrow('5-hour limit')
+    const crashed = { claude: { code: 1, stdout: '', stderr: 'boom' } }
+    await expect(claudeCode.complete!(fakeMachine(crashed).machine, request)).rejects.toThrow('boom')
+  })
+})
+
 describe('claudeCode.detect', () => {
   it('reports installed and signed in, with the effort levels from claude --help', async () => {
     expect(await claudeCode.detect(fakeMachine(detected).machine)).toMatchObject({
@@ -354,6 +407,7 @@ describe('claudeCode.detect', () => {
       signedIn: true,
       detail: '2.1.319 (Claude Code)',
       thinking: ['low', 'medium', 'high', 'xhigh', 'max'],
+      cheapModel: 'claude-haiku-5-5',
     })
   })
 

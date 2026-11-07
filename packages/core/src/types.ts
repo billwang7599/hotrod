@@ -32,7 +32,7 @@ export interface Machine {
   run(
     command: string,
     args: string[],
-    options: { cwd: string; env?: Record<string, string>; input?: string },
+    options: { cwd: string; env?: Record<string, string>; input?: string; timeoutMs?: number },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -47,6 +47,7 @@ export type EngineStatus = {
   thinking?: string[]
   defaultModel?: string
   defaultThinking?: string
+  cheapModel?: string
 }
 
 export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
@@ -64,6 +65,12 @@ export type SessionOptions = {
 }
 
 export type ImageInput = { mimeType: string; base64: string }
+
+export const COMPLETE_TIMEOUT_MS = 180_000
+
+export type CompletionRequest = { system: string; prompt: string; schema?: object }
+
+export type CompleteOptions = CompletionRequest & { cwd: string; model: string; accountDir?: string; apiKey?: string }
 
 export interface Session {
   prompt(text: string, images?: ImageInput[]): void
@@ -85,6 +92,7 @@ export interface Adapter {
   id: string
   detect(machine: Machine): Promise<EngineStatus>
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
+  complete?(machine: Machine, options: CompleteOptions): Promise<string>
   imageInput?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
@@ -139,6 +147,15 @@ export const pickThinking = (engine: EngineStatus | undefined, chat: Pick<ChatIn
   chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
 
 export type Mods = { subagents: { enabled: boolean; limit: number } }
+
+export type MemorySettings = { engine?: string; model?: string }
+
+export function pickMemory(engines: EngineInfo[], saved: MemorySettings) {
+  const engine = saved.engine
+    ? engines.find((e) => e.id === saved.engine)
+    : engines.find((e) => e.enabled && e.cheapModel)
+  return { engine: engine?.id, model: saved.model ?? engine?.cheapModel }
+}
 
 export const DEFAULT_SUBAGENT_LIMIT = 4
 
@@ -208,6 +225,7 @@ export type ClientMessage =
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'subagents.set'; enabled: boolean; limit: number }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
+  | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -226,6 +244,7 @@ export type CoreMessage =
       contextDefaults: Record<ContextSection, boolean>
       mods: Mods
       modelLists: Record<string, ModelLists>
+      memory: MemorySettings
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -242,4 +261,5 @@ export type CoreMessage =
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   | { type: 'mods.updated'; mods: Mods }
   | { type: 'models.updated'; engine: string; lists: ModelLists }
+  | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'error'; message: string }

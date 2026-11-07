@@ -16,6 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
+import { MEMORY_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -122,6 +123,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     chats: [expect.objectContaining({ id: 'main', name: WORKSHOP_NAME })],
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
+    memory: {},
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -494,7 +496,7 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
   }
   expect(itemsOf(chatId).map((i) => i.from)).toEqual(['main', subchat.id, chatId])
   handle({ type: 'chat.send', chatId, text: 'again' })
-  expect(sessionOf(chatId).options.instructions).toBe('WORKSHOP\n\nPARENT\n\nOWN')
+  expect(sessionOf(chatId).options.instructions).toBe([MEMORY_INSTRUCTIONS, 'WORKSHOP', 'PARENT', 'OWN'].join('\n\n'))
   sessionOf(chatId).end('ok')
   sessionOf(subchat.id).end('ok')
   expect(sessionsOf(subchat.id)).toHaveLength(3)

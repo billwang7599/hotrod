@@ -1,4 +1,4 @@
-import type { Adapter, ToolKind } from '../types.ts'
+import { COMPLETE_TIMEOUT_MS, type Adapter, type ToolKind } from '../types.ts'
 import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
@@ -21,8 +21,7 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
 
 const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
-const RPC_ARGS = [
-  '--mode', 'rpc',
+const CLEAN_ARGS = [
   '--no-session',
   '--no-extensions',
   '--no-skills',
@@ -31,6 +30,8 @@ const RPC_ARGS = [
   '--no-context-files',
   '--no-approve',
 ]
+
+const RPC_ARGS = ['--mode', 'rpc', ...CLEAN_ARGS]
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
@@ -76,6 +77,7 @@ export const pi: Adapter = {
     const { model: started, thinkingLevel } = answers.get_state ?? {}
     const startedId = `${started?.provider}/${started?.id}`
     const defaultModel = models.some((m) => m.id === startedId) ? startedId : models[0]?.id
+    const cheapModel = models.find((m) => m.id.includes('/claude-haiku-'))?.id
     return {
       installed: true,
       signedIn: models.length > 0,
@@ -84,7 +86,17 @@ export const pi: Adapter = {
       thinking: THINKING,
       ...(defaultModel && { defaultModel }),
       ...(THINKING.includes(thinkingLevel) && { defaultThinking: thinkingLevel }),
+      ...(cheapModel && { cheapModel }),
     }
+  },
+
+  async complete(machine, { cwd, system, prompt, model }) {
+    const args = ['-p', ...CLEAN_ARGS, '--no-tools', '--offline', '--model', model, '--thinking', 'off']
+    args.push('--system-prompt', system)
+    const options = { cwd, input: prompt, timeoutMs: COMPLETE_TIMEOUT_MS }
+    const { code, stdout, stderr } = await machine.run('pi', args, options)
+    if (code !== 0) throw new Error(stderr.trim() || `pi exited with code ${code}`)
+    return stdout
   },
 
   start(machine, { cwd, instructions, extraDirs = [], model, thinking }, emit) {

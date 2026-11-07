@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, SessionOptions } from '../types.ts'
+import { COMPLETE_TIMEOUT_MS, type EngineEvent, type SessionOptions } from '../types.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -287,6 +287,42 @@ describe('pi adapter', () => {
   })
 })
 
+describe('pi.complete', () => {
+  const request = { cwd: '/tmp/home', system: 'Summarize.', prompt: 'the items', schema: {}, model: 'anthropic/x' }
+
+  it('prints one clean reply with no tools and no thinking, prompt on stdin', async () => {
+    const fake = fakeMachine({ pi: { code: 0, stdout: '{"summaries":[]}\n', stderr: '' } })
+    expect(await pi.complete!(fake.machine, request)).toBe('{"summaries":[]}\n')
+    expect(fake.ran).toEqual([
+      {
+        command: 'pi',
+        args: [
+          '-p',
+          '--no-session',
+          '--no-extensions',
+          '--no-skills',
+          '--no-prompt-templates',
+          '--no-mcp',
+          '--no-context-files',
+          '--no-approve',
+          '--no-tools',
+          '--offline',
+          '--model', 'anthropic/x',
+          '--thinking', 'off',
+          '--system-prompt', 'Summarize.',
+        ],
+        input: 'the items',
+        timeoutMs: COMPLETE_TIMEOUT_MS,
+      },
+    ])
+  })
+
+  it('fails with what pi said', async () => {
+    const fake = fakeMachine({ pi: { code: 1, stdout: '', stderr: 'No API key for anthropic' } })
+    await expect(pi.complete!(fake.machine, request)).rejects.toThrow('No API key for anthropic')
+  })
+})
+
 describe('pi.detect', () => {
   const version = { code: 0, stdout: '1.5.0\n', stderr: '' }
 
@@ -331,6 +367,7 @@ describe('pi.detect', () => {
       thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
       defaultModel: 'anthropic/claude-haiku-5-5',
       defaultThinking: 'xhigh',
+      cheapModel: 'anthropic/claude-haiku-5-5',
     })
     const input = fake.ran.find((r) => r.args.includes('rpc'))?.input ?? ''
     expect(input.split('\n').filter(Boolean).map((l) => JSON.parse(l).type)).toEqual([
@@ -355,6 +392,7 @@ describe('pi.detect', () => {
     const detected = await pi.detect(machine)
     expect(detected).toMatchObject({ installed: true, signedIn: false, detail: '1.5.0', models: [] })
     expect(detected.defaultModel).toBeUndefined()
+    expect(detected.cheapModel).toBeUndefined()
   })
 
   it('reports not installed', async () => {

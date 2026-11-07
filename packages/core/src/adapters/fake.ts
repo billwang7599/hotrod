@@ -39,12 +39,16 @@ export const FAKE_MODELS = [
   { id: 'fake-small', label: 'Fake Small' },
 ]
 export const FAKE_THINKING = ['low', 'high']
-export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
+export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high', cheapModel: 'fake-small' }
 
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
   return {
     id: 'fake',
     imageInput: true,
+    async complete(_machine, { prompt }) {
+      const keys = [...prompt.matchAll(/<item key="([^"]+)"/g)].map(([, key]) => key)
+      return JSON.stringify({ summaries: keys.map((key) => ({ key, text: `summary of ${key}` })) })
+    },
     detect: async () => ({
       installed: true,
       signedIn: true,

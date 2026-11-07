@@ -11,6 +11,7 @@ import type {
   CoreMessage,
   EngineAccounts,
   EngineInfo,
+  MemorySettings,
   ModelLists,
   Mods,
   QueuedMessage,
@@ -58,6 +59,7 @@ export type State = {
   contextDefaults: Record<ContextSection, boolean>
   mods: Mods
   modelLists: Record<string, ModelLists>
+  memory: MemorySettings
   context?: { chatId: string; items: ContextItem[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
@@ -79,6 +81,7 @@ export const initialState: State = {
   contextDefaults: { agents: true, folders: true, files: true },
   mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
   modelLists: {},
+  memory: {},
   toasts: [],
   nextToastId: 1,
 }
@@ -176,6 +179,7 @@ export function reduce(state: State, action: Action): State {
         contextDefaults: action.contextDefaults,
         mods: action.mods,
         modelLists: action.modelLists,
+        memory: action.memory,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -238,6 +242,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, mods: action.mods }
     case 'models.updated':
       return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
+    case 'memory.updated':
+      return { ...state, memory: action.memory }
     case 'error':
       return {
         ...state,
