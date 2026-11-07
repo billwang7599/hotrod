@@ -1,4 +1,13 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -7,7 +16,7 @@ import { openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import type { Adapter, ChatEntry, CoreMessage, EngineEvent, SessionOptions } from './types.ts'
 
-const TEST_INTERRUPT_GRACE_MS = 30
+const TEST_STOP_GRACE_MS = 30
 
 const textScript: FakeStep[] = [
   { type: 'text.delta', text: 'Hel' },
@@ -30,7 +39,7 @@ const permissionScript: FakeStep[] = [
 ]
 
 function recording(adapter: Adapter) {
-  const calls: { options: SessionOptions; prompt?: string; closed: boolean }[] = []
+  const calls: { options: SessionOptions; prompt?: string; interrupted?: boolean; closed: boolean }[] = []
   const wrapped: Adapter = {
     ...adapter,
     start(machine, options, emit) {
@@ -42,6 +51,10 @@ function recording(adapter: Adapter) {
         prompt(text) {
           call.prompt = text
           session.prompt(text)
+        },
+        interrupt() {
+          call.interrupted = true
+          session.interrupt()
         },
         close() {
           call.closed = true
@@ -62,14 +75,14 @@ function tempDir() {
   return dir
 }
 
-function setup(source: FakeStep[] | Adapter, garage = tempDir()) {
+function setup(source: FakeStep[] | Adapter, garage = tempDir(), stopGraceMs = TEST_STOP_GRACE_MS) {
   const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
-  return { ...open(garage, [adapter], adapter.id), calls }
+  return { ...open(garage, [adapter], adapter.id, stopGraceMs), calls }
 }
 
-function open(garage: string, adapters: Adapter[], defaultEngine: string) {
+function open(garage: string, adapters: Adapter[], defaultEngine: string, stopGraceMs = TEST_STOP_GRACE_MS) {
   const machine = localMachine
-  const core = openCore({ garage, adapters, defaultEngine, machine, interruptGraceMs: TEST_INTERRUPT_GRACE_MS })
+  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs })
   cores.push(core)
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
@@ -104,8 +117,8 @@ beforeEach(() => {
   cores = []
 })
 
-afterEach(() => {
-  for (const core of cores) core.close()
+afterEach(async () => {
+  await Promise.all(cores.map((core) => core.close(true)))
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
 })
 
@@ -486,26 +499,25 @@ describe('engines', () => {
 })
 
 describe('interrupt', () => {
-  it('ends the turn when the engine ignores the interrupt', async () => {
+  const ignoresInterrupt = (onInterrupt: (emit: (event: EngineEvent) => void) => void = () => {}) =>
+    stubAdapter((_machine, _options, emit) => ({
+      prompt() {
+        emit({ type: 'turn.started' })
+        emit({ type: 'text.delta', text: 'partial' })
+      },
+      interrupt: () => onInterrupt(emit),
+      respond() {},
+      close() {},
+    }))
+
+  it('shows the chat as stopping, then force-stops an engine that ignores the interrupt', async () => {
     let emitLate: ((event: EngineEvent) => void) | undefined
-    const t = setup(
-      stubAdapter((_machine, _options, emit) => {
-        emitLate = emit
-        return {
-          prompt() {
-            emit({ type: 'turn.started' })
-            emit({ type: 'text.delta', text: 'partial' })
-          },
-          interrupt() {},
-          respond() {},
-          close() {},
-        }
-      }),
-    )
+    const t = setup(ignoresInterrupt((emit) => (emitLate = emit)))
     const project = addProject(t)
     t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
     t.handle({ type: 'chat.interrupt', projectId: project.id })
-    expect(statusOf(t.core, project.id)).toBe('running')
+    expect(statusOf(t.core, project.id)).toBe('stopping')
+    expect(t.messages).toContainEqual({ type: 'chat.status', projectId: project.id, status: 'stopping' })
     await until(() => statusOf(t.core, project.id) === 'idle')
 
     const entries = entriesOf(t.core, project.id)
@@ -513,20 +525,120 @@ describe('interrupt', () => {
       { type: 'text.completed', text: 'partial' },
       { type: 'turn.completed', error: 'Interrupted' },
     ])
-    expect(t.calls[0]?.closed).toBe(true)
+    expect(t.calls[0]).toMatchObject({ closed: true })
     emitLate?.({ type: 'turn.completed' })
     expect(entriesOf(t.core, project.id)).toHaveLength(entries.length)
   })
 
-  it('ends an interrupted turn once when the engine stops in time', async () => {
+  it('force-stops at once when asked, keeping the text streamed so far', () => {
+    const t = setup(ignoresInterrupt())
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    t.handle({ type: 'chat.interrupt', projectId: project.id, force: true })
+    expect(statusOf(t.core, project.id)).toBe('idle')
+    expect(entriesOf(t.core, project.id).slice(-2)).toMatchObject([
+      { type: 'text.completed', text: 'partial' },
+      { type: 'turn.completed', error: 'Interrupted' },
+    ])
+    expect(t.calls[0]).toMatchObject({ closed: true })
+  })
+
+  it('stays stopping while the engine winds down', () => {
+    const t = setup(
+      ignoresInterrupt((emit) =>
+        emit({ type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} }),
+      ),
+    )
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    expect(statusOf(t.core, project.id)).toBe('stopping')
+  })
+
+  it('closes a session gently once the engine stops in time', async () => {
     const t = setup(permissionScript)
     const project = addProject(t)
     t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
     await until(() => statusOf(t.core, project.id) === 'waiting')
     t.handle({ type: 'chat.interrupt', projectId: project.id })
     await until(() => statusOf(t.core, project.id) === 'idle')
-    await new Promise((r) => setTimeout(r, TEST_INTERRUPT_GRACE_MS * 3))
+    expect(t.calls[0]).toMatchObject({ closed: true })
+    await new Promise((r) => setTimeout(r, TEST_STOP_GRACE_MS * 3))
     expect(entriesOf(t.core, project.id).filter((e) => e.type === 'turn.completed')).toHaveLength(1)
+  })
+
+})
+
+describe('quit', () => {
+  const ignoresInterrupt = () =>
+    stubAdapter((_machine, _options, emit) => ({
+      prompt() {
+        emit({ type: 'turn.started' })
+        emit({ type: 'text.delta', text: 'partial' })
+      },
+      interrupt() {},
+      respond() {},
+      close() {},
+    }))
+
+  it('asks a busy engine to stop first and closes its session once the turn ends', async () => {
+    const t = setup(permissionScript)
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    await until(() => statusOf(t.core, project.id) === 'waiting')
+    await t.core.close()
+    expect(t.calls[0]).toMatchObject({ interrupted: true, closed: true })
+    expect(entriesOf(t.core, project.id).at(-1)).toMatchObject({ type: 'turn.completed', error: 'Interrupted' })
+  })
+
+  it('shows a busy chat as stopping and forces it after the stop grace', async () => {
+    const t = setup(ignoresInterrupt())
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    let closed = false
+    const closing = t.core.close().then(() => (closed = true))
+    expect(t.calls[0]).toMatchObject({ interrupted: true, closed: false })
+    expect(statusOf(t.core, project.id)).toBe('stopping')
+    expect(closed).toBe(false)
+    await closing
+    expect(t.calls[0]?.closed).toBe(true)
+    expect(entriesOf(t.core, project.id).slice(-2)).toMatchObject([
+      { type: 'text.completed', text: 'partial' },
+      { type: 'turn.completed', error: 'Interrupted' },
+    ])
+  })
+
+  it('skips the interrupt on a forced quit and closes every session at once', async () => {
+    const t = setup(ignoresInterrupt())
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    await t.core.close(true)
+    expect(t.calls[0]).toMatchObject({ closed: true })
+    expect(t.calls[0]?.interrupted).toBeUndefined()
+    expect(statusOf(t.core, project.id)).toBe('idle')
+  })
+
+  it('ends a waiting quit when it is forced', async () => {
+    const longGraceMs = 60_000
+    const t = setup(ignoresInterrupt(), tempDir(), longGraceMs)
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    const start = performance.now()
+    const closing = t.core.close()
+    await t.core.close(true)
+    await closing
+    expect(performance.now() - start).toBeLessThan(longGraceMs / 2)
+    expect(t.calls[0]).toMatchObject({ interrupted: true, closed: true })
+  })
+
+  it('refuses new messages while quitting', () => {
+    const t = setup(ignoresInterrupt())
+    const busy = addProject(t)
+    const idle = addProject(t)
+    t.handle({ type: 'chat.send', projectId: busy.id, text: 'go' })
+    void t.core.close()
+    expect(() => t.handle({ type: 'chat.send', projectId: idle.id, text: 'hi' })).toThrow(/quitting/)
   })
 })
 
@@ -551,9 +663,7 @@ describe('engine failures', () => {
     const t = setup(
       stubAdapter((machine, options, emit) => {
         const proc = machine.spawn('hotrod-test-missing-engine', [], { cwd: options.cwd })
-        let stderr = ''
-        proc.onStderr((chunk) => (stderr += chunk))
-        proc.onExit((code) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
+        proc.onExit((code, stderr) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
         return {
           prompt(text) {
             proc.write(text)
@@ -594,5 +704,179 @@ describe('engine failures', () => {
     expect(types(entriesOf(t.core, project.id))).toEqual(['user.message', 'session.ended'])
     expect(prompted).toBe(false)
     expect(t.calls[0]?.closed).toBe(true)
+  })
+})
+
+describe('accounts', () => {
+  function setupAccounts(script: FakeStep[] = textScript, garage = tempDir()) {
+    const logouts: string[] = []
+    const fake = createFakeAdapter(script, 0)
+    const logout = async (_machine: unknown, dir: string) => void logouts.push(dir)
+    const adapter: Adapter = { ...fake, accounts: { ...fake.accounts!, logout } }
+    const { adapter: wrapped, calls } = recording(adapter)
+    return { ...open(garage, [wrapped, { ...stubAdapter(() => ({}) as never), id: 'plain' }], 'fake'), calls, logouts }
+  }
+
+  const accountsOf = (core: Core) => core.accounts().find((a) => a.engine === 'fake')!
+  const accountDir = (garage: string, id: string) => join(garage, 'accounts', 'fake', id)
+
+  async function signIn(t: ReturnType<typeof setupAccounts>, name: string) {
+    t.handle({ type: 'account.login', engine: 'fake', name })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
+    await until(() => !accountsOf(t.core).login)
+  }
+
+  it("lists the engine's own login as the default account, only for engines with accounts", async () => {
+    const t = setupAccounts()
+    await t.core.refreshAccounts()
+    expect(t.core.accounts()).toEqual([
+      {
+        engine: 'fake',
+        active: 'default',
+        apiKeys: true,
+        accounts: [{ id: 'default', name: 'Default', kind: 'login', label: 'default@fake.test', signedIn: true }],
+      },
+    ])
+  })
+
+  it('signs in a new account in its own folder and keeps it across a restart', async () => {
+    const t = setupAccounts()
+    t.handle({ type: 'account.login', engine: 'fake', name: 'Work' })
+    expect(t.messages.at(-1)).toMatchObject({ type: 'accounts.updated', accounts: { login: { name: 'Work' } } })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    expect(() => t.handle({ type: 'account.login', engine: 'fake', name: 'Other' })).toThrow(/already/)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
+    await until(() => !accountsOf(t.core).login)
+
+    const work = { id: 'work', name: 'Work', kind: 'login', label: 'work@fake.test', signedIn: true }
+    expect(accountsOf(t.core).accounts.at(-1)).toEqual(work)
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(true)
+    await signIn(t, 'work')
+    expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default', 'work', 'work-2'])
+
+    const reopened = setupAccounts(textScript, t.garage)
+    await reopened.core.refreshAccounts()
+    expect(accountsOf(reopened.core).accounts.map((a) => a.id)).toEqual(['default', 'work', 'work-2'])
+  })
+
+  it('reports a failed sign-in, removes its folder and clears it on cancel', async () => {
+    const t = setupAccounts()
+    t.handle({ type: 'account.login', engine: 'fake', name: 'Work' })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'fail' })
+    await until(() => accountsOf(t.core).login?.error !== undefined)
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(false)
+    t.handle({ type: 'account.cancelLogin', engine: 'fake' })
+    expect(accountsOf(t.core).login).toBeUndefined()
+    expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default'])
+  })
+
+  it('starts sessions with the active account and switches only while idle', async () => {
+    const t = setupAccounts(permissionScript)
+    await signIn(t, 'Work')
+    const project = addProject(t)
+
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'work' })
+    expect(accountsOf(t.core).active).toBe('work')
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(t.calls[0]?.options.accountDir).toBe(accountDir(t.garage, 'work'))
+    await until(() => statusOf(t.core, project.id) === 'waiting')
+    expect(() => t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'account.use', engine: 'fake', accountId: 'nope' })).toThrow(/Unknown account/)
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'again' })
+    expect(t.calls[1]?.options.accountDir).toBeUndefined()
+    const reopened = setupAccounts(textScript, t.garage)
+    expect(accountsOf(reopened.core).active).toBe('default')
+  })
+
+  it('removes an account: logs it out, deletes its folder and falls back to the default', async () => {
+    const t = setupAccounts()
+    await signIn(t, 'Work')
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'work' })
+    expect(() => t.handle({ type: 'account.remove', engine: 'fake', accountId: 'default' })).toThrow(/default/)
+    t.handle({ type: 'account.remove', engine: 'fake', accountId: 'work' })
+    await until(() => accountsOf(t.core).accounts.length === 1)
+    expect(t.logouts).toEqual([accountDir(t.garage, 'work')])
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(false)
+    expect(accountsOf(t.core).active).toBe('default')
+  })
+
+  it('rejects account messages for an engine without accounts', () => {
+    const t = setupAccounts()
+    expect(() => t.handle({ type: 'account.login', engine: 'plain', name: 'Work' })).toThrow(/accounts/)
+  })
+
+  describe('API keys', () => {
+    const key = 'sk-ant-test-0000-secret-1234abcd'
+    const addKey = (t: ReturnType<typeof setupAccounts>, name = 'Billing', apiKey = `  ${key}\n`) =>
+      t.handle({ type: 'account.addApiKey', engine: 'fake', name, key: apiKey })
+
+    it('keeps the key in a 0600 file in its own folder and shows only its last 4 characters', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      const label = 'API key ••••abcd'
+      const billing = { id: 'billing', name: 'Billing', kind: 'apiKey', label, signedIn: true }
+      expect(accountsOf(t.core).accounts.at(-1)).toEqual(billing)
+      const keyFile = join(accountDir(t.garage, 'billing'), 'api-key')
+      expect(readFileSync(keyFile, 'utf8')).toBe(key)
+      expect(statSync(keyFile).mode & 0o777).toBe(0o600)
+      expect(readFileSync(join(t.garage, 'accounts', 'fake.json'), 'utf8')).not.toContain(key)
+      expect(JSON.stringify([t.messages, t.replies, t.core.accounts()])).not.toContain(key)
+
+      await t.core.refreshAccounts()
+      const reopened = setupAccounts(textScript, t.garage)
+      await reopened.core.refreshAccounts()
+      expect(accountsOf(reopened.core).accounts.at(-1)).toEqual(billing)
+    })
+
+    it('starts sessions with the key and its folder, and never writes the key to the chat log', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      const project = addProject(t)
+      t.handle({ type: 'account.use', engine: 'fake', accountId: 'billing' })
+      t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+      expect(t.calls[0]?.options).toMatchObject({ accountDir: accountDir(t.garage, 'billing'), apiKey: key })
+      await until(() => statusOf(t.core, project.id) === 'idle')
+      const log = readFileSync(join(t.garage, 'projects', project.id, 'chats', 'main', 'log.jsonl'), 'utf8')
+      expect(log).not.toContain(key)
+      expect(JSON.stringify(t.messages)).not.toContain(key)
+    })
+
+    it('removes a key account without signing out', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      t.handle({ type: 'account.remove', engine: 'fake', accountId: 'billing' })
+      await until(() => accountsOf(t.core).accounts.length === 1)
+      expect(t.logouts).toEqual([])
+      expect(existsSync(accountDir(t.garage, 'billing'))).toBe(false)
+    })
+
+    it('rejects an empty or spaced key without echoing it, and engines without key support', () => {
+      const t = setupAccounts()
+      expect(() => addKey(t, 'Billing', '   ')).toThrow(/Paste/)
+      let error = ''
+      try {
+        addKey(t, 'Billing', 'sk-ant one')
+      } catch (e) {
+        error = String(e)
+      }
+      expect(error).toMatch(/space/)
+      expect(error).not.toContain('sk-ant')
+      expect(() => addKey(t, ' ')).toThrow(/name/)
+      expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default'])
+      expect(existsSync(join(t.garage, 'accounts', 'fake', 'billing'))).toBe(false)
+
+      const fake = createFakeAdapter(textScript, 0)
+      const noKeys: Adapter = { ...fake, id: 'nokeys', accounts: { ...fake.accounts!, apiKeys: false } }
+      const plain = open(tempDir(), [noKeys], 'nokeys')
+      expect(plain.core.accounts()[0]?.apiKeys).toBe(false)
+      const message = { type: 'account.addApiKey', engine: 'nokeys', name: 'Billing', key } as const
+      expect(() => plain.handle(message)).toThrow(/API keys/)
+    })
   })
 })

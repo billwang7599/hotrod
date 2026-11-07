@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { openAccounts } from './accounts.ts'
 import type {
   Adapter,
   ChatEntry,
@@ -23,17 +24,17 @@ import type {
   Session,
 } from './types.ts'
 
+export const STOP_GRACE_MS = 60_000
+
 type Chat = {
   project: Project
   entries: ChatEntry[]
   status: ChatStatus
   session?: Session
   unsavedText: string
-  interruptTimer?: ReturnType<typeof setTimeout>
+  stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Set<string>
 }
-
-const INTERRUPT_GRACE_MS = 5000
 
 export type Core = ReturnType<typeof openCore>
 
@@ -42,9 +43,9 @@ export function openCore(options: {
   adapters: Adapter[]
   defaultEngine: string
   machine: Machine
-  interruptGraceMs?: number
+  stopGraceMs?: number
 }) {
-  const { garage, adapters, defaultEngine, machine, interruptGraceMs = INTERRUPT_GRACE_MS } = options
+  const { garage, adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
   const adapterFor = (engine: string) => adapters.find((adapter) => adapter.id === engine)
   const checkEngine = (engine: string) => {
     if (!adapterFor(engine)) {
@@ -55,6 +56,8 @@ export function openCore(options: {
   const projectsDir = join(garage, 'projects')
   mkdirSync(projectsDir, { recursive: true })
   const chats = new Map<string, Chat>()
+  const allStoppedWaiters: (() => void)[] = []
+  let quitting = false
   const listeners: ((message: CoreMessage) => void)[] = []
 
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
@@ -74,8 +77,17 @@ export function openCore(options: {
     broadcast({ type: 'chat.entry', projectId: chat.project.id, entry })
   }
 
+  const accounts = openAccounts({
+    garage,
+    adapters,
+    machine,
+    broadcast,
+    isBusy: (engine) => [...chats.values()].some((chat) => chat.project.engine === engine && chat.status !== 'idle'),
+  })
+  void accounts.refresh()
+
   const setStatus = (chat: Chat, status: ChatStatus) => {
-    if (chat.status === status) return
+    if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
     chat.status = status
     broadcast({ type: 'chat.status', projectId: chat.project.id, status })
   }
@@ -87,12 +99,14 @@ export function openCore(options: {
   }
 
   const stopSession = (chat: Chat) => {
-    clearTimeout(chat.interruptTimer)
-    chat.interruptTimer = undefined
+    clearTimeout(chat.stopTimer)
+    chat.stopTimer = undefined
     const session = chat.session
     chat.session = undefined
     session?.close()
   }
+
+  const allStopped = () => [...chats.values()].every((chat) => !chat.session)
 
   const endTurn = (chat: Chat, end: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
     if (chat.unsavedText) append(chat, { at: end.at, type: 'text.completed', text: chat.unsavedText })
@@ -101,7 +115,11 @@ export function openCore(options: {
     stopSession(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
+    if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
   }
+
+  const forceStop = (chat: Chat) =>
+    endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' })
 
   for (const id of readdirSync(projectsDir)) {
     const projectFile = join(projectsDir, id, 'project.json')
@@ -150,6 +168,7 @@ export function openCore(options: {
   }
 
   const send = (chat: Chat, text: string) => {
+    if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     const adapter = adapterFor(chat.project.engine)
     if (!adapter) {
@@ -191,7 +210,8 @@ export function openCore(options: {
     }
 
     try {
-      session = adapter.start(machine, { cwd: chat.project.path, instructions }, emit)
+      const options = { cwd: chat.project.path, instructions, ...accounts.sessionFor(adapter.id) }
+      session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
       session.prompt(prompt)
@@ -201,12 +221,12 @@ export function openCore(options: {
     }
   }
 
-  const interrupt = (chat: Chat) => {
+  const interrupt = (chat: Chat, force: boolean) => {
     if (!chat.session) return
-    chat.interruptTimer ??= setTimeout(
-      () => endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' }),
-      interruptGraceMs,
-    )
+    if (force) return forceStop(chat)
+    if (chat.status === 'stopping') return
+    setStatus(chat, 'stopping')
+    chat.stopTimer = setTimeout(() => forceStop(chat), stopGraceMs)
     chat.session.interrupt()
   }
 
@@ -221,6 +241,8 @@ export function openCore(options: {
 
   return {
     projects: () => [...chats.values()].map(state),
+    accounts: accounts.list,
+    refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
     handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
       switch (message.type) {
@@ -232,15 +254,32 @@ export function openCore(options: {
           if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
           return send(chatFor(message.projectId), message.text)
         case 'chat.interrupt':
-          return interrupt(chatFor(message.projectId))
+          return interrupt(chatFor(message.projectId), message.force === true)
         case 'permission.respond':
           return respond(chatFor(message.projectId), message.requestId, message.allow === true)
+        case 'account.login':
+          return accounts.login(String(message.engine), String(message.name ?? ''))
+        case 'account.addApiKey':
+          return accounts.addApiKey(String(message.engine), String(message.name ?? ''), String(message.key ?? ''))
+        case 'account.code':
+          return accounts.submitCode(String(message.engine), String(message.code ?? ''))
+        case 'account.cancelLogin':
+          return accounts.cancelLogin(String(message.engine))
+        case 'account.use':
+          return accounts.use(String(message.engine), String(message.accountId))
+        case 'account.remove':
+          return accounts.remove(String(message.engine), String(message.accountId), reply)
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }
     },
-    async close() {
-      for (const chat of chats.values()) stopSession(chat)
+    async close(force = false) {
+      quitting = true
+      for (const chat of chats.values()) {
+        if (chat.status === 'idle') stopSession(chat)
+        else interrupt(chat, force)
+      }
+      if (!allStopped()) await new Promise<void>((resolve) => allStoppedWaiters.push(resolve))
       await machine.stopAll()
     },
   }

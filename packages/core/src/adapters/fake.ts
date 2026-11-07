@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { basename } from 'node:path'
 import type { Adapter, EngineEvent, ToolKind } from '../types.ts'
 
 export type FakeStep =
@@ -37,6 +38,30 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
   return {
     id: 'fake',
     detect: async () => ({ installed: true, signedIn: true }),
+    accounts: {
+      status: async (_machine, accountDir) => ({
+        signedIn: true,
+        label: `${accountDir ? basename(accountDir) : 'default'}@fake.test`,
+      }),
+      login(_machine, _accountDir, emit) {
+        let open = true
+        const timer = setTimeout(() => emit({ type: 'url', url: 'https://example.com/fake-sign-in' }), delayMs)
+        return {
+          submitCode(code) {
+            if (!open) return
+            open = false
+            const error = 'Login failed: the fake engine refused that code.'
+            emit(code.trim() === 'fail' ? { type: 'failed', error } : { type: 'done' })
+          },
+          cancel() {
+            open = false
+            clearTimeout(timer)
+          },
+        }
+      },
+      logout: async () => {},
+      apiKeys: true,
+    },
     start(_machine, _options, emit) {
       let timer: ReturnType<typeof setTimeout> | undefined
       let pending: { requestId: string; toolId: string; output: string; rest: FakeStep[] } | undefined

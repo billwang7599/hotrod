@@ -1,4 +1,4 @@
-import type { Adapter, ToolKind } from '../types.ts'
+import type { AccountStatus, Adapter, Machine, ToolKind } from '../types.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -20,7 +20,25 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   fetch: ['url', 'query'],
 }
 
-const STDERR_TAIL_CHARS = 2000
+const OUTPUT_TAIL_CHARS = 2000
+// The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
+const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
+const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
+
+// Each account is its own config folder; Claude Code keys its keychain login by that folder's path.
+const accountEnv = (accountDir?: string, apiKey?: string) =>
+  accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir, ...(apiKey && { ANTHROPIC_API_KEY: apiKey }) } } : {}
+
+async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
+  const options = { cwd: '/', ...accountEnv(accountDir) }
+  const auth = await machine.run('claude', ['auth', 'status'], options).catch(() => null)
+  try {
+    const status = JSON.parse(auth?.stdout ?? '')
+    return { signedIn: status.loggedIn === true, ...(typeof status.email === 'string' && { label: status.email }) }
+  } catch {
+    return { signedIn: false }
+  }
+}
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
@@ -36,15 +54,46 @@ export const claudeCode: Adapter = {
     const options = { cwd: '/' }
     const version = await machine.run('claude', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
-    const auth = await machine.run('claude', ['auth', 'status'], options).catch(() => null)
-    let signedIn = false
-    try {
-      signedIn = JSON.parse(auth?.stdout ?? '').loggedIn === true
-    } catch {}
+    const { signedIn } = await authStatus(machine)
     return { installed: true, signedIn, detail: version.stdout.trim() }
   },
 
-  start(machine, { cwd, instructions }, emit) {
+  accounts: {
+    status: authStatus,
+
+    login(machine, accountDir, emit) {
+      const options = { cwd: accountDir, ...accountEnv(accountDir) }
+      const proc = machine.spawn('claude', ['auth', 'login', '--claudeai'], options)
+      let output = ''
+      let sentUrl = false
+      const collect = (chunk: string) => {
+        output = (output + chunk).slice(-OUTPUT_TAIL_CHARS)
+        const url = !sentUrl && output.match(LOGIN_URL)?.[0]
+        if (!url) return
+        sentUrl = true
+        emit({ type: 'url', url })
+      }
+      proc.onStdout(collect)
+      proc.onExit((code, stderrTail) => {
+        if (code === 0) return emit({ type: 'done' })
+        const text = (output + stderrTail).replace(ANSI, '')
+        const error = text.match(/Login failed:.*/)?.[0] ?? `Claude Code sign-in exited with code ${code}`
+        emit({ type: 'failed', error: error.trim() })
+      })
+      return {
+        submitCode: (code) => proc.write(code.trim() + '\n'),
+        cancel: () => proc.kill(),
+      }
+    },
+
+    async logout(machine, accountDir) {
+      await machine.run('claude', ['auth', 'logout'], { cwd: '/', ...accountEnv(accountDir) })
+    },
+
+    apiKeys: true,
+  },
+
+  start(machine, { cwd, instructions, accountDir, apiKey }, emit) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -61,14 +110,12 @@ export const claudeCode: Adapter = {
       '--thinking-display', 'summarized',
     ]
     if (instructions) args.push('--append-system-prompt', instructions)
-    const proc = machine.spawn('claude', args, { cwd })
+    const proc = machine.spawn('claude', args, { cwd, ...accountEnv(accountDir, apiKey) })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
     const pendingInputs = new Map<string, unknown>()
     let buffer = ''
-    let stderr = ''
     let interrupted = false
     let closed = false
-    let exited = false
     let interruptCount = 0
 
     const handle = (msg: any) => {
@@ -150,13 +197,9 @@ export const claudeCode: Adapter = {
         handle(msg)
       }
     })
-    proc.onStderr((chunk) => {
-      stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS)
-    })
-    proc.onExit((code) => {
-      exited = true
+    proc.onExit((code, stderrTail) => {
       if (code === 0 || closed) return emit({ type: 'session.ended' })
-      emit({ type: 'session.ended', error: stderr.trim() || `Claude Code exited with code ${code}` })
+      emit({ type: 'session.ended', error: stderrTail.trim() || `Claude Code exited with code ${code}` })
     })
 
     return {
@@ -180,7 +223,7 @@ export const claudeCode: Adapter = {
       close() {
         closed = true
         proc.closeStdin()
-        if (!exited) proc.kill()
+        proc.kill()
       },
     }
   },

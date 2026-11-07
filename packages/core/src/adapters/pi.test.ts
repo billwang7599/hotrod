@@ -230,8 +230,7 @@ describe('pi adapter', () => {
 
   it('reports a startup failure with the stderr tail', () => {
     const { fake, events } = startSession()
-    fake.stderr('Error: Model "x" is ambiguous across providers\n')
-    fake.exit(1)
+    fake.exit(1, 'Error: Model "x" is ambiguous across providers\n')
     expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers' }])
   })
 
@@ -249,11 +248,11 @@ describe('pi adapter', () => {
     expect(events).toEqual([{ type: 'session.ended' }])
   })
 
-  it('does not kill a process that already exited', () => {
+  it('kills on close even after the engine exited, to reach what it started', () => {
     const { fake, session } = startSession()
     fake.exit(0)
     session.close()
-    expect(fake.state.killed).toBe(false)
+    expect(fake.state.killed).toBe(true)
   })
 })
 

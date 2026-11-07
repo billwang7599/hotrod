@@ -18,8 +18,6 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   search: ['pattern'],
 }
 
-const STDERR_TAIL_CHARS = 2000
-
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
 function summarize(kind: ToolKind, input: any): string {
@@ -57,10 +55,8 @@ export const pi: Adapter = {
     const proc = machine.spawn('pi', args, { cwd })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''
-    let stderr = ''
     let turnError: string | undefined
     let closed = false
-    let exited = false
 
     const endTurn = (error?: string) => {
       turnError = undefined
@@ -121,13 +117,9 @@ export const pi: Adapter = {
         handle(msg)
       }
     })
-    proc.onStderr((chunk) => {
-      stderr = (stderr + chunk).slice(-STDERR_TAIL_CHARS)
-    })
-    proc.onExit((code) => {
-      exited = true
+    proc.onExit((code, stderrTail) => {
       if (code === 0 || closed) return emit({ type: 'session.ended' })
-      emit({ type: 'session.ended', error: stderr.trim() || `pi exited with code ${code}` })
+      emit({ type: 'session.ended', error: stderrTail.trim() || `pi exited with code ${code}` })
     })
 
     return {
@@ -142,7 +134,7 @@ export const pi: Adapter = {
       close() {
         closed = true
         proc.closeStdin()
-        if (!exited) proc.kill()
+        proc.kill()
       },
     }
   },

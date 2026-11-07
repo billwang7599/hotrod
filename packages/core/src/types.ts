@@ -24,8 +24,7 @@ export interface EngineProcess {
   closeStdin(): void
   kill(): void
   onStdout(listener: (chunk: string) => void): void
-  onStderr(listener: (chunk: string) => void): void
-  onExit(listener: (code: number | null) => void): void
+  onExit(listener: (code: number | null, stderrTail: string) => void): void
 }
 
 export interface Machine {
@@ -42,7 +41,7 @@ export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: str
 
 export type EngineInfo = { id: string } & EngineStatus
 
-export type SessionOptions = { cwd: string; instructions: string }
+export type SessionOptions = { cwd: string; instructions: string; accountDir?: string; apiKey?: string }
 
 export interface Session {
   prompt(text: string): void
@@ -51,15 +50,40 @@ export interface Session {
   close(): void
 }
 
+export type AccountStatus = { signedIn: boolean; label?: string }
+
+export type LoginEvent = { type: 'url'; url: string } | { type: 'done' } | { type: 'failed'; error: string }
+
+export interface LoginFlow {
+  submitCode(code: string): void
+  cancel(): void
+}
+
 export interface Adapter {
   id: string
   detect(machine: Machine): Promise<EngineStatus>
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
+  accounts?: {
+    status(machine: Machine, accountDir?: string): Promise<AccountStatus>
+    login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
+    logout(machine: Machine, accountDir: string): Promise<void>
+    apiKeys?: boolean
+  }
+}
+
+export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean }
+
+export type EngineAccounts = {
+  engine: string
+  active: string
+  apiKeys: boolean
+  accounts: Account[]
+  login?: { name: string; url?: string; error?: string }
 }
 
 export type Project = { id: string; name: string; path: string; engine: string }
 
-export type ChatStatus = 'idle' | 'running' | 'waiting'
+export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string }
@@ -73,13 +97,20 @@ export type ClientMessage =
   | { type: 'project.add'; path: string }
   | { type: 'project.setEngine'; projectId: string; engine: string }
   | { type: 'chat.send'; projectId: string; text: string }
-  | { type: 'chat.interrupt'; projectId: string }
+  | { type: 'chat.interrupt'; projectId: string; force?: boolean }
   | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
+  | { type: 'account.login'; engine: string; name: string }
+  | { type: 'account.code'; engine: string; code: string }
+  | { type: 'account.addApiKey'; engine: string; name: string; key: string }
+  | { type: 'account.cancelLogin'; engine: string }
+  | { type: 'account.use'; engine: string; accountId: string }
+  | { type: 'account.remove'; engine: string; accountId: string }
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
 export type CoreMessage =
-  | { type: 'snapshot'; engines: EngineInfo[]; projects: ProjectState[] }
+  | { type: 'snapshot'; engines: EngineInfo[]; projects: ProjectState[]; accounts: EngineAccounts[] }
+  | { type: 'accounts.updated'; accounts: EngineAccounts }
   | { type: 'project.added'; project: ProjectState }
   | { type: 'project.updated'; project: Project }
   | { type: 'chat.entry'; projectId: string; entry: ChatEntry }

@@ -1,26 +1,26 @@
 import type { EngineProcess, Machine } from '../types.ts'
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
-  const spawned: { command: string; args: string[]; cwd: string }[] = []
+  const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string> }[] = []
+  const ran: { command: string; args: string[]; env?: Record<string, string> }[] = []
   const written: string[] = []
   const state = { stdinClosed: false, killed: false }
   let stdout = (_: string) => {}
-  let stderr = (_: string) => {}
-  let exit = (_: number | null) => {}
+  let exit = (_code: number | null, _stderrTail: string) => {}
   const proc: EngineProcess = {
     write: (data) => written.push(data),
     closeStdin: () => (state.stdinClosed = true),
     kill: () => (state.killed = true),
     onStdout: (l) => (stdout = l),
-    onStderr: (l) => (stderr = l),
     onExit: (l) => (exit = l),
   }
   const machine: Machine = {
     spawn(command, args, options) {
-      spawned.push({ command, args, cwd: options.cwd })
+      spawned.push({ command, args, cwd: options.cwd, ...(options.env && { env: options.env }) })
       return proc
     },
-    async run(command, args) {
+    async run(command, args, options) {
+      ran.push({ command, args, ...(options.env && { env: options.env }) })
       return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
     },
     stopAll: async () => {},
@@ -28,10 +28,11 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
   return {
     machine,
     spawned,
+    ran,
     state,
+    written: () => written.join(''),
     sent: () => written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
     stdout: (chunk: string) => stdout(chunk),
-    stderr: (chunk: string) => stderr(chunk),
-    exit: (code: number | null) => exit(code),
+    exit: (code: number | null, stderrTail = '') => exit(code, stderrTail),
   }
 }

@@ -18,26 +18,58 @@ async function start() {
   await app.whenReady()
   const hotrod = await startCore({ uiDir })
 
-  let closing: Promise<void> | undefined
-  let closed = false
-  app.on('will-quit', (event) => {
-    if (closed) return
-    event.preventDefault()
-    closing ??= hotrod.close().finally(() => {
-      closed = true
-      app.quit()
-    })
-  })
-  app.on('window-all-closed', () => app.quit())
-  const onSignal = () => (closing ? process.exit(1) : app.quit())
-  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, onSignal)
-
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
     title: 'Hotrod',
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
+
+  let closing: Promise<void> | undefined
+  let closed = false
+  let confirming = false
+  let forcing = false
+  const forceQuit = () => {
+    forcing = true
+    void hotrod.close(true)
+  }
+  const confirmForceQuit = async () => {
+    if (confirming || forcing || closed) return
+    confirming = true
+    const { response } = await dialog.showMessageBox(window, {
+      type: 'warning',
+      message: 'Force quit?',
+      detail: 'Engines stop without finishing their turn. Any still running after a few seconds are killed.',
+      buttons: ['Force Quit', 'Cancel'],
+      defaultId: 1,
+      cancelId: 1,
+    })
+    confirming = false
+    if (response === 0) forceQuit()
+  }
+  app.on('before-quit', (event) => {
+    if (closed) return
+    event.preventDefault()
+    if (closing) return void confirmForceQuit()
+    if (hotrod.core.projects().some((p) => p.status !== 'idle')) window.webContents.send('quitting')
+    closing = hotrod.close().finally(() => {
+      closed = true
+      app.quit()
+    })
+  })
+  window.on('close', (event) => {
+    if (closed) return
+    event.preventDefault()
+    app.quit()
+  })
+  app.on('window-all-closed', () => app.quit())
+  ipcMain.handle('force-quit', confirmForceQuit)
+  const onSignal = () => {
+    if (forcing) app.exit(1)
+    else if (closing) forceQuit()
+    else app.quit()
+  }
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, onSignal)
 
   const pickFolder = async () => {
     const result = await dialog.showOpenDialog(window, {

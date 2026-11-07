@@ -1,10 +1,11 @@
 import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createLocalMachine, RUN_TIMEOUT_MS, STRIPPED_ENV_KEYS } from './machine.ts'
+import { createLocalMachine, RUN_TIMEOUT_MS, STDERR_TAIL_CHARS, STRIPPED_ENV_KEYS } from './machine.ts'
 
 const cwd = process.cwd()
 const node = process.execPath
-const fast = createLocalMachine({ killGraceMs: 100, runTimeoutMs: 300 })
+const TEST_KILL_GRACE_MS = 100
+const fast = createLocalMachine({ killGraceMs: TEST_KILL_GRACE_MS, runTimeoutMs: 300 })
 
 const alive = (pid: number) => {
   try {
@@ -55,18 +56,49 @@ describe('localMachine', () => {
     expect(STRIPPED_ENV_KEYS).toContain('HOTROD_TOKEN')
   })
 
-  it('force-kills a process that ignores SIGTERM after the grace', async () => {
+  it('hands only the tail of stderr to exit listeners', async () => {
+    const write = `process.stderr.write('a'.repeat(${STDERR_TAIL_CHARS}) + 'b'.repeat(${STDERR_TAIL_CHARS}))`
+    const proc = fast.spawn(node, ['-e', write], { cwd })
+    const [code, stderrTail] = await new Promise<[number | null, string]>((resolve) =>
+      proc.onExit((code, stderrTail) => resolve([code, stderrTail])),
+    )
+    expect(code).toBe(0)
+    expect(stderrTail).toBe('b'.repeat(STDERR_TAIL_CHARS))
+  })
+
+  it('waits the kill grace for a process that ignores SIGTERM, then sends SIGKILL', async () => {
     const proc = fast.spawn(
       node,
-      ['-e', `process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)`],
+      ['-e', `process.on('SIGTERM', () => console.log('term')); console.log('ready'); setInterval(() => {}, 1000)`],
       { cwd },
     )
-    await new Promise<void>((resolve) => proc.onStdout(() => resolve()))
+    const lines: string[] = []
+    await new Promise<void>((resolve) =>
+      proc.onStdout((chunk) => {
+        lines.push(...chunk.trim().split('\n'))
+        resolve()
+      }),
+    )
     const exited = new Promise<number | null>((resolve) => proc.onExit(resolve))
     const start = performance.now()
     proc.kill()
     expect(await exited).toBeNull()
-    expect(performance.now() - start).toBeGreaterThanOrEqual(90)
+    expect(lines).toEqual(['ready', 'term'])
+    expect(performance.now() - start).toBeGreaterThanOrEqual(TEST_KILL_GRACE_MS - 10)
+  })
+
+  it('keeps the first kill grace when killed again', async () => {
+    const machine = createLocalMachine({ killGraceMs: 300 })
+    const stubborn = `process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000)`
+    const proc = machine.spawn(node, ['-e', stubborn], { cwd })
+    await new Promise<void>((resolve) => proc.onStdout(() => resolve()))
+    const exited = new Promise<number | null>((resolve) => proc.onExit(resolve))
+    const start = performance.now()
+    proc.kill()
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    proc.kill()
+    await exited
+    expect(performance.now() - start).toBeLessThan(450)
   })
 
   it('kills the processes an engine started', async () => {
@@ -92,6 +124,16 @@ describe('localMachine', () => {
     await exited
     expect(alive(pid)).toBe(true)
     await waitFor(() => !alive(pid))
+  })
+
+  it('sends SIGTERM to a run that times out and SIGKILL only after the kill grace', async () => {
+    const machine = createLocalMachine({ killGraceMs: 200, runTimeoutMs: 100 })
+    const hang = `process.on('SIGTERM', () => console.log('term')); setInterval(() => {}, 1000)`
+    const start = performance.now()
+    const result = await machine.run(node, ['-e', hang], { cwd })
+    expect(result.code).toBeNull()
+    expect(result.stdout.trim()).toBe('term')
+    expect(performance.now() - start).toBeGreaterThanOrEqual(290)
   })
 
   it('gives up on a run that takes too long', async () => {

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent } from '../types.ts'
+import type { EngineEvent, LoginEvent } from '../types.ts'
 import { claudeCode } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -138,9 +138,7 @@ describe('claudeCode adapter', () => {
     const { fake, events, session } = startSession()
     session.prompt('hi')
     fake.stdout(fixture('error-result'))
-    fake.stderr('starting\n')
-    fake.stderr('[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}\n')
-    fake.exit(1)
+    fake.exit(1, 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}\n')
     const message =
       "There's an issue with the selected model (claude-nonexistent-9). It may not exist or you may not have access " +
       'to it. Run --model to pick a different model.'
@@ -250,11 +248,11 @@ describe('claudeCode adapter', () => {
     expect(events).toEqual([{ type: 'session.ended' }])
   })
 
-  it('does not kill a process that already exited', () => {
+  it('kills on close even after the engine exited, to reach what it started', () => {
     const { fake, session } = startSession()
     fake.exit(0)
     session.close()
-    expect(fake.state.killed).toBe(false)
+    expect(fake.state.killed).toBe(true)
   })
 })
 
@@ -278,5 +276,82 @@ describe('claudeCode.detect', () => {
   it('reports not installed', async () => {
     const { machine } = fakeMachine()
     expect(await claudeCode.detect(machine)).toEqual({ installed: false, signedIn: false })
+  })
+})
+
+describe('claudeCode accounts', () => {
+  const dir = '/garage/accounts/claude-code/work'
+  const url = 'https://claude.com/cai/oauth/authorize?code=true&state=abc'
+  const loginOutput = `Opening browser to sign in…\nIf the browser didn't open, visit: \x1b]8;;${url}\x07${url}\x1b]8;;\x07\nPaste code here if prompted > `
+
+  function startLogin() {
+    const fake = fakeMachine()
+    const events: LoginEvent[] = []
+    const flow = claudeCode.accounts!.login(fake.machine, dir, (e) => events.push(e))
+    return { fake, events, flow }
+  }
+
+  it('starts sessions in the account config folder', () => {
+    const fake = fakeMachine()
+    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', accountDir: dir }, () => {})
+    expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: dir })
+  })
+
+  it("passes an API-key account's key in the spawn env, never in the arguments", () => {
+    const fake = fakeMachine()
+    const apiKey = 'sk-ant-test-1234abcd'
+    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', accountDir: dir, apiKey }, () => {})
+    expect(claudeCode.accounts?.apiKeys).toBe(true)
+    expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: dir, ANTHROPIC_API_KEY: apiKey })
+    expect(fake.spawned[0]?.args.join(' ')).not.toContain(apiKey)
+  })
+
+  it('reads the account status and email from its config folder', async () => {
+    const fake = fakeMachine({
+      'claude auth status': { code: 0, stdout: '{"loggedIn":true,"email":"me@work.test"}', stderr: '' },
+    })
+    expect(await claudeCode.accounts!.status(fake.machine, dir)).toEqual({ signedIn: true, label: 'me@work.test' })
+    expect(fake.ran).toEqual([{ command: 'claude', args: ['auth', 'status'], env: { CLAUDE_CONFIG_DIR: dir } }])
+  })
+
+  it('logs in with the account config folder, passes on the sign-in link and a pasted code', () => {
+    const { fake, events, flow } = startLogin()
+    expect(fake.spawned).toEqual([
+      { command: 'claude', args: ['auth', 'login', '--claudeai'], cwd: dir, env: { CLAUDE_CONFIG_DIR: dir } },
+    ])
+    fake.stdout(loginOutput.slice(0, 90))
+    expect(events).toEqual([])
+    fake.stdout(loginOutput.slice(90))
+    expect(events).toEqual([{ type: 'url', url }])
+    fake.exit(0)
+    expect(events.at(-1)).toEqual({ type: 'done' })
+  })
+
+  it('writes the pasted code to the login prompt', () => {
+    const { fake, flow } = startLogin()
+    flow.submitCode(' the-code#state \n')
+    expect(fake.written()).toBe('the-code#state\n')
+  })
+
+  it('reports why a login failed', () => {
+    const { fake, events } = startLogin()
+    fake.stdout(loginOutput + "Login failed: That code wasn't accepted. Sign in again to get a new code.\n")
+    fake.exit(1)
+    expect(events.at(-1)).toEqual({
+      type: 'failed',
+      error: "Login failed: That code wasn't accepted. Sign in again to get a new code.",
+    })
+  })
+
+  it('stops the login when cancelled', () => {
+    const { fake, flow } = startLogin()
+    flow.cancel()
+    expect(fake.state.killed).toBe(true)
+  })
+
+  it('logs out of the account config folder only', async () => {
+    const fake = fakeMachine({ 'claude auth logout': { code: 0, stdout: '', stderr: '' } })
+    await claudeCode.accounts!.logout(fake.machine, dir)
+    expect(fake.ran).toEqual([{ command: 'claude', args: ['auth', 'logout'], env: { CLAUDE_CONFIG_DIR: dir } }])
   })
 })
