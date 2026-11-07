@@ -1,4 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
+import { Select } from './controls.tsx'
 
 export const TOKENS = [
   'bg',
@@ -485,18 +486,12 @@ export function Appearance() {
           Base color scheme
           <div className="text-sm text-muted">Every theme has a light and a dark version. System follows your OS.</div>
         </div>
-        <select
-          className="h-control rounded border bg-bg px-8"
-          aria-label="Base color scheme"
+        <Select
+          label="Base color scheme"
           value={scheme}
-          onChange={(e) => chooseAppearance({ scheme: e.target.value as Scheme })}
-        >
-          {Object.entries(SCHEMES).map(([id, label]) => (
-            <option key={id} value={id}>
-              {label}
-            </option>
-          ))}
-        </select>
+          options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
+          onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
+        />
       </div>
       <div className="border-t pt-12 pb-10">Themes</div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-12">

@@ -41,7 +41,7 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
                 disabled={!!item.disabledReason}
                 title={item.disabledReason}
                 onSelect={item.run}
-                className={`flex h-26 cursor-pointer items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:cursor-default data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
+                className={`flex h-26 items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
               >
                 {item.label}
               </DropdownMenu.Item>

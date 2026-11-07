@@ -15,7 +15,7 @@ import {
   type Mods,
 } from '@hotrod/core/shared'
 import { SECTIONS } from './context-panel.tsx'
-import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
+import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Select, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 import { Appearance } from './themes.tsx'
 
@@ -257,38 +257,26 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
               description={about}
               below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
             >
-              <select
-                className="h-control rounded border bg-bg px-8"
-                aria-label={`Add a ${name} model for ${engine.id}`}
+              <Select
+                label={`Add a ${name} model for ${engine.id}`}
                 value=""
+                placeholder="Add model…"
                 disabled={!connected || !addable.length}
-                onChange={(e) => setList([...list, e.target.value])}
-              >
-                <option value="">Add model…</option>
-                {addable.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+                options={addable.map((m) => ({ value: m.id, label: m.label }))}
+                onChange={(model) => setList([...list, model])}
+              />
             </SettingRow>
           )
         })}
       {offered.length > 0 && engine.defaultThinking && (
         <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
-          <select
-            className="h-control rounded border bg-bg px-8"
-            aria-label={`Default thinking for ${engine.id}`}
+          <Select
+            label={`Default thinking for ${engine.id}`}
             value={engine.defaultThinking}
             disabled={!connected}
-            onChange={(e) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking: e.target.value })}
-          >
-            {engine.thinking?.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
+            options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
+            onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
+          />
         </SettingRow>
       )}
     </section>

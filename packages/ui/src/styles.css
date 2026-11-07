@@ -78,8 +78,11 @@
     scrollbar-color: var(--border) transparent;
   }
 
-  button:not(:disabled),
-  summary {
+  :is(button, select, input[type='range'], input[type='checkbox'], input[type='radio']):not(:disabled),
+  label:has(> :is(input[type='checkbox'], input[type='radio']):not(:disabled)),
+  :is([role='option'], [role='menuitem']):not([data-disabled]),
+  summary,
+  a[href] {
     cursor: pointer;
   }
 
