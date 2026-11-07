@@ -16,7 +16,7 @@ import {
 } from '@hotrod/core/shared'
 import { SECTIONS } from './context-panel.tsx'
 import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
-import { accountLabel, engineProblem, NO_LISTS } from './state.ts'
+import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -80,7 +80,9 @@ const PAGES = [
     id: 'accounts',
     group: 'Options',
     title: 'Accounts',
-    hint: 'Each engine runs as its account marked In use. Accounts show while their engine is on.',
+    hint:
+      'Each engine runs as its Active account: one saved here, or whoever the engine itself is signed in as. ' +
+      'Accounts show while their engine is on.',
     body: ({ engines, accounts, connected, send }: PageProps) => {
       const shown = engines.flatMap((e) => (e.enabled ? accounts.filter((a) => a.engine === e.id) : []))
       if (!shown.length) return <p className="text-muted">Turn on an engine to manage its accounts.</p>
@@ -291,6 +293,7 @@ type EngineAccountsProps = { accounts: EngineAccounts; connected: boolean; send:
 function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProps) {
   const id = accounts.engine
   const login = accounts.login
+  const listed = listedAccounts(accounts)
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [keyName, setKeyName] = useState('')
@@ -331,10 +334,17 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   return (
     <section className="flex flex-col not-first:pt-24" aria-label={`${id} accounts`}>
       <h3 className="pb-8 font-mono font-semibold">{id}</h3>
-      {accounts.accounts.map((a) => (
-        <SettingRow key={a.id} name={accountLabel(a)} description={a.id === 'default' && `${id}'s own sign-in`}>
-          {a.id === accounts.active ? (
-            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">In use</span>
+      {listed.accounts.map((a) => (
+        <SettingRow
+          key={a.id}
+          name={accountLabel(a)}
+          description={
+            a.id === 'default' &&
+            (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
+          }
+        >
+          {a.id === listed.active ? (
+            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
           ) : (
             <Button
               size="small"

@@ -34,6 +34,7 @@ import {
   columnSlider,
   engineOptions,
   formatBytes,
+  listedAccounts,
   MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   modelMenu,
@@ -467,6 +468,7 @@ type ChatProps = {
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings } = props
+  const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
   const pendingRef = useRef(pending)
@@ -634,10 +636,10 @@ export function Chat(props: ChatProps) {
               </option>
             ))}
           </ChipSelect>
-          {accounts && !engineOff && (
+          {accounts && listed && !engineOff && (
             <ChipSelect
               aria-label="Account"
-              value={accounts.active}
+              value={listed.active}
               disabled={!canSend}
               onChange={(e) =>
                 e.target.value === MANAGE_ACCOUNTS
@@ -645,7 +647,7 @@ export function Chat(props: ChatProps) {
                   : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
               }
             >
-              {accounts.accounts.map((a) => (
+              {listed.accounts.map((a) => (
                 <option key={a.id} value={a.id}>
                   {accountLabel(a)}
                 </option>
