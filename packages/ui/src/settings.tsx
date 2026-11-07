@@ -17,6 +17,7 @@ import {
 import { SECTIONS } from './context-panel.tsx'
 import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
+import { Appearance } from './themes.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -75,6 +76,12 @@ const PAGES = [
           </SettingRow>
         )
       }),
+  },
+  {
+    id: 'appearance',
+    group: 'Options',
+    title: 'Appearance',
+    body: () => <Appearance />,
   },
   {
     id: 'accounts',

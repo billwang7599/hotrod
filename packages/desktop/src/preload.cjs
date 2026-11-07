@@ -13,4 +13,6 @@ contextBridge.exposeInMainWorld('hotrod', {
     return () => ipcRenderer.removeListener('quitting', handler)
   },
   forceQuit: () => ipcRenderer.invoke('force-quit'),
+  vibrancy: process.platform === 'darwin',
+  setAppearance: (/** @type {unknown} */ appearance) => ipcRenderer.send('set-appearance', appearance),
 })
