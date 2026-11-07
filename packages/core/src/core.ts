@@ -239,8 +239,9 @@ export function openCore(options: {
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }
     },
-    close() {
+    async close() {
       for (const chat of chats.values()) stopSession(chat)
+      await machine.stopAll()
     },
   }
 }

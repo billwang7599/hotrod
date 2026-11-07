@@ -5,6 +5,7 @@ type SpawnOptions = { cwd: string; env?: Record<string, string> }
 
 export const KILL_GRACE_MS = 3000
 export const RUN_TIMEOUT_MS = 10000
+const GROUP_POLL_MS = 50
 // These would make an engine bill an API key or another endpoint instead of its own login.
 export const STRIPPED_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -13,6 +14,21 @@ export const STRIPPED_ENV_KEYS = [
   'OPENAI_API_KEY',
 ] as const
 
+const liveGroups = new Set<number>()
+// Engines run detached in their own process group, so nothing else stops them when the core dies.
+process.on('exit', () => {
+  for (const pgid of liveGroups) signal(pgid, 'SIGKILL')
+})
+
+function signal(pgid: number, name: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pgid, name)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function engineEnv(extra: Record<string, string> = {}) {
   const env: Record<string, string | undefined> = { ...process.env }
   for (const key of STRIPPED_ENV_KEYS) delete env[key]
@@ -20,6 +36,8 @@ function engineEnv(extra: Record<string, string> = {}) {
 }
 
 export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs = RUN_TIMEOUT_MS } = {}): Machine {
+  const running = new Set<{ kill(): void; settled: Promise<void> }>()
+
   function spawnProcess(command: string, args: string[], options: SpawnOptions): EngineProcess {
     const child = spawn(command, args, {
       cwd: options.cwd,
@@ -31,19 +49,37 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     child.stderr.setEncoding('utf8')
     const stderrListeners: ((chunk: string) => void)[] = []
     const exitListeners: ((code: number | null) => void)[] = []
+    const pgid = child.pid
     let exited = false
     let forceKill: NodeJS.Timeout | undefined
+    let groupPoll: NodeJS.Timeout | undefined
+    let done = false
+    let settle = () => {}
+    const tracked = { kill, settled: new Promise<void>((resolve) => (settle = resolve)) }
+    const finish = () => {
+      done = true
+      clearTimeout(forceKill)
+      clearInterval(groupPoll)
+      if (pgid !== undefined) liveGroups.delete(pgid)
+      running.delete(tracked)
+      settle()
+    }
+    const groupAlive = () => pgid !== undefined && signal(pgid, 0)
     const exit = (code: number | null) => {
       if (exited) return
       exited = true
       for (const listener of exitListeners) listener(code)
+      if (!groupAlive()) return finish()
+      groupPoll = setInterval(() => groupAlive() || finish(), GROUP_POLL_MS)
     }
-    const signalGroup = (signal: NodeJS.Signals) => {
-      if (child.pid === undefined) return
-      try {
-        process.kill(-child.pid, signal)
-      } catch {}
+    function kill() {
+      if (pgid === undefined || done || forceKill) return
+      signal(pgid, 'SIGTERM')
+      // Runs even after the engine exits: a tool it started may still ignore SIGTERM.
+      forceKill = setTimeout(() => signal(pgid, 'SIGKILL'), killGraceMs)
     }
+    if (pgid !== undefined) liveGroups.add(pgid)
+    running.add(tracked)
     child.stderr.on('data', (chunk: string) => stderrListeners.forEach((listener) => listener(chunk)))
     // A missing command or a dead stdin emits 'error'; unhandled, it would crash the core.
     child.on('error', (error) => {
@@ -58,12 +94,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
         if (child.stdin.writable) child.stdin.write(data)
       },
       closeStdin: () => child.stdin.end(),
-      kill: () => {
-        if (exited || forceKill) return
-        signalGroup('SIGTERM')
-        // Runs even after the engine exits: a tool it started may still ignore SIGTERM.
-        forceKill = setTimeout(() => signalGroup('SIGKILL'), killGraceMs).unref()
-      },
+      kill,
       onStdout: (listener) => child.stdout.on('data', listener),
       onStderr: (listener) => stderrListeners.push(listener),
       onExit: (listener) => exitListeners.push(listener),
@@ -89,7 +120,13 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     })
   }
 
-  return { spawn: spawnProcess, run }
+  async function stopAll() {
+    const stopping = [...running]
+    for (const proc of stopping) proc.kill()
+    await Promise.all(stopping.map((proc) => proc.settled))
+  }
+
+  return { spawn: spawnProcess, run, stopAll }
 }
 
 export const localMachine = createLocalMachine()

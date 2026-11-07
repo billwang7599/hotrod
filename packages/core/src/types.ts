@@ -35,6 +35,7 @@ export interface Machine {
     args: string[],
     options: { cwd: string; env?: Record<string, string> },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
+  stopAll(): Promise<void>
 }
 
 export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }

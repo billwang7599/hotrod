@@ -18,18 +18,19 @@ async function start() {
   await app.whenReady()
   const hotrod = await startCore({ uiDir })
 
+  let closing: Promise<void> | undefined
   let closed = false
   app.on('will-quit', (event) => {
     if (closed) return
     event.preventDefault()
-    void hotrod.close().finally(() => {
+    closing ??= hotrod.close().finally(() => {
       closed = true
       app.quit()
     })
   })
   app.on('window-all-closed', () => app.quit())
-  process.on('SIGINT', () => app.quit())
-  process.on('SIGTERM', () => app.quit())
+  const onSignal = () => (closing ? process.exit(1) : app.quit())
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, onSignal)
 
   const window = new BrowserWindow({
     width: 1200,

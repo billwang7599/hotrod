@@ -37,22 +37,28 @@ export async function startCore(
     port: server.port,
     uiUrl,
     close: async () => {
-      core.close()
-      await server.close()
+      await Promise.all([core.close(), server.close()])
     },
   }
+}
+
+export function closeOnSignals(close: () => Promise<void>) {
+  let closing = false
+  const shutdown = async () => {
+    if (closing) process.exit(1)
+    closing = true
+    await close()
+    process.exit(0)
+  }
+  // Engines sit in their own process groups, so a closed terminal's SIGHUP reaches only the core.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, shutdown)
 }
 
 if (import.meta.main) {
   try {
     const hotrod = await startCore()
     console.log(`Hotrod core on ws://127.0.0.1:${hotrod.port} (garage ${hotrod.garage})`)
-    const shutdown = async () => {
-      await hotrod.close()
-      process.exit(0)
-    }
-    process.on('SIGINT', shutdown)
-    process.on('SIGTERM', shutdown)
+    closeOnSignals(hotrod.close)
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
