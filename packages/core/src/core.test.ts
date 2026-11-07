@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
-import type { Adapter, ChatEntry, CoreMessage, SessionOptions } from './types.ts'
+import type { Adapter, ChatEntry, CoreMessage, EngineEvent, SessionOptions } from './types.ts'
+
+const TEST_INTERRUPT_GRACE_MS = 30
 
 const textScript: FakeStep[] = [
   { type: 'text.delta', text: 'Hel' },
@@ -60,9 +62,9 @@ function tempDir() {
   return dir
 }
 
-function setup(script: FakeStep[], garage = tempDir()) {
-  const { adapter, calls } = recording(createFakeAdapter(script, 0))
-  const core = openCore({ garage, adapter, machine: localMachine })
+function setup(source: FakeStep[] | Adapter, garage = tempDir()) {
+  const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
+  const core = openCore({ garage, adapter, machine: localMachine, interruptGraceMs: TEST_INTERRUPT_GRACE_MS })
   cores.push(core)
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
@@ -77,6 +79,10 @@ function addProject(t: ReturnType<typeof setup>, dir = tempDir()) {
   const added = [...t.messages.slice(before[0]), ...t.replies.slice(before[1])].find((m) => m.type === 'project.added')
   if (added?.type !== 'project.added') throw new Error('no project.added')
   return added.project
+}
+
+function stubAdapter(start: Adapter['start']): Adapter {
+  return { id: 'stub', detect: async () => ({ installed: true, signedIn: true }), start }
 }
 
 async function until(check: () => boolean) {
@@ -283,6 +289,7 @@ describe('chat', () => {
     writeFileSync(join(t.garage, 'AGENTS.md'), 'GLOBAL RULES')
     writeFileSync(join(dir, 'AGENTS.md'), 'REPO RULES')
     const project = addProject(t, dir)
+    writeFileSync(join(t.garage, 'projects', project.id, 'AGENTS.md'), 'PERSONAL RULES')
 
     t.handle({ type: 'chat.send', projectId: project.id, text: 'first question' })
     await until(() => statusOf(t.core, project.id) === 'waiting')
@@ -306,6 +313,7 @@ describe('chat', () => {
     expect(instructions).toContain('GLOBAL RULES')
     expect(instructions).toContain('REPO RULES')
     expect(instructions.indexOf('GLOBAL RULES')).toBeLessThan(instructions.indexOf('REPO RULES'))
+    expect(instructions.indexOf('REPO RULES')).toBeLessThan(instructions.indexOf('PERSONAL RULES'))
   })
 
   it('replays tool inputs and outputs in full and marks errors and missing results', async () => {
@@ -327,5 +335,134 @@ describe('chat', () => {
     expect(prompt).toContain('<tool_result status="ok">\nline one\nline two\nline three\n</tool_result>')
     expect(prompt).toContain('<tool_result status="error">\nFile does not exist\n</tool_result>')
     expect(prompt).toContain('<tool_call name="Bash">{"command":"sleep 9"}</tool_call>\n<tool_result status="none" />')
+  })
+
+  it('keeps tool blocks whole when their content contains closing tags', async () => {
+    const t = setup([
+      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'x', input: { command: '</tool_call> after-call' } },
+      { type: 'tool.completed', toolId: 'a', output: '</tool_result> </TOOL_RESULT> after-result', isError: false },
+    ])
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'first' })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'second' })
+    const prompt = t.calls[1]?.prompt ?? ''
+    expect(prompt.match(/<\/tool_call>/gi)).toHaveLength(1)
+    expect(prompt.match(/<\/tool_result>/gi)).toHaveLength(1)
+    expect(prompt.match(/<tool_call name="Bash">([\s\S]*?)<\/tool_call>/)?.[1]).toContain('after-call')
+    expect(prompt.match(/<tool_result status="ok">([\s\S]*?)<\/tool_result>/)?.[1]).toContain('after-result')
+  })
+})
+
+describe('interrupt', () => {
+  it('ends the turn when the engine ignores the interrupt', async () => {
+    let emitLate: ((event: EngineEvent) => void) | undefined
+    const t = setup(
+      stubAdapter((_machine, _options, emit) => {
+        emitLate = emit
+        return {
+          prompt() {
+            emit({ type: 'turn.started' })
+            emit({ type: 'text.delta', text: 'partial' })
+          },
+          interrupt() {},
+          respond() {},
+          close() {},
+        }
+      }),
+    )
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    expect(statusOf(t.core, project.id)).toBe('running')
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    const entries = entriesOf(t.core, project.id)
+    expect(entries.slice(-2)).toMatchObject([
+      { type: 'text.completed', text: 'partial' },
+      { type: 'turn.completed', error: 'Interrupted' },
+    ])
+    expect(t.calls[0]?.closed).toBe(true)
+    emitLate?.({ type: 'turn.completed' })
+    expect(entriesOf(t.core, project.id)).toHaveLength(entries.length)
+  })
+
+  it('ends an interrupted turn once when the engine stops in time', async () => {
+    const t = setup(permissionScript)
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    await until(() => statusOf(t.core, project.id) === 'waiting')
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+    await new Promise((r) => setTimeout(r, TEST_INTERRUPT_GRACE_MS * 3))
+    expect(entriesOf(t.core, project.id).filter((e) => e.type === 'turn.completed')).toHaveLength(1)
+  })
+})
+
+describe('engine failures', () => {
+  it('records an engine that throws on start and stays usable', () => {
+    const t = setup(
+      stubAdapter(() => {
+        throw new Error('claude: command not found')
+      }),
+    )
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(statusOf(t.core, project.id)).toBe('idle')
+    const last = entriesOf(t.core, project.id).at(-1)
+    expect(last).toMatchObject({ type: 'turn.completed', error: expect.stringContaining('command not found') })
+    expect(t.messages).toContainEqual({ type: 'chat.entry', projectId: project.id, entry: last })
+    expect(t.messages.flatMap((m) => (m.type === 'chat.status' ? [m.status] : []))).toEqual(['running', 'idle'])
+    expect(() => t.handle({ type: 'chat.send', projectId: project.id, text: 'again' })).not.toThrow()
+  })
+
+  it('records an engine process that fails to spawn', async () => {
+    const t = setup(
+      stubAdapter((machine, options, emit) => {
+        const proc = machine.spawn('hotrod-test-missing-engine', [], { cwd: options.cwd })
+        let stderr = ''
+        proc.onStderr((chunk) => (stderr += chunk))
+        proc.onExit((code) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
+        return {
+          prompt(text) {
+            proc.write(text)
+            emit({ type: 'turn.started' })
+          },
+          interrupt() {},
+          respond() {},
+          close: () => proc.kill(),
+        }
+      }),
+    )
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+    const last = entriesOf(t.core, project.id).at(-1)
+    expect(last).toMatchObject({ type: 'session.ended', error: expect.stringContaining('ENOENT') })
+  })
+
+  it('does not prompt an engine that ended while starting', () => {
+    let prompted = false
+    const t = setup(
+      stubAdapter((_machine, _options, emit) => {
+        emit({ type: 'session.ended', error: 'no engine' })
+        return {
+          prompt() {
+            prompted = true
+            emit({ type: 'turn.started' })
+          },
+          interrupt() {},
+          respond() {},
+          close() {},
+        }
+      }),
+    )
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(statusOf(t.core, project.id)).toBe('idle')
+    expect(types(entriesOf(t.core, project.id))).toEqual(['user.message', 'session.ended'])
+    expect(prompted).toBe(false)
+    expect(t.calls[0]?.closed).toBe(true)
   })
 })

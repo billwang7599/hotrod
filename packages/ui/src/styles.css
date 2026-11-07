@@ -201,14 +201,10 @@ pre {
   padding: 20px;
 }
 
-.user,
-.assistant {
+.user {
   max-width: 760px;
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.user {
   align-self: flex-end;
   background: var(--raised);
   border: 1px solid var(--border);
@@ -216,7 +212,106 @@ pre {
   padding: 8px 12px;
 }
 
-.streaming::after {
+.assistant {
+  max-width: 760px;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown :is(p, ul, ol, pre, blockquote, table) {
+  margin: 0 0 10px;
+}
+
+.markdown :is(h1, h2, h3, h4, h5, h6) {
+  margin: 16px 0 8px;
+  line-height: 1.3;
+}
+
+.markdown h1 {
+  font-size: 20px;
+}
+
+.markdown h2 {
+  font-size: 17px;
+}
+
+.markdown :is(h3, h4, h5, h6) {
+  font-size: 15px;
+}
+
+.markdown :is(ul, ol) {
+  padding-left: 22px;
+}
+
+.markdown li + li {
+  margin-top: 2px;
+}
+
+.markdown a {
+  color: var(--accent);
+}
+
+.markdown code {
+  font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.markdown pre {
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.markdown pre code {
+  font: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+.markdown blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+
+.markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown :is(th, td) {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+}
+
+.markdown th {
+  background: var(--raised);
+}
+
+.markdown hr {
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.streaming > :last-child::after {
   content: '▍';
   color: var(--accent);
   animation: pulse 1s steps(2) infinite;

@@ -22,7 +22,10 @@ const demoScript: FakeStep[] = [
     input: { command: 'ls -la' },
     output: 'total 16\n-rw-r--r--  1 you  staff  120 README.md\ndrwxr-xr-x  4 you  staff  128 src',
   },
-  ...demoReply('This folder has a README and a src directory. This reply came from the fake engine.'),
+  ...demoReply(
+    'This folder has:\n\n- a `README.md`\n- a `src` directory\n\nTo list it yourself:\n\n```sh\nls -la\n```\n\n' +
+      'This reply came from the **fake engine**.',
+  ),
 ]
 
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
