@@ -10,7 +10,11 @@ const demoReply = (text: string): FakeStep[] => [
   { type: 'text.completed', text },
 ]
 
+const demoThinking = (text: string): FakeStep[] =>
+  text.split(/(?<= )/).map((word): FakeStep => ({ type: 'thinking.delta', text: word }))
+
 const demoScript: FakeStep[] = [
+  ...demoThinking('The user wants to know what is here. Listing the folder is the quickest way to find out.'),
   ...demoReply("I'll look at what's in this folder first."),
   { type: 'tool.started', toolId: 'demo-ls', name: 'Bash', kind: 'shell', summary: 'ls -la', input: { command: 'ls -la' } },
   {
@@ -22,6 +26,7 @@ const demoScript: FakeStep[] = [
     input: { command: 'ls -la' },
     output: 'total 16\n-rw-r--r--  1 you  staff  120 README.md\ndrwxr-xr-x  4 you  staff  128 src',
   },
+  ...demoThinking('A README and a src directory. I will describe both briefly.'),
   ...demoReply(
     'This folder has:\n\n- a `README.md`\n- a `src` directory\n\nTo list it yourself:\n\n```sh\nls -la\n```\n\n' +
       'This reply came from the **fake engine**.',

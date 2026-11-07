@@ -1,8 +1,9 @@
-import type { ChatEntry, ChatStatus, CoreMessage, EngineStatus, ProjectState } from '@hotrod/core/types'
+import type { ChatEntry, ChatStatus, CoreMessage, EngineInfo, ProjectState } from '@hotrod/core/types'
 
 export type Item =
   | { kind: 'user'; text: string }
   | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string }
   | {
       kind: 'tool'
       toolId: string
@@ -22,11 +23,19 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ProjectView = { id: string; name: string; path: string; status: ChatStatus; items: Item[]; draft: string }
+export type ProjectView = {
+  id: string
+  name: string
+  path: string
+  engine: string
+  status: ChatStatus
+  items: Item[]
+  draft: string
+}
 
 export type State = {
   connected: boolean
-  engine: ({ id: string } & EngineStatus) | null
+  engines: EngineInfo[]
   projects: ProjectView[]
   selectedId: string | null
   toasts: { id: number; message: string }[]
@@ -41,7 +50,7 @@ export type Action =
 
 export const initialState: State = {
   connected: false,
-  engine: null,
+  engines: [],
   projects: [],
   selectedId: null,
   toasts: [],
@@ -102,7 +111,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
     }
     case 'turn.completed':
     case 'session.ended': {
-      const settled = items.map((i): Item =>
+      const settled = items.filter((i) => i.kind !== 'thinking').map((i): Item =>
         i.kind === 'tool' && (i.state === 'running' || i.state === 'waiting')
           ? { ...i, state: 'stopped' }
           : i.kind === 'permission' && i.outcome === 'pending'
@@ -120,9 +129,10 @@ const toView = (p: ProjectState): ProjectView => ({
   id: p.id,
   name: p.name,
   path: p.path,
+  engine: p.engine,
   status: p.status,
   items: p.entries.reduce(applyEntry, []),
-  draft: '',
+  draft: p.draft,
 })
 
 function updateProject(state: State, id: string, update: (p: ProjectView) => ProjectView): State {
@@ -137,13 +147,15 @@ export function reduce(state: State, action: Action): State {
     case 'snapshot': {
       const projects = action.projects.map(toView)
       const selectedId = projects.some((p) => p.id === state.selectedId) ? state.selectedId : (projects[0]?.id ?? null)
-      return { ...state, engine: action.engine, projects, selectedId }
+      return { ...state, engines: action.engines, projects, selectedId }
     }
     case 'project.added': {
       const known = state.projects.some((p) => p.id === action.project.id)
       const projects = known ? state.projects : [...state.projects, toView(action.project)]
       return { ...state, projects, selectedId: action.project.id }
     }
+    case 'project.updated':
+      return updateProject(state, action.project.id, (p) => ({ ...p, ...action.project }))
     case 'chat.entry':
       return updateProject(state, action.projectId, (p) => ({
         ...p,
@@ -152,6 +164,15 @@ export function reduce(state: State, action: Action): State {
       }))
     case 'chat.delta':
       return updateProject(state, action.projectId, (p) => ({ ...p, draft: p.draft + action.text }))
+    case 'chat.thinking':
+      return updateProject(state, action.projectId, (p) => {
+        const last = p.items.at(-1)
+        const items: Item[] =
+          last?.kind === 'thinking'
+            ? [...p.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
+            : [...p.items, { kind: 'thinking', text: action.text }]
+        return { ...p, items }
+      })
     case 'chat.status':
       return updateProject(state, action.projectId, (p) => ({ ...p, status: action.status }))
     case 'error':
@@ -167,4 +188,12 @@ export function reduce(state: State, action: Action): State {
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
+}
+
+export function engineOptions(engines: EngineInfo[], current: string): { id: string; label: string }[] {
+  const options = engines.map((e) => ({
+    id: e.id,
+    label: !e.installed ? `${e.id} (not installed)` : !e.signedIn ? `${e.id} (not signed in)` : e.id,
+  }))
+  return options.some((o) => o.id === current) ? options : [...options, { id: current, label: `${current} (unknown)` }]
 }

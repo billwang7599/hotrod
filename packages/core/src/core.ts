@@ -37,8 +37,21 @@ const INTERRUPT_GRACE_MS = 5000
 
 export type Core = ReturnType<typeof openCore>
 
-export function openCore(options: { garage: string; adapter: Adapter; machine: Machine; interruptGraceMs?: number }) {
-  const { garage, adapter, machine, interruptGraceMs = INTERRUPT_GRACE_MS } = options
+export function openCore(options: {
+  garage: string
+  adapters: Adapter[]
+  defaultEngine: string
+  machine: Machine
+  interruptGraceMs?: number
+}) {
+  const { garage, adapters, defaultEngine, machine, interruptGraceMs = INTERRUPT_GRACE_MS } = options
+  const adapterFor = (engine: string) => adapters.find((adapter) => adapter.id === engine)
+  const checkEngine = (engine: string) => {
+    if (!adapterFor(engine)) {
+      throw new Error(`Unknown engine "${engine}". Pick one of: ${adapters.map((a) => a.id).join(', ')}`)
+    }
+  }
+  checkEngine(defaultEngine)
   const projectsDir = join(garage, 'projects')
   mkdirSync(projectsDir, { recursive: true })
   const chats = new Map<string, Chat>()
@@ -46,7 +59,14 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
 
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
   const logPath = (id: string) => join(projectsDir, id, 'chats', 'main', 'log.jsonl')
-  const state = (chat: Chat): ProjectState => ({ ...chat.project, status: chat.status, entries: chat.entries })
+  const saveProject = (project: Project) =>
+    writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
+  const state = (chat: Chat): ProjectState => ({
+    ...chat.project,
+    status: chat.status,
+    entries: chat.entries,
+    draft: chat.unsavedText,
+  })
 
   const append = (chat: Chat, entry: ChatEntry) => {
     chat.entries.push(entry)
@@ -86,7 +106,7 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
   for (const id of readdirSync(projectsDir)) {
     const projectFile = join(projectsDir, id, 'project.json')
     if (!existsSync(projectFile)) continue
-    const project: Project = JSON.parse(readFileSync(projectFile, 'utf8'))
+    const project: Project = { engine: defaultEngine, ...JSON.parse(readFileSync(projectFile, 'utf8')) }
     const log = existsSync(logPath(id)) ? readFileSync(logPath(id), 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
     const chat: Chat = { project, entries, status: 'idle', unsavedText: '', pendingRequests: new Set() }
@@ -112,17 +132,29 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
     let id = base
     for (let n = 2; taken.has(id.toLowerCase()); n++) id = `${base}-${n}`
 
-    const project: Project = { id, name, path: realPath }
+    const project: Project = { id, name, path: realPath, engine: defaultEngine }
     mkdirSync(join(projectsDir, id, 'chats', 'main'), { recursive: true })
-    writeFileSync(join(projectsDir, id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
+    saveProject(project)
     writeFileSync(logPath(id), '')
     const chat: Chat = { project, entries: [], status: 'idle', unsavedText: '', pendingRequests: new Set() }
     chats.set(id, chat)
     broadcast({ type: 'project.added', project: state(chat) })
   }
 
+  const setEngine = (chat: Chat, engine: string) => {
+    checkEngine(engine)
+    if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
+    chat.project = { ...chat.project, engine }
+    saveProject(chat.project)
+    broadcast({ type: 'project.updated', project: chat.project })
+  }
+
   const send = (chat: Chat, text: string) => {
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
+    const adapter = adapterFor(chat.project.engine)
+    if (!adapter) {
+      throw new Error(`Engine "${chat.project.engine}" is not available. Pick another engine for this project.`)
+    }
     const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
     append(chat, { at: new Date().toISOString(), type: 'user.message', text })
     setStatus(chat, 'running')
@@ -144,6 +176,10 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
       if (event.type === 'text.delta') {
         chat.unsavedText += event.text
         broadcast({ type: 'chat.delta', projectId: chat.project.id, text: event.text })
+        return
+      }
+      if (event.type === 'thinking.delta') {
+        broadcast({ type: 'chat.thinking', projectId: chat.project.id, text: event.text })
         return
       }
       if (event.type === 'text.completed') chat.unsavedText = ''
@@ -190,6 +226,8 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
       switch (message.type) {
         case 'project.add':
           return addProject(String(message.path), reply)
+        case 'project.setEngine':
+          return setEngine(chatFor(message.projectId), String(message.engine))
         case 'chat.send':
           if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
           return send(chatFor(message.projectId), message.text)

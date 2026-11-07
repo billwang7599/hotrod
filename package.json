@@ -2,11 +2,12 @@
   "name": "hotrod",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "apps/*"],
   "engines": { "node": ">=26" },
   "scripts": {
     "dev": "npm run dev -w @hotrod/core & npm run dev -w @hotrod/ui & wait",
-    "typecheck": "tsc -p packages/core && tsc -p packages/ui",
+    "desktop": "npm run build -w @hotrod/ui && electron apps/desktop",
+    "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p apps/desktop",
     "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {

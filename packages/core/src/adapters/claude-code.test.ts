@@ -1,44 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, EngineProcess, Machine } from '../types.ts'
+import type { EngineEvent } from '../types.ts'
 import { claudeCode } from './claude-code.ts'
+import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}.jsonl`, import.meta.url), 'utf8')
-
-function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
-  const spawned: { command: string; args: string[]; cwd: string }[] = []
-  const written: string[] = []
-  const state = { stdinClosed: false, killed: false }
-  let stdout = (_: string) => {}
-  let stderr = (_: string) => {}
-  let exit = (_: number | null) => {}
-  const proc: EngineProcess = {
-    write: (data) => written.push(data),
-    closeStdin: () => (state.stdinClosed = true),
-    kill: () => (state.killed = true),
-    onStdout: (l) => (stdout = l),
-    onStderr: (l) => (stderr = l),
-    onExit: (l) => (exit = l),
-  }
-  const machine: Machine = {
-    spawn(command, args, options) {
-      spawned.push({ command, args, cwd: options.cwd })
-      return proc
-    },
-    async run(command, args) {
-      return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
-    },
-  }
-  return {
-    machine,
-    spawned,
-    state,
-    sent: () => written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
-    stdout: (chunk: string) => stdout(chunk),
-    stderr: (chunk: string) => stderr(chunk),
-    exit: (code: number | null) => exit(code),
-  }
-}
 
 function startSession(instructions = '') {
   const fake = fakeMachine()
@@ -66,6 +32,7 @@ describe('claudeCode adapter', () => {
           '--strict-mcp-config',
           '--disable-slash-commands',
           '--settings', '{"autoMemoryEnabled":false}',
+          '--thinking-display', 'summarized',
         ],
       },
     ])
@@ -89,6 +56,38 @@ describe('claudeCode adapter', () => {
       { type: 'text.completed', text: 'Hello there' },
       { type: 'turn.completed' },
     ])
+  })
+
+  it("streams thinking text but not a subagent's", () => {
+    const { fake, events } = startSession()
+    const thinking = (text: string, parent: string | null = null) =>
+      JSON.stringify({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: text } },
+        parent_tool_use_id: parent,
+      }) + '\n'
+    fake.stdout(thinking('Let me ') + thinking('check.') + thinking('inner', 'toolu_1'))
+    expect(events).toEqual([
+      { type: 'thinking.delta', text: 'Let me ' },
+      { type: 'thinking.delta', text: 'check.' },
+    ])
+  })
+
+  it('streams the thinking summary Claude Code sends with summarized display', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Think briefly, then answer: is 391 prime? One word.')
+    fake.stdout(fixture('thinking-summarized'))
+    const thinking = events.flatMap((e) => (e.type === 'thinking.delta' ? [e.text] : [])).join('')
+    expect(thinking).toBe("I'm checking the factorization: 17 times 23 does come to 391, so that holds.\n\n")
+    expect(events.at(-2)).toEqual({ type: 'text.completed', text: 'No.' })
+  })
+
+  it('shows nothing for thinking that arrives as a signature only', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Think hard: is 91 prime? Answer in one short sentence.')
+    fake.stdout(fixture('thinking-redacted'))
+    expect(events.map((e) => e.type)).not.toContain('thinking.delta')
+    expect(events.at(-2)).toEqual({ type: 'text.completed', text: "No, 91 isn't prime, because 91 = 7 × 13." })
   })
 
   it('asks permission for a tool call and passes the input back on allow', () => {

@@ -25,6 +25,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
   color: inherit;
@@ -109,6 +110,18 @@ pre {
   white-space: nowrap;
 }
 
+.project-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-engine {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .project:hover {
   background: var(--raised);
 }
@@ -190,6 +203,22 @@ pre {
 .chat-path {
   color: var(--muted);
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engine-select {
+  margin-left: auto;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.engine-select:disabled {
+  opacity: 0.4;
 }
 
 .messages {
@@ -311,7 +340,10 @@ pre {
   border-top: 1px solid var(--border);
 }
 
-.streaming > :last-child::after {
+.streaming
+  :is(p, li, pre, h1, h2, h3, h4, h5, h6, th, td):last-child:not(:has(> :is(p, ul, ol, pre, blockquote, table))):not(
+    .streaming :not(:last-child) *
+  )::after {
   content: '▍';
   color: var(--accent);
   animation: pulse 1s steps(2) infinite;
@@ -321,6 +353,30 @@ pre {
   color: var(--red);
   border-left: 3px solid var(--red);
   padding-left: 10px;
+}
+
+.thinking {
+  max-width: 760px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.thinking summary {
+  cursor: pointer;
+  font-style: italic;
+}
+
+.thinking:last-child summary {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.thinking-text {
+  max-height: 320px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  white-space: pre-wrap;
 }
 
 .tool {

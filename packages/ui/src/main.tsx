@@ -1,48 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientMessage } from '@hotrod/core/types'
+import type { ClientMessage, EngineInfo } from '@hotrod/core/types'
+import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
-import { initialState, reduce, type Action, type Item, type ProjectView } from './state.ts'
+import { engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
-const CORE_URL = import.meta.env.VITE_HOTROD_CORE_URL ?? 'ws://127.0.0.1:4317'
-const MIN_RETRY_MS = 500
-const MAX_RETRY_MS = 10_000
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedProject'
 
-function useCore(dispatch: (action: Action) => void) {
-  const socketRef = useRef<WebSocket | null>(null)
-  useEffect(() => {
-    let retryMs = MIN_RETRY_MS
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let stopped = false
-    const connect = () => {
-      const socket = new WebSocket(CORE_URL)
-      socketRef.current = socket
-      socket.onopen = () => {
-        retryMs = MIN_RETRY_MS
-        dispatch({ type: 'connection', connected: true })
-      }
-      socket.onmessage = (e) => dispatch(JSON.parse(e.data))
-      socket.onclose = () => {
-        dispatch({ type: 'connection', connected: false })
-        if (stopped) return
-        timer = setTimeout(connect, retryMs)
-        retryMs = Math.min(retryMs * 2, MAX_RETRY_MS)
-      }
-    }
-    connect()
-    return () => {
-      stopped = true
-      clearTimeout(timer)
-      socketRef.current?.close()
-    }
-  }, [dispatch])
-  return useCallback((message: ClientMessage) => {
-    const socket = socketRef.current
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
-  }, [])
+declare global {
+  interface Window {
+    hotrod?: { pickFolder(): Promise<string | null>; onAddProject(listener: () => void): () => void }
+  }
 }
 
 type ItemProps = { item: Item; project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }
@@ -55,6 +25,13 @@ function ItemView({ item, project, connected, send }: ItemProps) {
       return <Markdown className="assistant" text={item.text} />
     case 'error':
       return <div className="turn-error">{item.text}</div>
+    case 'thinking':
+      return (
+        <details className="thinking">
+          <summary>Thinking…</summary>
+          <div className="thinking-text">{item.text}</div>
+        </details>
+      )
     case 'tool':
       return (
         <details className={`tool ${item.state}`}>
@@ -100,7 +77,9 @@ function ItemView({ item, project, connected, send }: ItemProps) {
   }
 }
 
-function Chat({ project, connected, send }: { project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }) {
+type ChatProps = { project: ProjectView; engines: EngineInfo[]; connected: boolean; send: (m: ClientMessage) => void }
+
+function Chat({ project, engines, connected, send }: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -132,6 +111,19 @@ function Chat({ project, connected, send }: { project: ProjectView; connected: b
       <header className="chat-header">
         <span className="chat-name">{project.name}</span>
         <span className="chat-path">{project.path}</span>
+        <select
+          className="engine-select"
+          aria-label="Engine"
+          value={project.engine}
+          disabled={!canSend}
+          onChange={(e) => send({ type: 'project.setEngine', projectId: project.id, engine: e.target.value })}
+        >
+          {engineOptions(engines, project.engine).map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </header>
       <div
         className="messages"
@@ -204,7 +196,7 @@ function App() {
   }, [state.selectedId])
   const [path, setPath] = useState('')
   const selected = state.projects.find((p) => p.id === state.selectedId)
-  const engine = state.engine
+  const engine = state.engines.find((e) => e.id === selected?.engine)
 
   const addProject = (e: FormEvent) => {
     e.preventDefault()
@@ -212,6 +204,14 @@ function App() {
     send({ type: 'project.add', path: path.trim() })
     setPath('')
   }
+
+  const connected = state.connected
+  const pickProject = useCallback(async () => {
+    if (!connected || !window.hotrod) return
+    const picked = await window.hotrod.pickFolder()
+    if (picked) send({ type: 'project.add', path: picked })
+  }, [connected, send])
+  useEffect(() => window.hotrod?.onAddProject(() => void pickProject()), [pickProject])
 
   return (
     <div className="app">
@@ -226,19 +226,28 @@ function App() {
               onClick={() => dispatch({ type: 'select', projectId: p.id })}
             >
               <span className={`dot ${p.status}`} />
-              {p.name}
+              <span className="project-name">{p.name}</span>
+              <span className="project-engine">{p.engine}</span>
             </button>
           ))}
         </nav>
-        <form className="add-project" onSubmit={addProject}>
-          <input
-            value={path}
-            placeholder="/absolute/path/to/project"
-            spellCheck={false}
-            onChange={(e) => setPath(e.target.value)}
-          />
-          <button disabled={!state.connected || !path.trim()}>Add project</button>
-        </form>
+        {window.hotrod ? (
+          <div className="add-project">
+            <button disabled={!connected} onClick={() => void pickProject()}>
+              Add project…
+            </button>
+          </div>
+        ) : (
+          <form className="add-project" onSubmit={addProject}>
+            <input
+              value={path}
+              placeholder="/absolute/path/to/project"
+              spellCheck={false}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <button disabled={!connected || !path.trim()}>Add project</button>
+          </form>
+        )}
       </aside>
       <div className="main">
         {!state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>}
@@ -248,7 +257,7 @@ function App() {
           </div>
         )}
         {selected ? (
-          <Chat key={selected.id} project={selected} connected={state.connected} send={send} />
+          <Chat key={selected.id} project={selected} engines={state.engines} connected={state.connected} send={send} />
         ) : (
           <div className="empty">Add a project folder to start.</div>
         )}

@@ -4,6 +4,7 @@ export type EngineEvent =
   | { type: 'turn.started' }
   | { type: 'text.delta'; text: string }
   | { type: 'text.completed'; text: string }
+  | { type: 'thinking.delta'; text: string }
   | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown }
   | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
   | {
@@ -38,6 +39,8 @@ export interface Machine {
 
 export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }
 
+export type EngineInfo = { id: string } & EngineStatus
+
 export type SessionOptions = { cwd: string; instructions: string }
 
 export interface Session {
@@ -53,28 +56,31 @@ export interface Adapter {
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
 }
 
-export type Project = { id: string; name: string; path: string }
+export type Project = { id: string; name: string; path: string; engine: string }
 
 export type ChatStatus = 'idle' | 'running' | 'waiting'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean }
-  | Exclude<EngineEvent, { type: 'text.delta' }>
+  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
-export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[] }
+export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[]; draft: string }
 
 export type ClientMessage =
   | { type: 'project.add'; path: string }
+  | { type: 'project.setEngine'; projectId: string; engine: string }
   | { type: 'chat.send'; projectId: string; text: string }
   | { type: 'chat.interrupt'; projectId: string }
   | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
 
 export type CoreMessage =
-  | { type: 'snapshot'; engine: { id: string } & EngineStatus; projects: ProjectState[] }
+  | { type: 'snapshot'; engines: EngineInfo[]; projects: ProjectState[] }
   | { type: 'project.added'; project: ProjectState }
+  | { type: 'project.updated'; project: Project }
   | { type: 'chat.entry'; projectId: string; entry: ChatEntry }
   | { type: 'chat.delta'; projectId: string; text: string }
+  | { type: 'chat.thinking'; projectId: string; text: string }
   | { type: 'chat.status'; projectId: string; status: ChatStatus }
   | { type: 'error'; message: string }

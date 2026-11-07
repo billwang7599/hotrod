@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
@@ -10,6 +10,7 @@ import { startServer } from './server.ts'
 import type { CoreMessage } from './types.ts'
 
 const origin = 'http://localhost:4318'
+const engines = [{ id: 'fake', installed: true, signedIn: true }]
 const cleanups: (() => void | Promise<void>)[] = []
 
 afterEach(async () => {
@@ -19,10 +20,15 @@ afterEach(async () => {
 async function start() {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const project = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const core = openCore({ garage, adapter: createFakeAdapter(undefined, 0), machine: localMachine })
+  const core = openCore({
+    garage,
+    adapters: [createFakeAdapter(undefined, 0)],
+    defaultEngine: 'fake',
+    machine: localMachine,
+  })
   const server = await startServer({
     core,
-    engine: { id: 'fake', installed: true, signedIn: true },
+    engines,
     port: 0,
     uiOrigin: origin,
   })
@@ -67,7 +73,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   await until(() => a.messages.length > 0 && b.messages.length > 0)
   expect(a.messages[0]).toEqual({
     type: 'snapshot',
-    engine: { id: 'fake', installed: true, signedIn: true },
+    engines,
     projects: [],
   })
 
@@ -76,12 +82,18 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   const added = b.messages.find((m) => m.type === 'project.added')
   if (added?.type !== 'project.added') throw new Error('no project')
 
+  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'nope' }))
+  await until(() => a.messages.some((m) => m.type === 'error'))
+  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'fake' }))
+  await until(() => b.messages.some((m) => m.type === 'project.updated'))
+  expect(b.messages.some((m) => m.type === 'error')).toBe(false)
+
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'hi' }))
   await until(() => b.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting'))
   expect(b.messages.some((m) => m.type === 'chat.delta')).toBe(true)
 
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'again' }))
-  await until(() => a.messages.some((m) => m.type === 'error'))
+  await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 })
 
@@ -92,4 +104,49 @@ it('answers bad messages with an error', async () => {
   a.socket.send('not json')
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: 'nope', text: 'hi' }))
   await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
+})
+
+it('serves the UI folder when given one', async () => {
+  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const uiDir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  mkdirSync(join(uiDir, 'assets'))
+  writeFileSync(join(uiDir, 'index.html'), '<html>hotrod</html>')
+  writeFileSync(join(uiDir, 'assets', 'app.js'), 'console.log(1)')
+  writeFileSync(join(garage, 'secret.txt'), 'secret')
+  const core = openCore({
+    garage,
+    adapters: [createFakeAdapter(undefined, 0)],
+    defaultEngine: 'fake',
+    machine: localMachine,
+  })
+  const server = await startServer({
+    core,
+    engines,
+    port: 0,
+    uiOrigin: origin,
+    uiDir,
+  })
+  cleanups.push(() => {
+    core.close()
+    rmSync(garage, { recursive: true, force: true })
+    rmSync(uiDir, { recursive: true, force: true })
+  })
+  cleanups.push(() => server.close())
+  const base = `http://127.0.0.1:${server.port}`
+
+  const index = await fetch(`${base}/`)
+  expect(index.headers.get('content-type')).toContain('text/html')
+  expect(await index.text()).toBe('<html>hotrod</html>')
+  const script = await fetch(`${base}/assets/app.js`)
+  expect(script.headers.get('content-type')).toContain('text/javascript')
+  expect(await script.text()).toBe('console.log(1)')
+  expect(await (await fetch(`${base}/projects/x`)).text()).toBe('<html>hotrod</html>')
+  const escaped = await fetch(`${base}/..%2f${basename(garage)}%2fsecret.txt`)
+  expect(await escaped.text()).not.toContain('secret')
+})
+
+it('serves no files without a UI folder', async () => {
+  const { url } = await start()
+  const response = await fetch(url.replace('ws:', 'http:'))
+  expect(response.ok).toBe(false)
 })
