@@ -289,6 +289,9 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
 }
 
+export const storedFlag = (value: string | null, fallback: boolean) =>
+  value === 'true' || value === 'false' ? value === 'true' : fallback
+
 export const folderName = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
 
 export const engineProblem = (engine: EngineInfo) =>

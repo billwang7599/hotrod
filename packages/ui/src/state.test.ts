@@ -12,6 +12,7 @@ import {
   MAIN_CHAT_ID,
   modelMenu,
   reduce,
+  storedFlag,
   type Action,
   type ChatView,
   type State,
@@ -428,5 +429,15 @@ describe('modelMenu', () => {
     expect(modelMenu(view({ ranModel: 'opus-5-5' }), offers, noLists).options[0]?.label).toBe('Auto · Opus 5.5')
     expect(modelMenu(view({ ranModel: 'other/x' }), offers, undefined).options[0]?.label).toBe('Auto · other/x')
     expect(modelMenu(view(), undefined, undefined)).toEqual({ value: '', options: [{ id: '', label: 'Auto' }] })
+  })
+})
+
+describe('storedFlag', () => {
+  it('reads a saved true or false, and falls back when nothing usable is saved', () => {
+    expect(storedFlag('true', false)).toBe(true)
+    expect(storedFlag('false', true)).toBe(false)
+    expect(storedFlag(null, true)).toBe(true)
+    expect(storedFlag(null, false)).toBe(false)
+    expect(storedFlag('yes', true)).toBe(true)
   })
 })

@@ -70,6 +70,36 @@ function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean
   )
 }
 
+type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
+
+function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      className="grid place-items-center aria-pressed:text-text"
+      aria-label={label}
+      aria-pressed={open}
+      title={`${open ? 'Hide' : 'Show'} ${noun}`}
+      onClick={toggle}
+    >
+      <svg
+        className={side === 'left' ? '-scale-x-100' : ''}
+        width="16"
+        height="16"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        aria-hidden="true"
+      >
+        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+        <path d="M10 2.5v11" />
+        {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
+      </svg>
+    </Button>
+  )
+}
+
 type ItemProps = { item: Item; chat: ChatView; connected: boolean; send: (m: ClientMessage) => void }
 
 function ItemView({ item, chat, connected, send }: ItemProps) {
@@ -169,6 +199,8 @@ type ChatProps = {
   connected: boolean
   send: (m: ClientMessage) => void
   openSettings: (page?: SettingsPage) => void
+  sidebarOpen: boolean
+  toggleSidebar: () => void
   contextOpen: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
@@ -177,7 +209,7 @@ type ChatProps = {
 }
 
 export function Chat(props: ChatProps) {
-  const { chat, folder, engines, accounts, connected, send, openSettings, contextOpen, toggleContext } = props
+  const { chat, folder, engines, accounts, connected, send, openSettings } = props
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -235,8 +267,15 @@ export function Chat(props: ChatProps) {
   return (
     <div className="flex min-h-0 flex-1">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-44 shrink-0 items-center gap-6 border-b pr-12 pl-20">
-          <div className="flex min-w-0 flex-1 items-baseline gap-10 whitespace-nowrap">
+        <header className="flex h-44 shrink-0 items-center gap-6 border-b px-12">
+          <PanelToggle
+            side="left"
+            label="Sidebar"
+            noun="sidebar"
+            open={props.sidebarOpen}
+            toggle={props.toggleSidebar}
+          />
+          <div className="flex min-w-0 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
             <span className="max-w-[50%] shrink-0 truncate font-semibold">{chat.name}</span>
             <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
               {folder ?? 'Not tied to a folder'}
@@ -273,23 +312,13 @@ export function Chat(props: ChatProps) {
               <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
             </ChipSelect>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="grid place-items-center aria-pressed:text-text"
-            aria-label="Context panel"
-            aria-pressed={contextOpen}
-            title={contextOpen ? 'Hide context' : 'Show context'}
-            onClick={toggleContext}
-          >
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-              <path d="M10 2.5v11" />
-              {contextOpen && (
-                <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />
-              )}
-            </svg>
-          </Button>
+          <PanelToggle
+            side="right"
+            label="Context panel"
+            noun="context"
+            open={props.contextOpen}
+            toggle={props.toggleContext}
+          />
         </header>
         <div
           className="flex flex-1 flex-col overflow-y-auto p-24"
@@ -468,7 +497,7 @@ export function Chat(props: ChatProps) {
         </div>
       </main>
       <AnimatePresence initial={false}>
-        {contextOpen && (
+        {props.contextOpen && (
           <m.div
             key="context"
             className="flex shrink-0 overflow-hidden"
