@@ -4,7 +4,6 @@ import { AnimatePresence, domAnimation, LazyMotion, MotionConfig, useReducedMoti
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
-import logo from './logo.svg'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce } from './state.ts'
@@ -80,10 +79,7 @@ function App() {
         <div className="flex h-screen">
           <aside className="flex w-232 shrink-0 flex-col border-r bg-panel max-[900px]:w-200">
             <div className="flex h-44 items-center justify-between pr-8 pl-16">
-              <span className="flex items-center gap-6 font-bold tracking-[0.02em] text-accent">
-                <img src={logo} alt="" width={18} height={18} />
-                Hotrod
-              </span>
+              <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
               <Button
                 variant="ghost"
                 size="icon"
