@@ -41,7 +41,7 @@ export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: str
 
 export type EngineInfo = { id: string } & EngineStatus
 
-export type SessionOptions = { cwd: string; instructions: string; accountDir?: string }
+export type SessionOptions = { cwd: string; instructions: string; accountDir?: string; apiKey?: string }
 
 export interface Session {
   prompt(text: string): void
@@ -67,14 +67,16 @@ export interface Adapter {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
     logout(machine: Machine, accountDir: string): Promise<void>
+    apiKeys?: boolean
   }
 }
 
-export type Account = { id: string; name: string; label?: string; signedIn?: boolean }
+export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean }
 
 export type EngineAccounts = {
   engine: string
   active: string
+  apiKeys: boolean
   accounts: Account[]
   login?: { name: string; url?: string; error?: string }
 }
@@ -99,6 +101,7 @@ export type ClientMessage =
   | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
+  | { type: 'account.addApiKey'; engine: string; name: string; key: string }
   | { type: 'account.cancelLogin'; engine: string }
   | { type: 'account.use'; engine: string; accountId: string }
   | { type: 'account.remove'; engine: string; accountId: string }

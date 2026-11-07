@@ -60,6 +60,7 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
         }
       },
       logout: async () => {},
+      apiKeys: true,
     },
     start(_machine, _options, emit) {
       let timer: ReturnType<typeof setTimeout> | undefined

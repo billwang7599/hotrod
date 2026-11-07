@@ -219,6 +219,7 @@ export function engineOptions(engines: EngineInfo[], current: string): { id: str
 }
 
 export function accountLabel(account: Account) {
-  if (account.signedIn === false) return `${account.name} (signed out)`
+  const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'
+  if (account.signedIn === false) return `${account.name} (${missing})`
   return account.label ? `${account.name} (${account.label})` : account.name
 }

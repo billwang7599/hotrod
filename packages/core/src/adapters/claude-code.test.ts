@@ -297,6 +297,15 @@ describe('claudeCode accounts', () => {
     expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: dir })
   })
 
+  it("passes an API-key account's key in the spawn env, never in the arguments", () => {
+    const fake = fakeMachine()
+    const apiKey = 'sk-ant-test-1234abcd'
+    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', accountDir: dir, apiKey }, () => {})
+    expect(claudeCode.accounts?.apiKeys).toBe(true)
+    expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: dir, ANTHROPIC_API_KEY: apiKey })
+    expect(fake.spawned[0]?.args.join(' ')).not.toContain(apiKey)
+  })
+
   it('reads the account status and email from its config folder', async () => {
     const fake = fakeMachine({
       'claude auth status': { code: 0, stdout: '{"loggedIn":true,"email":"me@work.test"}', stderr: '' },

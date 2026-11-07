@@ -26,7 +26,8 @@ const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 
 // Each account is its own config folder; Claude Code keys its keychain login by that folder's path.
-const accountEnv = (accountDir?: string) => (accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir } } : {})
+const accountEnv = (accountDir?: string, apiKey?: string) =>
+  accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir, ...(apiKey && { ANTHROPIC_API_KEY: apiKey }) } } : {}
 
 async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
   const options = { cwd: '/', ...accountEnv(accountDir) }
@@ -88,9 +89,11 @@ export const claudeCode: Adapter = {
     async logout(machine, accountDir) {
       await machine.run('claude', ['auth', 'logout'], { cwd: '/', ...accountEnv(accountDir) })
     },
+
+    apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir }, emit) {
+  start(machine, { cwd, instructions, accountDir, apiKey }, emit) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -107,7 +110,7 @@ export const claudeCode: Adapter = {
       '--thinking-display', 'summarized',
     ]
     if (instructions) args.push('--append-system-prompt', instructions)
-    const proc = machine.spawn('claude', args, { cwd, ...accountEnv(accountDir) })
+    const proc = machine.spawn('claude', args, { cwd, ...accountEnv(accountDir, apiKey) })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
     const pendingInputs = new Map<string, unknown>()
     let buffer = ''

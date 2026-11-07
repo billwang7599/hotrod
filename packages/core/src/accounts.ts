@@ -22,15 +22,16 @@ export function openAccounts(options: {
   const root = join(garage, 'accounts')
   const savedFile = (engine: string) => join(root, `${engine}.json`)
   const dirOf = (engine: string, id: string) => join(root, engine, id)
+  const keyFile = (dir: string) => join(dir, 'api-key')
   const engines = new Map<string, Engine>()
 
   for (const adapter of options.adapters) {
     if (!adapter.accounts) continue
     const file = savedFile(adapter.id)
     const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { active: DEFAULT_ID, accounts: [] }
-    const accounts: Account[] = [{ id: DEFAULT_ID, name: 'Default' }, ...saved.accounts]
+    const accounts: Account[] = [{ id: DEFAULT_ID, name: 'Default', kind: 'login' }, ...saved.accounts]
     const active = accounts.some((a) => a.id === saved.active) ? saved.active : DEFAULT_ID
-    const state = { engine: adapter.id, active, accounts }
+    const state = { engine: adapter.id, active, apiKeys: adapter.accounts.apiKeys === true, accounts }
     engines.set(adapter.id, { adapter: { ...adapter, accounts: adapter.accounts }, state })
   }
 
@@ -40,7 +41,7 @@ export function openAccounts(options: {
       mkdirSync(root, { recursive: true })
       const accounts = engine.state.accounts
         .filter((a) => a.id !== DEFAULT_ID)
-        .map(({ id, name, label }) => ({ id, name, label }))
+        .map(({ id, name, kind, label }) => ({ id, name, kind, label }))
       const saved = { active: engine.state.active, accounts }
       writeFileSync(savedFile(engine.state.engine), JSON.stringify(saved, null, 2) + '\n')
     }
@@ -63,12 +64,9 @@ export function openAccounts(options: {
     if (isBusy(engine.state.engine)) throw new Error('Wait for the running turn to end before switching accounts')
   }
 
-  const login = (engine: Engine, rawName: string) => {
+  const newAccountDir = (engine: Engine, rawName: string) => {
     const name = rawName.trim().slice(0, MAX_NAME_CHARS)
     if (!name) throw new Error('Give the account a name')
-    if (engine.login?.flow) throw new Error('A sign-in is already running for this engine')
-    if (engine.login) cancelLogin(engine)
-
     const base = name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[.-]+|-+$/g, '') || 'account'
     const engineDir = join(root, engine.state.engine)
     mkdirSync(engineDir, { recursive: true })
@@ -77,7 +75,15 @@ export function openAccounts(options: {
     let id = base
     for (let n = 2; taken.has(id); n++) id = `${base}-${n}`
     const dir = dirOf(engine.state.engine, id)
-    mkdirSync(dir)
+    mkdirSync(dir, { mode: 0o700 })
+    return { id, name, dir }
+  }
+
+  const login = (engine: Engine, rawName: string) => {
+    if (!rawName.trim()) throw new Error('Give the account a name')
+    if (engine.login?.flow) throw new Error('A sign-in is already running for this engine')
+    if (engine.login) cancelLogin(engine)
+    const { id, name, dir } = newAccountDir(engine, rawName)
 
     const attempt: NonNullable<Engine['login']> = { dir }
     const current = () => engine.login === attempt && attempt.flow !== undefined
@@ -99,10 +105,22 @@ export function openAccounts(options: {
           if (!current()) return
           if (!status.signedIn) return fail('The sign-in finished, but the account is not signed in')
           engine.login = undefined
-          const account: Account = { id, name, ...(status.label && { label: status.label }), signedIn: true }
+          const label = status.label && { label: status.label }
+          const account: Account = { id, name, kind: 'login', ...label, signedIn: true }
           update(engine, { accounts: [...engine.state.accounts, account], login: undefined }, true)
         })
     })
+  }
+
+  const addApiKey = (engine: Engine, rawName: string, rawKey: string) => {
+    if (!engine.state.apiKeys) throw new Error(`${engine.state.engine} doesn't take API keys`)
+    const key = rawKey.trim()
+    if (!key) throw new Error('Paste the API key')
+    if (/\s/.test(key)) throw new Error('An API key has no spaces or line breaks')
+    const { id, name, dir } = newAccountDir(engine, rawName)
+    writeFileSync(keyFile(dir), key, { mode: 0o600 })
+    const account: Account = { id, name, kind: 'apiKey', label: `API key ••••${key.slice(-4)}`, signedIn: true }
+    update(engine, { accounts: [...engine.state.accounts, account] }, true)
   }
 
   const cancelLogin = (engine: Engine) => {
@@ -116,11 +134,11 @@ export function openAccounts(options: {
 
   const remove = (engine: Engine, id: string, reply: (message: CoreMessage) => void) => {
     if (id === DEFAULT_ID) throw new Error("The default account is the engine's own login and can't be removed here")
-    accountFor(engine, id)
+    const account = accountFor(engine, id)
     if (engine.state.active === id) checkIdle(engine)
     const dir = dirOf(engine.state.engine, id)
-    void engine.adapter.accounts
-      .logout(machine, dir)
+    const logout = account.kind === 'apiKey' ? Promise.resolve() : engine.adapter.accounts.logout(machine, dir)
+    void logout
       .catch((error) => reply({ type: 'error', message: `Could not sign out of "${id}": ${error}` }))
       .finally(() => {
         rmSync(dir, { recursive: true, force: true })
@@ -131,9 +149,13 @@ export function openAccounts(options: {
 
   return {
     list: () => [...engines.values()].map((engine) => engine.state),
-    dirFor(engine: string) {
-      const active = engines.get(engine)?.state.active
-      return active && active !== DEFAULT_ID ? dirOf(engine, active) : undefined
+    sessionFor(engine: string): { accountDir?: string; apiKey?: string } {
+      const state = engines.get(engine)?.state
+      const account = state?.accounts.find((a) => a.id === state.active)
+      if (!account || account.id === DEFAULT_ID) return {}
+      const accountDir = dirOf(engine, account.id)
+      if (account.kind !== 'apiKey') return { accountDir }
+      return { accountDir, apiKey: readFileSync(keyFile(accountDir), 'utf8') }
     },
     async refresh() {
       await Promise.all(
@@ -142,6 +164,7 @@ export function openAccounts(options: {
             await Promise.all(
               engine.state.accounts.map(async (account) => {
                 const dir = account.id === DEFAULT_ID ? undefined : dirOf(engine.state.engine, account.id)
+                if (account.kind === 'apiKey') return [account.id, { signedIn: existsSync(keyFile(dir!)) }] as const
                 const status = await engine.adapter.accounts.status(machine, dir).catch(() => ({ signedIn: false }))
                 return [account.id, status] as const
               }),
@@ -158,6 +181,7 @@ export function openAccounts(options: {
       if (!code.trim()) throw new Error('Paste the code from the sign-in page')
       flow.submitCode(code)
     },
+    addApiKey: (engine: string, name: string, key: string) => addApiKey(engineFor(engine), name, key),
     cancelLogin: (engine: string) => cancelLogin(engineFor(engine)),
     use(engineId: string, id: string) {
       const engine = engineFor(engineId)

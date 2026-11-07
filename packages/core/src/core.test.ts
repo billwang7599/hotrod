@@ -1,4 +1,13 @@
-import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -622,7 +631,8 @@ describe('accounts', () => {
       {
         engine: 'fake',
         active: 'default',
-        accounts: [{ id: 'default', name: 'Default', label: 'default@fake.test', signedIn: true }],
+        apiKeys: true,
+        accounts: [{ id: 'default', name: 'Default', kind: 'login', label: 'default@fake.test', signedIn: true }],
       },
     ])
   })
@@ -636,7 +646,7 @@ describe('accounts', () => {
     t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
     await until(() => !accountsOf(t.core).login)
 
-    const work = { id: 'work', name: 'Work', label: 'work@fake.test', signedIn: true }
+    const work = { id: 'work', name: 'Work', kind: 'login', label: 'work@fake.test', signedIn: true }
     expect(accountsOf(t.core).accounts.at(-1)).toEqual(work)
     expect(existsSync(accountDir(t.garage, 'work'))).toBe(true)
     await signIn(t, 'work')
@@ -696,5 +706,74 @@ describe('accounts', () => {
   it('rejects account messages for an engine without accounts', () => {
     const t = setupAccounts()
     expect(() => t.handle({ type: 'account.login', engine: 'plain', name: 'Work' })).toThrow(/accounts/)
+  })
+
+  describe('API keys', () => {
+    const key = 'sk-ant-test-0000-secret-1234abcd'
+    const addKey = (t: ReturnType<typeof setupAccounts>, name = 'Billing', apiKey = `  ${key}\n`) =>
+      t.handle({ type: 'account.addApiKey', engine: 'fake', name, key: apiKey })
+
+    it('keeps the key in a 0600 file in its own folder and shows only its last 4 characters', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      const label = 'API key ••••abcd'
+      const billing = { id: 'billing', name: 'Billing', kind: 'apiKey', label, signedIn: true }
+      expect(accountsOf(t.core).accounts.at(-1)).toEqual(billing)
+      const keyFile = join(accountDir(t.garage, 'billing'), 'api-key')
+      expect(readFileSync(keyFile, 'utf8')).toBe(key)
+      expect(statSync(keyFile).mode & 0o777).toBe(0o600)
+      expect(readFileSync(join(t.garage, 'accounts', 'fake.json'), 'utf8')).not.toContain(key)
+      expect(JSON.stringify([t.messages, t.replies, t.core.accounts()])).not.toContain(key)
+
+      await t.core.refreshAccounts()
+      const reopened = setupAccounts(textScript, t.garage)
+      await reopened.core.refreshAccounts()
+      expect(accountsOf(reopened.core).accounts.at(-1)).toEqual(billing)
+    })
+
+    it('starts sessions with the key and its folder, and never writes the key to the chat log', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      const project = addProject(t)
+      t.handle({ type: 'account.use', engine: 'fake', accountId: 'billing' })
+      t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+      expect(t.calls[0]?.options).toMatchObject({ accountDir: accountDir(t.garage, 'billing'), apiKey: key })
+      await until(() => statusOf(t.core, project.id) === 'idle')
+      const log = readFileSync(join(t.garage, 'projects', project.id, 'chats', 'main', 'log.jsonl'), 'utf8')
+      expect(log).not.toContain(key)
+      expect(JSON.stringify(t.messages)).not.toContain(key)
+    })
+
+    it('removes a key account without signing out', async () => {
+      const t = setupAccounts()
+      addKey(t)
+      t.handle({ type: 'account.remove', engine: 'fake', accountId: 'billing' })
+      await until(() => accountsOf(t.core).accounts.length === 1)
+      expect(t.logouts).toEqual([])
+      expect(existsSync(accountDir(t.garage, 'billing'))).toBe(false)
+    })
+
+    it('rejects an empty or spaced key without echoing it, and engines without key support', () => {
+      const t = setupAccounts()
+      expect(() => addKey(t, 'Billing', '   ')).toThrow(/Paste/)
+      let error = ''
+      try {
+        addKey(t, 'Billing', 'sk-ant one')
+      } catch (e) {
+        error = String(e)
+      }
+      expect(error).toMatch(/space/)
+      expect(error).not.toContain('sk-ant')
+      expect(() => addKey(t, ' ')).toThrow(/name/)
+      expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default'])
+      expect(existsSync(join(t.garage, 'accounts', 'fake', 'billing'))).toBe(false)
+
+      const fake = createFakeAdapter(textScript, 0)
+      const noKeys: Adapter = { ...fake, id: 'nokeys', accounts: { ...fake.accounts!, apiKeys: false } }
+      const plain = open(tempDir(), [noKeys], 'nokeys')
+      expect(plain.core.accounts()[0]?.apiKeys).toBe(false)
+      const message = { type: 'account.addApiKey', engine: 'nokeys', name: 'Billing', key } as const
+      expect(() => plain.handle(message)).toThrow(/API keys/)
+    })
   })
 })

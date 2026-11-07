@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatEntry, CoreMessage, ProjectState } from '@hotrod/core/types'
-import type { EngineAccounts } from '@hotrod/core/types'
+import type { Account, EngineAccounts } from '@hotrod/core/types'
 import { accountLabel, engineOptions, initialState, reduce, type Action, type State } from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
@@ -88,9 +88,10 @@ describe('reduce', () => {
   })
 
   it('loads accounts from the snapshot and replaces one engine on update', () => {
-    const fake: EngineAccounts = { engine: 'fake', active: 'default', accounts: [{ id: 'default', name: 'Default' }] }
+    const accounts: Account[] = [{ id: 'default', name: 'Default', kind: 'login' }]
+    const fake: EngineAccounts = { engine: 'fake', active: 'default', apiKeys: true, accounts }
     const other: EngineAccounts = { ...fake, engine: 'other' }
-    const work = { id: 'work', name: 'Work', label: 'me@work.test', signedIn: true }
+    const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
       { type: 'snapshot', engines, accounts: [fake, other], projects: [] },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
@@ -103,10 +104,14 @@ describe('reduce', () => {
     ])
   })
 
-  it('labels an account with its email and sign-in state', () => {
-    expect(accountLabel({ id: 'work', name: 'Work', label: 'me@work.test', signedIn: true })).toBe('Work (me@work.test)')
-    expect(accountLabel({ id: 'default', name: 'Default' })).toBe('Default')
-    expect(accountLabel({ id: 'old', name: 'Old', label: 'me@old.test', signedIn: false })).toBe('Old (signed out)')
+  it('labels an account with its email or key ending and sign-in state', () => {
+    const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
+    expect(accountLabel(work)).toBe('Work (me@work.test)')
+    expect(accountLabel({ id: 'default', name: 'Default', kind: 'login' })).toBe('Default')
+    expect(accountLabel({ ...work, id: 'old', name: 'Old', signedIn: false })).toBe('Old (signed out)')
+    const billing: Account = { id: 'billing', name: 'Billing', kind: 'apiKey', label: 'API key ••••abcd', signedIn: true }
+    expect(accountLabel(billing)).toBe('Billing (API key ••••abcd)')
+    expect(accountLabel({ ...billing, signedIn: false })).toBe('Billing (key file missing)')
   })
 
   it('selects a re-added project instead of adding it twice', () => {

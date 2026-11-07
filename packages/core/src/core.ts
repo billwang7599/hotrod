@@ -201,8 +201,7 @@ export function openCore(options: {
     }
 
     try {
-      const accountDir = accounts.dirFor(adapter.id)
-      const options = { cwd: chat.project.path, instructions, ...(accountDir && { accountDir }) }
+      const options = { cwd: chat.project.path, instructions, ...accounts.sessionFor(adapter.id) }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
@@ -251,6 +250,8 @@ export function openCore(options: {
           return respond(chatFor(message.projectId), message.requestId, message.allow === true)
         case 'account.login':
           return accounts.login(String(message.engine), String(message.name ?? ''))
+        case 'account.addApiKey':
+          return accounts.addApiKey(String(message.engine), String(message.name ?? ''), String(message.key ?? ''))
         case 'account.code':
           return accounts.submitCode(String(message.engine), String(message.code ?? ''))
         case 'account.cancelLogin':

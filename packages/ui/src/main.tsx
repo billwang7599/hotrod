@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
+import type { Account, ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
 import { accountLabel, engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
@@ -89,6 +89,8 @@ function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
   const { engine, login } = accounts
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
+  const [keyName, setKeyName] = useState('')
+  const [key, setKey] = useState('')
   const startLogin = (e: FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
@@ -101,9 +103,20 @@ function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
     send({ type: 'account.code', engine, code: code.trim() })
     setCode('')
   }
-  const remove = (id: string, label: string) => {
-    if (!confirm(`Sign out of ${label} and remove it from Hotrod?`)) return
-    send({ type: 'account.remove', engine, accountId: id })
+  const addKey = (e: FormEvent) => {
+    e.preventDefault()
+    if (!keyName.trim() || !key.trim()) return
+    send({ type: 'account.addApiKey', engine, name: keyName.trim(), key })
+    setKeyName('')
+    setKey('')
+  }
+  const remove = (account: Account) => {
+    const question =
+      account.kind === 'apiKey'
+        ? `Remove ${account.name} and delete its saved API key?`
+        : `Sign out of ${account.name} and remove it from Hotrod?`
+    if (!confirm(question)) return
+    send({ type: 'account.remove', engine, accountId: account.id })
   }
 
   return (
@@ -125,7 +138,7 @@ function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
               </button>
             )}
             {a.id !== 'default' && (
-              <button disabled={!connected} onClick={() => remove(a.id, a.name)}>
+              <button disabled={!connected} onClick={() => remove(a)}>
                 Remove
               </button>
             )}
@@ -168,6 +181,20 @@ function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
             Cancel
           </button>
         </div>
+      )}
+      {accounts.apiKeys && (
+        <form className="account-form" onSubmit={addKey}>
+          <input value={keyName} placeholder="Name for an API key" onChange={(e) => setKeyName(e.target.value)} />
+          <input
+            type="password"
+            value={key}
+            placeholder="API key"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setKey(e.target.value)}
+          />
+          <button disabled={!connected || !keyName.trim() || !key.trim()}>Add API key</button>
+        </form>
       )}
     </section>
   )
