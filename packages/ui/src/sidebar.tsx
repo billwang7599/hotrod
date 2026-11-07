@@ -1,6 +1,7 @@
+import { AnimatePresence, m } from 'motion/react'
 import { DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage, Project } from '@hotrod/core/types'
-import { Button, Chevron, confirm, NAV_LABEL } from './controls.tsx'
+import { Button, Chevron, confirm, MOTION, NAV_LABEL, useSettled } from './controls.tsx'
 import { MAIN_CHAT_ID, type ChatView } from './state.ts'
 
 const CHAT_BUSY = 'Stop this chat first'
@@ -26,22 +27,25 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
         </DropdownMenu.Trigger>
       </div>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          align="end"
-          sideOffset={4}
-          className="z-20 flex min-w-140 flex-col rounded-lg border bg-panel p-4 shadow outline-none"
-        >
-          {items.map((item) => (
-            <DropdownMenu.Item
-              key={item.label}
-              disabled={!!item.disabledReason}
-              title={item.disabledReason}
-              onSelect={item.run}
-              className={`flex h-26 cursor-pointer items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:cursor-default data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
-            >
-              {item.label}
-            </DropdownMenu.Item>
-          ))}
+        <DropdownMenu.Content asChild align="end" sideOffset={4}>
+          <m.div
+            className="z-20 flex min-w-140 flex-col rounded-lg border bg-panel p-4 shadow outline-none"
+            initial={MOTION.menu.initial}
+            animate={MOTION.menu.animate}
+            transition={MOTION.menu.transition}
+          >
+            {items.map((item) => (
+              <DropdownMenu.Item
+                key={item.label}
+                disabled={!!item.disabledReason}
+                title={item.disabledReason}
+                onSelect={item.run}
+                className={`flex h-26 cursor-pointer items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:cursor-default data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
+              >
+                {item.label}
+              </DropdownMenu.Item>
+            ))}
+          </m.div>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
@@ -50,6 +54,7 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
 
 type RowProps = {
   chat: ChatView
+  animate: boolean
   label: string
   title?: string
   selected: boolean
@@ -60,7 +65,7 @@ type RowProps = {
   menu?: MenuItem[]
 }
 
-function ChatRow({ chat, label, title, selected, sub, nested, select, add, menu }: RowProps) {
+function ChatRow({ chat, animate, label, title, selected, sub, nested, select, add, menu }: RowProps) {
   const highlight = selected
     ? 'bg-raised text-text'
     : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
@@ -68,7 +73,11 @@ function ChatRow({ chat, label, title, selected, sub, nested, select, add, menu 
     ? 'group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden'
     : ''
   return (
-    <div className={`group/row relative flex shrink-0 items-center rounded ${highlight}`}>
+    <m.div
+      className={`group/row relative flex shrink-0 items-center rounded ${highlight}`}
+      {...MOTION.collapse}
+      initial={animate && MOTION.collapse.initial}
+    >
       <button
         className={`flex h-control min-w-0 flex-1 items-center gap-8 pr-8 text-left whitespace-nowrap ${nested ? 'pl-36' : sub ? 'pl-22' : 'pl-8'} ${add ? 'font-medium text-text' : ''}`}
         title={title ?? label}
@@ -93,7 +102,7 @@ function ChatRow({ chat, label, title, selected, sub, nested, select, add, menu 
         </Button>
       )}
       {menu && <RowMenu label={label} items={menu} />}
-    </div>
+    </m.div>
   )
 }
 
@@ -116,6 +125,7 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
     chats.filter((c) => !c.main && shown(c) && c.projectId === projectId && !hasShownParent(c)).sort(newestFirst)
   const projectBusy = (id: string) => chats.some((c) => c.projectId === id && c.status !== 'idle')
   const offline = connected ? undefined : 'Disconnected from the core'
+  const settled = useSettled(chats.length > 0)
 
   const chatMenu = (chat: ChatView): MenuItem[] => {
     const disabledReason = offline ?? (chat.status !== 'idle' ? CHAT_BUSY : undefined)
@@ -152,6 +162,7 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
     <ChatRow
       key={chat.id}
       chat={chat}
+      animate={settled.current}
       label={chat.title}
       selected={chat.id === selectedId}
       select={() => select(chat.id)}
@@ -177,14 +188,16 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
 
   return (
     <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pb-8">
-      {main &&
-        withSubagents(main, {
-          label: 'Workshop',
-          title: 'Workshop: not tied to a folder',
-          menu: undefined,
-          sub: false,
-        })}
-      {subchats().map((c) => withSubagents(c))}
+      <AnimatePresence>
+        {main &&
+          withSubagents(main, {
+            label: 'Workshop',
+            title: 'Workshop: not tied to a folder',
+            menu: undefined,
+            sub: false,
+          })}
+        {subchats().flatMap((c) => withSubagents(c))}
+      </AnimatePresence>
       <Button
         variant="ghost"
         size="small"
@@ -197,27 +210,35 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
 
       <div className={NAV_LABEL}>Projects</div>
       {activeProjects.length === 0 && <div className="px-8 py-2 text-sm text-faint">No projects yet</div>}
-      {activeProjects.map((project) => {
-        const projectMain = chats.find((c) => c.projectId === project.id && c.main)
-        return (
-          projectMain && (
-            <section key={project.id}>
-              {withSubagents(projectMain, {
-                label: project.name,
-                title: project.path,
-                sub: false,
-                add: {
-                  label: `New chat in ${project.name}`,
-                  disabledReason: offline,
-                  run: () => send({ type: 'chat.create', projectId: project.id }),
-                },
-                menu: projectMenu(project),
-              })}
-              {subchats(project.id).map((c) => withSubagents(c))}
-            </section>
+      <AnimatePresence>
+        {activeProjects.map((project) => {
+          const projectMain = chats.find((c) => c.projectId === project.id && c.main)
+          return (
+            projectMain && (
+              <m.section
+                key={project.id}
+                {...MOTION.collapse}
+                initial={settled.current && MOTION.collapse.initial}
+              >
+                <AnimatePresence initial={false}>
+                  {withSubagents(projectMain, {
+                    label: project.name,
+                    title: project.path,
+                    sub: false,
+                    add: {
+                      label: `New chat in ${project.name}`,
+                      disabledReason: offline,
+                      run: () => send({ type: 'chat.create', projectId: project.id }),
+                    },
+                    menu: projectMenu(project),
+                  })}
+                  {subchats(project.id).flatMap((c) => withSubagents(c))}
+                </AnimatePresence>
+              </m.section>
+            )
           )
-        )
-      })}
+        })}
+      </AnimatePresence>
 
       {(archivedProjects.length > 0 || archivedChats.length > 0) && (
         <details className="group mt-auto">
@@ -225,23 +246,26 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
             <Chevron />
             Archived ({archivedProjects.length + archivedChats.length})
           </summary>
-          {archivedProjects.map((project) => {
-            const projectMain = chats.find((c) => c.projectId === project.id && c.main)
-            return (
-              projectMain && (
-                <ChatRow
-                  key={project.id}
-                  chat={projectMain}
-                  label={project.name}
-                  title={`${project.path} (archived project)`}
-                  selected={chats.some((c) => c.projectId === project.id && c.id === selectedId)}
-                  select={() => select(projectMain.id)}
-                  menu={projectMenu(project)}
-                />
+          <AnimatePresence>
+            {archivedProjects.map((project) => {
+              const projectMain = chats.find((c) => c.projectId === project.id && c.main)
+              return (
+                projectMain && (
+                  <ChatRow
+                    key={project.id}
+                    chat={projectMain}
+                    animate={settled.current}
+                    label={project.name}
+                    title={`${project.path} (archived project)`}
+                    selected={chats.some((c) => c.projectId === project.id && c.id === selectedId)}
+                    select={() => select(projectMain.id)}
+                    menu={projectMenu(project)}
+                  />
+                )
               )
-            )
-          })}
-          {archivedChats.map((c) => row(c, { title: `${c.title} (in ${placeOf(c)})`, sub: false }))}
+            })}
+            {archivedChats.map((c) => row(c, { title: `${c.title} (in ${placeOf(c)})`, sub: false }))}
+          </AnimatePresence>
         </details>
       )}
     </nav>

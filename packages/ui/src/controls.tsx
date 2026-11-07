@@ -1,7 +1,32 @@
-import { useEffect, useRef, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react'
+import { AnimatePresence, m, type Transition } from 'motion/react'
 import { AlertDialog, Switch as SwitchPrimitive } from 'radix-ui'
 
 const TOAST_MS = 6_000
+const EASE_OUT = [0.2, 0, 0, 1] as const
+
+export const TRANSITION: Transition = { duration: 0.18, ease: EASE_OUT }
+
+export const MOTION = {
+  fade: { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } },
+  pop: { initial: { opacity: 0, scale: 0.97 }, animate: { opacity: 1, scale: 1 }, exit: { opacity: 0, scale: 0.97 } },
+  rise: { initial: { opacity: 0, y: 6 }, animate: { opacity: 1, y: 0 } },
+  menu: { initial: { opacity: 0, y: -4 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.12, ease: EASE_OUT } },
+  // Overflow is hidden only while animating, so focus rings aren't clipped once open.
+  collapse: {
+    initial: { height: 0, opacity: 0, overflow: 'hidden' },
+    animate: { height: 'auto', opacity: 1, transitionEnd: { overflow: 'visible' } },
+    exit: { height: 0, opacity: 0, overflow: 'hidden' },
+  },
+} as const
+
+export function useSettled(ready = true) {
+  const settled = useRef(false)
+  useEffect(() => {
+    if (ready) settled.current = true
+  }, [ready])
+  return settled
+}
 
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
@@ -48,7 +73,7 @@ export function Switch({ label, checked, disabled, onChange }: SwitchProps) {
 
 export function Chevron() {
   return (
-    <span className="w-10 shrink-0 text-faint before:inline-block before:text-[14px] before:leading-none before:transition-transform before:duration-120 before:content-['›'] group-open:before:rotate-90" />
+    <span className="w-10 shrink-0 text-faint before:inline-block before:text-[14px] before:leading-none before:transition-transform before:duration-120 before:content-['›'] group-open:before:rotate-90 group-data-open:before:rotate-90" />
   )
 }
 
@@ -66,15 +91,17 @@ export function Toast({ id, message, dismiss }: { id: number; message: string; d
     return () => clearTimeout(timer)
   }, [id, dismiss])
   return (
-    <div
-      className="flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow"
-      role="status"
-    >
-      <span className="flex-1 pt-3 [word-break:break-word]">{message}</span>
-      <Button variant="ghost" size="none" className="size-22" aria-label="Dismiss" onClick={() => dismiss(id)}>
-        ×
-      </Button>
-    </div>
+    <m.div {...MOTION.collapse}>
+      <div
+        className="mb-8 flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow"
+        role="status"
+      >
+        <span className="flex-1 pt-3 [word-break:break-word]">{message}</span>
+        <Button variant="ghost" size="none" className="size-22" aria-label="Dismiss" onClick={() => dismiss(id)}>
+          ×
+        </Button>
+      </div>
+    </m.div>
   )
 }
 
@@ -113,35 +140,49 @@ const subscribeConfirm = (listener: () => void) => {
 
 export function ConfirmDialog() {
   const pending = useSyncExternalStore(subscribeConfirm, () => pendingConfirm)
+  const [text, setText] = useState('')
+  if (pending && pending.text !== text) setText(pending.text)
   const okRef = useRef<HTMLButtonElement>(null)
   const focus = useReturnFocus()
   return (
     <AlertDialog.Root open={!!pending} onOpenChange={(open) => open || settleConfirm(false)}>
-      <AlertDialog.Portal>
-        <AlertDialog.Overlay className="fixed inset-0 bg-backdrop" />
-        <AlertDialog.Content
-          aria-describedby={undefined}
-          onOpenAutoFocus={(e) => {
-            focus.remember()
-            e.preventDefault()
-            okRef.current?.focus()
-          }}
-          onCloseAutoFocus={focus.restore}
-          className="fixed inset-0 m-auto flex h-fit w-[min(420px,calc(100vw-32px))] flex-col gap-16 rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
-        >
-          <AlertDialog.Title className="text-body leading-[1.5]">{pending?.text}</AlertDialog.Title>
-          <div className="flex justify-end gap-8">
-            <AlertDialog.Cancel asChild>
-              <Button>Cancel</Button>
-            </AlertDialog.Cancel>
-            <AlertDialog.Action asChild onClick={() => settleConfirm(true)}>
-              <Button ref={okRef} variant="primary">
-                OK
-              </Button>
-            </AlertDialog.Action>
-          </div>
-        </AlertDialog.Content>
-      </AlertDialog.Portal>
+      <AnimatePresence>
+        {pending && (
+          <AlertDialog.Portal forceMount>
+            <AlertDialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </AlertDialog.Overlay>
+            <AlertDialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={(e) => {
+                focus.remember()
+                e.preventDefault()
+                okRef.current?.focus()
+              }}
+              onCloseAutoFocus={focus.restore}
+            >
+              <m.div
+                className="fixed inset-0 m-auto flex h-fit w-[min(420px,calc(100vw-32px))] flex-col gap-16 rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                {...MOTION.pop}
+              >
+                <AlertDialog.Title className="text-body leading-[1.5]">{text}</AlertDialog.Title>
+                <div className="flex justify-end gap-8">
+                  <AlertDialog.Cancel asChild>
+                    <Button>Cancel</Button>
+                  </AlertDialog.Cancel>
+                  <AlertDialog.Action asChild onClick={() => settleConfirm(true)}>
+                    <Button ref={okRef} variant="primary">
+                      OK
+                    </Button>
+                  </AlertDialog.Action>
+                </div>
+              </m.div>
+            </AlertDialog.Content>
+          </AlertDialog.Portal>
+        )}
+      </AnimatePresence>
     </AlertDialog.Root>
   )
 }
