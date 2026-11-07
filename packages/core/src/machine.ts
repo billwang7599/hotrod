@@ -5,6 +5,7 @@ type SpawnOptions = { cwd: string; env?: Record<string, string> }
 
 export const KILL_GRACE_MS = 3000
 export const RUN_TIMEOUT_MS = 10000
+export const STDERR_TAIL_CHARS = 2000
 const GROUP_POLL_MS = 50
 // These would make an engine bill an API key or another endpoint instead of its own login.
 export const STRIPPED_ENV_KEYS = [
@@ -48,9 +49,10 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     })
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
-    const stderrListeners: ((chunk: string) => void)[] = []
-    const exitListeners: ((code: number | null) => void)[] = []
+    const exitListeners: ((code: number | null, stderrTail: string) => void)[] = []
     const pgid = child.pid
+    let stderrTail = ''
+    const addStderr = (text: string) => (stderrTail = (stderrTail + text).slice(-STDERR_TAIL_CHARS))
     let exited = false
     let forceKill: NodeJS.Timeout | undefined
     let groupPoll: NodeJS.Timeout | undefined
@@ -69,7 +71,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     const exit = (code: number | null) => {
       if (exited) return
       exited = true
-      for (const listener of exitListeners) listener(code)
+      for (const listener of exitListeners) listener(code, stderrTail)
       if (!groupAlive()) return finish()
       groupPoll = setInterval(() => groupAlive() || finish(), GROUP_POLL_MS)
     }
@@ -81,10 +83,10 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     }
     if (pgid !== undefined) liveGroups.add(pgid)
     running.add(tracked)
-    child.stderr.on('data', (chunk: string) => stderrListeners.forEach((listener) => listener(chunk)))
+    child.stderr.on('data', addStderr)
     // A missing command or a dead stdin emits 'error'; unhandled, it would crash the core.
     child.on('error', (error) => {
-      stderrListeners.forEach((listener) => listener(error.message))
+      addStderr(error.message)
       exit(null)
     })
     child.stdin.on('error', () => {})
@@ -97,7 +99,6 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
       closeStdin: () => child.stdin.end(),
       kill,
       onStdout: (listener) => child.stdout.on('data', listener),
-      onStderr: (listener) => stderrListeners.push(listener),
       onExit: (listener) => exitListeners.push(listener),
     }
   }
@@ -106,16 +107,16 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawnProcess(command, args, options)
       let stdout = ''
-      let stderr = ''
+      let timedOut = false
       const timeout = setTimeout(() => {
+        timedOut = true
         child.kill()
-        resolve({ code: null, stdout, stderr: `${stderr}${command} timed out after ${runTimeoutMs}ms` })
       }, runTimeoutMs)
       child.onStdout((chunk) => (stdout += chunk))
-      child.onStderr((chunk) => (stderr += chunk))
-      child.onExit((code) => {
+      child.onExit((code, stderr) => {
         clearTimeout(timeout)
-        resolve({ code, stdout, stderr })
+        if (!timedOut) return resolve({ code, stdout, stderr })
+        resolve({ code: null, stdout, stderr: `${stderr}${command} timed out after ${runTimeoutMs}ms` })
       })
       child.closeStdin()
     })

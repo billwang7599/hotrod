@@ -230,8 +230,7 @@ describe('pi adapter', () => {
 
   it('reports a startup failure with the stderr tail', () => {
     const { fake, events } = startSession()
-    fake.stderr('Error: Model "x" is ambiguous across providers\n')
-    fake.exit(1)
+    fake.exit(1, 'Error: Model "x" is ambiguous across providers\n')
     expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers' }])
   })
 

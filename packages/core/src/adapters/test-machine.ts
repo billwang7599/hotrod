@@ -5,14 +5,12 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
   const written: string[] = []
   const state = { stdinClosed: false, killed: false }
   let stdout = (_: string) => {}
-  let stderr = (_: string) => {}
-  let exit = (_: number | null) => {}
+  let exit = (_code: number | null, _stderrTail: string) => {}
   const proc: EngineProcess = {
     write: (data) => written.push(data),
     closeStdin: () => (state.stdinClosed = true),
     kill: () => (state.killed = true),
     onStdout: (l) => (stdout = l),
-    onStderr: (l) => (stderr = l),
     onExit: (l) => (exit = l),
   }
   const machine: Machine = {
@@ -31,7 +29,6 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
     state,
     sent: () => written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
     stdout: (chunk: string) => stdout(chunk),
-    stderr: (chunk: string) => stderr(chunk),
-    exit: (code: number | null) => exit(code),
+    exit: (code: number | null, stderrTail = '') => exit(code, stderrTail),
   }
 }

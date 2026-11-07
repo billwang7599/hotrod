@@ -24,8 +24,7 @@ export interface EngineProcess {
   closeStdin(): void
   kill(): void
   onStdout(listener: (chunk: string) => void): void
-  onStderr(listener: (chunk: string) => void): void
-  onExit(listener: (code: number | null) => void): void
+  onExit(listener: (code: number | null, stderrTail: string) => void): void
 }
 
 export interface Machine {

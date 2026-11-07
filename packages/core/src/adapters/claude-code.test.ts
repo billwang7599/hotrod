@@ -138,9 +138,7 @@ describe('claudeCode adapter', () => {
     const { fake, events, session } = startSession()
     session.prompt('hi')
     fake.stdout(fixture('error-result'))
-    fake.stderr('starting\n')
-    fake.stderr('[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}\n')
-    fake.exit(1)
+    fake.exit(1, 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}\n')
     const message =
       "There's an issue with the selected model (claude-nonexistent-9). It may not exist or you may not have access " +
       'to it. Run --model to pick a different model.'

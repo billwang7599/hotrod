@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
-import { createLocalMachine, RUN_TIMEOUT_MS, STRIPPED_ENV_KEYS } from './machine.ts'
+import { createLocalMachine, RUN_TIMEOUT_MS, STDERR_TAIL_CHARS, STRIPPED_ENV_KEYS } from './machine.ts'
 
 const cwd = process.cwd()
 const node = process.execPath
@@ -53,6 +53,16 @@ describe('localMachine', () => {
 
   it("keeps the core's UI token from engines, so an agent can't approve its own tool calls", () => {
     expect(STRIPPED_ENV_KEYS).toContain('HOTROD_TOKEN')
+  })
+
+  it('hands only the tail of stderr to exit listeners', async () => {
+    const write = `process.stderr.write('a'.repeat(${STDERR_TAIL_CHARS}) + 'b'.repeat(${STDERR_TAIL_CHARS}))`
+    const proc = fast.spawn(node, ['-e', write], { cwd })
+    const [code, stderrTail] = await new Promise<[number | null, string]>((resolve) =>
+      proc.onExit((code, stderrTail) => resolve([code, stderrTail])),
+    )
+    expect(code).toBe(0)
+    expect(stderrTail).toBe('b'.repeat(STDERR_TAIL_CHARS))
   })
 
   it('force-kills a process that ignores SIGTERM after the grace', async () => {

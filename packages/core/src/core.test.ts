@@ -551,9 +551,7 @@ describe('engine failures', () => {
     const t = setup(
       stubAdapter((machine, options, emit) => {
         const proc = machine.spawn('hotrod-test-missing-engine', [], { cwd: options.cwd })
-        let stderr = ''
-        proc.onStderr((chunk) => (stderr += chunk))
-        proc.onExit((code) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
+        proc.onExit((code, stderr) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
         return {
           prompt(text) {
             proc.write(text)
