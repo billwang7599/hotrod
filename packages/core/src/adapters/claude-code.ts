@@ -20,6 +20,10 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   fetch: ['url', 'query'],
 }
 
+// Claude Code has no list command; these are the aliases `claude --help` names.
+const MODELS = ['fable', 'opus', 'sonnet', 'haiku']
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+
 const OUTPUT_TAIL_CHARS = 2000
 // The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
 const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
@@ -55,7 +59,7 @@ export const claudeCode: Adapter = {
     const version = await machine.run('claude', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
-    return { installed: true, signedIn, detail: version.stdout.trim() }
+    return { installed: true, signedIn, detail: version.stdout.trim(), models: MODELS, thinking: EFFORTS }
   },
 
   accounts: {
@@ -93,7 +97,7 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp }, emit) {
+  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp, model, thinking }, emit) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -109,6 +113,8 @@ export const claudeCode: Adapter = {
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
     ]
+    if (model) args.push('--model', model)
+    if (thinking) args.push('--effort', thinking)
     const env = accountEnv(accountDir, apiKey).env ?? {}
     if (hotrodMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.

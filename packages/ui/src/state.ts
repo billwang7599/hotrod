@@ -1,3 +1,4 @@
+import { DEFAULT_SUBAGENT_LIMIT } from '@hotrod/core/types'
 import type {
   Account,
   ChatEntry,
@@ -9,7 +10,9 @@ import type {
   CoreMessage,
   EngineAccounts,
   EngineInfo,
+  Mods,
   Project,
+  QueuedMessage,
 } from '@hotrod/core/types'
 
 export const MAIN_CHAT_ID = 'main'
@@ -37,7 +40,7 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string }
+export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string; queue: QueuedMessage[] }
 
 export type State = {
   connected: boolean
@@ -48,6 +51,7 @@ export type State = {
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextKind, boolean>
+  mods: Mods
   context?: { chatId: string; layers: ContextLayer[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
@@ -67,7 +71,8 @@ export const initialState: State = {
   projects: [],
   chats: [],
   selectedId: MAIN_CHAT_ID,
-  contextDefaults: { workshop: true, repo: true, project: true, own: true },
+  contextDefaults: { workshop: true, repo: true, project: true, parent: true, own: true },
+  mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
   toasts: [],
   nextToastId: 1,
 }
@@ -162,6 +167,7 @@ export function reduce(state: State, action: Action): State {
         projects: action.projects,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
+        mods: action.mods,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -198,7 +204,12 @@ export function reduce(state: State, action: Action): State {
         selectedId: action.chat.id,
       }
     case 'chat.updated':
-      return updateChat(state, action.chat.id, (c) => ({ ...c, ...action.chat }))
+      return updateChat(state, action.chat.id, (c) => ({
+        ...c,
+        model: undefined,
+        thinking: undefined,
+        ...action.chat,
+      }))
     case 'chat.removed':
       return keepSelection({ ...state, chats: state.chats.filter((c) => c.id !== action.chatId) })
     case 'chat.entry':
@@ -220,6 +231,8 @@ export function reduce(state: State, action: Action): State {
       })
     case 'chat.status':
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
+    case 'chat.queue':
+      return updateChat(state, action.chatId, (c) => ({ ...c, queue: action.queue }))
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, layers: action.layers } }
@@ -231,6 +244,8 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
+    case 'mods.updated':
+      return { ...state, mods: action.mods }
     case 'error':
       return {
         ...state,

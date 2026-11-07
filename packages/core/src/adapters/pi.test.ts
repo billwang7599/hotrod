@@ -1,15 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent } from '../types.ts'
+import type { EngineEvent, SessionOptions } from '../types.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/pi/${name}.jsonl`, import.meta.url), 'utf8')
 
-function startSession(instructions = '') {
+function startSession(instructions = '', extra: Partial<SessionOptions> = {}) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
-  const session = pi.start(fake.machine, { cwd: '/tmp/project', instructions }, (e) => events.push(e))
+  const session = pi.start(fake.machine, { cwd: '/tmp/project', instructions, ...extra }, (e) => events.push(e))
   return { fake, events, session }
 }
 
@@ -18,6 +18,18 @@ const toolStart = (toolName: string, args: unknown, toolCallId = 't1') =>
   line({ type: 'tool_execution_start', toolCallId, toolName, args })
 
 describe('pi adapter', () => {
+  it('passes the model and thinking level only when set', () => {
+    const { fake } = startSession('', { model: 'anthropic/claude-haiku-5-5', thinking: 'low' })
+    const args = fake.spawned[0]?.args ?? []
+    expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual([
+      '--model',
+      'anthropic/claude-haiku-5-5',
+    ])
+    expect(args.slice(args.indexOf('--thinking'), args.indexOf('--thinking') + 2)).toEqual(['--thinking', 'low'])
+    expect(startSession().fake.spawned[0]?.args).not.toContain('--model')
+    expect(startSession().fake.spawned[0]?.args).not.toContain('--thinking')
+  })
+
   it('spawns pi in rpc mode with the clean flags in the project folder', () => {
     const { fake } = startSession()
     expect(fake.spawned).toEqual([
@@ -259,16 +271,25 @@ describe('pi adapter', () => {
 describe('pi.detect', () => {
   const version = { code: 0, stdout: '1.5.0\n', stderr: '' }
 
-  it('reports installed and signed in when pi lists a model', async () => {
+  it('reports installed and signed in when pi lists a model, with the models and thinking levels', async () => {
     const { machine } = fakeMachine({
       'pi --version': version,
       'pi --list-models --offline': {
         code: 0,
-        stdout: 'provider   model             context  max-out  thinking  images\nanthropic  claude-haiku-5-5  1M  128K  yes  yes\n',
+        stdout:
+          'provider   model             context  max-out  thinking  images\n' +
+          'anthropic  claude-haiku-5-5  1M       128K     yes       yes   \n' +
+          'openai     gpt-5             400K     128K     yes       yes   \n',
         stderr: '',
       },
     })
-    expect(await pi.detect(machine)).toEqual({ installed: true, signedIn: true, detail: '1.5.0' })
+    expect(await pi.detect(machine)).toEqual({
+      installed: true,
+      signedIn: true,
+      detail: '1.5.0',
+      models: ['anthropic/claude-haiku-5-5', 'openai/gpt-5'],
+      thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    })
   })
 
   it('reports signed out when pi has no models', async () => {
@@ -280,7 +301,7 @@ describe('pi.detect', () => {
         stderr: '',
       },
     })
-    expect(await pi.detect(machine)).toEqual({ installed: true, signedIn: false, detail: '1.5.0' })
+    expect(await pi.detect(machine)).toMatchObject({ installed: true, signedIn: false, detail: '1.5.0', models: [] })
   })
 
   it('reports not installed', async () => {

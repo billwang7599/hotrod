@@ -37,7 +37,13 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
-export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }
+export type EngineStatus = {
+  installed: boolean
+  signedIn: boolean
+  detail?: string
+  models?: string[]
+  thinking?: string[]
+}
 
 export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
 
@@ -47,6 +53,8 @@ export type SessionOptions = {
   accountDir?: string
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
+  model?: string
+  thinking?: string
 }
 
 export interface Session {
@@ -97,9 +105,16 @@ export type ChatInfo = {
   engine: string
   archived: boolean
   createdAt: string
+  parentId?: string
+  model?: string
+  thinking?: string
 }
 
-export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'own'] as const
+export type Mods = { subagents: { enabled: boolean; limit: number } }
+
+export const DEFAULT_SUBAGENT_LIMIT = 4
+
+export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'parent', 'own'] as const
 
 export type ContextKind = (typeof CONTEXT_KINDS)[number]
 
@@ -119,7 +134,14 @@ export type ChatEntry = { at: string } & (
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
-export type ChatState = ChatInfo & { status: ChatStatus; entries: ChatEntry[]; draft: string }
+export type QueuedMessage = { id: string; text: string }
+
+export type ChatState = ChatInfo & {
+  status: ChatStatus
+  entries: ChatEntry[]
+  draft: string
+  queue: QueuedMessage[]
+}
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
@@ -130,13 +152,16 @@ export type ClientMessage =
   | { type: 'chat.archive'; chatId: string; archived: boolean }
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
+  | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
   | { type: 'chat.send'; chatId: string; text: string }
+  | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'context.get'; chatId: string }
   | { type: 'context.set'; chatId: string; kind: ContextKind; enabled: boolean }
   | { type: 'context.write'; chatId: string; kind: ContextKind; text: string }
   | { type: 'context.setDefault'; kind: ContextKind; enabled: boolean }
+  | { type: 'subagents.set'; enabled: boolean; limit: number }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -154,6 +179,7 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextKind, boolean>
+      mods: Mods
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -167,7 +193,9 @@ export type CoreMessage =
   | { type: 'chat.delta'; chatId: string; text: string }
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
+  | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.context'; chatId: string; layers: ContextLayer[] }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }
+  | { type: 'mods.updated'; mods: Mods }
   | { type: 'error'; message: string }

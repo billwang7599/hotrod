@@ -11,10 +11,17 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
+import { createFakeAdapter, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { openCore, TITLE_MAX_CHARS, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
-import type { Adapter, ChatEntry, CoreMessage, EngineEvent, SessionOptions } from './types.ts'
+import {
+  DEFAULT_SUBAGENT_LIMIT,
+  type Adapter,
+  type ChatEntry,
+  type CoreMessage,
+  type EngineEvent,
+  type SessionOptions,
+} from './types.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
@@ -167,7 +174,7 @@ describe('projects', () => {
 
 describe('main chat and subchats', () => {
   const infoOf = (core: Core, id: string) => {
-    const { status, entries, draft, ...info } = chatOf(core, id)!
+    const { status, entries, draft, queue, ...info } = chatOf(core, id)!
     return info
   }
 
@@ -380,14 +387,6 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
     expect(t.calls[1]?.prompt).not.toContain('SECRET')
-  })
-
-  it('rejects a send while a turn runs', async () => {
-    const t = setup(permissionScript)
-    const chat = addProject(t)
-    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
-    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })).toThrow()
-    expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'user.message')).toHaveLength(1)
   })
 
   it('keeps the log across a restart', async () => {
@@ -637,7 +636,7 @@ describe('engines', () => {
     const chat = addProject(t)
     const other = createChat(t, chat.projectId)
     t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
-    const { status, entries, draft, ...info } = chatOf(t.core, chat.id)!
+    const { status, entries, draft, queue, ...info } = chatOf(t.core, chat.id)!
     expect(t.messages.at(-1)).toEqual({ type: 'chat.updated', chat: { ...info, engine: 'beta' } })
     expect(engineOf(t.core, chat.id)).toBe('beta')
     expect(engineOf(t.core, other.id)).toBe('alpha')
@@ -674,6 +673,63 @@ describe('engines', () => {
     expect(prompt.trimEnd().endsWith('second question')).toBe(true)
     const texts = entriesOf(t.core, chat.id).flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))
     expect(texts).toEqual(['Alpha reply', 'Beta reply'])
+  })
+
+  it('sets a chat model and thinking level, saves them and starts the next session with them', async () => {
+    const t = setupEngines()
+    await t.core.refreshEngines()
+    const chat = addProject(t)
+    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING.at(-1)!]
+    t.handle({ type: 'chat.setModel', chatId: chat.id, model, thinking })
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, model, thinking } })
+    expect(JSON.parse(readFileSync(chatFile(t, chat.projectId), 'utf8'))).toMatchObject({ model, thinking })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(t.alpha[0]?.options).toMatchObject({ model, thinking })
+
+    t.handle({ type: 'chat.setModel', chatId: chat.id, thinking })
+    const updated = t.messages.at(-1)
+    expect(updated?.type === 'chat.updated' && 'model' in updated.chat).toBe(false)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(t.alpha[1]?.options.model).toBeUndefined()
+    expect(t.alpha[1]?.options.thinking).toBe(thinking)
+    expect(JSON.parse(readFileSync(chatFile(t, chat.projectId), 'utf8')).model).toBeUndefined()
+
+    t.core.close()
+    const reopened = chatOf(setupEngines(t.garage).core, chat.id)
+    expect(reopened?.model).toBeUndefined()
+    expect(reopened?.thinking).toBe(thinking)
+  })
+
+  it('rejects a model or thinking level the engine does not offer, and a change while a turn runs', async () => {
+    const t = setupEngines()
+    await t.core.refreshEngines()
+    const chat = addProject(t)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: 'nope' })).toThrow(/model "nope"/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, thinking: 'nope' })).toThrow(
+      /thinking level "nope"/,
+    )
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0] })).toThrow(/turn/)
+    expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
+  })
+
+  it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
+    const alpha = createFakeAdapter([], 0)
+    const betaOffers = { models: FAKE_MODELS.slice(0, 1), thinking: FAKE_THINKING }
+    const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
+    const beta: Adapter = { ...alpha, id: 'beta', detect }
+    const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
+    await t.core.refreshEngines()
+    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING[0]!]
+    t.handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
+    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
+    expect(chatOf(t.core, 'main')?.model).toBeUndefined()
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0], thinking })
+    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0], thinking })
   })
 
   it('keeps a chat whose saved engine is gone and refuses to send', () => {
@@ -773,6 +829,116 @@ describe('settings', () => {
       { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ])
     expect(t.messages.filter((m) => m.type === 'engine.updated')).toHaveLength(2)
+  })
+})
+
+describe('queue', () => {
+  const userTexts = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [e.text] : []))
+  const queueOf = (core: Core, id: string) => chatOf(core, id)?.queue.map((q) => q.text)
+
+  it('queues messages sent during a turn and sends them as one prompt when it ends', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(queueOf(t.core, chat.id)).toEqual(['two', 'three'])
+    const last = t.messages.at(-1)
+    expect(last).toMatchObject({ type: 'chat.queue', chatId: chat.id, queue: [{ text: 'two' }, { text: 'three' }] })
+
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => userTexts(t.core, chat.id).length === 2)
+
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two\n\nthree'])
+    expect(t.calls[1]?.prompt?.endsWith('two\n\nthree')).toBe(true)
+    expect(queueOf(t.core, chat.id)).toEqual([])
+    expect(t.messages).toContainEqual({ type: 'chat.queue', chatId: chat.id, queue: [] })
+    expect(statusOf(t.core, chat.id)).not.toBe('idle')
+  })
+
+  it('sends the queue after a stopped or failed turn too', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => userTexts(t.core, chat.id).length === 2)
+    expect(entriesOf(t.core, chat.id).find((e) => e.type === 'turn.completed')).toMatchObject({ error: 'Interrupted' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two'])
+
+    const emits: ((event: EngineEvent) => void)[] = []
+    const failing = setup(
+      stubAdapter((_machine, _options, emit) => {
+        emits.push(emit)
+        return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+      }),
+    )
+    const other = addProject(failing)
+    failing.handle({ type: 'chat.send', chatId: other.id, text: 'go' })
+    failing.handle({ type: 'chat.send', chatId: other.id, text: 'next' })
+    emits[0]?.({ type: 'session.ended', error: 'crashed' })
+    expect(userTexts(failing.core, other.id)).toEqual(['go', 'next'])
+    expect(statusOf(failing.core, other.id)).toBe('running')
+  })
+
+  it('removes a queued message by id, ignoring one that is already gone', () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    const [two] = chatOf(t.core, chat.id)?.queue ?? []
+    if (!two) throw new Error('nothing queued')
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: two.id })
+    expect(queueOf(t.core, chat.id)).toEqual(['three'])
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.queue', queue: [{ text: 'three' }] })
+    const count = t.messages.length
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: two.id })
+    expect(t.messages).toHaveLength(count)
+  })
+
+  it('sends nothing queued while Hotrod quits', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    await t.core.close()
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(t.calls).toHaveLength(1)
+  })
+
+  it('keeps the queue and reports why when it cannot be sent', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: false })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(queueOf(t.core, chat.id)).toEqual(['two'])
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringMatching(/is off/) })
+
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two\n\nthree'])
+    expect(queueOf(t.core, chat.id)).toEqual([])
+  })
+
+  it('still refuses an empty message', () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: '  ' })).toThrow(/empty/)
+    expect(queueOf(t.core, chat.id)).toEqual([])
   })
 })
 
@@ -1261,13 +1427,13 @@ describe('context', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
     const t = setup(textScript, garage)
-    expect(t.core.contextDefaults()).toEqual({ workshop: true, repo: true, project: true, own: true })
+    expect(t.core.contextDefaults()).toEqual({ workshop: true, repo: true, project: true, parent: true, own: true })
     const sub = createChat(t)
     t.handle({ type: 'context.set', chatId: sub.id, kind: 'workshop', enabled: true })
 
     t.handle({ type: 'context.setDefault', kind: 'own', enabled: false })
     t.handle({ type: 'context.setDefault', kind: 'workshop', enabled: false })
-    const defaults = { workshop: false, repo: true, project: true, own: false }
+    const defaults = { workshop: false, repo: true, project: true, parent: true, own: false }
     expect(t.messages.at(-1)).toEqual({ type: 'context.defaults', defaults })
     expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toEqual({
       theme: 'dark',
@@ -1315,5 +1481,26 @@ describe('context', () => {
       t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'x' }),
     ).toThrow(/archived/)
     expect(layersOf(t, sub.id)).toHaveLength(2)
+  })
+})
+
+describe('subagents mod', () => {
+  it('is off by default, and saves its switch and limit in settings.json', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    expect(t.core.mods()).toEqual({ subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } })
+
+    t.handle({ type: 'subagents.set', enabled: true, limit: -1 })
+    const mods = { subagents: { enabled: true, limit: -1 } }
+    expect(t.messages.at(-1)).toEqual({ type: 'mods.updated', mods })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({ theme: 'dark', mods })
+
+    for (const limit of [-2, 1.5, '3', undefined]) {
+      expect(() => t.handle({ type: 'subagents.set', enabled: true, limit } as never)).toThrow(/limit/)
+    }
+    expect(t.core.mods()).toEqual(mods)
+    t.core.close()
+    expect(setup(textScript, garage).core.mods()).toEqual(mods)
   })
 })

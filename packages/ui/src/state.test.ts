@@ -16,11 +16,13 @@ const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatSt
   status: 'idle',
   entries,
   draft: '',
+  queue: [],
 })
 const project = (id: string): Project => ({ id, name: id, path: `/tmp/${id}`, archived: false })
-const contextDefaults = { workshop: true, repo: true, project: true, own: true }
+const contextDefaults = { workshop: true, repo: true, project: true, parent: true, own: true }
+const mods = { subagents: { enabled: false, limit: 4 } }
 const snapshot = (chats: ChatState[], projects: Project[] = []): Action =>
-  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults })
+  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults, mods })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -82,6 +84,18 @@ describe('reduce', () => {
     expect(updated.chats[1]).toMatchObject({ title: 'hi', archived: true, items: [{ kind: 'user', text: 'hi' }] })
   })
 
+  it('sets and clears a chat model and thinking level, since JSON drops the cleared field', () => {
+    const { status, entries, draft, ...info } = chat('c')
+    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), {
+      type: 'chat.updated',
+      chat: { ...info, model: 'large', thinking: 'high' },
+    })
+    expect(state.chats[1]).toMatchObject({ model: 'large', thinking: 'high' })
+    const cleared = reduce(state, { type: 'chat.updated', chat: { ...info, thinking: 'high' } })
+    expect(cleared.chats[1]?.model).toBeUndefined()
+    expect(cleared.chats[1]?.thinking).toBe('high')
+  })
+
   it('removes a chat, or a project with all its chats, and selects Main if the selection went with it', () => {
     const state = run(snapshot([chat(MAIN_CHAT_ID), chat('p/main', [], 'p'), chat('s', [], 'p'), chat('c')], [project('p')]))
     const onSub = reduce(state, { type: 'select', chatId: 's' })
@@ -113,7 +127,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults },
+      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults, mods },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -125,7 +139,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults },
+      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults, mods },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -191,6 +205,15 @@ describe('reduce', () => {
       { type: 'chat.delta', chatId: 'a', text: 'lo' },
     )
     expect(state.chats[0]!.draft).toBe('Hello')
+  })
+
+  it('shows the queue a snapshot carries and replaces it on every change', () => {
+    const queued = [{ id: 'q1', text: 'next' }]
+    const state = run(snapshot([{ ...chat('a'), status: 'running', queue: queued }]))
+    expect(state.chats[0]!.queue).toEqual(queued)
+    const more = reduce(state, { type: 'chat.queue', chatId: 'a', queue: [...queued, { id: 'q2', text: 'then' }] })
+    expect(more.chats[0]!.queue.map((q) => q.text)).toEqual(['next', 'then'])
+    expect(reduce(more, { type: 'chat.queue', chatId: 'a', queue: [] }).chats[0]!.queue).toEqual([])
   })
 
   it('streams thinking into the turn in order and drops it when the turn ends', () => {
@@ -287,5 +310,12 @@ describe('reduce', () => {
     const defaults = { ...contextDefaults, own: false }
     expect(reduce(written, { type: 'context.defaults', defaults }).contextDefaults).toEqual(defaults)
     expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
+  })
+
+  it('loads the mods from the snapshot and follows their updates', () => {
+    const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
+    expect(loaded.mods).toEqual(mods)
+    const on = { subagents: { enabled: true, limit: -1 } }
+    expect(reduce(loaded, { type: 'mods.updated', mods: on }).mods).toEqual(on)
   })
 })

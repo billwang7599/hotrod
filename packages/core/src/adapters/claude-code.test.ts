@@ -1,16 +1,22 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, LoginEvent } from '../types.ts'
+import type { EngineEvent, LoginEvent, SessionOptions } from '../types.ts'
 import { claudeCode } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${name}.jsonl`, import.meta.url), 'utf8')
 
-function startSession(instructions = '') {
+function startSession(instructions = '', extra: Partial<SessionOptions> = {}) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
-  const session = claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions }, (e) => events.push(e))
+  const options = { cwd: '/tmp/project', instructions, ...extra }
+  const session = claudeCode.start(fake.machine, options, (e) => events.push(e))
   return { fake, events, session }
+}
+
+const detected = {
+  'claude --version': { code: 0, stdout: '2.1.319 (Claude Code)\n', stderr: '' },
+  'claude auth status': { code: 0, stdout: '{"loggedIn":true,"authMethod":"claude.ai"}', stderr: '' },
 }
 
 describe('claudeCode adapter', () => {
@@ -52,6 +58,16 @@ describe('claudeCode adapter', () => {
     expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__hotrod__*')
     expect(args.join(' ')).not.toContain(token)
     expect(fake.spawned[0]?.env).toEqual({ HOTROD_MCP_TOKEN: token })
+  })
+
+  it('passes the model and effort only when set', async () => {
+    const { models = [], thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
+    const { fake } = startSession('', { model: models.at(-1), thinking: thinking[0] })
+    const args = fake.spawned[0]?.args ?? []
+    expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', models.at(-1)])
+    expect(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2)).toEqual(['--effort', thinking[0]])
+    expect(startSession().fake.spawned[0]?.args).not.toContain('--model')
+    expect(startSession().fake.spawned[0]?.args).not.toContain('--effort')
   })
 
   it('appends instructions to the system prompt when given', () => {
@@ -273,12 +289,14 @@ describe('claudeCode adapter', () => {
 })
 
 describe('claudeCode.detect', () => {
-  it('reports installed and signed in', async () => {
-    const { machine } = fakeMachine({
-      'claude --version': { code: 0, stdout: '2.1.319 (Claude Code)\n', stderr: '' },
-      'claude auth status': { code: 0, stdout: '{"loggedIn":true,"authMethod":"claude.ai"}', stderr: '' },
+  it('reports installed and signed in, with the model aliases and effort levels from claude --help', async () => {
+    expect(await claudeCode.detect(fakeMachine(detected).machine)).toEqual({
+      installed: true,
+      signedIn: true,
+      detail: '2.1.319 (Claude Code)',
+      models: ['fable', 'opus', 'sonnet', 'haiku'],
+      thinking: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
-    expect(await claudeCode.detect(machine)).toEqual({ installed: true, signedIn: true, detail: '2.1.319 (Claude Code)' })
   })
 
   it('reports signed out', async () => {
