@@ -97,9 +97,14 @@ export type ChatInfo = {
   engine: string
   archived: boolean
   createdAt: string
+  parentId?: string
 }
 
-export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'own'] as const
+export type Mods = { subagents: { enabled: boolean; limit: number } }
+
+export const DEFAULT_SUBAGENT_LIMIT = 4
+
+export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'parent', 'own'] as const
 
 export type ContextKind = (typeof CONTEXT_KINDS)[number]
 
@@ -145,6 +150,7 @@ export type ClientMessage =
   | { type: 'context.set'; chatId: string; kind: ContextKind; enabled: boolean }
   | { type: 'context.write'; chatId: string; kind: ContextKind; text: string }
   | { type: 'context.setDefault'; kind: ContextKind; enabled: boolean }
+  | { type: 'subagents.set'; enabled: boolean; limit: number }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -162,6 +168,7 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextKind, boolean>
+      mods: Mods
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -179,4 +186,5 @@ export type CoreMessage =
   | { type: 'chat.context'; chatId: string; layers: ContextLayer[] }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }
+  | { type: 'mods.updated'; mods: Mods }
   | { type: 'error'; message: string }

@@ -9,6 +9,7 @@ import {
   type ContextLayer,
   type EngineAccounts,
   type EngineInfo,
+  type Mods,
   type Project,
 } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
@@ -43,6 +44,7 @@ const CONTEXT_LABELS: Record<ContextKind, { label: string; about: string }> = {
   workshop: { label: 'Workshop', about: 'Your AGENTS.md for every chat' },
   repo: { label: 'Repo', about: "The AGENTS.md in a project's folder" },
   project: { label: 'Project', about: 'Your notes for one project' },
+  parent: { label: 'Parent', about: 'The notes of the subchat a subagent works for' },
   own: { label: 'Subchat', about: "A subchat's own notes" },
 }
 const EMPTY_LAYER = 'Empty. Instructions written here go to the engine.'
@@ -307,16 +309,64 @@ function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
   )
 }
 
+type SubagentsProps = { subagents: Mods['subagents']; connected: boolean; send: (m: ClientMessage) => void }
+
+function SubagentsSettings({ subagents: { enabled, limit }, connected, send }: SubagentsProps) {
+  const [draft, setDraft] = useState(String(limit))
+  useEffect(() => setDraft(String(limit)), [limit])
+  const save = () => {
+    const next = Number(draft)
+    if (draft.trim() && Number.isInteger(next) && next >= -1 && next !== limit) {
+      send({ type: 'subagents.set', enabled, limit: next })
+    } else setDraft(String(limit))
+  }
+  return (
+    <div className={`engine-card ${enabled ? 'on' : ''}`}>
+      <div className="engine-row">
+        <span className="engine-name">
+          Subagents
+          <span className="muted">
+            Chats can hand a task to a new chat that reports back when it ends. Claude Code only.
+          </span>
+        </span>
+        <Switch
+          label="Subagents"
+          checked={enabled}
+          disabled={!connected}
+          onChange={(on) => send({ type: 'subagents.set', enabled: on, limit })}
+        />
+      </div>
+      {enabled && (
+        <label className="mod-limit">
+          Max running per chat
+          <input
+            type="number"
+            min={-1}
+            step={1}
+            value={draft}
+            disabled={!connected}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={save}
+            onKeyDown={(e) => e.key === 'Enter' && save()}
+          />
+          <span className="muted">-1 for no limit</span>
+        </label>
+      )}
+    </div>
+  )
+}
+
 type SettingsProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextKind, boolean>
+  mods: Mods
   connected: boolean
   send: (m: ClientMessage) => void
   close: () => void
 }
 
-function SettingsDialog({ engines, accounts, contextDefaults, connected, send, close }: SettingsProps) {
+function SettingsDialog({ engines, accounts, contextDefaults, mods, connected, send, close }: SettingsProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   useEffect(() => dialogRef.current?.showModal(), [])
   return (
@@ -368,6 +418,11 @@ function SettingsDialog({ engines, accounts, contextDefaults, connected, send, c
               </div>
             ))}
           </div>
+        </section>
+        <section>
+          <h3>Mods</h3>
+          <p className="muted settings-hint">Built-in mods. Each is off until you turn it on.</p>
+          <SubagentsSettings subagents={mods.subagents} connected={connected} send={send} />
         </section>
       </div>
     </dialog>
@@ -785,16 +840,19 @@ type RowProps = {
   title?: string
   selected: boolean
   sub?: boolean
+  nested?: boolean
   select: () => void
   menu?: MenuItem[]
 }
 
-function ChatRow({ chat, label, title, selected, sub, select, menu }: RowProps) {
+function ChatRow({ chat, label, title, selected, sub, nested, select, menu }: RowProps) {
+  const classes = ['chat-row', selected && 'selected', sub && 'sub', nested && 'nested', menu && 'has-menu']
   return (
-    <div className={`chat-row ${selected ? 'selected' : ''} ${sub ? 'sub' : ''} ${menu ? 'has-menu' : ''}`}>
+    <div className={classes.filter(Boolean).join(' ')}>
       <button className="chat-link" title={title ?? label} onClick={select}>
         <span className={`dot ${chat.status}`} />
         <span className="chat-label">{label}</span>
+        {chat.parentId && <span className="chat-tag">subagent</span>}
         <span className="chat-engine">{chat.engine}</span>
       </button>
       {menu && <RowMenu label={label} items={menu} />}
@@ -827,8 +885,10 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
   const toggle = (id: string) => setCollapsed((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
 
   const main = chats.find((c) => c.id === MAIN_CHAT_ID)
+  const shown = (c: ChatView) => !c.archived && !projects.find((p) => p.id === c.projectId)?.archived
+  const hasShownParent = (c: ChatView) => chats.some((p) => p.id === c.parentId && shown(p))
   const subchats = (projectId?: string) =>
-    chats.filter((c) => !c.main && !c.archived && c.projectId === projectId).sort(newestFirst)
+    chats.filter((c) => !c.main && shown(c) && c.projectId === projectId && !hasShownParent(c)).sort(newestFirst)
   const projectBusy = (id: string) => chats.some((c) => c.projectId === id && c.status !== 'idle')
   const offline = connected ? undefined : 'Disconnected from the core'
 
@@ -875,6 +935,13 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
       {...props}
     />
   )
+  const withSubagents = (chat: ChatView, props: Partial<RowProps> = {}) => [
+    row(chat, props),
+    ...chats
+      .filter((c) => c.parentId === chat.id && !c.archived)
+      .sort(newestFirst)
+      .map((c) => row(c, { nested: true })),
+  ]
 
   const activeProjects = projects.filter((p) => !p.archived)
   const archivedProjects = projects.filter((p) => p.archived)
@@ -885,8 +952,14 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
 
   return (
     <nav className="chat-nav">
-      {main && row(main, { label: 'Workshop', title: 'Workshop: not tied to a folder', menu: undefined, sub: false })}
-      {subchats().map((c) => row(c))}
+      {main &&
+        withSubagents(main, {
+          label: 'Workshop',
+          title: 'Workshop: not tied to a folder',
+          menu: undefined,
+          sub: false,
+        })}
+      {subchats().map((c) => withSubagents(c))}
       <button className="ghost small new-chat" disabled={!connected} onClick={() => send({ type: 'chat.create' })}>
         + New chat
       </button>
@@ -919,8 +992,8 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
               </button>
               <RowMenu label={project.name} items={projectMenu(project)} />
             </div>
-            {open && projectMain && row(projectMain, { label: 'Main', title: project.path, menu: undefined })}
-            {open && subchats(project.id).map((c) => row(c))}
+            {open && projectMain && withSubagents(projectMain, { label: 'Main', title: project.path, menu: undefined })}
+            {open && subchats(project.id).map((c) => withSubagents(c))}
           </section>
         )
       })}
@@ -1085,6 +1158,7 @@ function App() {
             engines={state.engines}
             accounts={state.accounts}
             contextDefaults={state.contextDefaults}
+            mods={state.mods}
             connected={connected}
             send={send}
             close={() => setSettingsOpen(false)}

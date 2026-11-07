@@ -266,6 +266,18 @@ pre {
   padding-left: 22px;
 }
 
+.chat-row.nested .chat-link {
+  padding-left: 36px;
+}
+
+.chat-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
 .chat-label {
   flex: 1;
   min-width: 0;
@@ -1435,6 +1447,17 @@ dialog.settings::backdrop {
 .context-layer textarea:read-only {
   color: var(--muted);
   background: transparent;
+}
+
+.mod-limit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+}
+
+.mod-limit input {
+  width: 72px;
 }
 
 .context-defaults {

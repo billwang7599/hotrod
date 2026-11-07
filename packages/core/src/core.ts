@@ -16,6 +16,7 @@ import { openAccounts } from './accounts.ts'
 import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
   CONTEXT_KINDS,
+  DEFAULT_SUBAGENT_LIMIT,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
@@ -29,6 +30,7 @@ import {
   type EngineInfo,
   type EngineStatus,
   type Machine,
+  type Mods,
   type Project,
   type QueuedMessage,
   type Session,
@@ -70,17 +72,22 @@ export function openCore(options: {
   }
   checkEngine(defaultEngine)
   const settingsFile = join(garage, 'settings.json')
-  const settings: { engines: Record<string, boolean>; context?: Partial<Record<ContextKind, boolean>> } = {
-    engines: {},
-    ...readJson(settingsFile),
-  }
+  const settings: {
+    engines: Record<string, boolean>
+    context?: Partial<Record<ContextKind, boolean>>
+    mods?: Partial<Mods>
+  } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextKind, boolean> => ({
     workshop: true,
     repo: true,
     project: true,
+    parent: true,
     own: true,
     ...settings.context,
+  })
+  const mods = (): Mods => ({
+    subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT, ...settings.mods?.subagents },
   })
   const detected = new Map<string, EngineStatus>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
@@ -112,11 +119,27 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
+  const setSubagents = (enabled: boolean, limit: unknown) => {
+    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < -1) {
+      throw new Error('The subagent limit must be a whole number, or -1 for no limit')
+    }
+    settings.mods = { ...settings.mods, subagents: { enabled, limit } }
+    saveSettings()
+    broadcast({ type: 'mods.updated', mods: mods() })
+  }
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
   const saveChat = ({ info, dir, context }: Chat) => {
-    const { id, title, engine, archived, createdAt } = info
-    const saved = { id, title, engine, archived, createdAt, ...(Object.keys(context).length ? { context } : {}) }
+    const { id, title, engine, archived, createdAt, parentId } = info
+    const saved = {
+      id,
+      title,
+      engine,
+      archived,
+      createdAt,
+      ...(parentId !== undefined && { parentId }),
+      ...(Object.keys(context).length ? { context } : {}),
+    }
     writeFileSync(join(dir, 'chat.json'), JSON.stringify(saved, null, 2) + '\n')
   }
   const state = (chat: Chat): ChatState => ({
@@ -191,12 +214,28 @@ export function openCore(options: {
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
-    if (quitting || !chat.queue.length) return
+    if (quitting) return
+    const parent = parentOf(chat)
+    if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
+    if (chat.queue.length) reportErrors(() => sendQueue(chat))
+  }
+
+  const reportErrors = (run: () => void) => {
     try {
-      sendQueue(chat)
+      run()
     } catch (error) {
       broadcast({ type: 'error', message: error instanceof Error ? error.message : String(error) })
     }
+  }
+
+  const parentOf = (chat: Chat) => (chat.info.parentId === undefined ? undefined : chats.get(chat.info.parentId))
+
+  const reportOf = (chat: Chat, error?: string) => {
+    const asked = chat.entries.findLastIndex((e) => e.type === 'user.message')
+    const reply = chat.entries.slice(asked + 1).findLast((e) => e.type === 'text.completed')
+    const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
+    const early = error ? ` (The turn ended early: ${error})` : ''
+    return `[subagent "${chat.info.title}" (${chat.info.id})] ${text}${early}`
   }
 
   const forceStop = (chat: Chat) =>
@@ -306,16 +345,30 @@ export function openCore(options: {
     broadcast({ type: 'project.removed', projectId: project.id })
   }
 
-  const createChat = (projectId?: string, engine = newChatEngine()) => {
+  const createChat = (projectId?: string, engine = newChatEngine(), parentId?: string) => {
     checkEngine(engine)
     checkEnabled(engine)
     if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
+    if (parentId !== undefined) {
+      const parent = chatFor(parentId)
+      if (parent.info.parentId !== undefined) throw new Error('A subagent cannot start subagents')
+      if (parent.info.projectId !== projectId) throw new Error("A subagent stays in its parent chat's place")
+    }
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
     const dir = projectId ? join(projectsDir, projectId, 'chats', id) : join(homeChatsDir, id)
     const createdAt = new Date().toISOString()
-    const info = { id, main: false, title: NEW_CHAT_TITLE, engine, archived: false, createdAt }
-    const chat = loadChat(dir, projectId ? { ...info, projectId } : info)
+    const info: ChatInfo = {
+      id,
+      ...(projectId !== undefined && { projectId }),
+      main: false,
+      title: NEW_CHAT_TITLE,
+      engine,
+      archived: false,
+      createdAt,
+      ...(parentId !== undefined && { parentId }),
+    }
+    const chat = loadChat(dir, info)
     broadcast({ type: 'chat.added', chat: state(chat) })
     return chat.info
   }
@@ -326,11 +379,21 @@ export function openCore(options: {
     broadcast({ type: 'chat.updated', chat: chat.info })
   }
 
+  const withSubagents = (chat: Chat) => {
+    const family = [chat, ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id)]
+    family.forEach(checkRemovable)
+    return family
+  }
+
+  const archiveChat = (chat: Chat, archived: boolean) =>
+    withSubagents(chat).forEach((c) => updateChat(c, { archived }))
+
   const deleteChat = (chat: Chat) => {
-    checkRemovable(chat)
-    chats.delete(chat.info.id)
-    rmSync(chat.dir, { recursive: true, force: true })
-    broadcast({ type: 'chat.removed', chatId: chat.info.id })
+    for (const c of withSubagents(chat)) {
+      chats.delete(c.info.id)
+      rmSync(c.dir, { recursive: true, force: true })
+      broadcast({ type: 'chat.removed', chatId: c.info.id })
+    }
   }
 
   const setEngine = (chat: Chat, engine: string) => {
@@ -352,11 +415,14 @@ export function openCore(options: {
     if (project) {
       files.push(['repo', join(project.path, 'AGENTS.md')], ['project', join(projectsDir, project.id, 'AGENTS.md')])
     }
+    const parent = parentOf(chat)
+    if (parent && !parent.info.main) files.push(['parent', join(parent.dir, 'AGENTS.md')])
     if (!chat.info.main) files.push(['own', join(chat.dir, 'AGENTS.md')])
+    const inherited = (kind: ContextKind) => parent?.context[kind === 'parent' ? 'own' : kind]
     return files.map(([kind, path]) => ({
       kind,
       path,
-      enabled: chat.context[kind] ?? contextDefaults()[kind],
+      enabled: chat.context[kind] ?? inherited(kind) ?? contextDefaults()[kind],
       writable: kind !== 'repo',
       text: existsSync(path) ? readFileSync(path, 'utf8') : '',
     }))
@@ -491,6 +557,7 @@ export function openCore(options: {
     addProject,
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
+    subagents: () => mods().subagents,
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
@@ -528,6 +595,7 @@ export function openCore(options: {
     },
     setEngineEnabled,
     contextDefaults,
+    mods,
     projects: () => [...projects.values()],
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
@@ -549,11 +617,8 @@ export function openCore(options: {
           return deleteProject(projectFor(message.projectId))
         case 'chat.create':
           return void createChat(message.projectId === undefined ? undefined : String(message.projectId))
-        case 'chat.archive': {
-          const chat = chatFor(message.chatId)
-          checkRemovable(chat)
-          return updateChat(chat, { archived: message.archived === true })
-        }
+        case 'chat.archive':
+          return archiveChat(chatFor(message.chatId), message.archived === true)
         case 'chat.delete':
           return deleteChat(chatFor(message.chatId))
         case 'chat.setEngine':
@@ -579,6 +644,8 @@ export function openCore(options: {
           return writeContext(chatFor(message.chatId), checkKind(message.kind), message.text)
         case 'context.setDefault':
           return setContextDefault(checkKind(message.kind), message.enabled === true)
+        case 'subagents.set':
+          return setSubagents(message.enabled === true, message.limit)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
         case 'account.login':

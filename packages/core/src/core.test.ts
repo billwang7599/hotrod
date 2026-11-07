@@ -14,7 +14,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { openCore, TITLE_MAX_CHARS, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
-import type { Adapter, ChatEntry, CoreMessage, EngineEvent, SessionOptions } from './types.ts'
+import {
+  DEFAULT_SUBAGENT_LIMIT,
+  type Adapter,
+  type ChatEntry,
+  type CoreMessage,
+  type EngineEvent,
+  type SessionOptions,
+} from './types.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
@@ -1363,13 +1370,13 @@ describe('context', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
     const t = setup(textScript, garage)
-    expect(t.core.contextDefaults()).toEqual({ workshop: true, repo: true, project: true, own: true })
+    expect(t.core.contextDefaults()).toEqual({ workshop: true, repo: true, project: true, parent: true, own: true })
     const sub = createChat(t)
     t.handle({ type: 'context.set', chatId: sub.id, kind: 'workshop', enabled: true })
 
     t.handle({ type: 'context.setDefault', kind: 'own', enabled: false })
     t.handle({ type: 'context.setDefault', kind: 'workshop', enabled: false })
-    const defaults = { workshop: false, repo: true, project: true, own: false }
+    const defaults = { workshop: false, repo: true, project: true, parent: true, own: false }
     expect(t.messages.at(-1)).toEqual({ type: 'context.defaults', defaults })
     expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toEqual({
       theme: 'dark',
@@ -1417,5 +1424,26 @@ describe('context', () => {
       t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'x' }),
     ).toThrow(/archived/)
     expect(layersOf(t, sub.id)).toHaveLength(2)
+  })
+})
+
+describe('subagents mod', () => {
+  it('is off by default, and saves its switch and limit in settings.json', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    expect(t.core.mods()).toEqual({ subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } })
+
+    t.handle({ type: 'subagents.set', enabled: true, limit: -1 })
+    const mods = { subagents: { enabled: true, limit: -1 } }
+    expect(t.messages.at(-1)).toEqual({ type: 'mods.updated', mods })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({ theme: 'dark', mods })
+
+    for (const limit of [-2, 1.5, '3', undefined]) {
+      expect(() => t.handle({ type: 'subagents.set', enabled: true, limit } as never)).toThrow(/limit/)
+    }
+    expect(t.core.mods()).toEqual(mods)
+    t.core.close()
+    expect(setup(textScript, garage).core.mods()).toEqual(mods)
   })
 })

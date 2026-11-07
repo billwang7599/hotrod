@@ -1,3 +1,4 @@
+import { DEFAULT_SUBAGENT_LIMIT } from '@hotrod/core/types'
 import type {
   Account,
   ChatEntry,
@@ -9,6 +10,7 @@ import type {
   CoreMessage,
   EngineAccounts,
   EngineInfo,
+  Mods,
   Project,
   QueuedMessage,
 } from '@hotrod/core/types'
@@ -49,6 +51,7 @@ export type State = {
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextKind, boolean>
+  mods: Mods
   context?: { chatId: string; layers: ContextLayer[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
@@ -68,7 +71,8 @@ export const initialState: State = {
   projects: [],
   chats: [],
   selectedId: MAIN_CHAT_ID,
-  contextDefaults: { workshop: true, repo: true, project: true, own: true },
+  contextDefaults: { workshop: true, repo: true, project: true, parent: true, own: true },
+  mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
   toasts: [],
   nextToastId: 1,
 }
@@ -163,6 +167,7 @@ export function reduce(state: State, action: Action): State {
         projects: action.projects,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
+        mods: action.mods,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -234,6 +239,8 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
+    case 'mods.updated':
+      return { ...state, mods: action.mods }
     case 'error':
       return {
         ...state,

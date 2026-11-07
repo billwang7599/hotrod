@@ -13,14 +13,17 @@ type Hub = {
   chats(): ChatState[]
   projects(): Project[]
   addProject(path: string, name?: string): Project
-  createChat(projectId?: string, engine?: string): ChatInfo
+  createChat(projectId?: string, engine?: string, parentId?: string): ChatInfo
   send(chatId: string, text: string): void
+  subagents(): { enabled: boolean; limit: number }
 }
 
-const isWorkshop = (chat: ChatInfo) => chat.main && chat.projectId === undefined
+const isWorkshop = (chat: ChatState) => chat.main && chat.projectId === undefined
 
-const isBelow = (caller: ChatInfo, chat: ChatInfo) =>
-  chat.id !== caller.id && (isWorkshop(caller) || (caller.main && chat.projectId === caller.projectId))
+const isBelow = (caller: ChatState, chat: ChatState) =>
+  chat.parentId !== undefined
+    ? chat.parentId === caller.id
+    : chat.id !== caller.id && (isWorkshop(caller) || (caller.main && chat.projectId === caller.projectId))
 
 function messages(chat: ChatState) {
   return chat.entries.flatMap((entry) => {
@@ -35,7 +38,7 @@ function messages(chat: ChatState) {
 type Context = { hub: Hub; caller: ChatState; below: (chatId: string) => ChatState }
 
 type Tool = {
-  workshopOnly: boolean
+  for: 'workshop' | 'main' | 'below' | 'subagents'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
@@ -43,7 +46,7 @@ type Tool = {
 
 const TOOLS: Record<string, Tool> = {
   list_chats: {
-    workshopOnly: false,
+    for: 'below',
     description: 'List the chats below this one, with their status.',
     input: z.object({}),
     run({ hub, caller }: Context) {
@@ -65,7 +68,7 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   read_chat: {
-    workshopOnly: false,
+    for: 'below',
     description: `Read a chat below this one: its last messages (${READ_CHAT_DEFAULT_LAST} by default).`,
     input: z.object({ chatId: z.string(), last: z.number().int().positive().optional() }),
     run({ below }: Context, { chatId, last = READ_CHAT_DEFAULT_LAST }: { chatId: string; last?: number }) {
@@ -73,7 +76,7 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   send_message: {
-    workshopOnly: false,
+    for: 'below',
     description: 'Send a message to an idle chat below this one. It starts a turn there.',
     input: z.object({ chatId: z.string(), text: z.string().min(1) }),
     run({ hub, below }: Context, { chatId, text }: { chatId: string; text: string }) {
@@ -84,7 +87,7 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   create_chat: {
-    workshopOnly: false,
+    for: 'main',
     description:
       'Start a new subchat below this one with a first message. The Workshop may put it in a project. ' +
       'Returns its id.',
@@ -99,8 +102,26 @@ const TOOLS: Record<string, Tool> = {
       return { chatId: chat.id }
     },
   },
+  spawn_subagent: {
+    for: 'subagents',
+    description:
+      'Start a subagent: a new chat below this one that works on the task, in this folder, with this engine ' +
+      'unless you name another. Its final reply comes back to you as a message when its turn ends, so ' +
+      "don't poll it. Returns its id.",
+    input: z.object({ task: z.string().min(1), engine: z.string().optional() }),
+    run({ hub, caller }: Context, { task, engine }: { task: string; engine?: string }) {
+      const { limit } = hub.subagents()
+      const running = hub.chats().filter((c) => c.parentId === caller.id && c.status !== 'idle').length
+      if (limit !== -1 && running >= limit) {
+        throw new Error(`This chat already has ${running} subagents running; the limit is ${limit}`)
+      }
+      const chat = hub.createChat(caller.projectId, engine ?? caller.engine, caller.id)
+      hub.send(chat.id, task)
+      return { chatId: chat.id }
+    },
+  },
   create_project: {
-    workshopOnly: true,
+    for: 'workshop',
     description:
       'Add a folder as a project, making it if missing; its contents are never touched. Returns the project ' +
       'and its main chat id.',
@@ -117,11 +138,19 @@ const TOOLS: Record<string, Tool> = {
 export function openHotrodMcp(hub: Hub) {
   const callers = new Map<string, string>()
 
+  const offers = (caller: ChatState, tool: Tool) => {
+    const spawns = caller.parentId === undefined && hub.subagents().enabled
+    if (tool.for === 'workshop') return isWorkshop(caller)
+    if (tool.for === 'main') return caller.main
+    if (tool.for === 'subagents') return spawns
+    return caller.main || spawns
+  }
+
   const serverFor = (callerId: string) => {
     const server = new McpServer({ name: 'hotrod', version: '0.0.0' })
     for (const [name, tool] of Object.entries(TOOLS)) {
       const caller = hub.chats().find((chat) => chat.id === callerId)
-      if (!caller || (tool.workshopOnly && !isWorkshop(caller))) continue
+      if (!caller || !offers(caller, tool)) continue
       server.registerTool(name, { description: tool.description, inputSchema: tool.input }, async (input: any) => {
         const caller = hub.chats().find((chat) => chat.id === callerId)
         try {
@@ -145,7 +174,7 @@ export function openHotrodMcp(hub: Hub) {
   return {
     grant(chatId: string) {
       const chat = hub.chats().find((c) => c.id === chatId)
-      if (!chat?.main) return undefined
+      if (!chat || !Object.values(TOOLS).some((tool) => offers(chat, tool))) return undefined
       const token = randomBytes(32).toString('base64url')
       callers.set(token, chatId)
       return token
