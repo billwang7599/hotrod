@@ -28,6 +28,9 @@ export function useSettled(ready = true) {
   return settled
 }
 
+// The word for a chat below the Workshop isn't picked yet, so every label for one reads it from here.
+export const CHAT_NOUN = { one: 'chat', many: 'chats' }
+
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
 

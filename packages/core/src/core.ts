@@ -11,22 +11,23 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { openAccounts } from './accounts.ts'
 import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
-  CONTEXT_KINDS,
+  CONTEXT_SECTIONS,
   DEFAULT_SUBAGENT_LIMIT,
   MODEL_ROLES,
   pickModel,
+  WORKSHOP_ID,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
   type ChatState,
   type ChatStatus,
   type ClientMessage,
-  type ContextKind,
-  type ContextLayer,
+  type ContextItem,
+  type ContextSection,
   type CoreMessage,
   type EngineEvent,
   type EngineInfo,
@@ -35,19 +36,19 @@ import {
   type ModelLists,
   type ModelRole,
   type Mods,
-  type Project,
+  type NewChat,
   type QueuedMessage,
   type Session,
 } from './types.ts'
 
 export const STOP_GRACE_MS = 60_000
-export const TITLE_MAX_CHARS = 40
-const NEW_CHAT_TITLE = 'New chat'
+export const MAX_CHAT_DEPTH = 1
+const WORKSHOP_NAME = 'Workshop'
 
 type Chat = {
   info: ChatInfo
   dir: string
-  context: Partial<Record<ContextKind, boolean>>
+  context: Record<string, boolean>
   entries: ChatEntry[]
   status: ChatStatus
   session?: Session
@@ -78,18 +79,15 @@ export function openCore(options: {
   const settingsFile = join(garage, 'settings.json')
   const settings: {
     engines: Record<string, boolean>
-    context?: Partial<Record<ContextKind, boolean>>
+    context?: Partial<Record<ContextSection, boolean>>
     mods?: Partial<Mods>
     models?: Record<string, Partial<ModelLists>>
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
-  const contextDefaults = (): Record<ContextKind, boolean> => ({
-    workshop: true,
-    repo: true,
-    project: true,
-    parent: true,
-    own: true,
-    ...settings.context,
+  const contextDefaults = (): Record<ContextSection, boolean> => ({
+    agents: settings.context?.agents ?? true,
+    folders: settings.context?.folders ?? true,
+    files: settings.context?.files ?? true,
   })
   const mods = (): Mods => ({
     subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT, ...settings.mods?.subagents },
@@ -118,11 +116,9 @@ export function openCore(options: {
   }
   const newChatEngine = () =>
     isEnabled(defaultEngine) ? defaultEngine : (adapters.find((a) => isEnabled(a.id))?.id ?? defaultEngine)
-  const projectsDir = join(garage, 'projects')
-  const homeChatsDir = join(garage, 'chats')
+  const chatsDir = join(garage, 'chats')
   const homeDir = join(garage, 'home')
-  for (const dir of [projectsDir, homeChatsDir, homeDir]) mkdirSync(dir, { recursive: true })
-  const projects = new Map<string, Project>()
+  for (const dir of [chatsDir, homeDir]) mkdirSync(dir, { recursive: true })
   const chats = new Map<string, Chat>()
   const allStoppedWaiters: (() => void)[] = []
   let quitting = false
@@ -154,11 +150,8 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
   }
-  const saveProject = (project: Project) =>
-    writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
   const saveChat = ({ info, dir, context }: Chat) => {
-    const { main, projectId, ...saved } = info
-    const file = { ...saved, ...(Object.keys(context).length ? { context } : {}) }
+    const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
     writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
   }
   const state = (chat: Chat): ChatState => ({
@@ -196,21 +189,25 @@ export function openCore(options: {
     return chat
   }
 
-  const projectFor = (projectId: string) => {
-    const project = projects.get(projectId)
-    if (!project) throw new Error(`Unknown project "${projectId}"`)
-    return project
+  const isWorkshop = (chat: Chat) => chat.info.id === WORKSHOP_ID
+
+  const parentOf = (chat: Chat) => (chat.info.parentId === undefined ? undefined : chats.get(chat.info.parentId))
+
+  const chainOf = (chat: Chat): Chat[] => {
+    const parent = parentOf(chat)
+    return parent ? [...chainOf(parent), chat] : [chat]
   }
 
-  const chatsOf = (projectId?: string) => [...chats.values()].filter((chat) => chat.info.projectId === projectId)
+  const familyOf = (chat: Chat): Chat[] => [
+    chat,
+    ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id).flatMap(familyOf),
+  ]
 
-  const checkIdle = (list: Chat[]) => {
-    if (list.some((chat) => chat.status !== 'idle')) throw new Error('Stop the running chat first')
-  }
+  const canNest = (chat: Chat) => !chat.info.subagent && chainOf(chat).length - 1 < MAX_CHAT_DEPTH
 
   const checkRemovable = (chat: Chat) => {
-    if (chat.info.main) throw new Error('A main chat cannot be archived or deleted')
-    checkIdle([chat])
+    if (isWorkshop(chat)) throw new Error('The Workshop cannot be archived or deleted')
+    if (chat.status !== 'idle') throw new Error('Stop the running chat first')
   }
 
   const stopSession = (chat: Chat) => {
@@ -234,7 +231,7 @@ export function openCore(options: {
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
-    const parent = parentOf(chat)
+    const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
   }
@@ -247,14 +244,12 @@ export function openCore(options: {
     }
   }
 
-  const parentOf = (chat: Chat) => (chat.info.parentId === undefined ? undefined : chats.get(chat.info.parentId))
-
   const reportOf = (chat: Chat, error?: string) => {
     const asked = chat.entries.findLastIndex((e) => e.type === 'user.message')
     const reply = chat.entries.slice(asked + 1).findLast((e) => e.type === 'text.completed')
     const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
     const early = error ? ` (The turn ended early: ${error})` : ''
-    return `[subagent "${chat.info.title}" (${chat.info.id})] ${text}${early}`
+    return `[subagent "${chat.info.name}" (${chat.info.id})] ${text}${early}`
   }
 
   const forceStop = (chat: Chat) =>
@@ -263,9 +258,9 @@ export function openCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const { context = {}, ...saved } = readJson(file)
-    const info: ChatInfo = { ...fallback, ...saved, id: fallback.id, main: fallback.main }
-    if (fallback.main) info.title = fallback.title
+    const { context = {}, title, ...saved } = readJson(file)
+    const info: ChatInfo = { ...fallback, ...(title !== undefined && { name: title }), ...saved, id: fallback.id }
+    if (info.id === WORKSHOP_ID) info.name = WORKSHOP_NAME
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -288,107 +283,51 @@ export function openCore(options: {
     return chat
   }
 
-  const mainChatInfo = (id: string, engine: string, projectId?: string): ChatInfo => ({
+  const freshInfo = (id: string, name: string, parentId?: string): ChatInfo => ({
     id,
-    ...(projectId ? { projectId } : {}),
-    main: true,
-    title: projectId ? 'Main' : 'Workshop',
-    engine,
+    name,
+    ...(parentId !== undefined && { parentId }),
+    folders: [],
+    files: [],
+    engine: newChatEngine(),
     archived: false,
     createdAt: new Date().toISOString(),
   })
 
-  const loadSubchats = (chatsDir: string, projectId?: string) => {
-    for (const id of readdirSync(chatsDir)) {
-      if (id === 'main' || !existsSync(join(chatsDir, id, 'chat.json'))) continue
-      const createdAt = new Date().toISOString()
-      const fallback = { id, main: false, title: NEW_CHAT_TITLE, engine: newChatEngine(), archived: false, createdAt }
-      loadChat(join(chatsDir, id), projectId ? { ...fallback, projectId } : fallback)
-    }
+  loadChat(join(chatsDir, WORKSHOP_ID), freshInfo(WORKSHOP_ID, WORKSHOP_NAME))
+  for (const id of readdirSync(chatsDir)) {
+    if (id === WORKSHOP_ID || !existsSync(join(chatsDir, id, 'chat.json'))) continue
+    loadChat(join(chatsDir, id), freshInfo(id, id, WORKSHOP_ID))
   }
 
-  loadChat(join(homeChatsDir, 'main'), mainChatInfo('main', newChatEngine()))
-  loadSubchats(homeChatsDir)
-  for (const id of readdirSync(projectsDir)) {
-    const projectFile = join(projectsDir, id, 'project.json')
-    if (!existsSync(projectFile)) continue
-    const { engine = newChatEngine(), ...saved } = JSON.parse(readFileSync(projectFile, 'utf8'))
-    const project: Project = { archived: false, ...saved, id }
-    projects.set(id, project)
-    loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, engine, id))
-    loadSubchats(join(projectsDir, id, 'chats'), id)
-  }
-
-  const addProject = (rawPath: string, name?: string, reply?: (message: CoreMessage) => void): Project => {
-    const expanded = rawPath.trim().replace(/^~(?=$|\/)/, homedir())
-    const path = resolve(expanded)
-    if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)
-    const realPath = realpathSync(path)
-    const existing = [...projects.values()].find((project) => project.path === realPath)
-    if (existing) {
-      const project = existing.archived ? archiveProject(existing, false) : existing
-      reply?.({ type: 'project.added', project, chat: state(chatFor(`${existing.id}/main`)) })
-      return project
-    }
-
-    const projectName = name?.trim() || basename(realPath) || 'root'
-    const base = projectName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+/, '') || 'project'
-    // macOS folders are case-insensitive, so "App" and "app" would share a folder.
-    const taken = new Set(readdirSync(projectsDir).map((id) => id.toLowerCase()))
-    let id = base
-    for (let n = 2; taken.has(id.toLowerCase()); n++) id = `${base}-${n}`
-
-    const project: Project = { id, name: projectName, path: realPath, archived: false }
-    mkdirSync(join(projectsDir, id), { recursive: true })
-    saveProject(project)
-    projects.set(id, project)
-    const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, newChatEngine(), id))
-    broadcast({ type: 'project.added', project, chat: state(chat) })
-    return project
-  }
-
-  const archiveProject = (project: Project, archived: boolean) => {
-    checkIdle(chatsOf(project.id))
-    const updated = { ...project, archived }
-    projects.set(project.id, updated)
-    saveProject(updated)
-    broadcast({ type: 'project.updated', project: updated })
-    return updated
-  }
-
-  const deleteProject = (project: Project) => {
-    checkIdle(chatsOf(project.id))
-    for (const chat of chatsOf(project.id)) chats.delete(chat.info.id)
-    projects.delete(project.id)
-    rmSync(join(projectsDir, project.id), { recursive: true, force: true })
-    broadcast({ type: 'project.removed', projectId: project.id })
-  }
-
-  const createChat = (projectId?: string, engine = newChatEngine(), parentId?: string, role?: ModelRole) => {
+  const createChat = (spec: NewChat & { subagent?: boolean; role?: ModelRole }) => {
+    const name = checkName(spec.name)
+    const engine = spec.engine ?? newChatEngine()
     checkEngine(engine)
-    checkEnabled(engine)
-    if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
-    const parent = parentId === undefined ? undefined : chatFor(parentId)
-    if (parent) {
-      if (parent.info.parentId !== undefined) throw new Error('A subagent cannot start subagents')
-      if (parent.info.projectId !== projectId) throw new Error("A subagent stays in its parent chat's place")
+    if (spec.engine !== undefined) checkEnabled(engine)
+    const parent = chatFor(spec.parentId ?? WORKSHOP_ID)
+    checkActive(parent)
+    if (parent.info.subagent) throw new Error('A subagent cannot start chats')
+    if (!spec.subagent && !canNest(parent)) {
+      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below the Workshop`)
     }
+    const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
+    const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
-    const dir = projectId ? join(projectsDir, projectId, 'chats', id) : join(homeChatsDir, id)
-    const createdAt = new Date().toISOString()
     const info: ChatInfo = {
       id,
-      ...(projectId !== undefined && { projectId }),
-      main: false,
-      title: NEW_CHAT_TITLE,
+      name,
+      parentId: parent.info.id,
+      ...(spec.subagent && { subagent: true, role: spec.role ?? 'subagents' }),
+      folders,
+      files,
       engine,
       archived: false,
-      createdAt,
-      ...(parentId !== undefined && { parentId, role: role ?? 'subagents' }),
-      ...(parent?.info.engine === engine && { thinking: parent.info.thinking }),
+      createdAt: new Date().toISOString(),
+      ...(spec.subagent && parent.info.engine === engine && { thinking: parent.info.thinking }),
     }
-    const chat = loadChat(dir, info)
+    const chat = loadChat(join(chatsDir, id), info)
     broadcast({ type: 'chat.added', chat: state(chat) })
     return chat.info
   }
@@ -400,17 +339,23 @@ export function openCore(options: {
     broadcast({ type: 'chat.updated', chat: chat.info })
   }
 
-  const withSubagents = (chat: Chat) => {
-    const family = [chat, ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id)]
-    family.forEach(checkRemovable)
-    return family
+  const renameChat = (chat: Chat, name: unknown) => {
+    if (isWorkshop(chat)) throw new Error('The Workshop cannot be renamed')
+    updateChat(chat, { name: checkName(name) })
   }
 
-  const archiveChat = (chat: Chat, archived: boolean) =>
-    withSubagents(chat).forEach((c) => updateChat(c, { archived }))
+  const archiveChat = (chat: Chat, archived: boolean) => {
+    const parent = parentOf(chat)
+    if (!archived && parent?.info.archived) throw new Error(`Unarchive "${parent.info.name}" first`)
+    const family = familyOf(chat)
+    family.forEach(checkRemovable)
+    family.forEach((c) => updateChat(c, { archived }))
+  }
 
   const deleteChat = (chat: Chat) => {
-    for (const c of withSubagents(chat)) {
+    const family = familyOf(chat)
+    family.forEach(checkRemovable)
+    for (const c of family) {
       chats.delete(c.info.id)
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
@@ -440,61 +385,79 @@ export function openCore(options: {
     updateChat(chat, { model, thinking })
   }
 
-  const projectOf = (chat: Chat) => (chat.info.projectId === undefined ? undefined : projectFor(chat.info.projectId))
-
   const checkActive = (chat: Chat) => {
-    if (chat.info.archived || projectOf(chat)?.archived) throw new Error('This chat is archived. Unarchive it first.')
+    if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
 
-  const contextLayers = (chat: Chat): ContextLayer[] => {
-    const project = projectOf(chat)
-    const files: [ContextKind, string][] = [['workshop', join(garage, 'AGENTS.md')]]
-    if (project) {
-      files.push(['repo', join(project.path, 'AGENTS.md')], ['project', join(projectsDir, project.id, 'AGENTS.md')])
-    }
+  const agentsFileOf = (chat: Chat) => join(isWorkshop(chat) ? garage : chat.dir, 'AGENTS.md')
+
+  const switchOf = (chat: Chat, item: Pick<ContextItem, 'section' | 'path' | 'from'>): boolean => {
+    const pinned = chat.context[item.path]
+    if (pinned !== undefined) return pinned
+    if (item.from === chat.info.id) return true
     const parent = parentOf(chat)
-    if (parent && !parent.info.main) files.push(['parent', join(parent.dir, 'AGENTS.md')])
-    if (!chat.info.main) files.push(['own', join(chat.dir, 'AGENTS.md')])
-    const inherited = (kind: ContextKind) => parent?.context[kind === 'parent' ? 'own' : kind]
-    return files.map(([kind, path]) => ({
-      kind,
-      path,
-      enabled: chat.context[kind] ?? inherited(kind) ?? contextDefaults()[kind],
-      writable: kind !== 'repo',
-      text: existsSync(path) ? readFileSync(path, 'utf8') : '',
-    }))
+    return chat.info.subagent && parent ? switchOf(parent, item) : contextDefaults()[item.section]
   }
 
-  const layerOf = (chat: Chat, kind: ContextKind) => {
-    const layer = contextLayers(chat).find((l) => l.kind === kind)
-    if (!layer) throw new Error(`This chat has no "${kind}" layer`)
-    return layer
+  const contextItems = (chat: Chat): ContextItem[] => {
+    const seen = new Set<string>()
+    return chainOf(chat).flatMap((owner) => {
+      const owned = [
+        ...owner.info.folders.map((path) => ({ section: 'folders' as const, path })),
+        { section: 'agents' as const, path: agentsFileOf(owner) },
+        ...owner.info.files.map((path) => ({ section: 'files' as const, path })),
+      ]
+      return owned.flatMap(({ section, path }) => {
+        if (seen.has(path)) return []
+        seen.add(path)
+        const item = { section, path, from: owner.info.id }
+        const text = readText(section === 'folders' ? join(path, 'AGENTS.md') : path)
+        return [{ ...item, enabled: switchOf(chat, item), text }]
+      })
+    })
   }
 
-  const checkKind = (kind: unknown): ContextKind => {
-    if (!CONTEXT_KINDS.includes(kind as ContextKind)) throw new Error(`Unknown context layer "${kind}"`)
-    return kind as ContextKind
-  }
+  const broadcastContext = (chat: Chat) =>
+    familyOf(chat).forEach((c) => broadcast({ type: 'chat.context', chatId: c.info.id, items: contextItems(c) }))
 
-  const setContext = (chat: Chat, kind: ContextKind, enabled: boolean) => {
+  const setContext = (chat: Chat, path: unknown, enabled: boolean) => {
     checkActive(chat)
-    layerOf(chat, kind)
-    chat.context = { ...chat.context, [kind]: enabled }
+    if (!contextItems(chat).some((item) => item.path === path)) {
+      throw new Error(`This chat has no context item "${path}"`)
+    }
+    chat.context = { ...chat.context, [String(path)]: enabled }
     saveChat(chat)
-    broadcast({ type: 'chat.context', chatId: chat.info.id, layers: contextLayers(chat) })
+    broadcastContext(chat)
   }
 
-  const writeContext = (chat: Chat, kind: ContextKind, text: string) => {
+  const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
     checkActive(chat)
-    const { path, writable } = layerOf(chat, kind)
-    if (!writable) throw new Error('Hotrod never writes into a project folder. Edit this file in the repo.')
+    const path = checkPath(rawPath, section)
+    if (contextItems(chat).some((item) => item.path === path)) {
+      throw new Error(`${path} is already in this chat's context`)
+    }
+    updateChat(chat, { [section]: [...chat.info[section], path] })
+    broadcastContext(chat)
+  }
+
+  const removeContext = (chat: Chat, section: 'folders' | 'files', path: unknown) => {
+    checkActive(chat)
+    if (!chat.info[section].includes(String(path))) throw new Error(`${path} is not one of this chat's ${section}`)
+    delete chat.context[String(path)]
+    updateChat(chat, { [section]: chat.info[section].filter((p) => p !== path) })
+    broadcastContext(chat)
+  }
+
+  const writeContext = (chat: Chat, text: string) => {
+    checkActive(chat)
+    const path = agentsFileOf(chat)
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, text)
     broadcast({ type: 'context.file', path, text })
   }
 
-  const setContextDefault = (kind: ContextKind, enabled: boolean) => {
-    settings.context = { ...settings.context, [kind]: enabled }
+  const setContextDefault = (section: ContextSection, enabled: boolean) => {
+    settings.context = { ...settings.context, [section]: enabled }
     saveSettings()
     broadcast({ type: 'context.defaults', defaults: contextDefaults() })
   }
@@ -502,7 +465,6 @@ export function openCore(options: {
   const send = (chat: Chat, text: string) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
-    const project = projectOf(chat)
     checkActive(chat)
     const adapter = adapterFor(chat.info.engine)
     if (!adapter) {
@@ -510,19 +472,20 @@ export function openCore(options: {
     }
     checkEnabled(adapter.id)
     const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
-    if (!chat.info.main && !chat.entries.some((e) => e.type === 'user.message')) {
-      const line = text.trim().replace(/\s+/g, ' ')
-      updateChat(chat, {
-        title: line.length > TITLE_MAX_CHARS ? `${line.slice(0, TITLE_MAX_CHARS).trimEnd()}…` : line,
-      })
-    }
     append(chat, { at: new Date().toISOString(), type: 'user.message', text })
     setStatus(chat, 'running')
 
-    const instructions = contextLayers(chat)
-      .filter((layer) => layer.enabled && layer.text.trim())
-      .map((layer) => layer.text.trim())
+    const items = contextItems(chat).filter((item) => item.enabled)
+    const instructions = items
+      .filter((item) => item.text.trim())
+      .map(({ section, path, text }) =>
+        section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim(),
+      )
       .join('\n\n')
+    const folders = items.filter((item) => item.section === 'folders')
+    const nearest = folders.at(-1)?.from
+    const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
+    const extraDirs = folders.map((folder) => folder.path).filter((path) => path !== cwd)
 
     let session: Session | undefined
     const emit = (event: EngineEvent) => {
@@ -551,8 +514,9 @@ export function openCore(options: {
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
       const model = pickModel(offered(adapter.id).models, listsOf(adapter.id), chat.info)
       const options = {
-        cwd: project?.path ?? homeDir,
+        cwd,
         instructions,
+        ...(extraDirs.length && { extraDirs }),
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
@@ -593,8 +557,10 @@ export function openCore(options: {
 
   const mcp = openHotrodMcp({
     chats: () => [...chats.values()].map(state),
-    projects: () => [...projects.values()],
-    addProject,
+    canNest: (chatId) => {
+      const chat = chats.get(chatId)
+      return chat !== undefined && canNest(chat)
+    },
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
     subagents: () => mods().subagents,
@@ -637,7 +603,6 @@ export function openCore(options: {
     contextDefaults,
     mods,
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
-    projects: () => [...projects.values()],
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
@@ -650,14 +615,16 @@ export function openCore(options: {
       switch (message.type) {
         case 'engine.setEnabled':
           return setEngineEnabled(String(message.engine), message.enabled === true)
-        case 'project.add':
-          return void addProject(String(message.path), undefined, reply)
-        case 'project.archive':
-          return archiveProject(projectFor(message.projectId), message.archived === true)
-        case 'project.delete':
-          return deleteProject(projectFor(message.projectId))
         case 'chat.create':
-          return void createChat(message.projectId === undefined ? undefined : String(message.projectId))
+          return void createChat({
+            parentId: optionalText(message.parentId),
+            name: message.name,
+            engine: optionalText(message.engine),
+            folders: message.folders,
+            files: message.files,
+          })
+        case 'chat.rename':
+          return renameChat(chatFor(message.chatId), message.name)
         case 'chat.archive':
           return archiveChat(chatFor(message.chatId), message.archived === true)
         case 'chat.delete':
@@ -678,15 +645,22 @@ export function openCore(options: {
           return interrupt(chatFor(message.chatId), message.force === true)
         case 'context.get': {
           const chat = chatFor(message.chatId)
-          return reply({ type: 'chat.context', chatId: chat.info.id, layers: contextLayers(chat) })
+          return reply({ type: 'chat.context', chatId: chat.info.id, items: contextItems(chat) })
         }
+        case 'context.add':
+          return addContext(chatFor(message.chatId), addable(message.section), message.path)
+        case 'context.remove':
+          return removeContext(chatFor(message.chatId), addable(message.section), message.path)
         case 'context.set':
-          return setContext(chatFor(message.chatId), checkKind(message.kind), message.enabled === true)
+          return setContext(chatFor(message.chatId), message.path, message.enabled === true)
         case 'context.write':
           if (typeof message.text !== 'string') throw new Error('Context text is missing')
-          return writeContext(chatFor(message.chatId), checkKind(message.kind), message.text)
+          return writeContext(chatFor(message.chatId), message.text)
         case 'context.setDefault':
-          return setContextDefault(checkKind(message.kind), message.enabled === true)
+          if (!CONTEXT_SECTIONS.includes(message.section)) {
+            throw new Error(`Unknown context section "${message.section}"`)
+          }
+          return setContextDefault(message.section, message.enabled === true)
         case 'subagents.set':
           return setSubagents(message.enabled === true, message.limit)
         case 'models.setList':
@@ -724,6 +698,37 @@ export function openCore(options: {
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
 const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
+
+const readText = (file: string) => {
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+const checkName = (name: unknown) => {
+  const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''
+  if (!trimmed) throw new Error('A chat needs a name')
+  return trimmed
+}
+
+const addable = (section: unknown) => {
+  if (section !== 'folders' && section !== 'files') {
+    throw new Error(`Only folders and files can be added, not "${section}"`)
+  }
+  return section
+}
+
+const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
+  const path = String(rawPath).trim().replace(/^~(?=$|\/)/, homedir())
+  if (!isAbsolute(path)) throw new Error(`The path must be absolute: ${rawPath}`)
+  const stat = existsSync(path) ? statSync(path) : undefined
+  if (section === 'folders' ? !stat?.isDirectory() : !stat?.isFile()) {
+    throw new Error(`Not a ${section === 'folders' ? 'folder' : 'file'}: ${rawPath}`)
+  }
+  return realpathSync(path)
+}
 
 function transcript(entries: ChatEntry[]) {
   const results = new Map<string, { output: string; isError: boolean }>()

@@ -5,25 +5,31 @@ import { isAbsolute } from 'node:path'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
-import type { ChatInfo, ChatState, ModelRole, Project } from './types.ts'
+import type { ChatInfo, ChatState, ModelRole, NewChat } from './types.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
+export const SUBAGENT_NAME_MAX_CHARS = 40
 
 type Hub = {
   chats(): ChatState[]
-  projects(): Project[]
-  addProject(path: string, name?: string): Project
-  createChat(projectId?: string, engine?: string, parentId?: string, role?: ModelRole): ChatInfo
+  canNest(chatId: string): boolean
+  createChat(spec: NewChat & { subagent?: boolean; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   subagents(): { enabled: boolean; limit: number }
 }
 
-const isWorkshop = (chat: ChatState) => chat.main && chat.projectId === undefined
+const isBelow = (chats: ChatState[], caller: ChatState, chat: ChatState) => {
+  if (chat.subagent) return chat.parentId === caller.id
+  for (let id = chat.parentId; id !== undefined; id = chats.find((c) => c.id === id)?.parentId) {
+    if (id === caller.id) return true
+  }
+  return false
+}
 
-const isBelow = (caller: ChatState, chat: ChatState) =>
-  chat.parentId !== undefined
-    ? chat.parentId === caller.id
-    : chat.id !== caller.id && (isWorkshop(caller) || (caller.main && chat.projectId === caller.projectId))
+const subagentName = (task: string) => {
+  const line = task.trim().replace(/\s+/g, ' ')
+  return line.length > SUBAGENT_NAME_MAX_CHARS ? `${line.slice(0, SUBAGENT_NAME_MAX_CHARS).trimEnd()}…` : line
+}
 
 function messages(chat: ChatState) {
   return chat.entries.flatMap((entry) => {
@@ -38,7 +44,7 @@ function messages(chat: ChatState) {
 type Context = { hub: Hub; caller: ChatState; below: (chatId: string) => ChatState }
 
 type Tool = {
-  for: 'workshop' | 'main' | 'below' | 'subagents'
+  for: 'nest' | 'below' | 'subagents'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
@@ -50,21 +56,10 @@ const TOOLS: Record<string, Tool> = {
     description: 'List the chats below this one, with their status.',
     input: z.object({}),
     run({ hub, caller }: Context) {
-      const projects = new Map(hub.projects().map((p) => [p.id, p]))
-      return hub
-        .chats()
-        .filter((chat) => isBelow(caller, chat))
-        .map(({ id, title, projectId, status, engine, archived }) => {
-          const project = projectId === undefined ? undefined : projects.get(projectId)
-          return {
-            id,
-            title,
-            ...(project && { project: { id: project.id, name: project.name, path: project.path } }),
-            status,
-            engine,
-            archived,
-          }
-        })
+      const chats = hub.chats()
+      return chats
+        .filter((chat) => isBelow(chats, caller, chat))
+        .map(({ id, name, folders, status, engine, archived }) => ({ id, name, folders, status, engine, archived }))
     },
   },
   read_chat: {
@@ -87,18 +82,23 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   create_chat: {
-    for: 'main',
+    for: 'nest',
     description:
-      'Start a new subchat below this one with a first message. The Workshop may put it in a project. ' +
-      'Returns its id.',
-    input: z.object({ prompt: z.string().min(1), projectId: z.string().optional(), engine: z.string().optional() }),
-    run({ hub, caller }: Context, input: { prompt: string; projectId?: string; engine?: string }) {
-      const projectId = isWorkshop(caller) ? input.projectId : (input.projectId ?? caller.projectId)
-      if (projectId !== undefined && !hub.chats().some((c) => c.projectId === projectId && isBelow(caller, c))) {
-        throw new Error(`No project "${projectId}" below this chat`)
-      }
-      const chat = hub.createChat(projectId, input.engine)
-      hub.send(chat.id, input.prompt)
+      'Make a named chat below this one. Its folders (absolute paths; missing ones are made) and files go into its ' +
+      'context; it runs in its first folder. Give a prompt to start it. Returns its id.',
+    input: z.object({
+      name: z.string().min(1),
+      prompt: z.string().min(1).optional(),
+      folders: z.array(z.string()).optional(),
+      files: z.array(z.string()).optional(),
+      engine: z.string().optional(),
+    }),
+    run({ hub, caller }: Context, { prompt, ...spec }: Omit<NewChat, 'parentId'> & { prompt?: string }) {
+      const relative = spec.folders?.find((folder) => !isAbsolute(folder))
+      if (relative !== undefined) throw new Error(`The path must be absolute: ${relative}`)
+      for (const folder of spec.folders ?? []) mkdirSync(folder, { recursive: true })
+      const chat = hub.createChat({ parentId: caller.id, ...spec })
+      if (prompt) hub.send(chat.id, prompt)
       return { chatId: chat.id }
     },
   },
@@ -115,26 +115,14 @@ const TOOLS: Record<string, Tool> = {
     }),
     run({ hub, caller }: Context, { task, engine, role }: { task: string; engine?: string; role?: ModelRole }) {
       const { limit } = hub.subagents()
-      const running = hub.chats().filter((c) => c.parentId === caller.id && c.status !== 'idle').length
+      const running = hub.chats().filter((c) => c.parentId === caller.id && c.subagent && c.status !== 'idle').length
       if (limit !== -1 && running >= limit) {
         throw new Error(`This chat already has ${running} subagents running; the limit is ${limit}`)
       }
-      const chat = hub.createChat(caller.projectId, engine ?? caller.engine, caller.id, role)
+      const name = subagentName(task)
+      const chat = hub.createChat({ parentId: caller.id, name, engine: engine ?? caller.engine, subagent: true, role })
       hub.send(chat.id, task)
       return { chatId: chat.id }
-    },
-  },
-  create_project: {
-    for: 'workshop',
-    description:
-      'Add a folder as a project, making it if missing; its contents are never touched. Returns the project ' +
-      'and its main chat id.',
-    input: z.object({ path: z.string(), name: z.string().optional() }),
-    run({ hub }: Context, { path, name }: { path: string; name?: string }) {
-      if (!isAbsolute(path)) throw new Error(`The path must be absolute: ${path}`)
-      mkdirSync(path, { recursive: true })
-      const project = hub.addProject(path, name)
-      return { project: { id: project.id, name: project.name, path: project.path }, chatId: `${project.id}/main` }
     },
   },
 }
@@ -143,11 +131,11 @@ export function openHotrodMcp(hub: Hub) {
   const callers = new Map<string, string>()
 
   const offers = (caller: ChatState, tool: Tool) => {
-    const spawns = caller.parentId === undefined && hub.subagents().enabled
-    if (tool.for === 'workshop') return isWorkshop(caller)
-    if (tool.for === 'main') return caller.main
+    const nests = hub.canNest(caller.id)
+    const spawns = !caller.subagent && hub.subagents().enabled
+    if (tool.for === 'nest') return nests
     if (tool.for === 'subagents') return spawns
-    return caller.main || spawns
+    return nests || spawns
   }
 
   const serverFor = (callerId: string) => {
@@ -156,12 +144,13 @@ export function openHotrodMcp(hub: Hub) {
       const caller = hub.chats().find((chat) => chat.id === callerId)
       if (!caller || !offers(caller, tool)) continue
       server.registerTool(name, { description: tool.description, inputSchema: tool.input }, async (input: any) => {
-        const caller = hub.chats().find((chat) => chat.id === callerId)
+        const chats = hub.chats()
+        const caller = chats.find((chat) => chat.id === callerId)
         try {
           if (!caller) throw new Error('This chat no longer exists')
           const below = (chatId: string) => {
-            const chat = hub.chats().find((c) => c.id === chatId)
-            if (!chat || !isBelow(caller, chat)) throw new Error(`No chat "${chatId}" below this one`)
+            const chat = chats.find((c) => c.id === chatId)
+            if (!chat || !isBelow(chats, caller, chat)) throw new Error(`No chat "${chatId}" below this one`)
             return chat
           }
           const result = tool.run({ hub, caller, below }, input)

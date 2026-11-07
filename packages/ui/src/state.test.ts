@@ -1,24 +1,30 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextLayer, CoreMessage, Project } from '@hotrod/core/types'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage } from '@hotrod/core/types'
 import type { Account, EngineAccounts } from '@hotrod/core/types'
 import {
   accountLabel,
+  chatTree,
   engineOptions,
+  familyOf,
+  folderName,
+  folderOf,
   initialState,
   MAIN_CHAT_ID,
   modelMenu,
   reduce,
   type Action,
+  type ChatView,
   type State,
 } from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
 const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
-const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatState => ({
+const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> = {}): ChatState => ({
   id,
-  ...(projectId ? { projectId } : {}),
-  main: id === MAIN_CHAT_ID || id.endsWith('/main'),
-  title: id,
+  name: id,
+  ...(id !== MAIN_CHAT_ID && { parentId: MAIN_CHAT_ID }),
+  folders: [],
+  files: [],
   engine: 'fake',
   archived: false,
   createdAt: at,
@@ -26,14 +32,14 @@ const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatSt
   entries,
   draft: '',
   queue: [],
+  ...change,
 })
-const project = (id: string): Project => ({ id, name: id, path: `/tmp/${id}`, archived: false })
-const contextDefaults = { workshop: true, repo: true, project: true, parent: true, own: true }
+const contextDefaults = { agents: true, folders: true, files: true }
 const mods = { subagents: { enabled: false, limit: 4 } }
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
-const snapshot = (chats: ChatState[], projects: Project[] = []): Action =>
-  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults, mods, modelLists })
+const snapshot = (chats: ChatState[]): Action =>
+  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -75,24 +81,21 @@ describe('reduce', () => {
     expect(run({ type: 'select', chatId: 'gone' }, snapshot([chat(MAIN_CHAT_ID)])).selectedId).toBe(MAIN_CHAT_ID)
   })
 
-  it('adds a project with its main chat and selects the chat, once', () => {
-    const added: Action = { type: 'project.added', project: project('p'), chat: chat('p/main', [], 'p') }
-    const state = run(snapshot([chat(MAIN_CHAT_ID)]), added, { type: 'select', chatId: MAIN_CHAT_ID }, added)
-    expect(state.projects).toEqual([project('p')])
-    expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'p/main'])
-    expect(state.selectedId).toBe('p/main')
-  })
-
-  it('adds a chat and selects it, then updates its title and archive flag', () => {
+  it('adds a chat once and selects it, then follows its name, folders and archive flag', () => {
+    const added: Action = { type: 'chat.added', chat: chat('c', [], { name: 'Build' }) }
     const state = run(
       snapshot([chat(MAIN_CHAT_ID)]),
-      { type: 'chat.added', chat: { ...chat('c'), title: 'New chat' } },
+      added,
       entry('c', { type: 'user.message', text: 'hi' }),
+      { type: 'select', chatId: MAIN_CHAT_ID },
+      added,
     )
+    expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'c'])
     expect(state.selectedId).toBe('c')
-    const { status, entries, draft, ...info } = chat('c')
-    const updated = reduce(state, { type: 'chat.updated', chat: { ...info, title: 'hi', archived: true } })
-    expect(updated.chats[1]).toMatchObject({ title: 'hi', archived: true, items: [{ kind: 'user', text: 'hi' }] })
+    const { status, entries, draft, queue, ...info } = chat('c')
+    const change = { name: 'Renamed', folders: ['/code/app'], archived: true }
+    const updated = reduce(state, { type: 'chat.updated', chat: { ...info, ...change } })
+    expect(updated.chats[1]).toMatchObject({ ...change, items: [{ kind: 'user', text: 'hi' }] })
   })
 
   it('sets and clears a chat model and thinking level, since JSON drops the cleared field', () => {
@@ -107,17 +110,12 @@ describe('reduce', () => {
     expect(cleared.chats[1]?.thinking).toBe('high')
   })
 
-  it('removes a chat, or a project with all its chats, and selects Main if the selection went with it', () => {
-    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('p/main', [], 'p'), chat('s', [], 'p'), chat('c')], [project('p')]))
-    const onSub = reduce(state, { type: 'select', chatId: 's' })
-    expect(reduce(onSub, { type: 'chat.removed', chatId: 'c' }).selectedId).toBe('s')
-    expect(reduce(onSub, { type: 'chat.removed', chatId: 's' }).selectedId).toBe(MAIN_CHAT_ID)
-    const removed = reduce(onSub, { type: 'project.removed', projectId: 'p' })
-    expect(removed.projects).toEqual([])
+  it('removes a chat and selects the Workshop if the selection went with it', () => {
+    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('s'), chat('c')]), { type: 'select', chatId: 's' })
+    expect(reduce(state, { type: 'chat.removed', chatId: 'c' }).selectedId).toBe('s')
+    const removed = reduce(state, { type: 'chat.removed', chatId: 's' })
     expect(removed.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'c'])
     expect(removed.selectedId).toBe(MAIN_CHAT_ID)
-    const archived = reduce(state, { type: 'project.updated', project: { ...project('p'), archived: true } })
-    expect(archived.projects[0]?.archived).toBe(true)
   })
 
   it('lists only engines that are on, keeping the chat engine when it is off or unknown', () => {
@@ -138,7 +136,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -150,7 +148,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -303,22 +301,26 @@ describe('reduce', () => {
   })
 
   it('keeps the context of the selected chat and follows file and default changes', () => {
-    const layer = (kind: ContextLayer['kind'], path: string, text = ''): ContextLayer =>
-      ({ kind, path, enabled: true, writable: kind !== 'repo', text })
-    const layers = [layer('workshop', '/g/AGENTS.md'), layer('own', '/g/chats/a/AGENTS.md')]
+    const item = (section: ContextItem['section'], path: string, from: string, text = ''): ContextItem =>
+      ({ section, path, from, enabled: true, text })
+    const items = [
+      item('agents', '/g/AGENTS.md', MAIN_CHAT_ID),
+      item('folders', '/code/app', 'a', 'REPO'),
+      item('agents', '/g/chats/a/AGENTS.md', 'a'),
+    ]
     const loaded = run(
       snapshot([chat(MAIN_CHAT_ID), chat('a'), chat('b')]),
       { type: 'select', chatId: 'a' },
-      { type: 'chat.context', chatId: 'a', layers },
-      { type: 'chat.context', chatId: 'b', layers: [] },
+      { type: 'chat.context', chatId: 'a', items },
+      { type: 'chat.context', chatId: 'b', items: [] },
     )
     expect(loaded.contextDefaults).toEqual(contextDefaults)
-    expect(loaded.context).toEqual({ chatId: 'a', layers })
+    expect(loaded.context).toEqual({ chatId: 'a', items })
 
     const written = reduce(loaded, { type: 'context.file', path: '/g/AGENTS.md', text: 'rules' })
-    expect(written.context?.layers.map((l) => l.text)).toEqual(['rules', ''])
+    expect(written.context?.items.map((i) => i.text)).toEqual(['rules', 'REPO', ''])
 
-    const defaults = { ...contextDefaults, own: false }
+    const defaults = { ...contextDefaults, files: false }
     expect(reduce(written, { type: 'context.defaults', defaults }).contextDefaults).toEqual(defaults)
     expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
   })
@@ -341,6 +343,56 @@ describe('reduce', () => {
     const loaded = run(snapshot([chat('a', [ran('x'), { at, type: 'turn.completed' }])]))
     expect(loaded.chats[0]?.ranModel).toBe('x')
     expect(reduce(loaded, entry('a', { type: 'turn.completed', model: 'y' })).chats[0]?.ranModel).toBe('y')
+  })
+})
+
+describe('chat tree', () => {
+  const view = (id: string, change: Partial<ChatState> = {}, createdAt = at) =>
+    reduce(initialState, snapshot([chat(id, [], { createdAt, ...change })])).chats[0]!
+  const rows = (list: { chat: ChatView; depth: number }[]) => list.map(({ chat, depth }) => `${depth} ${chat.id}`)
+  const later = '2026-11-07T00:00:00.000Z'
+  const chats = [
+    view('old'),
+    view('new', {}, later),
+    view(MAIN_CHAT_ID),
+    view('s1', { parentId: 'old', subagent: true }),
+    view('s0', { parentId: MAIN_CHAT_ID, subagent: true }),
+    view('gone', { archived: true }),
+    view('gone-s', { parentId: 'gone', subagent: true, archived: true }),
+    view('orphan', { parentId: 'nope' }, '2026-11-06T12:00:00.000Z'),
+  ]
+
+  it("shows the Workshop first, then each chat's subagents and named chats below it, newest first", () => {
+    expect(rows(chatTree(chats).active)).toEqual(['0 main', '1 s0', '1 new', '1 orphan', '1 old', '2 s1'])
+  })
+
+  it('lists archived chats apart, each with the archived chats below it', () => {
+    expect(rows(chatTree(chats).archived)).toEqual(['0 gone', '1 gone-s'])
+  })
+
+  it('finds a chat with every chat below it', () => {
+    expect(familyOf(chats, 'old').map((c) => c.id)).toEqual(['old', 's1'])
+    expect(familyOf(chats, MAIN_CHAT_ID).map((c) => c.id).sort()).toEqual(
+      chats.filter((c) => c.parentId !== 'nope').map((c) => c.id).sort(),
+    )
+  })
+
+  it("names a chat's working folder: its own first folder, else the nearest one above it", () => {
+    const tree = [
+      view(MAIN_CHAT_ID),
+      view('a', { folders: ['/code/app', '/code/lib'] }),
+      view('s', { parentId: 'a', subagent: true }),
+      view('b'),
+    ]
+    expect(folderOf(tree, tree[1]!)).toBe('/code/app')
+    expect(folderOf(tree, tree[2]!)).toBe('/code/app')
+    expect(folderOf(tree, tree[3]!)).toBeUndefined()
+  })
+
+  it('names a chat after the last part of its folder', () => {
+    expect(folderName('/Users/me/code/app')).toBe('app')
+    expect(folderName('/Users/me/code/app/')).toBe('app')
+    expect(folderName('/')).toBe('/')
   })
 })
 

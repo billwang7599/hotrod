@@ -1,4 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -87,16 +96,17 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   expect(a.messages[0]).toMatchObject({
     type: 'snapshot',
     engines: [{ id: 'fake', enabled: false }],
-    projects: [],
-    chats: [expect.objectContaining({ id: 'main', title: 'Workshop' })],
+    chats: [expect.objectContaining({ id: 'main', name: 'Workshop' })],
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
   })
 
-  a.socket.send(JSON.stringify({ type: 'project.add', path: project }))
-  await until(() => b.messages.some((m) => m.type === 'project.added'))
-  const added = b.messages.find((m) => m.type === 'project.added')
-  if (added?.type !== 'project.added') throw new Error('no project')
+  expect(a.messages[0]).not.toHaveProperty('projects')
+
+  a.socket.send(JSON.stringify({ type: 'chat.create', name: 'App', folders: [project] }))
+  await until(() => b.messages.some((m) => m.type === 'chat.added'))
+  const added = b.messages.find((m) => m.type === 'chat.added')
+  if (added?.type !== 'chat.added') throw new Error('no chat')
 
   a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'nope' }))
   await until(() => a.messages.some((m) => m.type === 'error'))
@@ -255,29 +265,27 @@ it("gives a main chat's session the Hotrod MCP server, only while the session li
 
   session.end()
   expect((await post(bearer, 'list_chats')).status).toBe(401)
-  core.handle({ type: 'chat.create' }, () => {})
-  const subchat = core.chats().find((c) => !c.main)!
-  expect(send(subchat.id, 'hi').options.hotrodMcp).toBeUndefined()
+  core.handle({ type: 'chat.create', name: 'Side' }, () => {})
+  const named = core.chats().find((c) => c.id !== 'main')!
+  expect(send(named.id, 'hi').options.hotrodMcp).toBeUndefined()
 })
 
-it('lets the Workshop add a project and start a subchat in it, shown like ones the user made', async () => {
+it('lets the Workshop make a named chat with a folder and start it, shown like ones the user made', async () => {
   const { core, garage, messages, sessions, tool, json, send } = await startHeld()
   const bearer = send('main', 'hi').options.hotrodMcp!.token
   const folder = join(garage, 'made', 'app')
 
-  const made = await json(bearer, 'create_project', { path: folder, name: 'App' })
-  expect(made).toEqual({ project: { id: 'App', name: 'App', path: expect.any(String) }, chatId: 'App/main' })
+  const bad = { name: 'App', prompt: 'x', folders: [folder], engine: 'nope' }
+  expect(await tool(bearer, 'create_chat', bad)).toMatchObject({ isError: true })
+  const made = { name: 'App', prompt: 'Look around', folders: [folder] }
+  const { chatId } = await json(bearer, 'create_chat', made)
   expect(existsSync(folder) && readdirSync(folder)).toEqual([])
-  expect(messages.some((m) => m.type === 'project.added' && m.project.id === 'App')).toBe(true)
-
-  expect(await tool(bearer, 'create_chat', { prompt: 'x', projectId: 'App', engine: 'nope' })).toMatchObject({
-    isError: true,
-  })
-  const { chatId } = await json(bearer, 'create_chat', { prompt: 'Look around', projectId: 'App' })
   const child = core.chats().find((c) => c.id === chatId)
-  expect(child).toMatchObject({ projectId: 'App', main: false, engine: 'held', status: 'running' })
+  const folders = [realpathSync(folder)]
+  expect(child).toMatchObject({ name: 'App', parentId: 'main', folders, engine: 'held', status: 'running' })
   expect(messages.some((m) => m.type === 'chat.added' && m.chat.id === chatId)).toBe(true)
   expect(sessions.at(-1)?.prompt).toBe('Look around')
+  expect(sessions.at(-1)?.options.cwd).toBe(folders[0])
   expect(sessions.at(-1)?.options.hotrodMcp).toBeUndefined()
 
   expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toEqual({
@@ -287,22 +295,6 @@ it('lets the Workshop add a project and start a subchat in it, shown like ones t
   sessions.at(-1)!.end()
   expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: false })
   expect(sessions.at(-1)?.prompt).toContain('more')
-})
-
-it("keeps a project main chat to its own project's chats", async () => {
-  const { garage, tool, json, send } = await startHeld()
-  const workshop = send('main', 'hi').options.hotrodMcp!.token
-  await json(workshop, 'create_project', { path: join(garage, 'a') })
-  await json(workshop, 'create_project', { path: join(garage, 'b') })
-  const inA = (await json(workshop, 'create_chat', { prompt: 'A work', projectId: 'a' })).chatId
-  const inB = (await json(workshop, 'create_chat', { prompt: 'B work', projectId: 'b' })).chatId
-
-  const lead = send('a/main', 'hi').options.hotrodMcp!.token
-  expect((await json(lead, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([inA])
-  const refused = { isError: true, text: `No chat "${inB}" below this one` }
-  expect(await tool(lead, 'read_chat', { chatId: inB })).toEqual(refused)
-  expect(await tool(lead, 'read_chat', { chatId: 'main' })).toMatchObject({ isError: true })
-  expect((await tool(lead, 'read_chat', { chatId: inA })).text).toBe('User: A work')
 })
 
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
@@ -316,15 +308,21 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   expect((await (await post(workshop, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_subagent not found',
   )
-  handle({ type: 'chat.create' })
-  const subchat = core.chats().find((c) => !c.main)!
+  handle({ type: 'chat.create', name: 'Side' })
+  const subchat = core.chats().find((c) => c.id !== 'main')!
   expect(send(subchat.id, 'hi').options.hotrodMcp).toBeUndefined()
 
   handle({ type: 'subagents.set', enabled: true, limit: 1 })
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
   const lead = send(subchat.id, 'again').options.hotrodMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Read the tests' })
-  expect(chatIn(core, chatId)).toMatchObject({ parentId: subchat.id, main: false, engine: 'held', status: 'running' })
+  expect(chatIn(core, chatId)).toMatchObject({
+    name: 'Read the tests',
+    parentId: subchat.id,
+    subagent: true,
+    engine: 'held',
+    status: 'running',
+  })
   expect(sessions.at(-1)).toMatchObject({ prompt: 'Read the tests', options: { cwd: join(garage, 'home') } })
   expect(sessions.at(-1)?.options.hotrodMcp).toBeUndefined()
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentId).toBe(subchat.id)
@@ -386,12 +384,12 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   expect(sessionsOf('main')).toHaveLength(3)
 })
 
-it('gives a subagent its parent layers plus its own, and archives and deletes it with its parent', async () => {
+it("gives a subagent its parent's items plus its own, and archives and deletes it with its parent", async () => {
   const { core, garage, sessionOf, sessionsOf, json, send } = await startHeld()
   const handle = handleOn(core)
   handle({ type: 'subagents.set', enabled: true, limit: 4 })
-  handle({ type: 'chat.create' })
-  const subchat = core.chats().find((c) => !c.main)!
+  handle({ type: 'chat.create', name: 'Side' })
+  const subchat = core.chats().find((c) => c.id !== 'main')!
   writeFileSync(join(garage, 'AGENTS.md'), 'WORKSHOP')
   writeFileSync(join(garage, 'chats', subchat.id, 'AGENTS.md'), 'PARENT')
   const lead = send(subchat.id, 'hi').options.hotrodMcp!.token
@@ -401,24 +399,25 @@ it('gives a subagent its parent layers plus its own, and archives and deletes it
   sessionOf(subchat.id).end('ok')
   sessionOf(subchat.id).end('ok')
 
-  const layers: CoreMessage[] = []
-  core.handle({ type: 'context.get', chatId }, (m) => layers.push(m))
-  const kinds = layers[0]?.type === 'chat.context' && layers[0].layers.map((l) => l.kind)
-  expect(kinds).toEqual(['workshop', 'parent', 'own'])
+  const itemsOf = (id: string) => {
+    const replies: CoreMessage[] = []
+    core.handle({ type: 'context.get', chatId: id }, (m) => replies.push(m))
+    return replies[0]?.type === 'chat.context' ? replies[0].items : []
+  }
+  expect(itemsOf(chatId).map((i) => i.from)).toEqual(['main', subchat.id, chatId])
   handle({ type: 'chat.send', chatId, text: 'again' })
   expect(sessionOf(chatId).options.instructions).toBe('WORKSHOP\n\nPARENT\n\nOWN')
   sessionOf(chatId).end('ok')
   sessionOf(subchat.id).end('ok')
   expect(sessionsOf(subchat.id)).toHaveLength(3)
 
-  handle({ type: 'context.set', chatId: subchat.id, kind: 'own', enabled: false })
-  const followed: CoreMessage[] = []
-  core.handle({ type: 'context.get', chatId }, (m) => followed.push(m))
-  const parentLayer = followed[0]?.type === 'chat.context' && followed[0].layers.find((l) => l.kind === 'parent')
-  expect(parentLayer).toMatchObject({ enabled: false })
+  const parentRules = join(garage, 'chats', subchat.id, 'AGENTS.md')
+  handle({ type: 'context.set', chatId: subchat.id, path: parentRules, enabled: false })
+  expect(itemsOf(chatId).find((i) => i.path === parentRules)).toMatchObject({ enabled: false })
 
   handle({ type: 'chat.archive', chatId: subchat.id, archived: true })
   expect(chatIn(core, chatId).archived).toBe(true)
+  expect(() => handle({ type: 'chat.archive', chatId, archived: false })).toThrow(/Unarchive "Side" first/)
   handle({ type: 'chat.delete', chatId: subchat.id })
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)

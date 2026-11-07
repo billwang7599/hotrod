@@ -1,22 +1,21 @@
-import { DEFAULT_SUBAGENT_LIMIT, pickModel } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, pickModel, WORKSHOP_ID } from '@hotrod/core/types'
 import type {
   Account,
   ChatEntry,
   ChatInfo,
   ChatState,
   ChatStatus,
-  ContextKind,
-  ContextLayer,
+  ContextItem,
+  ContextSection,
   CoreMessage,
   EngineAccounts,
   EngineInfo,
   ModelLists,
   Mods,
-  Project,
   QueuedMessage,
 } from '@hotrod/core/types'
 
-export const MAIN_CHAT_ID = 'main'
+export const MAIN_CHAT_ID = WORKSHOP_ID
 
 export type Item =
   | { kind: 'user'; text: string }
@@ -54,13 +53,12 @@ export type State = {
   rejected: boolean
   engines: EngineInfo[]
   accounts: EngineAccounts[]
-  projects: Project[]
   chats: ChatView[]
   selectedId: string
-  contextDefaults: Record<ContextKind, boolean>
+  contextDefaults: Record<ContextSection, boolean>
   mods: Mods
   modelLists: Record<string, ModelLists>
-  context?: { chatId: string; layers: ContextLayer[] }
+  context?: { chatId: string; items: ContextItem[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -76,10 +74,9 @@ export const initialState: State = {
   rejected: false,
   engines: [],
   accounts: [],
-  projects: [],
   chats: [],
   selectedId: MAIN_CHAT_ID,
-  contextDefaults: { workshop: true, repo: true, project: true, parent: true, own: true },
+  contextDefaults: { agents: true, folders: true, files: true },
   mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
   modelLists: {},
   toasts: [],
@@ -178,7 +175,6 @@ export function reduce(state: State, action: Action): State {
         ...state,
         engines: action.engines,
         accounts: action.accounts,
-        projects: action.projects,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
         mods: action.mods,
@@ -194,24 +190,6 @@ export function reduce(state: State, action: Action): State {
         : [...state.accounts, action.accounts]
       return { ...state, accounts }
     }
-    case 'project.added': {
-      const { project, chat } = action
-      const known = state.projects.some((p) => p.id === project.id)
-      return {
-        ...state,
-        projects: known ? state.projects.map((p) => (p.id === project.id ? project : p)) : [...state.projects, project],
-        chats: state.chats.some((c) => c.id === chat.id) ? state.chats : [...state.chats, toView(chat)],
-        selectedId: chat.id,
-      }
-    }
-    case 'project.updated':
-      return { ...state, projects: state.projects.map((p) => (p.id === action.project.id ? action.project : p)) }
-    case 'project.removed':
-      return keepSelection({
-        ...state,
-        projects: state.projects.filter((p) => p.id !== action.projectId),
-        chats: state.chats.filter((c) => c.projectId !== action.projectId),
-      })
     case 'chat.added':
       return {
         ...state,
@@ -251,12 +229,12 @@ export function reduce(state: State, action: Action): State {
       return updateChat(state, action.chatId, (c) => ({ ...c, queue: action.queue }))
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
-      return { ...state, context: { chatId: action.chatId, layers: action.layers } }
+      return { ...state, context: { chatId: action.chatId, items: action.items } }
     case 'context.file': {
       const { context } = state
       if (!context) return state
-      const layers = context.layers.map((l) => (l.path === action.path ? { ...l, text: action.text } : l))
-      return { ...state, context: { ...context, layers } }
+      const items = context.items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
+      return { ...state, context: { ...context, items } }
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
@@ -278,6 +256,40 @@ export function reduce(state: State, action: Action): State {
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
 }
+
+const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.createdAt)
+
+export type TreeRow = { chat: ChatView; depth: number }
+
+export function chatTree(chats: ChatView[]) {
+  const parentOf = (c: ChatView) => (chats.some((p) => p.id === c.parentId) ? c.parentId : MAIN_CHAT_ID)
+  const below = (chat: ChatView, archived: boolean) =>
+    chats
+      .filter((c) => c.id !== MAIN_CHAT_ID && parentOf(c) === chat.id && c.archived === archived)
+      .sort((a, b) => Number(!!b.subagent) - Number(!!a.subagent) || newestFirst(a, b))
+  const walk = (chat: ChatView, depth: number, archived: boolean): TreeRow[] => [
+    { chat, depth },
+    ...below(chat, archived).flatMap((c) => walk(c, depth + 1, archived)),
+  ]
+  const main = chats.find((c) => c.id === MAIN_CHAT_ID)
+  const archivedRoots = chats.filter((c) => c.archived && !chats.find((p) => p.id === c.parentId)?.archived)
+  return {
+    active: main ? walk(main, 0, false) : [],
+    archived: archivedRoots.sort(newestFirst).flatMap((c) => walk(c, 0, true)),
+  }
+}
+
+export const familyOf = (chats: ChatView[], chatId: string): ChatView[] => [
+  ...chats.filter((c) => c.id === chatId),
+  ...chats.filter((c) => c.parentId === chatId).flatMap((c) => familyOf(chats, c.id)),
+]
+
+export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {
+  const parent = chats.find((c) => c.id === chat.parentId)
+  return chat.folders[0] ?? (parent && folderOf(chats, parent))
+}
+
+export const folderName = (path: string) => path.split('/').filter(Boolean).at(-1) ?? path
 
 export const engineProblem = (engine: EngineInfo) =>
   !engine.installed ? 'not installed' : !engine.signedIn ? 'not signed in' : undefined

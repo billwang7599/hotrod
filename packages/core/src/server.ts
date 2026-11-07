@@ -63,7 +63,6 @@ export async function startServer(options: {
     send(socket, {
       type: 'snapshot',
       engines: core.engines(),
-      projects: core.projects(),
       chats: core.chats(),
       accounts: core.accounts(),
       contextDefaults: core.contextDefaults(),

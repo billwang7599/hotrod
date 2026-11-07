@@ -55,6 +55,14 @@ describe('pi adapter', () => {
     expect(fake.spawned[0]?.args.slice(-2)).toEqual(['--append-system-prompt', 'Be brief.'])
   })
 
+  it('lists the other folders in the instructions, since pi has no flag for them', () => {
+    const withRules = startSession('Be brief.', { extraDirs: ['/tmp/a', '/tmp/b'] }).fake.spawned[0]!.args
+    expect(withRules.at(-1)).toMatch(/^Be brief\.\n\n.*\n- \/tmp\/a\n- \/tmp\/b$/)
+    const alone = startSession('', { extraDirs: ['/tmp/a'] }).fake.spawned[0]!.args
+    expect(alone.at(-2)).toBe('--append-system-prompt')
+    expect(alone.at(-1)).toMatch(/^[^\n]+\n- \/tmp\/a$/)
+  })
+
   it('sends the prompt command and streams text', () => {
     const { fake, events, session } = startSession()
     session.prompt('Reply with exactly: Hello there')

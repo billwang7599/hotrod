@@ -71,6 +71,12 @@ describe('claudeCode adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--effort')
   })
 
+  it('gives Claude Code the other folders with --add-dir', () => {
+    const args = startSession('', { extraDirs: ['/tmp/a', '/tmp/b'] }).fake.spawned[0]!.args
+    expect(args.filter((_, i) => args[i - 1] === '--add-dir')).toEqual(['/tmp/a', '/tmp/b'])
+    expect(startSession().fake.spawned[0]?.args).not.toContain('--add-dir')
+  })
+
   it('appends instructions to the system prompt when given', () => {
     const { fake } = startSession('Be brief.')
     expect(fake.spawned[0]?.args.slice(-2)).toEqual(['--append-system-prompt', 'Be brief.'])

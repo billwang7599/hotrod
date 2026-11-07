@@ -76,7 +76,7 @@ async function start() {
 
   const pickFolder = async () => {
     const result = await dialog.showOpenDialog(window, {
-      title: 'Add Project',
+      title: 'New chat from folder',
       properties: ['openDirectory', 'createDirectory'],
     })
     return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -89,7 +89,11 @@ async function start() {
       {
         label: 'File',
         submenu: [
-          { label: 'Add Project…', accelerator: 'CmdOrCtrl+O', click: () => window.webContents.send('add-project') },
+          {
+            label: 'New chat from folder…',
+            accelerator: 'CmdOrCtrl+O',
+            click: () => window.webContents.send('new-chat-from-folder'),
+          },
           { type: 'separator' },
           { role: process.platform === 'darwin' ? 'close' : 'quit' },
         ],
