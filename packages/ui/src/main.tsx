@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ClientMessage } from '@hotrod/core/types'
+import { Markdown } from './markdown.tsx'
 import { initialState, reduce, type Action, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
@@ -51,7 +52,7 @@ function ItemView({ item, project, connected, send }: ItemProps) {
     case 'user':
       return <div className="user">{item.text}</div>
     case 'text':
-      return <div className="assistant">{item.text}</div>
+      return <Markdown className="assistant" text={item.text} />
     case 'error':
       return <div className="turn-error">{item.text}</div>
     case 'tool':
@@ -146,7 +147,7 @@ function Chat({ project, connected, send }: { project: ProjectView; connected: b
         {project.items.map((item, i) => (
           <ItemView key={i} item={item} project={project} connected={connected} send={send} />
         ))}
-        {project.draft && <div className="assistant streaming">{project.draft}</div>}
+        {project.draft && <Markdown className="assistant streaming" text={project.draft} />}
       </div>
       <div className="composer">
         <textarea
