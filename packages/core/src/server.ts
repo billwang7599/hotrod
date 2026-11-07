@@ -79,7 +79,11 @@ export async function startServer(options: {
   })
 
   await new Promise<void>((resolve, reject) => {
-    http.once('error', reject)
+    // ws re-emits the http server's errors on wss, where they'd go uncaught without a listener.
+    wss.once('error', (error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') return reject(error)
+      reject(new Error(`Port ${port} is in use. Is Hotrod already running? Set HOTROD_PORT to use another port.`))
+    })
     http.listen(port, '127.0.0.1', resolve)
   })
 
