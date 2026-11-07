@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { openAccounts } from './accounts.ts'
 import type {
   Adapter,
   ChatEntry,
@@ -73,6 +74,15 @@ export function openCore(options: {
     appendFileSync(logPath(chat.project.id), JSON.stringify(entry) + '\n')
     broadcast({ type: 'chat.entry', projectId: chat.project.id, entry })
   }
+
+  const accounts = openAccounts({
+    garage,
+    adapters,
+    machine,
+    broadcast,
+    isBusy: (engine) => [...chats.values()].some((chat) => chat.project.engine === engine && chat.status !== 'idle'),
+  })
+  void accounts.refresh()
 
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status) return
@@ -191,7 +201,9 @@ export function openCore(options: {
     }
 
     try {
-      session = adapter.start(machine, { cwd: chat.project.path, instructions }, emit)
+      const accountDir = accounts.dirFor(adapter.id)
+      const options = { cwd: chat.project.path, instructions, ...(accountDir && { accountDir }) }
+      session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
       session.prompt(prompt)
@@ -221,6 +233,8 @@ export function openCore(options: {
 
   return {
     projects: () => [...chats.values()].map(state),
+    accounts: accounts.list,
+    refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
     handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
       switch (message.type) {
@@ -235,6 +249,16 @@ export function openCore(options: {
           return interrupt(chatFor(message.projectId))
         case 'permission.respond':
           return respond(chatFor(message.projectId), message.requestId, message.allow === true)
+        case 'account.login':
+          return accounts.login(String(message.engine), String(message.name ?? ''))
+        case 'account.code':
+          return accounts.submitCode(String(message.engine), String(message.code ?? ''))
+        case 'account.cancelLogin':
+          return accounts.cancelLogin(String(message.engine))
+        case 'account.use':
+          return accounts.use(String(message.engine), String(message.accountId))
+        case 'account.remove':
+          return accounts.remove(String(message.engine), String(message.accountId), reply)
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }

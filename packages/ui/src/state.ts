@@ -1,4 +1,12 @@
-import type { ChatEntry, ChatStatus, CoreMessage, EngineInfo, ProjectState } from '@hotrod/core/types'
+import type {
+  Account,
+  ChatEntry,
+  ChatStatus,
+  CoreMessage,
+  EngineAccounts,
+  EngineInfo,
+  ProjectState,
+} from '@hotrod/core/types'
 
 export type Item =
   | { kind: 'user'; text: string }
@@ -37,6 +45,7 @@ export type State = {
   connected: boolean
   rejected: boolean
   engines: EngineInfo[]
+  accounts: EngineAccounts[]
   projects: ProjectView[]
   selectedId: string | null
   toasts: { id: number; message: string }[]
@@ -53,6 +62,7 @@ export const initialState: State = {
   connected: false,
   rejected: false,
   engines: [],
+  accounts: [],
   projects: [],
   selectedId: null,
   toasts: [],
@@ -149,7 +159,15 @@ export function reduce(state: State, action: Action): State {
     case 'snapshot': {
       const projects = action.projects.map(toView)
       const selectedId = projects.some((p) => p.id === state.selectedId) ? state.selectedId : (projects[0]?.id ?? null)
-      return { ...state, engines: action.engines, projects, selectedId }
+      return { ...state, engines: action.engines, accounts: action.accounts, projects, selectedId }
+    }
+    case 'accounts.updated': {
+      const { engine } = action.accounts
+      const known = state.accounts.some((a) => a.engine === engine)
+      const accounts = known
+        ? state.accounts.map((a) => (a.engine === engine ? action.accounts : a))
+        : [...state.accounts, action.accounts]
+      return { ...state, accounts }
     }
     case 'project.added': {
       const known = state.projects.some((p) => p.id === action.project.id)
@@ -198,4 +216,9 @@ export function engineOptions(engines: EngineInfo[], current: string): { id: str
     label: !e.installed ? `${e.id} (not installed)` : !e.signedIn ? `${e.id} (not signed in)` : e.id,
   }))
   return options.some((o) => o.id === current) ? options : [...options, { id: current, label: `${current} (unknown)` }]
+}
+
+export function accountLabel(account: Account) {
+  if (account.signedIn === false) return `${account.name} (signed out)`
+  return account.label ? `${account.name} (${account.label})` : account.name
 }

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -592,5 +592,109 @@ describe('engine failures', () => {
     expect(types(entriesOf(t.core, project.id))).toEqual(['user.message', 'session.ended'])
     expect(prompted).toBe(false)
     expect(t.calls[0]?.closed).toBe(true)
+  })
+})
+
+describe('accounts', () => {
+  function setupAccounts(script: FakeStep[] = textScript, garage = tempDir()) {
+    const logouts: string[] = []
+    const fake = createFakeAdapter(script, 0)
+    const logout = async (_machine: unknown, dir: string) => void logouts.push(dir)
+    const adapter: Adapter = { ...fake, accounts: { ...fake.accounts!, logout } }
+    const { adapter: wrapped, calls } = recording(adapter)
+    return { ...open(garage, [wrapped, { ...stubAdapter(() => ({}) as never), id: 'plain' }], 'fake'), calls, logouts }
+  }
+
+  const accountsOf = (core: Core) => core.accounts().find((a) => a.engine === 'fake')!
+  const accountDir = (garage: string, id: string) => join(garage, 'accounts', 'fake', id)
+
+  async function signIn(t: ReturnType<typeof setupAccounts>, name: string) {
+    t.handle({ type: 'account.login', engine: 'fake', name })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
+    await until(() => !accountsOf(t.core).login)
+  }
+
+  it("lists the engine's own login as the default account, only for engines with accounts", async () => {
+    const t = setupAccounts()
+    await t.core.refreshAccounts()
+    expect(t.core.accounts()).toEqual([
+      {
+        engine: 'fake',
+        active: 'default',
+        accounts: [{ id: 'default', name: 'Default', label: 'default@fake.test', signedIn: true }],
+      },
+    ])
+  })
+
+  it('signs in a new account in its own folder and keeps it across a restart', async () => {
+    const t = setupAccounts()
+    t.handle({ type: 'account.login', engine: 'fake', name: 'Work' })
+    expect(t.messages.at(-1)).toMatchObject({ type: 'accounts.updated', accounts: { login: { name: 'Work' } } })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    expect(() => t.handle({ type: 'account.login', engine: 'fake', name: 'Other' })).toThrow(/already/)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
+    await until(() => !accountsOf(t.core).login)
+
+    const work = { id: 'work', name: 'Work', label: 'work@fake.test', signedIn: true }
+    expect(accountsOf(t.core).accounts.at(-1)).toEqual(work)
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(true)
+    await signIn(t, 'work')
+    expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default', 'work', 'work-2'])
+
+    const reopened = setupAccounts(textScript, t.garage)
+    await reopened.core.refreshAccounts()
+    expect(accountsOf(reopened.core).accounts.map((a) => a.id)).toEqual(['default', 'work', 'work-2'])
+  })
+
+  it('reports a failed sign-in, removes its folder and clears it on cancel', async () => {
+    const t = setupAccounts()
+    t.handle({ type: 'account.login', engine: 'fake', name: 'Work' })
+    await until(() => accountsOf(t.core).login?.url !== undefined)
+    t.handle({ type: 'account.code', engine: 'fake', code: 'fail' })
+    await until(() => accountsOf(t.core).login?.error !== undefined)
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(false)
+    t.handle({ type: 'account.cancelLogin', engine: 'fake' })
+    expect(accountsOf(t.core).login).toBeUndefined()
+    expect(accountsOf(t.core).accounts.map((a) => a.id)).toEqual(['default'])
+  })
+
+  it('starts sessions with the active account and switches only while idle', async () => {
+    const t = setupAccounts(permissionScript)
+    await signIn(t, 'Work')
+    const project = addProject(t)
+
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'work' })
+    expect(accountsOf(t.core).active).toBe('work')
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(t.calls[0]?.options.accountDir).toBe(accountDir(t.garage, 'work'))
+    await until(() => statusOf(t.core, project.id) === 'waiting')
+    expect(() => t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'account.use', engine: 'fake', accountId: 'nope' })).toThrow(/Unknown account/)
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'again' })
+    expect(t.calls[1]?.options.accountDir).toBeUndefined()
+    const reopened = setupAccounts(textScript, t.garage)
+    expect(accountsOf(reopened.core).active).toBe('default')
+  })
+
+  it('removes an account: logs it out, deletes its folder and falls back to the default', async () => {
+    const t = setupAccounts()
+    await signIn(t, 'Work')
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'work' })
+    expect(() => t.handle({ type: 'account.remove', engine: 'fake', accountId: 'default' })).toThrow(/default/)
+    t.handle({ type: 'account.remove', engine: 'fake', accountId: 'work' })
+    await until(() => accountsOf(t.core).accounts.length === 1)
+    expect(t.logouts).toEqual([accountDir(t.garage, 'work')])
+    expect(existsSync(accountDir(t.garage, 'work'))).toBe(false)
+    expect(accountsOf(t.core).active).toBe('default')
+  })
+
+  it('rejects account messages for an engine without accounts', () => {
+    const t = setupAccounts()
+    expect(() => t.handle({ type: 'account.login', engine: 'plain', name: 'Work' })).toThrow(/accounts/)
   })
 })

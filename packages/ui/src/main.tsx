@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientMessage, EngineInfo } from '@hotrod/core/types'
+import type { ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
-import { engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
+import { accountLabel, engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedProject'
+const MANAGE_ACCOUNTS = '__manage'
 
 declare global {
   interface Window {
@@ -77,9 +78,111 @@ function ItemView({ item, project, connected, send }: ItemProps) {
   }
 }
 
-type ChatProps = { project: ProjectView; engines: EngineInfo[]; connected: boolean; send: (m: ClientMessage) => void }
+type AccountsProps = {
+  accounts: EngineAccounts
+  connected: boolean
+  send: (m: ClientMessage) => void
+  close: () => void
+}
 
-function Chat({ project, engines, connected, send }: ChatProps) {
+function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
+  const { engine, login } = accounts
+  const [name, setName] = useState('')
+  const [code, setCode] = useState('')
+  const startLogin = (e: FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    send({ type: 'account.login', engine, name: name.trim() })
+    setName('')
+  }
+  const submitCode = (e: FormEvent) => {
+    e.preventDefault()
+    if (!code.trim()) return
+    send({ type: 'account.code', engine, code: code.trim() })
+    setCode('')
+  }
+  const remove = (id: string, label: string) => {
+    if (!confirm(`Sign out of ${label} and remove it from Hotrod?`)) return
+    send({ type: 'account.remove', engine, accountId: id })
+  }
+
+  return (
+    <section className="accounts">
+      <header className="accounts-header">
+        <strong>{engine} accounts</strong>
+        <button onClick={close}>Close</button>
+      </header>
+      <ul className="account-list">
+        {accounts.accounts.map((a) => (
+          <li key={a.id}>
+            <span className="account-name">{accountLabel(a)}</span>
+            {a.id === 'default' && <span className="account-note">{engine}'s own sign-in</span>}
+            {a.id === accounts.active ? (
+              <span className="account-active">In use</span>
+            ) : (
+              <button disabled={!connected} onClick={() => send({ type: 'account.use', engine, accountId: a.id })}>
+                Use
+              </button>
+            )}
+            {a.id !== 'default' && (
+              <button disabled={!connected} onClick={() => remove(a.id, a.name)}>
+                Remove
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      {!login ? (
+        <form className="account-form" onSubmit={startLogin}>
+          <input
+            value={name}
+            placeholder="Name for another account, e.g. Work"
+            onChange={(e) => setName(e.target.value)}
+          />
+          <button disabled={!connected || !name.trim()}>Sign in…</button>
+        </form>
+      ) : login.error ? (
+        <div className="account-login">
+          <div className="turn-error">{login.error}</div>
+          <button onClick={() => send({ type: 'account.cancelLogin', engine })}>Dismiss</button>
+        </div>
+      ) : (
+        <div className="account-login">
+          <p>Signing in “{login.name}”. Finish in the browser window that opened.</p>
+          {login.url && (
+            <>
+              <p>
+                No window, or it is signed in to another account? Open{' '}
+                <a href={login.url} target="_blank" rel="noreferrer">
+                  this sign-in link
+                </a>{' '}
+                (a private window lets you pick the account), then paste the code it shows:
+              </p>
+              <form className="account-form" onSubmit={submitCode}>
+                <input value={code} placeholder="Code" spellCheck={false} onChange={(e) => setCode(e.target.value)} />
+                <button disabled={!connected || !code.trim()}>Submit code</button>
+              </form>
+            </>
+          )}
+          <button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine })}>
+            Cancel
+          </button>
+        </div>
+      )}
+    </section>
+  )
+}
+
+type ChatProps = {
+  project: ProjectView
+  engines: EngineInfo[]
+  accounts?: EngineAccounts
+  connected: boolean
+  send: (m: ClientMessage) => void
+  manageAccounts: () => void
+}
+
+function Chat({ project, engines, accounts, connected, send, manageAccounts }: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -124,6 +227,26 @@ function Chat({ project, engines, connected, send }: ChatProps) {
             </option>
           ))}
         </select>
+        {accounts && (
+          <select
+            className="engine-select"
+            aria-label="Account"
+            value={accounts.active}
+            disabled={!canSend}
+            onChange={(e) =>
+              e.target.value === MANAGE_ACCOUNTS
+                ? manageAccounts()
+                : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
+            }
+          >
+            {accounts.accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {accountLabel(a)}
+              </option>
+            ))}
+            <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
+          </select>
+        )}
       </header>
       <div
         className="messages"
@@ -195,8 +318,13 @@ function App() {
     if (state.selectedId) localStorage.setItem(SELECTED_KEY, state.selectedId)
   }, [state.selectedId])
   const [path, setPath] = useState('')
+  const [managing, setManaging] = useState<string | null>(null)
   const selected = state.projects.find((p) => p.id === state.selectedId)
   const engine = state.engines.find((e) => e.id === selected?.engine)
+  const accounts = state.accounts.find((a) => a.engine === selected?.engine)
+  const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
+  const signedIn = activeAccount?.signedIn ?? engine?.signedIn
+  const managed = state.accounts.find((a) => a.engine === managing)
 
   const addProject = (e: FormEvent) => {
     e.preventDefault()
@@ -255,13 +383,30 @@ function App() {
         ) : (
           !state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>
         )}
-        {engine && (!engine.installed || !engine.signedIn) && (
+        {engine && (!engine.installed || !signedIn) && (
           <div className="banner">
-            {engine.id} is {engine.installed ? 'not signed in' : 'not installed'}.{engine.detail && ` ${engine.detail}`}
+            {engine.id} is{' '}
+            {!engine.installed
+              ? 'not installed'
+              : activeAccount && activeAccount.id !== 'default'
+                ? `not signed in as ${activeAccount.name}`
+                : 'not signed in'}
+            .{engine.detail && ` ${engine.detail}`}
           </div>
         )}
+        {managed && (
+          <AccountsPanel accounts={managed} connected={connected} send={send} close={() => setManaging(null)} />
+        )}
         {selected ? (
-          <Chat key={selected.id} project={selected} engines={state.engines} connected={state.connected} send={send} />
+          <Chat
+            key={selected.id}
+            project={selected}
+            engines={state.engines}
+            accounts={accounts}
+            connected={state.connected}
+            send={send}
+            manageAccounts={() => setManaging(selected.engine)}
+          />
         ) : (
           <div className="empty">Add a project folder to start.</div>
         )}

@@ -86,10 +86,11 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   const a = connect(url, { origin })
   const b = connect(url, { origin })
   await until(() => a.messages.length > 0 && b.messages.length > 0)
-  expect(a.messages[0]).toEqual({
+  expect(a.messages[0]).toMatchObject({
     type: 'snapshot',
     engines,
     projects: [],
+    accounts: [{ engine: 'fake', active: 'default' }],
   })
 
   a.socket.send(JSON.stringify({ type: 'project.add', path: project }))
