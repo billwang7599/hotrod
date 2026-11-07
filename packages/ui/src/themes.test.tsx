@@ -36,7 +36,7 @@ function fakePage({ dark = true, desktop = false } = {}) {
   const store = new Map<string, string>()
   const mediaListeners: (() => void)[] = []
   const media = { matches: dark, addEventListener: (_: string, fn: () => void) => mediaListeners.push(fn) }
-  const bridge = { vibrancy: true, setAppearance: vi.fn() }
+  const bridge = { setAppearance: vi.fn() }
   vi.stubGlobal('document', {
     documentElement: {
       style: { setProperty: (k: string, v: string) => props.set(k, v), removeProperty: (k: string) => props.delete(k) },
@@ -129,7 +129,7 @@ describe('appearance', () => {
     expect(page.props.get('--bg')).toBe(THEMES.catppuccin.dark.bg)
   })
 
-  it('lays Glass over a backdrop in the browser and asks the desktop app for vibrancy', () => {
+  it('lays Glass over the same opaque gradient in the browser and the desktop app, with no native vibrancy', () => {
     const browser = fakePage()
     startAppearance()
     chooseAppearance({ theme: 'glass' })
@@ -142,18 +142,27 @@ describe('appearance', () => {
     const desktop = fakePage({ desktop: true })
     startAppearance()
     chooseAppearance({ theme: 'glass', scheme: 'light' })
-    expect(desktop.props.get('background')).toBe('transparent')
+    expect(desktop.props.get('background')).toContain('gradient')
     expect(desktop.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'light',
-      vibrancy: true,
-      background: '#00000000',
+      background: THEMES.glass.backdrop.light.at(-1),
     })
     chooseAppearance({ theme: 'gruvbox' })
     expect(desktop.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'light',
-      vibrancy: false,
       background: THEMES.gruvbox.light.bg,
     })
+  })
+
+  it('paints the window background opaque, so the desktop app never shows through stale frames', () => {
+    const desktop = fakePage({ desktop: true })
+    startAppearance()
+    for (const theme of Object.keys(THEMES) as (keyof typeof THEMES)[])
+      for (const scheme of SCHEMES) {
+        chooseAppearance({ theme, scheme })
+        const { background } = desktop.bridge.setAppearance.mock.lastCall?.[0]
+        expect(background, `${theme} ${scheme}`).toMatch(/^#[0-9a-f]{6}$/i)
+      }
   })
 
   it('shows a card for every theme and marks the current one', () => {

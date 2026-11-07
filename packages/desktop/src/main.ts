@@ -92,10 +92,9 @@ async function start() {
     return result.canceled ? null : (result.filePaths[0] ?? null)
   }
   ipcMain.handle('pick-folder', pickFolder)
-  ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
-    const { scheme, vibrancy, background } = appearance
+  ipcMain.on('set-appearance', (_event, appearance: { scheme: string; background: string }) => {
+    const { scheme, background } = appearance
     if (scheme === 'system' || scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme
-    if (process.platform === 'darwin') window.setVibrancy(vibrancy ? 'under-window' : null)
     window.setBackgroundColor(background)
   })
 

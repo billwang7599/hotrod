@@ -420,14 +420,11 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   for (const token of TOKENS) root.style.setProperty(`--${token}`, theme[scheme][token])
   root.style.setProperty('color-scheme', scheme)
   root.toggleAttribute('data-glass', !!theme.backdrop)
-  const vibrancy = !!theme.backdrop && !!window.hotrod?.vibrancy
-  if (vibrancy) root.style.setProperty('background', 'transparent')
-  else if (theme.backdrop) root.style.setProperty('background', backdropOf(theme.backdrop[scheme]))
+  if (theme.backdrop) root.style.setProperty('background', backdropOf(theme.backdrop[scheme]))
   else root.style.removeProperty('background')
   window.hotrod?.setAppearance({
     scheme: current.scheme,
-    vibrancy,
-    background: vibrancy ? '#00000000' : (theme.backdrop?.[scheme].at(-1) ?? theme[scheme].bg),
+    background: theme.backdrop?.[scheme].at(-1) ?? theme[scheme].bg,
   })
   for (const listener of listeners) listener()
 }

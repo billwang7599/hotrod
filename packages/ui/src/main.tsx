@@ -40,8 +40,7 @@ declare global {
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
-      vibrancy: boolean
-      setAppearance(appearance: { scheme: 'system' | 'light' | 'dark'; vibrancy: boolean; background: string }): void
+      setAppearance(appearance: { scheme: 'system' | 'light' | 'dark'; background: string }): void
     }
   }
 }
