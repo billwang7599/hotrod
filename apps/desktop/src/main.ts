@@ -51,7 +51,7 @@ async function start() {
     if (closed) return
     event.preventDefault()
     if (closing) return void confirmForceQuit()
-    if (hotrod.core.projects().some((p) => p.status !== 'idle')) window.webContents.send('quitting')
+    if (hotrod.core.chats().some((c) => c.status !== 'idle')) window.webContents.send('quitting')
     closing = hotrod.close().finally(() => {
       closed = true
       app.quit()
