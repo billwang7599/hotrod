@@ -270,13 +270,20 @@ export function Chat(props: ChatProps) {
           )}
           <Button
             variant="ghost"
-            size="small"
-            className="aria-pressed:bg-raised aria-pressed:text-text"
+            size="icon"
+            className="grid place-items-center aria-pressed:text-text"
+            aria-label="Context panel"
             aria-pressed={contextOpen}
-            title={contextOpen ? 'Hide context' : 'Show the AGENTS.md layers this chat gets'}
+            title={contextOpen ? 'Hide context' : 'Show context'}
             onClick={toggleContext}
           >
-            Context
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+              <path d="M10 2.5v11" />
+              {contextOpen && (
+                <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />
+              )}
+            </svg>
           </Button>
         </header>
         <div
@@ -449,7 +456,6 @@ export function Chat(props: ChatProps) {
           readOnly={!!archivedBy}
           connected={connected}
           send={send}
-          close={toggleContext}
         />
       )}
     </div>
