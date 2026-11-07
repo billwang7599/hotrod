@@ -552,7 +552,8 @@ function Chat(props: ChatProps) {
 
   const archivedBy = project?.archived ? project : chat.archived ? chat : undefined
   const canChange = connected && chat.status === 'idle' && !archivedBy
-  const engineOff = !engines.find((e) => e.id === chat.engine)?.enabled
+  const offers = engines.find((e) => e.id === chat.engine)
+  const engineOff = !offers?.enabled
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
@@ -574,6 +575,11 @@ function Chat(props: ChatProps) {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
     if (window.confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
+  const withSaved = (list: string[] = [], saved?: string) => (saved && !list.includes(saved) ? [...list, saved] : list)
+  const models = withSaved(offers?.models, chat.model)
+  const levels = withSaved(offers?.thinking, chat.thinking)
+  const setModel = (model?: string, thinking?: string) =>
+    send({ type: 'chat.setModel', chatId: chat.id, model: model || undefined, thinking: thinking || undefined })
   const unarchive = () =>
     project?.archived
       ? send({ type: 'project.archive', projectId: project.id, archived: false })
@@ -725,27 +731,63 @@ function Chat(props: ChatProps) {
                 <span className="hint">
                   {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
                 </span>
-                {busy ? (
-                  <span className="composer-actions">
-                    {text.trim() && (
-                      <button className="small" disabled={!canQueue} onClick={submit}>
-                        Queue
-                      </button>
-                    )}
-                    <button
-                      className={`danger stop ${chat.status}`}
-                      disabled={!connected}
-                      title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                      onClick={stop}
+                <span className="composer-actions">
+                  {models.length > 0 && (
+                    <select
+                      className="chip"
+                      aria-label="Model"
+                      title="Model, from the next message"
+                      value={chat.model ?? ''}
+                      disabled={!canChange}
+                      onChange={(e) => setModel(e.target.value, chat.thinking)}
                     >
-                      {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                      <option value="">Default model</option>
+                      {models.map((m) => (
+                        <option key={m} value={m}>
+                          {m}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {levels.length > 0 && (
+                    <select
+                      className="chip"
+                      aria-label="Thinking"
+                      title="Thinking level, from the next message"
+                      value={chat.thinking ?? ''}
+                      disabled={!canChange}
+                      onChange={(e) => setModel(chat.model, e.target.value)}
+                    >
+                      <option value="">Default thinking</option>
+                      {levels.map((l) => (
+                        <option key={l} value={l}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  {busy ? (
+                    <>
+                      {text.trim() && (
+                        <button className="small" disabled={!canQueue} onClick={submit}>
+                          Queue
+                        </button>
+                      )}
+                      <button
+                        className={`danger stop ${chat.status}`}
+                        disabled={!connected}
+                        title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                        onClick={stop}
+                      >
+                        {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                      </button>
+                    </>
+                  ) : (
+                    <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                      Send
                     </button>
-                  </span>
-                ) : (
-                  <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
-                    Send
-                  </button>
-                )}
+                  )}
+                </span>
               </div>
             </div>
           )}

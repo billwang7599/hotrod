@@ -18,6 +18,8 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   search: ['pattern'],
 }
 
+const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
 function summarize(kind: ToolKind, input: any): string {
@@ -36,11 +38,16 @@ export const pi: Adapter = {
     const version = await machine.run('pi', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const models = await machine.run('pi', ['--list-models', '--offline'], options).catch(() => null)
-    const signedIn = models?.code === 0 && models.stdout.trim() !== '' && !models.stdout.includes('No models available')
-    return { installed: true, signedIn, detail: version.stdout.trim() }
+    const listed = models?.code === 0 && !models.stdout.includes('No models available') ? models.stdout : ''
+    const ids = listed
+      .split('\n')
+      .slice(1)
+      .map((row) => row.trim().split(/\s+/))
+      .flatMap(([provider, model]) => (provider && model ? [`${provider}/${model}`] : []))
+    return { installed: true, signedIn: ids.length > 0, detail: version.stdout.trim(), models: ids, thinking: THINKING }
   },
 
-  start(machine, { cwd, instructions }, emit) {
+  start(machine, { cwd, instructions, model, thinking }, emit) {
     const args = [
       '--mode', 'rpc',
       '--no-session',
@@ -51,6 +58,8 @@ export const pi: Adapter = {
       '--no-context-files',
       '--no-approve',
     ]
+    if (model) args.push('--model', model)
+    if (thinking) args.push('--thinking', thinking)
     if (instructions) args.push('--append-system-prompt', instructions)
     const proc = machine.spawn('pi', args, { cwd })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')

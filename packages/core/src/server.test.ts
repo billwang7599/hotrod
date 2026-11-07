@@ -168,12 +168,14 @@ it('serves no files without a UI folder', async () => {
   expect(response.ok).toBe(false)
 })
 
+const heldOffers = { models: ['small', 'large'], thinking: ['low', 'high'] }
+
 async function startHeld() {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const sessions: { options: SessionOptions; prompt?: string; end: (reply?: string, error?: string) => void }[] = []
   const held: Adapter = {
     id: 'held',
-    detect: async () => ({ installed: true, signedIn: true }),
+    detect: async () => ({ installed: true, signedIn: true, ...heldOffers }),
     start(_machine, options, emit: (event: EngineEvent) => void) {
       const end = (reply?: string, error?: string) => {
         if (reply !== undefined) emit({ type: 'text.completed', text: reply })
@@ -327,6 +329,19 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   sessions.at(-1)!.end('Done')
   expect((await json(lead, 'spawn_subagent', { task: 'More' })).chatId).not.toBe(chatId)
   expect((await json(workshop, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([subchat.id])
+})
+
+it("starts a subagent on its parent's model and thinking level", async () => {
+  const { core, json, send, sessionOf } = await startHeld()
+  const handle = handleOn(core)
+  await core.refreshEngines()
+  handle({ type: 'subagents.set', enabled: true, limit: -1 })
+  const [model, thinking] = [heldOffers.models[1], heldOffers.thinking[1]]
+  handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
+  const parent = send('main', 'Plan it')
+  const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Go' })
+  expect(chatIn(core, chatId)).toMatchObject({ model, thinking })
+  expect(sessionOf(chatId).options).toMatchObject({ model, thinking })
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy", async () => {

@@ -37,7 +37,13 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
-export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }
+export type EngineStatus = {
+  installed: boolean
+  signedIn: boolean
+  detail?: string
+  models?: string[]
+  thinking?: string[]
+}
 
 export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
 
@@ -47,6 +53,8 @@ export type SessionOptions = {
   accountDir?: string
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
+  model?: string
+  thinking?: string
 }
 
 export interface Session {
@@ -98,6 +106,8 @@ export type ChatInfo = {
   archived: boolean
   createdAt: string
   parentId?: string
+  model?: string
+  thinking?: string
 }
 
 export type Mods = { subagents: { enabled: boolean; limit: number } }
@@ -142,6 +152,7 @@ export type ClientMessage =
   | { type: 'chat.archive'; chatId: string; archived: boolean }
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
+  | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
   | { type: 'chat.send'; chatId: string; text: string }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }

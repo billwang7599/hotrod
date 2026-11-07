@@ -34,10 +34,13 @@ const demoScript: FakeStep[] = [
   ),
 ]
 
+export const FAKE_MODELS = ['fake-small', 'fake-large']
+export const FAKE_THINKING = ['low', 'high']
+
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
   return {
     id: 'fake',
-    detect: async () => ({ installed: true, signedIn: true }),
+    detect: async () => ({ installed: true, signedIn: true, models: FAKE_MODELS, thinking: FAKE_THINKING }),
     accounts: {
       status: async (_machine, accountDir) => ({
         signedIn: true,

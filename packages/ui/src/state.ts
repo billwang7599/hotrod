@@ -204,7 +204,12 @@ export function reduce(state: State, action: Action): State {
         selectedId: action.chat.id,
       }
     case 'chat.updated':
-      return updateChat(state, action.chat.id, (c) => ({ ...c, ...action.chat }))
+      return updateChat(state, action.chat.id, (c) => ({
+        ...c,
+        model: undefined,
+        thinking: undefined,
+        ...action.chat,
+      }))
     case 'chat.removed':
       return keepSelection({ ...state, chats: state.chats.filter((c) => c.id !== action.chatId) })
     case 'chat.entry':

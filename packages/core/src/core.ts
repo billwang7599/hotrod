@@ -96,6 +96,10 @@ export function openCore(options: {
     enabled: isEnabled(id),
     ...(detected.get(id) ?? { installed: false, signedIn: false }),
   })
+  const offered = (engine: string) => {
+    const { models = [], thinking = [] } = detected.get(engine) ?? {}
+    return { models, thinking }
+  }
   const checkEnabled = (engine: string) => {
     if (!isEnabled(engine)) throw new Error(`Engine "${engine}" is off. Turn it on in Settings.`)
   }
@@ -130,17 +134,9 @@ export function openCore(options: {
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
   const saveChat = ({ info, dir, context }: Chat) => {
-    const { id, title, engine, archived, createdAt, parentId } = info
-    const saved = {
-      id,
-      title,
-      engine,
-      archived,
-      createdAt,
-      ...(parentId !== undefined && { parentId }),
-      ...(Object.keys(context).length ? { context } : {}),
-    }
-    writeFileSync(join(dir, 'chat.json'), JSON.stringify(saved, null, 2) + '\n')
+    const { main, projectId, ...saved } = info
+    const file = { ...saved, ...(Object.keys(context).length ? { context } : {}) }
+    writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
   }
   const state = (chat: Chat): ChatState => ({
     ...chat.info,
@@ -349,8 +345,8 @@ export function openCore(options: {
     checkEngine(engine)
     checkEnabled(engine)
     if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
-    if (parentId !== undefined) {
-      const parent = chatFor(parentId)
+    const parent = parentId === undefined ? undefined : chatFor(parentId)
+    if (parent) {
       if (parent.info.parentId !== undefined) throw new Error('A subagent cannot start subagents')
       if (parent.info.projectId !== projectId) throw new Error("A subagent stays in its parent chat's place")
     }
@@ -367,6 +363,7 @@ export function openCore(options: {
       archived: false,
       createdAt,
       ...(parentId !== undefined && { parentId }),
+      ...(parent?.info.engine === engine && { model: parent.info.model, thinking: parent.info.thinking }),
     }
     const chat = loadChat(dir, info)
     broadcast({ type: 'chat.added', chat: state(chat) })
@@ -374,7 +371,8 @@ export function openCore(options: {
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
-    chat.info = { ...chat.info, ...change }
+    const merged = Object.entries({ ...chat.info, ...change }).filter(([, value]) => value !== undefined)
+    chat.info = Object.fromEntries(merged) as ChatInfo
     saveChat(chat)
     broadcast({ type: 'chat.updated', chat: chat.info })
   }
@@ -400,7 +398,24 @@ export function openCore(options: {
     checkEngine(engine)
     checkEnabled(engine)
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
-    updateChat(chat, { engine })
+    const { models, thinking } = offered(engine)
+    const { model, thinking: level } = chat.info
+    updateChat(chat, {
+      engine,
+      model: model && models.includes(model) ? model : undefined,
+      thinking: level && thinking.includes(level) ? level : undefined,
+    })
+  }
+
+  const setModel = (chat: Chat, model?: string, thinking?: string) => {
+    if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')
+    const { engine } = chat.info
+    const offers = offered(engine)
+    if (model && !offers.models.includes(model)) throw new Error(`Engine "${engine}" offers no model "${model}"`)
+    if (thinking && !offers.thinking.includes(thinking)) {
+      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
+    }
+    updateChat(chat, { model, thinking })
   }
 
   const projectOf = (chat: Chat) => (chat.info.projectId === undefined ? undefined : projectFor(chat.info.projectId))
@@ -517,6 +532,8 @@ export function openCore(options: {
         instructions,
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
+        ...(chat.info.model && { model: chat.info.model }),
+        ...(chat.info.thinking && { thinking: chat.info.thinking }),
       }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
@@ -623,6 +640,8 @@ export function openCore(options: {
           return deleteChat(chatFor(message.chatId))
         case 'chat.setEngine':
           return setEngine(chatFor(message.chatId), String(message.engine))
+        case 'chat.setModel':
+          return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
         case 'chat.send':
           if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
           return enqueue(chatFor(message.chatId), message.text)
@@ -675,6 +694,8 @@ export function openCore(options: {
     },
   }
 }
+
+const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
 const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 

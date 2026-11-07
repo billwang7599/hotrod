@@ -84,6 +84,18 @@ describe('reduce', () => {
     expect(updated.chats[1]).toMatchObject({ title: 'hi', archived: true, items: [{ kind: 'user', text: 'hi' }] })
   })
 
+  it('sets and clears a chat model and thinking level, since JSON drops the cleared field', () => {
+    const { status, entries, draft, ...info } = chat('c')
+    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), {
+      type: 'chat.updated',
+      chat: { ...info, model: 'large', thinking: 'high' },
+    })
+    expect(state.chats[1]).toMatchObject({ model: 'large', thinking: 'high' })
+    const cleared = reduce(state, { type: 'chat.updated', chat: { ...info, thinking: 'high' } })
+    expect(cleared.chats[1]?.model).toBeUndefined()
+    expect(cleared.chats[1]?.thinking).toBe('high')
+  })
+
   it('removes a chat, or a project with all its chats, and selects Main if the selection went with it', () => {
     const state = run(snapshot([chat(MAIN_CHAT_ID), chat('p/main', [], 'p'), chat('s', [], 'p'), chat('c')], [project('p')]))
     const onSub = reduce(state, { type: 'select', chatId: 's' })

@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
+import { createFakeAdapter, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { openCore, TITLE_MAX_CHARS, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -673,6 +673,63 @@ describe('engines', () => {
     expect(prompt.trimEnd().endsWith('second question')).toBe(true)
     const texts = entriesOf(t.core, chat.id).flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))
     expect(texts).toEqual(['Alpha reply', 'Beta reply'])
+  })
+
+  it('sets a chat model and thinking level, saves them and starts the next session with them', async () => {
+    const t = setupEngines()
+    await t.core.refreshEngines()
+    const chat = addProject(t)
+    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING.at(-1)!]
+    t.handle({ type: 'chat.setModel', chatId: chat.id, model, thinking })
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, model, thinking } })
+    expect(JSON.parse(readFileSync(chatFile(t, chat.projectId), 'utf8'))).toMatchObject({ model, thinking })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(t.alpha[0]?.options).toMatchObject({ model, thinking })
+
+    t.handle({ type: 'chat.setModel', chatId: chat.id, thinking })
+    const updated = t.messages.at(-1)
+    expect(updated?.type === 'chat.updated' && 'model' in updated.chat).toBe(false)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(t.alpha[1]?.options.model).toBeUndefined()
+    expect(t.alpha[1]?.options.thinking).toBe(thinking)
+    expect(JSON.parse(readFileSync(chatFile(t, chat.projectId), 'utf8')).model).toBeUndefined()
+
+    t.core.close()
+    const reopened = chatOf(setupEngines(t.garage).core, chat.id)
+    expect(reopened?.model).toBeUndefined()
+    expect(reopened?.thinking).toBe(thinking)
+  })
+
+  it('rejects a model or thinking level the engine does not offer, and a change while a turn runs', async () => {
+    const t = setupEngines()
+    await t.core.refreshEngines()
+    const chat = addProject(t)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: 'nope' })).toThrow(/model "nope"/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, thinking: 'nope' })).toThrow(
+      /thinking level "nope"/,
+    )
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0] })).toThrow(/turn/)
+    expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
+  })
+
+  it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
+    const alpha = createFakeAdapter([], 0)
+    const betaOffers = { models: FAKE_MODELS.slice(0, 1), thinking: FAKE_THINKING }
+    const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
+    const beta: Adapter = { ...alpha, id: 'beta', detect }
+    const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
+    await t.core.refreshEngines()
+    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING[0]!]
+    t.handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
+    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
+    expect(chatOf(t.core, 'main')?.model).toBeUndefined()
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0], thinking })
+    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0], thinking })
   })
 
   it('keeps a chat whose saved engine is gone and refuses to send', () => {
