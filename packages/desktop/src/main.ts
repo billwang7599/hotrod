@@ -85,7 +85,7 @@ async function start() {
 
   const pickFolder = async () => {
     const result = await dialog.showOpenDialog(window, {
-      title: 'New chat from folder',
+      title: 'New space from folder',
       properties: ['openDirectory', 'createDirectory'],
     })
     return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -99,7 +99,7 @@ async function start() {
         label: 'File',
         submenu: [
           {
-            label: 'New chat from folder…',
+            label: 'New space from folder…',
             accelerator: 'CmdOrCtrl+O',
             click: () => window.webContents.send('new-chat-from-folder'),
           },

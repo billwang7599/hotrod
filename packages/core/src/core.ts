@@ -20,6 +20,7 @@ import {
   MODEL_ROLES,
   pickModel,
   WORKSHOP_ID,
+  WORKSHOP_NAME,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
@@ -43,7 +44,6 @@ import {
 
 export const STOP_GRACE_MS = 60_000
 export const MAX_CHAT_DEPTH = 1
-const WORKSHOP_NAME = 'Workshop'
 
 type Chat = {
   info: ChatInfo
@@ -206,7 +206,7 @@ export function openCore(options: {
   const canNest = (chat: Chat) => !chat.info.subagent && chainOf(chat).length - 1 < MAX_CHAT_DEPTH
 
   const checkRemovable = (chat: Chat) => {
-    if (isWorkshop(chat)) throw new Error('The Workshop cannot be archived or deleted')
+    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be archived or deleted`)
     if (chat.status !== 'idle') throw new Error('Stop the running chat first')
   }
 
@@ -309,7 +309,7 @@ export function openCore(options: {
     checkActive(parent)
     if (parent.info.subagent) throw new Error('A subagent cannot start chats')
     if (!spec.subagent && !canNest(parent)) {
-      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below the Workshop`)
+      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below ${WORKSHOP_NAME}`)
     }
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
@@ -340,7 +340,7 @@ export function openCore(options: {
   }
 
   const renameChat = (chat: Chat, name: unknown) => {
-    if (isWorkshop(chat)) throw new Error('The Workshop cannot be renamed')
+    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be renamed`)
     updateChat(chat, { name: checkName(name) })
   }
 

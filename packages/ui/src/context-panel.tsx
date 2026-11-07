@@ -1,24 +1,30 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import { CONTEXT_SECTIONS, type ClientMessage, type ContextItem, type ContextSection } from '@hotrod/core/types'
-import { Button, MOTION, Switch, useSettled } from './controls.tsx'
+import {
+  CONTEXT_SECTIONS,
+  WORKSHOP_NAME,
+  type ClientMessage,
+  type ContextItem,
+  type ContextSection,
+} from '@hotrod/core/types'
+import { Button, CHAT_NOUN, MOTION, Switch, useSettled } from './controls.tsx'
 import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
     label: 'AGENTS.md',
-    about: 'Instructions, from the Workshop down',
-    inherited: 'The AGENTS.md of the Workshop and every chat above',
+    about: `Instructions, from ${WORKSHOP_NAME} down`,
+    inherited: `The AGENTS.md of ${WORKSHOP_NAME} and every ${CHAT_NOUN.one} above`,
   },
   folders: {
     label: 'Folders',
     about: 'Where it works; each folder’s AGENTS.md is read in',
-    inherited: 'The folders of the chats above, with their AGENTS.md',
+    inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
     label: 'Files',
     about: 'Pasted in full into the instructions',
-    inherited: 'The files of the chats above, pasted in full',
+    inherited: `The files of the ${CHAT_NOUN.many} above, pasted in full`,
   },
 }
 const EMPTY_SECTION: Record<ContextSection, string> = {
@@ -176,7 +182,7 @@ export function ContextPanel({ chatId, items, chats, contextDefaults, readOnly, 
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
         <p className="text-sm text-faint">
-          Each message gets the items that are on, from the Workshop down. Edits apply from the next message.
+          Each message gets the items that are on, from {WORKSHOP_NAME} down. Edits apply from the next message.
         </p>
         {CONTEXT_SECTIONS.map((section) => {
           const listed = items?.filter((item) => item.section === section) ?? []

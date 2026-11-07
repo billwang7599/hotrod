@@ -99,6 +99,7 @@ export type EngineAccounts = {
 }
 
 export const WORKSHOP_ID = 'main'
+export const WORKSHOP_NAME = 'Home'
 
 export type ChatInfo = {
   id: string

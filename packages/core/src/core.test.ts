@@ -17,6 +17,7 @@ import { MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
   DEFAULT_SUBAGENT_LIMIT,
+  WORKSHOP_NAME,
   type Adapter,
   type ChatEntry,
   type ChatState,
@@ -157,7 +158,7 @@ describe('chats', () => {
   it('opens one permanent Workshop chat that runs in a scratch home folder', async () => {
     const t = setup(textScript)
     expect(t.core.chats()).toEqual([
-      expect.objectContaining({ id: 'main', name: 'Workshop', engine: 'fake', folders: [], files: [] }),
+      expect.objectContaining({ id: 'main', name: WORKSHOP_NAME, engine: 'fake', folders: [], files: [] }),
     ])
     expect(chatOf(t.core, 'main')?.parentId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
@@ -166,21 +167,23 @@ describe('chats', () => {
     expect(statSync(join(t.garage, 'home')).isDirectory()).toBe(true)
     const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n')).toHaveLength(4)
-    expect(chatOf(t.core, 'main')?.name).toBe('Workshop')
+    expect(chatOf(t.core, 'main')?.name).toBe(WORKSHOP_NAME)
 
-    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(/Workshop/)
-    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(/Workshop/)
-    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(/Workshop/)
+    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(WORKSHOP_NAME)
+    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(WORKSHOP_NAME)
+    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(WORKSHOP_NAME)
     t.core.close()
     expect(entriesOf(setup(textScript, t.garage).core, 'main')).toHaveLength(4)
   })
 
-  it('calls the root chat Workshop, even in a garage that saved it as Main', () => {
-    const garage = tempDir()
-    mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
-    const saved = { id: 'main', title: 'Main', name: 'Main', engine: 'fake', archived: false, createdAt: at }
-    writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
-    expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe('Workshop')
+  it(`calls the root chat ${WORKSHOP_NAME}, even in a garage that saved an older name`, () => {
+    for (const old of ['Main', 'Workshop']) {
+      const garage = tempDir()
+      mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
+      const saved = { id: 'main', title: old, name: old, engine: 'fake', archived: false, createdAt: at }
+      writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
+      expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe(WORKSHOP_NAME)
+    }
   })
 
   it('creates named chats under the Workshop, stored flat in the garage, and keeps their names', async () => {

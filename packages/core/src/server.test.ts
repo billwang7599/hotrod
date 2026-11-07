@@ -17,7 +17,14 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
 import { startServer } from './server.ts'
-import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage, type EngineEvent, type SessionOptions } from './types.ts'
+import {
+  BAD_TOKEN_CLOSE_CODE,
+  WORKSHOP_NAME,
+  type Adapter,
+  type CoreMessage,
+  type EngineEvent,
+  type SessionOptions,
+} from './types.ts'
 
 const origin = 'http://localhost:4318'
 const token = 'test-token-0123456789'
@@ -112,7 +119,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   expect(a.messages[0]).toMatchObject({
     type: 'snapshot',
     engines: [{ id: 'fake', enabled: false }],
-    chats: [expect.objectContaining({ id: 'main', name: 'Workshop' })],
+    chats: [expect.objectContaining({ id: 'main', name: WORKSHOP_NAME })],
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
   })

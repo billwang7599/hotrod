@@ -4,6 +4,7 @@ import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
+  WORKSHOP_NAME,
   type Account,
   type ClientMessage,
   type ContextSection,
@@ -110,7 +111,7 @@ const PAGES = [
     group: 'Options',
     title: 'Context',
     hint:
-      `What a ${CHAT_NOUN.one} uses from the chats above it, unless you switch it in its Context panel. ` +
+      `What a ${CHAT_NOUN.one} uses from ${WORKSHOP_NAME} and the ${CHAT_NOUN.many} above it, unless you switch it in its Context panel. ` +
       'Its own AGENTS.md, folders and files always start on.',
     body: ({ contextDefaults, connected, send }: PageProps) =>
       CONTEXT_SECTIONS.map((section) => (
