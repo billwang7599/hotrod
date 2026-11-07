@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import type {
   ChatStatus,
@@ -13,7 +13,7 @@ import { ContextPanel } from './context-panel.tsx'
 import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
-import { accountLabel, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
+import { accountLabel, columnSlider, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -38,6 +38,8 @@ const TOOL_STATES: Record<string, string> = {
 }
 const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
+const SLIDER =
+  'h-12 w-96 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
 const SELECT_ARROW =
   'bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20fill=%27none%27%20stroke=%27%238b8e96%27%20stroke-width=%271.5%27/%3E%3C/svg%3E)]'
 
@@ -206,6 +208,8 @@ type ChatProps = {
   contextItems?: ContextItem[]
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
+  columnPx: number
+  setColumnPx: (px: number) => void
 }
 
 export function Chat(props: ChatProps) {
@@ -213,6 +217,7 @@ export function Chat(props: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
 
@@ -224,8 +229,9 @@ export function Chat(props: ChatProps) {
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list) return
-    const observer = new ResizeObserver(() => {
+    const observer = new ResizeObserver(([entry]) => {
       if (stickToBottom.current) list.scrollTop = list.scrollHeight
+      setPaneColumnPx(entry!.contentRect.width)
     })
     observer.observe(list)
     return () => observer.disconnect()
@@ -265,7 +271,7 @@ export function Chat(props: ChatProps) {
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
 
   return (
-    <div className="flex min-h-0 flex-1">
+    <div className="flex min-h-0 flex-1" style={{ '--column': `${props.columnPx}px` } as CSSProperties}>
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-44 shrink-0 items-center gap-6 border-b px-12">
           <PanelToggle
@@ -356,7 +362,7 @@ export function Chat(props: ChatProps) {
             )}
           </div>
         </div>
-        <div className="shrink-0 px-24 pb-16">
+        <div className="relative shrink-0 px-24 pb-16">
           {archived && (
             <div className="mx-auto mb-8 flex max-w-column items-center gap-8 text-sm text-muted">
               <span className="flex-1">
@@ -494,6 +500,14 @@ export function Chat(props: ChatProps) {
               </div>
             </div>
           )}
+          <input
+            type="range"
+            className={`absolute right-24 bottom-2 ${SLIDER}`}
+            aria-label="Chat width"
+            title="Chat width"
+            {...columnSlider(props.columnPx, paneColumnPx)}
+            onChange={(e) => props.setColumnPx(Number(e.target.value))}
+          />
         </div>
       </main>
       <AnimatePresence initial={false}>

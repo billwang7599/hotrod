@@ -6,12 +6,13 @@ import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
-import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce, storedFlag } from './state.ts'
+import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce, storedColumn, storedFlag } from './state.ts'
 import './styles.css'
 
 const SELECTED_KEY = 'hotrod.selectedChat'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
+const COLUMN_KEY = 'hotrod.columnWidth'
 
 declare global {
   interface Window {
@@ -59,6 +60,8 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
   useEffect(() => localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen)), [sidebarOpen])
   const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
+  const [columnPx, setColumnPx] = useState(() => storedColumn(localStorage.getItem(COLUMN_KEY)))
+  useEffect(() => localStorage.setItem(COLUMN_KEY, String(columnPx)), [columnPx])
   const selected = state.chats.find((c) => c.id === state.selectedId)
   const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
@@ -189,6 +192,8 @@ function App() {
                 toggleSidebar={toggleSidebar}
                 contextOpen={contextOpen}
                 toggleContext={toggleContext}
+                columnPx={columnPx}
+                setColumnPx={setColumnPx}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists[selected.engine]}

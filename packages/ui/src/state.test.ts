@@ -4,6 +4,8 @@ import type { Account, EngineAccounts } from '@hotrod/core/types'
 import {
   accountLabel,
   chatTree,
+  COLUMN_PX,
+  columnSlider,
   engineOptions,
   familyOf,
   folderName,
@@ -12,6 +14,7 @@ import {
   MAIN_CHAT_ID,
   modelMenu,
   reduce,
+  storedColumn,
   storedFlag,
   type Action,
   type ChatView,
@@ -439,5 +442,25 @@ describe('storedFlag', () => {
     expect(storedFlag(null, true)).toBe(true)
     expect(storedFlag(null, false)).toBe(false)
     expect(storedFlag('yes', true)).toBe(true)
+  })
+})
+
+describe('chat width', () => {
+  it('reads the saved width, falling back to the default and never going below the minimum', () => {
+    expect(storedColumn(null)).toBe(COLUMN_PX.default)
+    expect(storedColumn('wide')).toBe(COLUMN_PX.default)
+    expect(storedColumn(String(COLUMN_PX.min + 100))).toBe(COLUMN_PX.min + 100)
+    expect(storedColumn(String(COLUMN_PX.min - 100))).toBe(COLUMN_PX.min)
+  })
+
+  it('runs the slider from the minimum to the full pane, clamping the saved width into it', () => {
+    const pane = COLUMN_PX.default + 200
+    expect(columnSlider(COLUMN_PX.default, pane)).toEqual({ min: COLUMN_PX.min, max: pane, value: COLUMN_PX.default })
+    expect(columnSlider(pane + 500, pane).value).toBe(pane)
+    expect(columnSlider(COLUMN_PX.default, COLUMN_PX.min - 50)).toEqual({
+      min: COLUMN_PX.min,
+      max: COLUMN_PX.min,
+      value: COLUMN_PX.min,
+    })
   })
 })
