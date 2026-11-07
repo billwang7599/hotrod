@@ -11,20 +11,26 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { openAccounts } from './accounts.ts'
-import type {
-  Adapter,
-  ChatEntry,
-  ChatInfo,
-  ChatState,
-  ChatStatus,
-  ClientMessage,
-  CoreMessage,
-  EngineEvent,
-  Machine,
-  Project,
-  Session,
+import { openHotrodMcp } from './hotrod-mcp.ts'
+import {
+  CONTEXT_KINDS,
+  type Adapter,
+  type ChatEntry,
+  type ChatInfo,
+  type ChatState,
+  type ChatStatus,
+  type ClientMessage,
+  type ContextKind,
+  type ContextLayer,
+  type CoreMessage,
+  type EngineEvent,
+  type EngineInfo,
+  type EngineStatus,
+  type Machine,
+  type Project,
+  type Session,
 } from './types.ts'
 
 export const STOP_GRACE_MS = 60_000
@@ -34,12 +40,14 @@ const NEW_CHAT_TITLE = 'New chat'
 type Chat = {
   info: ChatInfo
   dir: string
+  context: Partial<Record<ContextKind, boolean>>
   entries: ChatEntry[]
   status: ChatStatus
   session?: Session
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Set<string>
+  mcpToken?: string
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -59,6 +67,31 @@ export function openCore(options: {
     }
   }
   checkEngine(defaultEngine)
+  const settingsFile = join(garage, 'settings.json')
+  const settings: { engines: Record<string, boolean>; context?: Partial<Record<ContextKind, boolean>> } = {
+    engines: {},
+    ...readJson(settingsFile),
+  }
+  const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
+  const contextDefaults = (): Record<ContextKind, boolean> => ({
+    workshop: true,
+    repo: true,
+    project: true,
+    own: true,
+    ...settings.context,
+  })
+  const detected = new Map<string, EngineStatus>()
+  const isEnabled = (engine: string) => settings.engines[engine] === true
+  const engineInfo = (id: string): EngineInfo => ({
+    id,
+    enabled: isEnabled(id),
+    ...(detected.get(id) ?? { installed: false, signedIn: false }),
+  })
+  const checkEnabled = (engine: string) => {
+    if (!isEnabled(engine)) throw new Error(`Engine "${engine}" is off. Turn it on in Settings.`)
+  }
+  const newChatEngine = () =>
+    isEnabled(defaultEngine) ? defaultEngine : (adapters.find((a) => isEnabled(a.id))?.id ?? defaultEngine)
   const projectsDir = join(garage, 'projects')
   const homeChatsDir = join(garage, 'chats')
   const homeDir = join(garage, 'home')
@@ -67,14 +100,22 @@ export function openCore(options: {
   const chats = new Map<string, Chat>()
   const allStoppedWaiters: (() => void)[] = []
   let quitting = false
+  let mcpUrl: string | undefined
   const listeners: ((message: CoreMessage) => void)[] = []
 
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
+  const setEngineEnabled = (engine: string, enabled: boolean) => {
+    checkEngine(engine)
+    settings.engines = { ...settings.engines, [engine]: enabled }
+    saveSettings()
+    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
+  }
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
-  const saveChat = ({ info, dir }: Chat) => {
+  const saveChat = ({ info, dir, context }: Chat) => {
     const { id, title, engine, archived, createdAt } = info
-    writeFileSync(join(dir, 'chat.json'), JSON.stringify({ id, title, engine, archived, createdAt }, null, 2) + '\n')
+    const saved = { id, title, engine, archived, createdAt, ...(Object.keys(context).length ? { context } : {}) }
+    writeFileSync(join(dir, 'chat.json'), JSON.stringify(saved, null, 2) + '\n')
   }
   const state = (chat: Chat): ChatState => ({
     ...chat.info,
@@ -132,6 +173,8 @@ export function openCore(options: {
     chat.stopTimer = undefined
     const session = chat.session
     chat.session = undefined
+    if (chat.mcpToken) mcp.revoke(chat.mcpToken)
+    chat.mcpToken = undefined
     session?.close()
   }
 
@@ -153,12 +196,13 @@ export function openCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+    const { context = {}, ...saved } = readJson(file)
     const info: ChatInfo = { ...fallback, ...saved, id: fallback.id, main: fallback.main }
+    if (fallback.main) info.title = fallback.title
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
-    const chat: Chat = { info, dir, entries, status: 'idle', unsavedText: '', pendingRequests: new Set() }
+    const chat: Chat = { info, dir, context, entries, status: 'idle', unsavedText: '', pendingRequests: new Set() }
     if (!existsSync(file)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
@@ -172,7 +216,7 @@ export function openCore(options: {
     id,
     ...(projectId ? { projectId } : {}),
     main: true,
-    title: 'Main',
+    title: projectId ? 'Main' : 'Workshop',
     engine,
     archived: false,
     createdAt: new Date().toISOString(),
@@ -182,24 +226,24 @@ export function openCore(options: {
     for (const id of readdirSync(chatsDir)) {
       if (id === 'main' || !existsSync(join(chatsDir, id, 'chat.json'))) continue
       const createdAt = new Date().toISOString()
-      const fallback = { id, main: false, title: NEW_CHAT_TITLE, engine: defaultEngine, archived: false, createdAt }
+      const fallback = { id, main: false, title: NEW_CHAT_TITLE, engine: newChatEngine(), archived: false, createdAt }
       loadChat(join(chatsDir, id), projectId ? { ...fallback, projectId } : fallback)
     }
   }
 
-  loadChat(join(homeChatsDir, 'main'), mainChatInfo('main', defaultEngine))
+  loadChat(join(homeChatsDir, 'main'), mainChatInfo('main', newChatEngine()))
   loadSubchats(homeChatsDir)
   for (const id of readdirSync(projectsDir)) {
     const projectFile = join(projectsDir, id, 'project.json')
     if (!existsSync(projectFile)) continue
-    const { engine = defaultEngine, ...saved } = JSON.parse(readFileSync(projectFile, 'utf8'))
+    const { engine = newChatEngine(), ...saved } = JSON.parse(readFileSync(projectFile, 'utf8'))
     const project: Project = { archived: false, ...saved, id }
     projects.set(id, project)
     loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, engine, id))
     loadSubchats(join(projectsDir, id, 'chats'), id)
   }
 
-  const addProject = (rawPath: string, reply: (message: CoreMessage) => void) => {
+  const addProject = (rawPath: string, name?: string, reply?: (message: CoreMessage) => void): Project => {
     const expanded = rawPath.trim().replace(/^~(?=$|\/)/, homedir())
     const path = resolve(expanded)
     if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)
@@ -207,22 +251,24 @@ export function openCore(options: {
     const existing = [...projects.values()].find((project) => project.path === realPath)
     if (existing) {
       const project = existing.archived ? archiveProject(existing, false) : existing
-      return reply({ type: 'project.added', project, chat: state(chatFor(`${existing.id}/main`)) })
+      reply?.({ type: 'project.added', project, chat: state(chatFor(`${existing.id}/main`)) })
+      return project
     }
 
-    const name = basename(realPath) || 'root'
-    const base = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+/, '') || 'project'
+    const projectName = name?.trim() || basename(realPath) || 'root'
+    const base = projectName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+/, '') || 'project'
     // macOS folders are case-insensitive, so "App" and "app" would share a folder.
     const taken = new Set(readdirSync(projectsDir).map((id) => id.toLowerCase()))
     let id = base
     for (let n = 2; taken.has(id.toLowerCase()); n++) id = `${base}-${n}`
 
-    const project: Project = { id, name, path: realPath, archived: false }
+    const project: Project = { id, name: projectName, path: realPath, archived: false }
     mkdirSync(join(projectsDir, id), { recursive: true })
     saveProject(project)
     projects.set(id, project)
-    const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, defaultEngine, id))
+    const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, newChatEngine(), id))
     broadcast({ type: 'project.added', project, chat: state(chat) })
+    return project
   }
 
   const archiveProject = (project: Project, archived: boolean) => {
@@ -242,15 +288,18 @@ export function openCore(options: {
     broadcast({ type: 'project.removed', projectId: project.id })
   }
 
-  const createChat = (projectId?: string) => {
+  const createChat = (projectId?: string, engine = newChatEngine()) => {
+    checkEngine(engine)
+    checkEnabled(engine)
     if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
     const dir = projectId ? join(projectsDir, projectId, 'chats', id) : join(homeChatsDir, id)
     const createdAt = new Date().toISOString()
-    const info = { id, main: false, title: NEW_CHAT_TITLE, engine: defaultEngine, archived: false, createdAt }
+    const info = { id, main: false, title: NEW_CHAT_TITLE, engine, archived: false, createdAt }
     const chat = loadChat(dir, projectId ? { ...info, projectId } : info)
     broadcast({ type: 'chat.added', chat: state(chat) })
+    return chat.info
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -268,19 +317,77 @@ export function openCore(options: {
 
   const setEngine = (chat: Chat, engine: string) => {
     checkEngine(engine)
+    checkEnabled(engine)
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
     updateChat(chat, { engine })
+  }
+
+  const projectOf = (chat: Chat) => (chat.info.projectId === undefined ? undefined : projectFor(chat.info.projectId))
+
+  const checkActive = (chat: Chat) => {
+    if (chat.info.archived || projectOf(chat)?.archived) throw new Error('This chat is archived. Unarchive it first.')
+  }
+
+  const contextLayers = (chat: Chat): ContextLayer[] => {
+    const project = projectOf(chat)
+    const files: [ContextKind, string][] = [['workshop', join(garage, 'AGENTS.md')]]
+    if (project) {
+      files.push(['repo', join(project.path, 'AGENTS.md')], ['project', join(projectsDir, project.id, 'AGENTS.md')])
+    }
+    if (!chat.info.main) files.push(['own', join(chat.dir, 'AGENTS.md')])
+    return files.map(([kind, path]) => ({
+      kind,
+      path,
+      enabled: chat.context[kind] ?? contextDefaults()[kind],
+      writable: kind !== 'repo',
+      text: existsSync(path) ? readFileSync(path, 'utf8') : '',
+    }))
+  }
+
+  const layerOf = (chat: Chat, kind: ContextKind) => {
+    const layer = contextLayers(chat).find((l) => l.kind === kind)
+    if (!layer) throw new Error(`This chat has no "${kind}" layer`)
+    return layer
+  }
+
+  const checkKind = (kind: unknown): ContextKind => {
+    if (!CONTEXT_KINDS.includes(kind as ContextKind)) throw new Error(`Unknown context layer "${kind}"`)
+    return kind as ContextKind
+  }
+
+  const setContext = (chat: Chat, kind: ContextKind, enabled: boolean) => {
+    checkActive(chat)
+    layerOf(chat, kind)
+    chat.context = { ...chat.context, [kind]: enabled }
+    saveChat(chat)
+    broadcast({ type: 'chat.context', chatId: chat.info.id, layers: contextLayers(chat) })
+  }
+
+  const writeContext = (chat: Chat, kind: ContextKind, text: string) => {
+    checkActive(chat)
+    const { path, writable } = layerOf(chat, kind)
+    if (!writable) throw new Error('Hotrod never writes into a project folder. Edit this file in the repo.')
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, text)
+    broadcast({ type: 'context.file', path, text })
+  }
+
+  const setContextDefault = (kind: ContextKind, enabled: boolean) => {
+    settings.context = { ...settings.context, [kind]: enabled }
+    saveSettings()
+    broadcast({ type: 'context.defaults', defaults: contextDefaults() })
   }
 
   const send = (chat: Chat, text: string) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
-    const project = chat.info.projectId === undefined ? undefined : projectFor(chat.info.projectId)
-    if (chat.info.archived || project?.archived) throw new Error('This chat is archived. Unarchive it first.')
+    const project = projectOf(chat)
+    checkActive(chat)
     const adapter = adapterFor(chat.info.engine)
     if (!adapter) {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
+    checkEnabled(adapter.id)
     const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
     if (!chat.info.main && !chat.entries.some((e) => e.type === 'user.message')) {
       const line = text.trim().replace(/\s+/g, ' ')
@@ -291,12 +398,9 @@ export function openCore(options: {
     append(chat, { at: new Date().toISOString(), type: 'user.message', text })
     setStatus(chat, 'running')
 
-    const instructionFiles = project
-      ? [join(garage, 'AGENTS.md'), join(project.path, 'AGENTS.md'), join(projectsDir, project.id, 'AGENTS.md')]
-      : [join(garage, 'AGENTS.md')]
-    const instructions = instructionFiles
-      .filter((file) => existsSync(file))
-      .map((file) => readFileSync(file, 'utf8').trim())
+    const instructions = contextLayers(chat)
+      .filter((layer) => layer.enabled && layer.text.trim())
+      .map((layer) => layer.text.trim())
       .join('\n\n')
 
     let session: Session | undefined
@@ -322,7 +426,14 @@ export function openCore(options: {
     }
 
     try {
-      const options = { cwd: project?.path ?? homeDir, instructions, ...accounts.sessionFor(adapter.id) }
+      chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
+      const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
+      const options = {
+        cwd: project?.path ?? homeDir,
+        instructions,
+        ...accounts.sessionFor(adapter.id),
+        ...(hotrodMcp && { hotrodMcp }),
+      }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
@@ -332,6 +443,14 @@ export function openCore(options: {
       endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
     }
   }
+
+  const mcp = openHotrodMcp({
+    chats: () => [...chats.values()].map(state),
+    projects: () => [...projects.values()],
+    addProject,
+    createChat,
+    send: (chatId, text) => send(chatFor(chatId), text),
+  })
 
   const interrupt = (chat: Chat, force: boolean) => {
     if (!chat.session) return
@@ -352,21 +471,43 @@ export function openCore(options: {
   }
 
   return {
+    engines: () => adapters.map((adapter) => engineInfo(adapter.id)),
+    async refreshEngines() {
+      await Promise.all(
+        adapters.map(async (adapter) => {
+          try {
+            detected.set(adapter.id, await adapter.detect(machine))
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            detected.set(adapter.id, { installed: false, signedIn: false, detail })
+          }
+          broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
+        }),
+      )
+    },
+    setEngineEnabled,
+    contextDefaults,
     projects: () => [...projects.values()],
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
+    serveMcp(url: string) {
+      mcpUrl = url
+      return mcp.handle
+    },
     handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
       switch (message.type) {
+        case 'engine.setEnabled':
+          return setEngineEnabled(String(message.engine), message.enabled === true)
         case 'project.add':
-          return addProject(String(message.path), reply)
+          return void addProject(String(message.path), undefined, reply)
         case 'project.archive':
           return archiveProject(projectFor(message.projectId), message.archived === true)
         case 'project.delete':
           return deleteProject(projectFor(message.projectId))
         case 'chat.create':
-          return createChat(message.projectId === undefined ? undefined : String(message.projectId))
+          return void createChat(message.projectId === undefined ? undefined : String(message.projectId))
         case 'chat.archive': {
           const chat = chatFor(message.chatId)
           checkRemovable(chat)
@@ -381,6 +522,17 @@ export function openCore(options: {
           return send(chatFor(message.chatId), message.text)
         case 'chat.interrupt':
           return interrupt(chatFor(message.chatId), message.force === true)
+        case 'context.get': {
+          const chat = chatFor(message.chatId)
+          return reply({ type: 'chat.context', chatId: chat.info.id, layers: contextLayers(chat) })
+        }
+        case 'context.set':
+          return setContext(chatFor(message.chatId), checkKind(message.kind), message.enabled === true)
+        case 'context.write':
+          if (typeof message.text !== 'string') throw new Error('Context text is missing')
+          return writeContext(chatFor(message.chatId), checkKind(message.kind), message.text)
+        case 'context.setDefault':
+          return setContextDefault(checkKind(message.kind), message.enabled === true)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
         case 'account.login':
@@ -410,6 +562,8 @@ export function openCore(options: {
     },
   }
 }
+
+const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 
 function transcript(entries: ChatEntry[]) {
   const results = new Map<string, { output: string; isError: boolean }>()

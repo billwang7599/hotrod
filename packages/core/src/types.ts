@@ -39,9 +39,15 @@ export interface Machine {
 
 export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }
 
-export type EngineInfo = { id: string } & EngineStatus
+export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
 
-export type SessionOptions = { cwd: string; instructions: string; accountDir?: string; apiKey?: string }
+export type SessionOptions = {
+  cwd: string
+  instructions: string
+  accountDir?: string
+  apiKey?: string
+  hotrodMcp?: { url: string; token: string }
+}
 
 export interface Session {
   prompt(text: string): void
@@ -93,6 +99,18 @@ export type ChatInfo = {
   createdAt: string
 }
 
+export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'own'] as const
+
+export type ContextKind = (typeof CONTEXT_KINDS)[number]
+
+export type ContextLayer = {
+  kind: ContextKind
+  path: string
+  enabled: boolean
+  writable: boolean
+  text: string
+}
+
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
@@ -104,6 +122,7 @@ export type ChatEntry = { at: string } & (
 export type ChatState = ChatInfo & { status: ChatStatus; entries: ChatEntry[]; draft: string }
 
 export type ClientMessage =
+  | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
   | { type: 'project.add'; path: string }
   | { type: 'project.archive'; projectId: string; archived: boolean }
   | { type: 'project.delete'; projectId: string }
@@ -114,6 +133,10 @@ export type ClientMessage =
   | { type: 'chat.send'; chatId: string; text: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
+  | { type: 'context.get'; chatId: string }
+  | { type: 'context.set'; chatId: string; kind: ContextKind; enabled: boolean }
+  | { type: 'context.write'; chatId: string; kind: ContextKind; text: string }
+  | { type: 'context.setDefault'; kind: ContextKind; enabled: boolean }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -124,7 +147,15 @@ export type ClientMessage =
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
 export type CoreMessage =
-  | { type: 'snapshot'; engines: EngineInfo[]; projects: Project[]; chats: ChatState[]; accounts: EngineAccounts[] }
+  | {
+      type: 'snapshot'
+      engines: EngineInfo[]
+      projects: Project[]
+      chats: ChatState[]
+      accounts: EngineAccounts[]
+      contextDefaults: Record<ContextKind, boolean>
+    }
+  | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
   | { type: 'project.added'; project: Project; chat: ChatState }
   | { type: 'project.updated'; project: Project }
@@ -136,4 +167,7 @@ export type CoreMessage =
   | { type: 'chat.delta'; chatId: string; text: string }
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
+  | { type: 'chat.context'; chatId: string; layers: ContextLayer[] }
+  | { type: 'context.file'; path: string; text: string }
+  | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }
   | { type: 'error'; message: string }

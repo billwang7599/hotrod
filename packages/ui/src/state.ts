@@ -4,6 +4,8 @@ import type {
   ChatInfo,
   ChatState,
   ChatStatus,
+  ContextKind,
+  ContextLayer,
   CoreMessage,
   EngineAccounts,
   EngineInfo,
@@ -45,6 +47,8 @@ export type State = {
   projects: Project[]
   chats: ChatView[]
   selectedId: string
+  contextDefaults: Record<ContextKind, boolean>
+  context?: { chatId: string; layers: ContextLayer[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -63,6 +67,7 @@ export const initialState: State = {
   projects: [],
   chats: [],
   selectedId: MAIN_CHAT_ID,
+  contextDefaults: { workshop: true, repo: true, project: true, own: true },
   toasts: [],
   nextToastId: 1,
 }
@@ -156,7 +161,10 @@ export function reduce(state: State, action: Action): State {
         accounts: action.accounts,
         projects: action.projects,
         chats: action.chats.map(toView),
+        contextDefaults: action.contextDefaults,
       })
+    case 'engine.updated':
+      return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
     case 'accounts.updated': {
       const { engine } = action.accounts
       const known = state.accounts.some((a) => a.engine === engine)
@@ -212,6 +220,17 @@ export function reduce(state: State, action: Action): State {
       })
     case 'chat.status':
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
+    case 'chat.context':
+      if (action.chatId !== state.selectedId) return state
+      return { ...state, context: { chatId: action.chatId, layers: action.layers } }
+    case 'context.file': {
+      const { context } = state
+      if (!context) return state
+      const layers = context.layers.map((l) => (l.path === action.path ? { ...l, text: action.text } : l))
+      return { ...state, context: { ...context, layers } }
+    }
+    case 'context.defaults':
+      return { ...state, contextDefaults: action.defaults }
     case 'error':
       return {
         ...state,
@@ -221,18 +240,22 @@ export function reduce(state: State, action: Action): State {
     case 'connection':
       return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
-      return { ...state, selectedId: action.chatId }
+      return { ...state, selectedId: action.chatId, context: undefined }
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
 }
 
-export function engineOptions(engines: EngineInfo[], current: string): { id: string; label: string }[] {
-  const options = engines.map((e) => ({
-    id: e.id,
-    label: !e.installed ? `${e.id} (not installed)` : !e.signedIn ? `${e.id} (not signed in)` : e.id,
-  }))
-  return options.some((o) => o.id === current) ? options : [...options, { id: current, label: `${current} (unknown)` }]
+export const engineProblem = (engine: EngineInfo) =>
+  !engine.installed ? 'not installed' : !engine.signedIn ? 'not signed in' : undefined
+
+export function engineOptions(engines: EngineInfo[], current: string) {
+  const options: { id: string; label: string; disabled?: true }[] = engines
+    .filter((e) => e.enabled)
+    .map((e) => ({ id: e.id, label: engineProblem(e) ? `${e.id} (${engineProblem(e)})` : e.id }))
+  if (options.some((o) => o.id === current)) return options
+  const known = engines.some((e) => e.id === current)
+  return [...options, { id: current, label: `${current} (${known ? 'off' : 'unknown'})`, disabled: true as const }]
 }
 
 export function accountLabel(account: Account) {

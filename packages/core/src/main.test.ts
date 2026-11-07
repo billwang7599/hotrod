@@ -49,8 +49,8 @@ it('starts the core from the environment and stops it', async () => {
   expect(await firstMessage('http://ui.test', hotrod.token)).toMatchObject({
     type: 'snapshot',
     engines: [
-      { id: 'fake', installed: true, signedIn: true },
-      { id: 'broken', installed: false, signedIn: false, detail: 'no binary' },
+      { id: 'fake', enabled: true, installed: true, signedIn: true },
+      { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ],
   })
   expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
@@ -64,6 +64,12 @@ it('starts the core from the environment and stops it', async () => {
   await again.close()
   expect(again.token).not.toBe(hotrod.token)
   expect(again.token.length).toBeGreaterThanOrEqual(32)
+})
+
+it('turns no engine on without HOTROD_ENGINE', async () => {
+  const hotrod = await startCore({ env: { HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port) }, adapters })
+  cleanups.push(() => hotrod.close())
+  expect(hotrod.core.engines().map((e) => e.enabled)).toEqual([false, false])
 })
 
 it('takes its token from HOTROD_TOKEN and hands the UI a link that carries it', async () => {

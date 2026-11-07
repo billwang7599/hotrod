@@ -7,7 +7,7 @@ import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
 import { startServer } from './server.ts'
-import type { Adapter, EngineInfo } from './types.ts'
+import type { Adapter } from './types.ts'
 
 const registered: Adapter[] = [claudeCode, pi, createFakeAdapter()]
 
@@ -20,21 +20,13 @@ export async function startCore(
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
   const token = env.HOTROD_TOKEN || randomBytes(32).toString('base64url')
 
-  const core = openCore({ garage, adapters, defaultEngine: env.HOTROD_ENGINE ?? 'claude-code', machine: localMachine })
-  const engines = await Promise.all(
-    adapters.map(async (adapter): Promise<EngineInfo> => {
-      try {
-        return { id: adapter.id, ...(await adapter.detect(localMachine)) }
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
-        return { id: adapter.id, installed: false, signedIn: false, detail }
-      }
-    }),
-  )
-  const server = await startServer({ core, engines, port, uiOrigin: uiUrl, token, uiDir })
+  const defaultEngine = env.HOTROD_ENGINE ?? adapters[0]?.id ?? ''
+  const core = openCore({ garage, adapters, defaultEngine, machine: localMachine })
+  if (env.HOTROD_ENGINE) core.setEngineEnabled(env.HOTROD_ENGINE, true)
+  await core.refreshEngines()
+  const server = await startServer({ core, port, uiOrigin: uiUrl, token, uiDir })
   return {
     core,
-    engines,
     garage,
     port: server.port,
     uiUrl,
