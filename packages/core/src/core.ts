@@ -28,13 +28,17 @@ type Chat = {
   entries: ChatEntry[]
   status: ChatStatus
   session?: Session
+  unsavedText: string
+  interruptTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Set<string>
 }
 
+const INTERRUPT_GRACE_MS = 5000
+
 export type Core = ReturnType<typeof openCore>
 
-export function openCore(options: { garage: string; adapter: Adapter; machine: Machine }) {
-  const { garage, adapter, machine } = options
+export function openCore(options: { garage: string; adapter: Adapter; machine: Machine; interruptGraceMs?: number }) {
+  const { garage, adapter, machine, interruptGraceMs = INTERRUPT_GRACE_MS } = options
   const projectsDir = join(garage, 'projects')
   mkdirSync(projectsDir, { recursive: true })
   const chats = new Map<string, Chat>()
@@ -62,9 +66,19 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
     return chat
   }
 
-  const endTurn = (chat: Chat) => {
-    chat.session?.close()
+  const stopSession = (chat: Chat) => {
+    clearTimeout(chat.interruptTimer)
+    chat.interruptTimer = undefined
+    const session = chat.session
     chat.session = undefined
+    session?.close()
+  }
+
+  const endTurn = (chat: Chat, end: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
+    if (chat.unsavedText) append(chat, { at: end.at, type: 'text.completed', text: chat.unsavedText })
+    chat.unsavedText = ''
+    append(chat, end)
+    stopSession(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
   }
@@ -75,7 +89,7 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
     const project: Project = JSON.parse(readFileSync(projectFile, 'utf8'))
     const log = existsSync(logPath(id)) ? readFileSync(logPath(id), 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
-    const chat: Chat = { project, entries, status: 'idle', pendingRequests: new Set() }
+    const chat: Chat = { project, entries, status: 'idle', unsavedText: '', pendingRequests: new Set() }
     chats.set(project.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
@@ -102,7 +116,7 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
     mkdirSync(join(projectsDir, id, 'chats', 'main'), { recursive: true })
     writeFileSync(join(projectsDir, id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
     writeFileSync(logPath(id), '')
-    const chat: Chat = { project, entries: [], status: 'idle', pendingRequests: new Set() }
+    const chat: Chat = { project, entries: [], status: 'idle', unsavedText: '', pendingRequests: new Set() }
     chats.set(id, chat)
     broadcast({ type: 'project.added', project: state(chat) })
   }
@@ -113,41 +127,51 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
     append(chat, { at: new Date().toISOString(), type: 'user.message', text })
     setStatus(chat, 'running')
 
-    const instructions = [join(garage, 'AGENTS.md'), join(chat.project.path, 'AGENTS.md')]
+    const instructions = [
+      join(garage, 'AGENTS.md'),
+      join(chat.project.path, 'AGENTS.md'),
+      join(projectsDir, chat.project.id, 'AGENTS.md'),
+    ]
       .filter((file) => existsSync(file))
       .map((file) => readFileSync(file, 'utf8').trim())
       .join('\n\n')
 
     let session: Session | undefined
-    let unsavedText = ''
     const emit = (event: EngineEvent) => {
-      if (session && chat.session !== session) return
+      if (chat.session !== session) return
+      const at = new Date().toISOString()
+      if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
       if (event.type === 'text.delta') {
-        unsavedText += event.text
+        chat.unsavedText += event.text
         broadcast({ type: 'chat.delta', projectId: chat.project.id, text: event.text })
         return
       }
-      if (event.type === 'text.completed') unsavedText = ''
-      if ((event.type === 'turn.completed' || event.type === 'session.ended') && unsavedText) {
-        append(chat, { at: new Date().toISOString(), type: 'text.completed', text: unsavedText })
-        unsavedText = ''
-      }
-      append(chat, { at: new Date().toISOString(), ...event })
+      if (event.type === 'text.completed') chat.unsavedText = ''
+      append(chat, { at, ...event })
       if (event.type === 'permission.requested') {
         chat.pendingRequests.add(event.requestId)
         setStatus(chat, 'waiting')
       }
-      if (event.type === 'turn.completed' || event.type === 'session.ended') endTurn(chat)
     }
 
     try {
       session = adapter.start(machine, { cwd: chat.project.path, instructions }, emit)
+      if (chat.status === 'idle') return session.close()
       chat.session = session
       session.prompt(prompt)
     } catch (error) {
-      append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
-      endTurn(chat)
+      if (chat.status === 'idle') return
+      endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
     }
+  }
+
+  const interrupt = (chat: Chat) => {
+    if (!chat.session) return
+    chat.interruptTimer ??= setTimeout(
+      () => endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' }),
+      interruptGraceMs,
+    )
+    chat.session.interrupt()
   }
 
   const respond = (chat: Chat, requestId: string, allow: boolean) => {
@@ -170,7 +194,7 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
           if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
           return send(chatFor(message.projectId), message.text)
         case 'chat.interrupt':
-          return chatFor(message.projectId).session?.interrupt()
+          return interrupt(chatFor(message.projectId))
         case 'permission.respond':
           return respond(chatFor(message.projectId), message.requestId, message.allow === true)
         default:
@@ -178,10 +202,7 @@ export function openCore(options: { garage: string; adapter: Adapter; machine: M
       }
     },
     close() {
-      for (const chat of chats.values()) {
-        chat.session?.close()
-        chat.session = undefined
-      }
+      for (const chat of chats.values()) stopSession(chat)
     },
   }
 }
@@ -196,12 +217,17 @@ function transcript(entries: ChatEntry[]) {
     if (entry.type === 'user.message') lines.push(`User: ${entry.text}`)
     if (entry.type === 'text.completed') lines.push(`Assistant: ${entry.text}`)
     if (entry.type === 'tool.started') {
-      const call = `<tool_call name="${entry.name}">${JSON.stringify(entry.input) ?? ''}</tool_call>`
+      const call = `<tool_call name="${entry.name}">${escapeClosingTags(JSON.stringify(entry.input) ?? '')}</tool_call>`
       const result = results.get(entry.toolId)
       if (!result) lines.push(`${call}\n<tool_result status="none" />`)
-      else lines.push(`${call}\n<tool_result status="${result.isError ? 'error' : 'ok'}">\n${result.output}\n</tool_result>`)
+      else {
+        const status = result.isError ? 'error' : 'ok'
+        lines.push(`${call}\n<tool_result status="${status}">\n${escapeClosingTags(result.output)}\n</tool_result>`)
+      }
     }
     if (entry.type === 'turn.completed' && entry.error) lines.push(`[Turn ended early: ${entry.error}]`)
   }
   return `This is the conversation so far:\n\n${lines.join('\n\n')}`
 }
+
+const escapeClosingTags = (text: string) => text.replace(/<\/(tool_call|tool_result)/gi, '<\\/$1')
