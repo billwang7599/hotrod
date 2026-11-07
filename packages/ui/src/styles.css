@@ -1,0 +1,390 @@
+:root {
+  --bg: #0f1115;
+  --panel: #161920;
+  --raised: #1d212a;
+  --border: #272c37;
+  --text: #e3e6ec;
+  --muted: #8a92a3;
+  --accent: #e8743b;
+  --green: #4cc38a;
+  --amber: #f0b429;
+  --red: #ef5b5b;
+  color-scheme: dark;
+  font: 14px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--raised);
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--muted);
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+input,
+textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+pre {
+  margin: 0;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.app {
+  display: flex;
+  height: 100vh;
+}
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  padding: 14px 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--accent);
+}
+
+.projects {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px;
+}
+
+.project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project:hover {
+  background: var(--raised);
+}
+
+.project.selected {
+  background: var(--raised);
+  font-weight: 600;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--muted);
+}
+
+.dot.running {
+  background: var(--green);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.dot.waiting {
+  background: var(--amber);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.add-project {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.banner {
+  padding: 8px 16px;
+  background: #3a2a12;
+  color: var(--amber);
+  border-bottom: 1px solid var(--border);
+}
+
+.empty {
+  margin: auto;
+  color: var(--muted);
+}
+
+.chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-name {
+  font-weight: 600;
+}
+
+.chat-path {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px;
+}
+
+.user,
+.assistant {
+  max-width: 760px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.user {
+  align-self: flex-end;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.streaming::after {
+  content: '▍';
+  color: var(--accent);
+  animation: pulse 1s steps(2) infinite;
+}
+
+.turn-error {
+  color: var(--red);
+  border-left: 3px solid var(--red);
+  padding-left: 10px;
+}
+
+.tool {
+  max-width: 760px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.tool summary {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 13px;
+}
+
+.tool summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-name {
+  font-weight: 600;
+}
+
+.tool-input {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.tool-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.tool.running .tool-state {
+  color: var(--green);
+}
+
+.tool.waiting .tool-state {
+  color: var(--amber);
+}
+
+.tool.error .tool-state {
+  color: var(--red);
+}
+
+.tool pre {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.permission {
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.permission.pending {
+  border-color: var(--amber);
+}
+
+.permission pre {
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+.permission-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.approve {
+  background: #17402c;
+  border-color: var(--green);
+}
+
+.deny {
+  background: #451c1c;
+  border-color: var(--red);
+}
+
+.permission-outcome {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.permission.allowed .permission-outcome {
+  color: var(--green);
+}
+
+.permission.denied .permission-outcome {
+  color: var(--red);
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.composer textarea {
+  flex: 1;
+  resize: none;
+}
+
+.stop {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.toasts {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--raised);
+  border: 1px solid var(--red);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.4);
+}
+
+.toast span {
+  flex: 1;
+  word-break: break-word;
+}
+
+.toast button {
+  border: none;
+  background: none;
+  padding: 0 4px;
+  color: var(--muted);
+}
