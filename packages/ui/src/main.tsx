@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Toast } from './controls.tsx'
+import { Button, ConfirmDialog, Toast } from './controls.tsx'
 import logo from './logo.svg'
 import { SettingsDialog } from './settings.tsx'
 import { ChatNav } from './sidebar.tsx'
@@ -21,6 +21,19 @@ declare global {
       forceQuit(): Promise<void>
     }
   }
+}
+
+const BANNER_TONES = { warning: 'bg-warning-bg text-amber', error: 'bg-error-bg text-red' }
+
+function Banner({ tone, children, action }: { tone: keyof typeof BANNER_TONES; children: ReactNode; action?: ReactNode }) {
+  return (
+    <div
+      className={`flex min-h-32 items-center gap-8 border-b py-4 pr-12 pl-16 text-sm before:size-7 before:shrink-0 before:rounded-full before:bg-current ${BANNER_TONES[tone]}`}
+    >
+      <span className="flex-1 text-text">{children}</span>
+      {action}
+    </div>
+  )
 }
 
 function App() {
@@ -64,22 +77,23 @@ function App() {
   useEffect(() => window.hotrod?.onQuitting(() => setQuitting(true)), [])
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="sidebar-header">
-          <span className="brand">
+    <div className="flex h-screen">
+      <aside className="flex w-232 shrink-0 flex-col border-r bg-panel max-[900px]:w-200">
+        <div className="flex h-44 items-center justify-between pr-8 pl-16">
+          <span className="flex items-center gap-6 font-bold tracking-[0.02em] text-accent">
             <img src={logo} alt="" width={18} height={18} />
             Hotrod
           </span>
-          <button
-            className="ghost icon"
+          <Button
+            variant="ghost"
+            size="icon"
             aria-label="Add project"
             title={window.hotrod ? 'Add project… (⌘O)' : 'Add project'}
             disabled={!connected}
             onClick={() => (window.hotrod ? void pickProject() : pathRef.current?.focus())}
           >
             +
-          </button>
+          </Button>
         </div>
         <ChatNav
           projects={state.projects}
@@ -90,64 +104,62 @@ function App() {
           select={select}
         />
         {window.hotrod ? (
-          <div className="add-project">
-            <button disabled={!connected} onClick={() => void pickProject()}>
+          <div className="flex items-center gap-6 border-t px-8 py-10">
+            <Button className="flex-1" disabled={!connected} onClick={() => void pickProject()}>
               Add project…
-            </button>
-            <span className="hint">⌘O</span>
+            </Button>
+            <span className="text-sm text-faint">⌘O</span>
           </div>
         ) : (
-          <form className="add-project" onSubmit={addProject}>
+          <form className="flex items-center gap-6 border-t px-8 py-10" onSubmit={addProject}>
             <input
+              className="flex-1 font-mono text-sm"
               ref={pathRef}
               value={path}
               placeholder="/path/to/project"
               spellCheck={false}
               onChange={(e) => setPath(e.target.value)}
             />
-            <button disabled={!connected || !path.trim()}>Add</button>
+            <Button disabled={!connected || !path.trim()}>Add</Button>
           </form>
         )}
-        <div className="sidebar-footer">
-          <button className="ghost settings-button" onClick={() => setSettingsOpen(true)}>
+        <div className="px-8 pb-10">
+          <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => setSettingsOpen(true)}>
             <span aria-hidden="true">⚙</span>
             Settings
-          </button>
+          </Button>
         </div>
       </aside>
-      <div className="main">
+      <div className="flex min-w-0 flex-1 flex-col">
         {quitting && (
-          <div className="banner warning">
-            <span>Stopping engines…</span>
-            <button className="small danger" onClick={() => void window.hotrod?.forceQuit()}>
-              Force quit
-            </button>
-          </div>
+          <Banner
+            tone="warning"
+            action={
+              <Button variant="danger" size="small" onClick={() => void window.hotrod?.forceQuit()}>
+                Force quit
+              </Button>
+            }
+          >
+            Stopping engines…
+          </Banner>
         )}
         {state.rejected ? (
-          <div className="banner error">
-            <span>The core rejected this window. Open the link the core printed; it carries the token.</span>
-          </div>
+          <Banner tone="error">
+            The core rejected this window. Open the link the core printed; it carries the token.
+          </Banner>
         ) : (
-          !state.connected &&
-          !quitting && (
-            <div className="banner warning">
-              <span>Disconnected from the core. Reconnecting…</span>
-            </div>
-          )
+          !state.connected && !quitting && <Banner tone="warning">Disconnected from the core. Reconnecting…</Banner>
         )}
         {engine?.enabled && (!engine.installed || !signedIn) && (
-          <div className="banner warning">
-            <span>
-              {engine.id} is{' '}
-              {!engine.installed
-                ? 'not installed'
-                : activeAccount && activeAccount.id !== 'default'
-                  ? `not signed in as ${activeAccount.name}`
-                  : 'not signed in'}
-              .{engine.detail && ` ${engine.detail}`}
-            </span>
-          </div>
+          <Banner tone="warning">
+            {engine.id} is{' '}
+            {!engine.installed
+              ? 'not installed'
+              : activeAccount && activeAccount.id !== 'default'
+                ? `not signed in as ${activeAccount.name}`
+                : 'not signed in'}
+            .{engine.detail && ` ${engine.detail}`}
+          </Banner>
         )}
         {settingsOpen && (
           <SettingsDialog
@@ -176,16 +188,19 @@ function App() {
             contextDefaults={state.contextDefaults}
           />
         ) : (
-          <div className="empty">
-            <strong>{state.connected ? 'Loading…' : 'Connecting to the core…'}</strong>
+          <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+            <strong className="text-body font-semibold text-text">
+              {state.connected ? 'Loading…' : 'Connecting to the core…'}
+            </strong>
           </div>
         )}
       </div>
-      <div className="toasts">
+      <div className="fixed right-16 bottom-128 flex max-w-360 flex-col gap-8">
         {state.toasts.map((t) => (
           <Toast key={t.id} id={t.id} message={t.message} dismiss={dismissToast} />
         ))}
       </div>
+      <ConfirmDialog />
     </div>
   )
 }
