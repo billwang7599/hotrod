@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "nodenext",
+    "types": ["node"],
+    "allowJs": true,
+    "checkJs": true
+  },
+  "include": ["src"]
+}

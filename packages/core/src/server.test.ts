@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
@@ -92,4 +92,44 @@ it('answers bad messages with an error', async () => {
   a.socket.send('not json')
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: 'nope', text: 'hi' }))
   await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
+})
+
+it('serves the UI folder when given one', async () => {
+  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const uiDir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  mkdirSync(join(uiDir, 'assets'))
+  writeFileSync(join(uiDir, 'index.html'), '<html>hotrod</html>')
+  writeFileSync(join(uiDir, 'assets', 'app.js'), 'console.log(1)')
+  writeFileSync(join(garage, 'secret.txt'), 'secret')
+  const core = openCore({ garage, adapter: createFakeAdapter(undefined, 0), machine: localMachine })
+  const server = await startServer({
+    core,
+    engine: { id: 'fake', installed: true, signedIn: true },
+    port: 0,
+    uiOrigin: origin,
+    uiDir,
+  })
+  cleanups.push(() => {
+    core.close()
+    rmSync(garage, { recursive: true, force: true })
+    rmSync(uiDir, { recursive: true, force: true })
+  })
+  cleanups.push(() => server.close())
+  const base = `http://127.0.0.1:${server.port}`
+
+  const index = await fetch(`${base}/`)
+  expect(index.headers.get('content-type')).toContain('text/html')
+  expect(await index.text()).toBe('<html>hotrod</html>')
+  const script = await fetch(`${base}/assets/app.js`)
+  expect(script.headers.get('content-type')).toContain('text/javascript')
+  expect(await script.text()).toBe('console.log(1)')
+  expect(await (await fetch(`${base}/projects/x`)).text()).toBe('<html>hotrod</html>')
+  const escaped = await fetch(`${base}/..%2f${basename(garage)}%2fsecret.txt`)
+  expect(await escaped.text()).not.toContain('secret')
+})
+
+it('serves no files without a UI folder', async () => {
+  const { url } = await start()
+  const response = await fetch(url.replace('ws:', 'http:'))
+  expect(response.ok).toBe(false)
 })

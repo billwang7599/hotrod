@@ -12,27 +12,46 @@ const adapters: Record<string, Adapter> = {
   fake: createFakeAdapter(),
 }
 
-const engineId = process.env.HOTROD_ENGINE ?? 'claude-code'
-const adapter = adapters[engineId]
-if (!adapter) {
-  console.error(`Unknown engine "${engineId}". Set HOTROD_ENGINE to one of: ${Object.keys(adapters).join(', ')}`)
-  process.exit(1)
+export async function startCore(options: { env?: Record<string, string | undefined>; uiDir?: string } = {}) {
+  const { env = process.env, uiDir } = options
+  const engineId = env.HOTROD_ENGINE ?? 'claude-code'
+  const adapter = adapters[engineId]
+  if (!adapter) {
+    throw new Error(`Unknown engine "${engineId}". Set HOTROD_ENGINE to one of: ${Object.keys(adapters).join(', ')}`)
+  }
+  const garage = env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
+  const port = Number(env.HOTROD_PORT ?? 4317)
+  const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
+  const machine = localMachine
+
+  const engine = { id: adapter.id, ...(await adapter.detect(machine)) }
+  const core = openCore({ garage, adapter, machine })
+  const server = await startServer({ core, engine, port, uiOrigin: uiUrl, uiDir })
+  return {
+    core,
+    engine,
+    garage,
+    port: server.port,
+    uiUrl,
+    close: async () => {
+      core.close()
+      await server.close()
+    },
+  }
 }
 
-const garage = process.env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
-const port = Number(process.env.HOTROD_PORT ?? 4317)
-const uiOrigin = process.env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318'
-const machine = localMachine
-
-const engine = { id: adapter.id, ...(await adapter.detect(machine)) }
-const core = openCore({ garage, adapter, machine })
-const server = await startServer({ core, engine, port, uiOrigin })
-console.log(`Hotrod core on ws://127.0.0.1:${server.port} (engine ${engine.id}, garage ${garage})`)
-
-const shutdown = async () => {
-  core.close()
-  await server.close()
-  process.exit(0)
+if (import.meta.main) {
+  try {
+    const hotrod = await startCore()
+    console.log(`Hotrod core on ws://127.0.0.1:${hotrod.port} (engine ${hotrod.engine.id}, garage ${hotrod.garage})`)
+    const shutdown = async () => {
+      await hotrod.close()
+      process.exit(0)
+    }
+    process.on('SIGINT', shutdown)
+    process.on('SIGTERM', shutdown)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
 }
-process.on('SIGINT', shutdown)
-process.on('SIGTERM', shutdown)

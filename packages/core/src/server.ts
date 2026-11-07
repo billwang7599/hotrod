@@ -1,18 +1,43 @@
+import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createServer, type RequestListener } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
 import type { CoreMessage, EngineStatus } from './types.ts'
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+}
 
 export async function startServer(options: {
   core: Core
   engine: { id: string } & EngineStatus
   port: number
   uiOrigin: string
+  uiDir?: string
 }) {
   const { core, engine, port, uiOrigin } = options
+  const uiDir = options.uiDir && resolve(options.uiDir)
+  const serveUi: RequestListener = (request, response) => {
+    if (!uiDir) return response.writeHead(426).end()
+    const index = join(uiDir, 'index.html')
+    let file = join(uiDir, new URL(request.url ?? '/', 'http://ui').pathname)
+    if (!file.startsWith(uiDir + sep) || !existsSync(file) || !statSync(file).isFile()) file = index
+    if (!existsSync(file)) return response.writeHead(404).end(`No UI build in ${uiDir}`)
+    response.writeHead(200, { 'content-type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
+    createReadStream(file).pipe(response)
+  }
+  const http = createServer(serveUi)
   const wss = new WebSocketServer({
-    host: '127.0.0.1',
-    port,
+    server: http,
     verifyClient: (info, accept) => accept(info.origin === uiOrigin, 403, 'Origin not allowed'),
   })
   const send = (socket: WebSocket, message: CoreMessage) => {
@@ -33,16 +58,18 @@ export async function startServer(options: {
   })
 
   await new Promise<void>((resolve, reject) => {
-    wss.once('listening', resolve)
-    wss.once('error', reject)
+    http.once('error', reject)
+    http.listen(port, '127.0.0.1', resolve)
   })
 
   return {
-    port: (wss.address() as AddressInfo).port,
+    port: (http.address() as AddressInfo).port,
     close: () =>
       new Promise<void>((resolve) => {
         wss.clients.forEach((socket) => socket.terminate())
-        wss.close(() => resolve())
+        wss.close()
+        http.closeAllConnections()
+        http.close(() => resolve())
       }),
   }
 }
