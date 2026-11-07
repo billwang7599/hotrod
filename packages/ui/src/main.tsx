@@ -29,7 +29,6 @@ import './styles.css'
 
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedChat'
-const COLLAPSED_KEY = 'hotrod.collapsedProjects'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const CHAT_BUSY = 'Stop this chat first'
 const PROJECT_BUSY = 'Stop the running chats in this project first'
@@ -884,33 +883,44 @@ type RowProps = {
   sub?: boolean
   nested?: boolean
   select: () => void
+  add?: MenuItem
   menu?: MenuItem[]
 }
 
-function ChatRow({ chat, label, title, selected, sub, nested, select, menu }: RowProps) {
-  const classes = ['chat-row', selected && 'selected', sub && 'sub', nested && 'nested', menu && 'has-menu']
+function ChatRow({ chat, label, title, selected, sub, nested, select, add, menu }: RowProps) {
+  const classes = [
+    'chat-row',
+    selected && 'selected',
+    sub && 'sub',
+    nested && 'nested',
+    add && 'project-row',
+    menu && 'has-menu',
+  ]
   return (
     <div className={classes.filter(Boolean).join(' ')}>
       <button className="chat-link" title={title ?? label} onClick={select}>
         <span className={`dot ${chat.status}`} />
         <span className="chat-label">{label}</span>
         {chat.parentId && <span className="chat-tag">subagent</span>}
-        <span className="chat-engine">{chat.engine}</span>
+        {!add && <span className="chat-engine">{chat.engine}</span>}
       </button>
+      {add && (
+        <button
+          className="ghost icon add-chat"
+          aria-label={add.label}
+          title={add.label}
+          disabled={!!add.disabledReason}
+          onClick={add.run}
+        >
+          +
+        </button>
+      )}
       {menu && <RowMenu label={label} items={menu} />}
     </div>
   )
 }
 
 const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.createdAt)
-
-function readCollapsed(): string[] {
-  try {
-    return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]')
-  } catch {
-    return []
-  }
-}
 
 type SidebarProps = {
   projects: Project[]
@@ -922,10 +932,6 @@ type SidebarProps = {
 }
 
 function ChatNav({ projects, chats, selectedId, connected, send, select }: SidebarProps) {
-  const [collapsed, setCollapsed] = useState(readCollapsed)
-  useEffect(() => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed)), [collapsed])
-  const toggle = (id: string) => setCollapsed((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
-
   const main = chats.find((c) => c.id === MAIN_CHAT_ID)
   const shown = (c: ChatView) => !c.archived && !projects.find((p) => p.id === c.projectId)?.archived
   const hasShownParent = (c: ChatView) => chats.some((p) => p.id === c.parentId && shown(p))
@@ -1009,34 +1015,24 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
       <div className="nav-label">Projects</div>
       {activeProjects.length === 0 && <div className="nav-empty">No projects yet</div>}
       {activeProjects.map((project) => {
-        const open = !collapsed.includes(project.id)
         const projectMain = chats.find((c) => c.projectId === project.id && c.main)
         return (
-          <section key={project.id} className="project-section">
-            <div className="chat-row section-header has-menu">
-              <button
-                className="chat-link"
-                title={project.path}
-                aria-expanded={open}
-                onClick={() => toggle(project.id)}
-              >
-                <span className={`disclosure ${open ? 'open' : ''}`} />
-                <span className="chat-label">{project.name}</span>
-              </button>
-              <button
-                className="ghost icon add-chat"
-                aria-label={`New chat in ${project.name}`}
-                title={`New chat in ${project.name}`}
-                disabled={!connected}
-                onClick={() => send({ type: 'chat.create', projectId: project.id })}
-              >
-                +
-              </button>
-              <RowMenu label={project.name} items={projectMenu(project)} />
-            </div>
-            {open && projectMain && withSubagents(projectMain, { label: 'Main', title: project.path, menu: undefined })}
-            {open && subchats(project.id).map((c) => withSubagents(c))}
-          </section>
+          projectMain && (
+            <section key={project.id}>
+              {withSubagents(projectMain, {
+                label: project.name,
+                title: project.path,
+                sub: false,
+                add: {
+                  label: `New chat in ${project.name}`,
+                  disabledReason: offline,
+                  run: () => send({ type: 'chat.create', projectId: project.id }),
+                },
+                menu: projectMenu(project),
+              })}
+              {subchats(project.id).map((c) => withSubagents(c))}
+            </section>
+          )
         )
       })}
 

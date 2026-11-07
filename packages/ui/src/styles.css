@@ -370,7 +370,7 @@ pre {
   color: var(--faint);
 }
 
-.section-header .chat-link {
+.project-row .chat-link {
   color: var(--text);
   font-weight: 500;
 }
@@ -389,7 +389,6 @@ pre {
   transition: transform 0.12s;
 }
 
-.disclosure.open::before,
 .archived-group[open] > summary .disclosure::before {
   transform: rotate(90deg);
 }
