@@ -340,7 +340,10 @@ pre {
   border-top: 1px solid var(--border);
 }
 
-.streaming > :last-child::after {
+.streaming
+  :is(p, li, pre, h1, h2, h3, h4, h5, h6, th, td):last-child:not(:has(> :is(p, ul, ol, pre, blockquote, table))):not(
+    .streaming :not(:last-child) *
+  )::after {
   content: '▍';
   color: var(--accent);
   animation: pulse 1s steps(2) infinite;
