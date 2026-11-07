@@ -67,6 +67,7 @@ function summarize(kind: ToolKind, input: any): string {
 export const claudeCode: Adapter = {
   id: 'claude-code',
   imageInput: true,
+  hotrodMcp: true,
 
   async detect(machine) {
     const options = { cwd: '/' }

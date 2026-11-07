@@ -17,10 +17,12 @@ import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   memoryPrompt,
+  memoryView,
   messagesOf,
   openCompactor,
   openSummaries,
   withAttachments,
+  ZOOM_INSTRUCTIONS,
   type Summaries,
 } from './memory.ts'
 import {
@@ -60,6 +62,7 @@ import {
 } from './types.ts'
 
 export const STOP_GRACE_MS = 60_000
+const PARENT_VIEW_FILE = 'parent-view.md'
 export const MAX_CHAT_DEPTH = 1
 export const HOME_INSTRUCTIONS =
   `You are the user's personal assistant in Hotrod, running in its main chat, ${WORKSHOP_NAME}. Answer general ` +
@@ -232,10 +235,13 @@ export function openCore(options: {
   })
   void accounts.refresh()
 
+  const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
+  const takesMcp = (engine: string) => adapterFor(engine)?.hotrodMcp === true && mcpUrl !== undefined
+
   const compactor = openCompactor({
     chat: (chatId) => {
       const chat = chats.get(chatId)
-      return chat && { messages: messagesOf(chat.entries), summaries: chat.summaries }
+      return chat && memoryOf(chat)
     },
     async complete(request) {
       const { engine, model } = pickMemory(engineInfos(), settings.memory ?? {})
@@ -388,11 +394,16 @@ export function openCore(options: {
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
+    const parentMemory = spec.subagent ? memoryOf(parent) : undefined
     const info: ChatInfo = {
       id,
       name,
       parentId: parent.info.id,
-      ...(spec.subagent && { subagent: true, role: spec.role ?? 'subagents' }),
+      ...(parentMemory && {
+        subagent: true,
+        role: spec.role ?? 'subagents',
+        parentMessages: parentMemory.messages.length,
+      }),
       folders,
       files,
       engine,
@@ -401,6 +412,10 @@ export function openCore(options: {
       ...(spec.subagent && parent.info.engine === engine && { thinking: parent.info.thinking }),
     }
     const chat = loadChat(join(chatsDir, id), info)
+    if (parentMemory?.messages.length) {
+      const view = memoryView(parentMemory.messages, parentMemory.summaries, { zoom: takesMcp(engine) })
+      writeFileSync(join(chat.dir, PARENT_VIEW_FILE), view)
+    }
     broadcast({ type: 'chat.added', chat: state(chat) })
     return chat.info
   }
@@ -557,7 +572,8 @@ export function openCore(options: {
     }
     checkEnabled(adapter.id)
     const message = withAttachments(text, attachments)
-    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: false })
+    const zoomable = takesMcp(adapter.id)
+    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable })
     const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
     append(chat, { at: new Date().toISOString(), ...sent })
     setStatus(chat, 'running')
@@ -572,7 +588,15 @@ export function openCore(options: {
     })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
     const role = isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []
-    const instructions = [...role, MEMORY_INSTRUCTIONS, ...contextText].join('\n\n')
+    const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
+    const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
+    const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
+    const memory = [
+      MEMORY_INSTRUCTIONS,
+      ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
+      ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
+    ]
+    const instructions = [...role, ...memory, ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
@@ -605,7 +629,7 @@ export function openCore(options: {
     }
 
     try {
-      chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
+      chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
       const engine = engineInfo(adapter.id)
       const model = pickModel(engine, listsOf(adapter.id), chat.info)
@@ -713,6 +737,7 @@ export function openCore(options: {
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
     subagents: () => mods().subagents,
+    memory: (chatId) => memoryOf(chatFor(chatId)),
   })
 
   const interrupt = (chat: Chat, force: boolean) => {

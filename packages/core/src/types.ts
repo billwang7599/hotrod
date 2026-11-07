@@ -92,6 +92,7 @@ export interface Adapter {
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
   complete?(machine: Machine, options: CompleteOptions): Promise<string>
   imageInput?: boolean
+  hotrodMcp?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
@@ -118,6 +119,7 @@ export type ChatInfo = {
   name: string
   parentId?: string
   subagent?: boolean
+  parentMessages?: number
   folders: string[]
   files: string[]
   engine: string

@@ -16,7 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
-import { MEMORY_INSTRUCTIONS } from './memory.ts'
+import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -277,11 +277,12 @@ const heldOffers = {
   thinking: ['low', 'high'],
 }
 
-async function startHeld() {
+async function startHeld({ hotrodMcp = true } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
   const sessions: { options: SessionOptions; prompt?: string; end: (reply?: string, error?: string) => void }[] = []
   const held: Adapter = {
     id: 'held',
+    hotrodMcp,
     detect: async () => ({ installed: true, signedIn: true, ...heldOffers }),
     start(_machine, options, emit: (event: EngineEvent) => void) {
       const end = (reply?: string, error?: string) => {
@@ -357,7 +358,7 @@ it("gives a main chat's session the Hotrod MCP server, only while the session li
   expect((await post(bearer, 'list_chats')).status).toBe(401)
   core.handle({ type: 'chat.create', name: 'Side' }, () => {})
   const named = core.chats().find((c) => c.id !== 'main')!
-  expect(send(named.id, 'hi').options.hotrodMcp).toBeUndefined()
+  expect(send(named.id, 'hi').options.hotrodMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
 })
 
 it('lets the Workshop make a named chat with a folder and start it, shown like ones the user made', async () => {
@@ -376,7 +377,6 @@ it('lets the Workshop make a named chat with a folder and start it, shown like o
   expect(messages.some((m) => m.type === 'chat.added' && m.chat.id === chatId)).toBe(true)
   expect(sessions.at(-1)?.prompt).toBe('Look around')
   expect(sessions.at(-1)?.options.cwd).toBe(folders[0])
-  expect(sessions.at(-1)?.options.hotrodMcp).toBeUndefined()
 
   expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toEqual({
     isError: true,
@@ -400,7 +400,10 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   )
   handle({ type: 'chat.create', name: 'Side' })
   const subchat = core.chats().find((c) => c.id !== 'main')!
-  expect(send(subchat.id, 'hi').options.hotrodMcp).toBeUndefined()
+  const before = send(subchat.id, 'hi').options.hotrodMcp!.token
+  expect((await (await post(before, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
+    'Tool spawn_subagent not found',
+  )
 
   handle({ type: 'subagents.set', enabled: true, limit: 1 })
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
@@ -414,7 +417,6 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
     status: 'running',
   })
   expect(sessions.at(-1)).toMatchObject({ prompt: 'Read the tests', options: { cwd: join(garage, 'home') } })
-  expect(sessions.at(-1)?.options.hotrodMcp).toBeUndefined()
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentId).toBe(subchat.id)
 
   expect(await tool(lead, 'spawn_subagent', { task: 'More' })).toEqual({
@@ -496,7 +498,9 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
   }
   expect(itemsOf(chatId).map((i) => i.from)).toEqual(['main', subchat.id, chatId])
   handle({ type: 'chat.send', chatId, text: 'again' })
-  expect(sessionOf(chatId).options.instructions).toBe([MEMORY_INSTRUCTIONS, 'WORKSHOP', 'PARENT', 'OWN'].join('\n\n'))
+  const instructions = sessionOf(chatId).options.instructions.split('\n\n')
+  expect(instructions.slice(0, 2)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
+  expect(instructions.slice(-3)).toEqual(['WORKSHOP', 'PARENT', 'OWN'])
   sessionOf(chatId).end('ok')
   sessionOf(subchat.id).end('ok')
   expect(sessionsOf(subchat.id)).toHaveLength(3)
@@ -511,4 +515,51 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
   handle({ type: 'chat.delete', chatId: subchat.id })
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+})
+
+it('lets every chat zoom its own memory, and cuts a long message only where zoom can bring it back', async () => {
+  const long = 'x'.repeat(MESSAGE_MAX_CHARS + 10)
+  for (const hotrodMcp of [true, false]) {
+    const { send, tool } = await startHeld({ hotrodMcp })
+    send('main', long).end('ok')
+    const next = send('main', 'next')
+    if (hotrodMcp) {
+      expect(next.options.instructions.split('\n\n')).toContain(ZOOM_INSTRUCTIONS)
+      expect(next.prompt).toContain(`cut at ${MESSAGE_MAX_CHARS} of ${long.length} chars; zoom(0) for the rest`)
+      expect((await tool(next.options.hotrodMcp!.token, 'zoom', { id: 0 })).text).toMatch(new RegExp(`\\n\\n${long}$`))
+    } else {
+      expect(next.options.hotrodMcp).toBeUndefined()
+      expect(next.options.instructions).not.toContain(ZOOM_INSTRUCTIONS)
+      expect(next.prompt).toContain(`\n${long}\n`)
+    }
+  }
+})
+
+it("gives a subagent its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld()
+  handleOn(core)({ type: 'subagents.set', enabled: true, limit: -1 })
+  const parent = send('main', 'Plan the release')
+  const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Check the changelog' })
+  const frozen = '<message id="0" kind="user">\nPlan the release\n</message>'
+  const first = sessionOf(chatId)
+  expect(first.options.instructions).toContain(`Your parent chat's memory when it started you`)
+  expect(first.options.instructions).toContain(frozen)
+  expect(first.prompt).toBe('Check the changelog')
+  expect(chatIn(core, chatId).parentMessages).toBe(1)
+  expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentMessages).toBe(1)
+  const token = first.options.hotrodMcp!.token
+  expect((await tool(token, 'zoom', { id: 0, parent: true })).text).toMatch(/\n\nPlan the release$/)
+  expect((await tool(token, 'date', { id: 0, parent: true })).isError).toBe(false)
+
+  first.end('Checked')
+  parent.end('Waiting')
+  sessionOf('main').end('Thanks')
+  handleOn(core)({ type: 'chat.send', chatId, text: 'Once more' })
+  const again = sessionOf(chatId)
+  expect(again.options.instructions).toContain(frozen)
+  expect(again.options.instructions).not.toContain('Waiting')
+  expect(await tool(again.options.hotrodMcp!.token, 'zoom', { id: 1, parent: true })).toEqual({
+    isError: true,
+    text: 'No message 1; this chat has messages 0 to 0',
+  })
 })

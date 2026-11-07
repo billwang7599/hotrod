@@ -209,9 +209,15 @@ export function memoryPrompt(
   messages: MemoryMessage[],
   summaries: Summaries,
   message: string,
-  { zoom: zoomable }: { zoom: boolean },
+  options: { zoom: boolean },
 ) {
   if (!messages.length) return message
+  const view = memoryView(messages, summaries, options)
+  return `This is the conversation so far:\n\n${view}\n\nNew message from the user:\n\n${message}`
+}
+
+export function memoryView(messages: MemoryMessage[], summaries: Summaries, { zoom: zoomable }: { zoom: boolean }) {
+  if (!messages.length) return ''
   const asked = messages.findLastIndex((m) => m.kind === 'user' || m.kind === 'work')
   const lastTalk = messages.findLastIndex((m) => m.kind === 'talk')
   const full = new Map<number, string>()
@@ -244,8 +250,9 @@ export function memoryPrompt(
 
   const items = [...lines, ...[...full].map(([id, text]) => ({ id, text, full: true }))]
   items.sort((a, b) => a.id - b.id)
-  const body = items.map((item, i) => (i > 0 && ('full' in item || 'full' in items[i - 1]!) ? '\n\n' : '\n') + item.text)
-  return `This is the conversation so far:\n${body.join('')}\n\nNew message from the user:\n\n${message}`
+  return items
+    .map((item, i) => (i === 0 ? '' : 'full' in item || 'full' in items[i - 1]! ? '\n\n' : '\n') + item.text)
+    .join('')
 }
 
 const checkId = (messages: MemoryMessage[], id: number) => {

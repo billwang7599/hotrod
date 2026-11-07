@@ -5,6 +5,7 @@ import { isAbsolute } from 'node:path'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
+import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
 import type { ChatInfo, ChatState, ModelRole, NewChat } from './types.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
@@ -16,6 +17,7 @@ type Hub = {
   createChat(spec: NewChat & { subagent?: boolean; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   subagents(): { enabled: boolean; limit: number }
+  memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
 }
 
 const isBelow = (chats: ChatState[], caller: ChatState, chat: ChatState) => {
@@ -43,14 +45,50 @@ function messages(chat: ChatState) {
 
 type Context = { hub: Hub; caller: ChatState; below: (chatId: string) => ChatState }
 
+const memoryOf = ({ hub, caller }: Context, parent = false) => {
+  if (!parent) return hub.memory(caller.id)
+  if (!caller.subagent || caller.parentId === undefined) {
+    throw new Error("Only a subagent can read its parent chat's memory")
+  }
+  const { messages, summaries } = hub.memory(caller.parentId)
+  return { messages: messages.slice(0, caller.parentMessages ?? 0), summaries }
+}
+
+const PARENT_INPUT = z.boolean().optional().describe("A subagent's parent chat, as it was at launch")
+
 type Tool = {
-  for: 'nest' | 'below' | 'subagents'
+  for: 'nest' | 'below' | 'subagents' | 'memory'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
 }
 
 const TOOLS: Record<string, Tool> = {
+  zoom: {
+    for: 'memory',
+    description:
+      'Open a line of your memory. zoom(id, n) gives the two lines of n/2 under line id+n; zoom(id, 1) gives ' +
+      'message id whole, in pages (offset and limit pick a part).',
+    input: z.object({
+      id: z.number().int(),
+      n: z.number().int().optional(),
+      offset: z.number().int().optional(),
+      limit: z.number().int().optional(),
+      parent: PARENT_INPUT,
+    }),
+    run(context: Context, input: { id: number; n?: number; offset?: number; limit?: number; parent?: boolean }) {
+      const { messages, summaries } = memoryOf(context, input.parent)
+      return zoom(messages, summaries, input.id, input.n, input.offset, input.limit)
+    },
+  },
+  date: {
+    for: 'memory',
+    description: 'The date and time of message id in your memory.',
+    input: z.object({ id: z.number().int(), parent: PARENT_INPUT }),
+    run(context: Context, { id, parent }: { id: number; parent?: boolean }) {
+      return dateOf(memoryOf(context, parent).messages, id)
+    },
+  },
   list_chats: {
     for: 'below',
     description: 'List the chats below this one, with their status.',
@@ -135,6 +173,7 @@ export function openHotrodMcp(hub: Hub) {
     const spawns = !caller.subagent && hub.subagents().enabled
     if (tool.for === 'nest') return nests
     if (tool.for === 'subagents') return spawns
+    if (tool.for === 'memory') return true
     return nests || spawns
   }
 
