@@ -2,25 +2,25 @@ import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'r
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, Tabs } from 'radix-ui'
 import {
-  CONTEXT_KINDS,
+  CONTEXT_SECTIONS,
   MODEL_ROLES,
   type Account,
   type ClientMessage,
-  type ContextKind,
+  type ContextSection,
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
   type ModelRole,
   type Mods,
 } from '@hotrod/core/types'
-import { CONTEXT_LABELS } from './context-panel.tsx'
-import { Button, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
+import { SECTIONS } from './context-panel.tsx'
+import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem, NO_LISTS } from './state.ts'
 
 type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
-  contextDefaults: Record<ContextKind, boolean>
+  contextDefaults: Record<ContextSection, boolean>
   mods: Mods
   modelLists: Record<string, ModelLists>
   connected: boolean
@@ -109,15 +109,17 @@ const PAGES = [
     id: 'context',
     group: 'Options',
     title: 'Context',
-    hint: "Which AGENTS.md layers a chat gets unless you change it in that chat's Context panel.",
+    hint:
+      `What a ${CHAT_NOUN.one} uses from the chats above it, unless you switch it in its Context panel. ` +
+      'Its own AGENTS.md, folders and files always start on.',
     body: ({ contextDefaults, connected, send }: PageProps) =>
-      CONTEXT_KINDS.map((kind) => (
-        <SettingRow key={kind} name={CONTEXT_LABELS[kind].label} description={CONTEXT_LABELS[kind].about}>
+      CONTEXT_SECTIONS.map((section) => (
+        <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
           <Switch
-            label={`${CONTEXT_LABELS[kind].label} on by default`}
-            checked={contextDefaults[kind]}
+            label={`${SECTIONS[section].label} from above on by default`}
+            checked={contextDefaults[section]}
             disabled={!connected}
-            onChange={(enabled) => send({ type: 'context.setDefault', kind, enabled })}
+            onChange={(enabled) => send({ type: 'context.setDefault', section, enabled })}
           />
         </SettingRow>
       )),

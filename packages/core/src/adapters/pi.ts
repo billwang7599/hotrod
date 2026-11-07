@@ -59,7 +59,7 @@ export const pi: Adapter = {
     return { installed: true, signedIn: models.length > 0, detail: version.stdout.trim(), models, thinking: THINKING }
   },
 
-  start(machine, { cwd, instructions, model, thinking }, emit) {
+  start(machine, { cwd, instructions, extraDirs = [], model, thinking }, emit) {
     const args = [
       '--mode', 'rpc',
       '--no-session',
@@ -72,7 +72,9 @@ export const pi: Adapter = {
     ]
     if (model) args.push('--model', model)
     if (thinking) args.push('--thinking', thinking)
-    if (instructions) args.push('--append-system-prompt', instructions)
+    const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
+    const systemPrompt = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean)
+    if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))
     const proc = machine.spawn('pi', args, { cwd })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''

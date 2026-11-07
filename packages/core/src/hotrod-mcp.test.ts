@@ -4,8 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { openHotrodMcp } from './hotrod-mcp.ts'
-import type { ChatEntry, ChatState, Project } from './types.ts'
+import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
+import type { ChatEntry, ChatState } from './types.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -15,13 +15,12 @@ afterEach(async () => {
 const at = '2026-11-07T00:00:00.000Z'
 
 function chat(id: string, change: Partial<ChatState> = {}): ChatState {
-  const main = id === 'main' || id.endsWith('/main')
-  const projectId = id.includes('/') ? id.split('/')[0] : undefined
   return {
     id,
-    ...(projectId ? { projectId } : {}),
-    main,
-    title: main ? 'Main' : `Chat ${id}`,
+    name: id === 'main' ? 'Workshop' : `Chat ${id}`,
+    ...(id !== 'main' && { parentId: 'main' }),
+    folders: [],
+    files: [],
     engine: 'fake',
     archived: false,
     createdAt: at,
@@ -34,31 +33,20 @@ function chat(id: string, change: Partial<ChatState> = {}): ChatState {
 }
 
 async function start(subagents = { enabled: false, limit: 4 }) {
-  const projects: Project[] = [
-    { id: 'app', name: 'app', path: '/tmp/app', archived: false },
-    { id: 'web', name: 'web', path: '/tmp/web', archived: false },
-  ]
   const chats: ChatState[] = [
     chat('main'),
-    chat('aaaa0001'),
-    chat('app/main'),
-    chat('bbbb0001', { projectId: 'app' }),
-    chat('web/main'),
-    chat('cccc0001', { projectId: 'web' }),
+    chat('aaaa0001', { folders: ['/tmp/app'] }),
+    chat('bbbb0001'),
+    chat('cccc0001', { parentId: 'aaaa0001' }),
   ]
+  const nestable = new Set(['main', 'aaaa0001'])
   const calls: unknown[][] = []
   const mcp = openHotrodMcp({
     chats: () => chats,
-    projects: () => projects,
-    addProject(path, name) {
-      calls.push(['addProject', path, name])
-      const project = { id: 'new', name: name ?? 'new', path, archived: false }
-      projects.push(project)
-      return project
-    },
-    createChat(projectId, engine, parentId, role) {
-      calls.push(['createChat', projectId, engine, ...(parentId ? [parentId] : []), ...(role ? [role] : [])])
-      const created = chat('dddd0001', { ...(projectId && { projectId }), ...(parentId && { parentId }) })
+    canNest: (chatId) => nestable.has(chatId),
+    createChat(spec) {
+      calls.push(['createChat', spec])
+      const created = chat('dddd0001', { parentId: spec.parentId, ...(spec.subagent && { subagent: true }) })
       chats.push(created)
       return created
     },
@@ -118,45 +106,33 @@ describe('Hotrod MCP server', () => {
     expect((await rpc(token, 'tools/list')).status).toBe(401)
   })
 
-  it('gives subchats no token', async () => {
+  it('gives no token to a chat that can neither nest chats nor spawn subagents', async () => {
     const { mcp } = await start()
-    expect(mcp.grant('aaaa0001')).toBeUndefined()
     expect(mcp.grant('bbbb0001')).toBeUndefined()
+    expect(mcp.grant('cccc0001')).toBeUndefined()
     expect(mcp.grant('nope')).toBeUndefined()
   })
 
-  it('offers create_project to the Workshop only', async () => {
-    const { rpc, grant } = await start()
-    const names = async (chatId: string) =>
-      (await rpc(grant(chatId), 'tools/list')).body.result.tools.map((t: { name: string }) => t.name).sort()
-    expect(await names('main')).toEqual(['create_chat', 'create_project', 'list_chats', 'read_chat', 'send_message'])
-    expect(await names('app/main')).toEqual(['create_chat', 'list_chats', 'read_chat', 'send_message'])
+  it('offers the chat tools to every chat that may nest chats', async () => {
+    const { names } = await start()
+    const tools = ['create_chat', 'list_chats', 'read_chat', 'send_message']
+    expect(await names('main')).toEqual(tools)
+    expect(await names('aaaa0001')).toEqual(tools)
   })
 
-  it('lists every other chat to the Workshop', async () => {
+  it('lists every chat below the caller, nested ones included', async () => {
     const { json, grant } = await start()
     const listed = await json(grant('main'), 'list_chats')
-    expect(listed.map((c: { id: string }) => c.id)).toEqual([
-      'aaaa0001',
-      'app/main',
-      'bbbb0001',
-      'web/main',
-      'cccc0001',
-    ])
-    expect(listed[1]).toEqual({
-      id: 'app/main',
-      title: 'Main',
-      project: { id: 'app', name: 'app', path: '/tmp/app' },
+    expect(listed.map((c: { id: string }) => c.id)).toEqual(['aaaa0001', 'bbbb0001', 'cccc0001'])
+    expect(listed[0]).toEqual({
+      id: 'aaaa0001',
+      name: 'Chat aaaa0001',
+      folders: ['/tmp/app'],
       status: 'idle',
       engine: 'fake',
       archived: false,
     })
-  })
-
-  it("lists only its own project's subchats to a project main chat", async () => {
-    const { json, grant } = await start()
-    const listed = await json(grant('app/main'), 'list_chats')
-    expect(listed.map((c: { id: string }) => c.id)).toEqual(['bbbb0001'])
+    expect((await json(grant('aaaa0001'), 'list_chats')).map((c: { id: string }) => c.id)).toEqual(['cccc0001'])
   })
 
   it('reads a chat as messages, with tool calls as their summary', async () => {
@@ -169,21 +145,21 @@ describe('Hotrod MCP server', () => {
       { at, type: 'text.completed', text: 'Two files.' },
       { at, type: 'turn.completed', error: 'Interrupted' },
     ]
-    chats.find((c) => c.id === 'bbbb0001')!.entries = entries
-    const token = grant('app/main')
-    expect(await tool(token, 'read_chat', { chatId: 'bbbb0001' })).toEqual({
+    chats.find((c) => c.id === 'cccc0001')!.entries = entries
+    const token = grant('aaaa0001')
+    expect(await tool(token, 'read_chat', { chatId: 'cccc0001' })).toEqual({
       isError: false,
       text: 'User: List the files\n\nTool Bash: ls -la\n\nAssistant: Two files.\n\n[Turn ended early: Interrupted]',
     })
-    expect((await tool(token, 'read_chat', { chatId: 'bbbb0001', last: 2 })).text).toBe(
+    expect((await tool(token, 'read_chat', { chatId: 'cccc0001', last: 2 })).text).toBe(
       'Assistant: Two files.\n\n[Turn ended early: Interrupted]',
     )
   })
 
   it('refuses to read or message a chat outside the caller’s subtree', async () => {
     const { calls, tool, grant } = await start()
-    const token = grant('app/main')
-    for (const chatId of ['main', 'aaaa0001', 'web/main', 'cccc0001', 'app/main', 'nope']) {
+    const token = grant('aaaa0001')
+    for (const chatId of ['main', 'aaaa0001', 'bbbb0001', 'nope']) {
       const refused = { isError: true, text: `No chat "${chatId}" below this one` }
       expect(await tool(token, 'read_chat', { chatId })).toEqual(refused)
       expect((await tool(token, 'send_message', { chatId, text: 'hi' })).isError).toBe(true)
@@ -194,38 +170,17 @@ describe('Hotrod MCP server', () => {
   it('sends a message to an idle descendant and refuses a busy one', async () => {
     const { chats, calls, tool, grant } = await start()
     const token = grant('main')
-    expect(await tool(token, 'send_message', { chatId: 'bbbb0001', text: 'Go on' })).toMatchObject({ isError: false })
-    expect(calls).toEqual([['send', 'bbbb0001', 'Go on']])
-    chats.find((c) => c.id === 'app/main')!.status = 'running'
-    expect(await tool(token, 'send_message', { chatId: 'app/main', text: 'Hi' })).toEqual({
+    expect(await tool(token, 'send_message', { chatId: 'cccc0001', text: 'Go on' })).toMatchObject({ isError: false })
+    expect(calls).toEqual([['send', 'cccc0001', 'Go on']])
+    chats.find((c) => c.id === 'aaaa0001')!.status = 'running'
+    expect(await tool(token, 'send_message', { chatId: 'aaaa0001', text: 'Hi' })).toEqual({
       isError: true,
-      text: 'Chat "app/main" is running; wait until it is idle',
+      text: 'Chat "aaaa0001" is running; wait until it is idle',
     })
     expect(calls).toHaveLength(1)
   })
 
-  it('creates a subchat under the caller and starts it with the prompt', async () => {
-    const { calls, json, tool, grant } = await start()
-    expect(await json(grant('main'), 'create_chat', { prompt: 'Research X' })).toEqual({ chatId: 'dddd0001' })
-    expect(await json(grant('main'), 'create_chat', { prompt: 'Fix Y', projectId: 'web', engine: 'pi' })).toEqual({
-      chatId: 'dddd0001',
-    })
-    expect(await json(grant('app/main'), 'create_chat', { prompt: 'Fix Z' })).toEqual({ chatId: 'dddd0001' })
-    expect(await tool(grant('app/main'), 'create_chat', { prompt: 'Sneak', projectId: 'web' })).toEqual({
-      isError: true,
-      text: 'No project "web" below this chat',
-    })
-    expect(calls).toEqual([
-      ['createChat', undefined, undefined],
-      ['send', 'dddd0001', 'Research X'],
-      ['createChat', 'web', 'pi'],
-      ['send', 'dddd0001', 'Fix Y'],
-      ['createChat', 'app', undefined],
-      ['send', 'dddd0001', 'Fix Z'],
-    ])
-  })
-
-  it('creates a project from an absolute path, making the folder but never touching its contents', async () => {
+  it('creates a named chat under the caller, making missing folders, and starts it only on a prompt', async () => {
     const { calls, json, tool, grant } = await start()
     const root = mkdtempSync(join(tmpdir(), 'hotrod-mcp-'))
     cleanups.push(() => rmSync(root, { recursive: true, force: true }))
@@ -235,69 +190,69 @@ describe('Hotrod MCP server', () => {
     const fresh = join(root, 'deep', 'fresh')
     const token = grant('main')
 
-    expect(await tool(token, 'create_project', { path: 'relative/dir' })).toEqual({
-      isError: true,
-      text: 'The path must be absolute: relative/dir',
-    })
-    expect((await json(token, 'create_project', { path: existing })).project.id).toBe('new')
-    expect(await json(token, 'create_project', { path: fresh, name: 'Fresh' })).toEqual({
-      project: { id: 'new', name: 'Fresh', path: fresh },
-      chatId: 'new/main',
-    })
+    expect(await json(token, 'create_chat', { name: 'Research', prompt: 'Research X' })).toEqual({ chatId: 'dddd0001' })
+    const app = { name: 'App', folders: [existing, fresh], files: ['/tmp/notes.md'], engine: 'pi' }
+    expect(await json(token, 'create_chat', app)).toEqual({ chatId: 'dddd0001' })
+    expect(await json(grant('aaaa0001'), 'create_chat', { name: 'Nested' })).toEqual({ chatId: 'dddd0001' })
     expect(readdirSync(existing)).toEqual(['keep.txt'])
     expect(existsSync(fresh)).toBe(true)
     expect(calls).toEqual([
-      ['addProject', existing, undefined],
-      ['addProject', fresh, 'Fresh'],
+      ['createChat', { parentId: 'main', name: 'Research' }],
+      ['send', 'dddd0001', 'Research X'],
+      ['createChat', { parentId: 'main', ...app }],
+      ['createChat', { parentId: 'aaaa0001', name: 'Nested' }],
     ])
-  })
 
-  it('refuses create_project from a project main chat', async () => {
-    const { calls, tool, grant } = await start()
-    const result = await tool(grant('app/main'), 'create_project', { path: '/tmp/x' })
-    expect(result.isError).toBe(true)
-    expect(calls).toEqual([])
+    expect(await tool(token, 'create_chat', { name: 'Bad', folders: ['relative/dir'] })).toEqual({
+      isError: true,
+      text: 'The path must be absolute: relative/dir',
+    })
+    expect((await tool(token, 'create_chat', { prompt: 'No name' })).isError).toBe(true)
+    expect(calls).toHaveLength(4)
   })
 
   describe('subagents', () => {
     const on = (limit = 4) => start({ enabled: true, limit })
 
-    it('offers spawn_subagent to every user-started chat only while the mod is on', async () => {
+    it('offers spawn_subagent to every chat but a subagent, only while the mod is on', async () => {
       const off = await start()
       expect(await off.names('main')).not.toContain('spawn_subagent')
       expect(off.mcp.grant('bbbb0001')).toBeUndefined()
 
       const { names, mcp, chats } = await on()
       expect(await names('main')).toContain('spawn_subagent')
-      expect(await names('app/main')).toContain('spawn_subagent')
+      expect(await names('aaaa0001')).toContain('spawn_subagent')
       expect(await names('bbbb0001')).toEqual(['list_chats', 'read_chat', 'send_message', 'spawn_subagent'])
-      chats.push(chat('eeee0001', { projectId: 'app', parentId: 'bbbb0001' }))
+      chats.push(chat('eeee0001', { parentId: 'bbbb0001', subagent: true }))
       expect(mcp.grant('eeee0001')).toBeUndefined()
     })
 
     it('refuses to spawn once the mod is turned off mid-session', async () => {
       const { calls, tool, grant, subagents } = await on()
-      const token = grant('app/main')
+      const token = grant('aaaa0001')
       subagents.enabled = false
       expect((await tool(token, 'spawn_subagent', { task: 'Go' })).isError).toBe(true)
       expect(calls).toEqual([])
     })
 
-    it("spawns a subagent in the parent's place with the parent's engine, and starts it with the task", async () => {
+    it("spawns a subagent named after its task with the parent's engine, and starts it with the task", async () => {
       const { calls, json, tool, grant } = await on()
-      expect(await json(grant('app/main'), 'spawn_subagent', { task: 'Read the tests' })).toEqual({
+      expect(await json(grant('aaaa0001'), 'spawn_subagent', { task: 'Read the tests' })).toEqual({
         chatId: 'dddd0001',
       })
       const search = { task: 'Search', engine: 'pi', role: 'searching' }
       expect(await json(grant('main'), 'spawn_subagent', search)).toEqual({ chatId: 'dddd0001' })
-      expect(await json(grant('bbbb0001'), 'spawn_subagent', { task: 'Lint' })).toEqual({ chatId: 'dddd0001' })
+      const long = `Lint   every file\nin ${'x'.repeat(SUBAGENT_NAME_MAX_CHARS)}`
+      expect(await json(grant('bbbb0001'), 'spawn_subagent', { task: long })).toEqual({ chatId: 'dddd0001' })
+      const name = `${`Lint every file in ${'x'.repeat(SUBAGENT_NAME_MAX_CHARS)}`.slice(0, SUBAGENT_NAME_MAX_CHARS)}…`
+      const subagent = { engine: 'fake', subagent: true }
       expect(calls).toEqual([
-        ['createChat', 'app', 'fake', 'app/main'],
+        ['createChat', { parentId: 'aaaa0001', name: 'Read the tests', ...subagent }],
         ['send', 'dddd0001', 'Read the tests'],
-        ['createChat', undefined, 'pi', 'main', 'searching'],
+        ['createChat', { parentId: 'main', name: 'Search', engine: 'pi', subagent: true, role: 'searching' }],
         ['send', 'dddd0001', 'Search'],
-        ['createChat', 'app', 'fake', 'bbbb0001'],
-        ['send', 'dddd0001', 'Lint'],
+        ['createChat', { parentId: 'bbbb0001', name, ...subagent }],
+        ['send', 'dddd0001', long],
       ])
       expect((await tool(grant('main'), 'spawn_subagent', { task: 'Go', role: 'chat' })).isError).toBe(true)
       expect(calls).toHaveLength(6)
@@ -306,42 +261,43 @@ describe('Hotrod MCP server', () => {
     it('counts running, waiting and stopping subagents against the limit, never idle ones', async () => {
       const limit = 3
       const { chats, calls, tool, grant } = await on(limit)
+      const under = (status: ChatState['status'], parentId = 'aaaa0001') => ({ parentId, subagent: true, status })
       chats.push(
-        chat('s1', { projectId: 'app', parentId: 'app/main', status: 'running' }),
-        chat('s2', { projectId: 'app', parentId: 'app/main', status: 'waiting' }),
-        chat('s3', { projectId: 'app', parentId: 'app/main', status: 'stopping' }),
-        chat('s4', { projectId: 'app', parentId: 'app/main', status: 'idle' }),
-        chat('s5', { projectId: 'app', parentId: 'bbbb0001', status: 'running' }),
+        chat('s1', under('running')),
+        chat('s2', under('waiting')),
+        chat('s3', under('stopping')),
+        chat('s4', under('idle')),
+        chat('s5', under('running', 'bbbb0001')),
       )
-      expect(await tool(grant('app/main'), 'spawn_subagent', { task: 'One more' })).toEqual({
+      expect(await tool(grant('aaaa0001'), 'spawn_subagent', { task: 'One more' })).toEqual({
         isError: true,
         text: `This chat already has ${limit} subagents running; the limit is ${limit}`,
       })
       expect(calls).toEqual([])
       chats.find((c) => c.id === 's3')!.status = 'idle'
-      expect(await tool(grant('app/main'), 'spawn_subagent', { task: 'One more' })).toMatchObject({ isError: false })
+      expect(await tool(grant('aaaa0001'), 'spawn_subagent', { task: 'One more' })).toMatchObject({ isError: false })
     })
 
     it('never limits when the limit is -1', async () => {
       const { chats, tool, grant } = await on(-1)
-      for (let i = 0; i < 20; i++) chats.push(chat(`s${i}`, { parentId: 'main', status: 'running' }))
+      for (let i = 0; i < 20; i++) chats.push(chat(`s${i}`, { subagent: true, status: 'running' }))
       expect(await tool(grant('main'), 'spawn_subagent', { task: 'Go' })).toMatchObject({ isError: false })
     })
 
     it('shows a subagent only to its own parent', async () => {
       const { chats, json, tool, grant } = await on()
       chats.push(
-        chat('s1', { projectId: 'app', parentId: 'app/main' }),
-        chat('s2', { projectId: 'app', parentId: 'bbbb0001' }),
-        chat('s3', { parentId: 'main' }),
+        chat('s1', { parentId: 'aaaa0001', subagent: true }),
+        chat('s2', { parentId: 'bbbb0001', subagent: true }),
+        chat('s3', { subagent: true }),
       )
       const ids = async (chatId: string) => (await json(grant(chatId), 'list_chats')).map((c: { id: string }) => c.id)
-      expect(await ids('main')).toEqual(['aaaa0001', 'app/main', 'bbbb0001', 'web/main', 'cccc0001', 's3'])
-      expect(await ids('app/main')).toEqual(['bbbb0001', 's1'])
+      expect(await ids('main')).toEqual(['aaaa0001', 'bbbb0001', 'cccc0001', 's3'])
+      expect(await ids('aaaa0001')).toEqual(['cccc0001', 's1'])
       expect(await ids('bbbb0001')).toEqual(['s2'])
-      expect(await tool(grant('bbbb0001'), 'read_chat', { chatId: 'app/main' })).toEqual({
+      expect(await tool(grant('bbbb0001'), 'read_chat', { chatId: 'aaaa0001' })).toEqual({
         isError: true,
-        text: 'No chat "app/main" below this one',
+        text: 'No chat "aaaa0001" below this one',
       })
       expect((await tool(grant('main'), 'send_message', { chatId: 's1', text: 'hi' })).isError).toBe(true)
       expect(await tool(grant('bbbb0001'), 'send_message', { chatId: 's2', text: 'hi' })).toMatchObject({

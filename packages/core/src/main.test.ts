@@ -56,8 +56,8 @@ it('starts the core from the environment and stops it', async () => {
   expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
   expect(await firstMessage('http://ui.test', 'wrong')).toBe(BAD_TOKEN_CLOSE_CODE)
 
-  hotrod.core.handle({ type: 'project.add', path: tempDir() }, () => {})
-  expect(hotrod.core.projects()).toHaveLength(1)
+  hotrod.core.handle({ type: 'chat.create', name: 'App', folders: [tempDir()] }, () => {})
+  expect(hotrod.core.chats()).toHaveLength(2)
 
   await hotrod.close()
   const again = await startCore({ env, adapters })

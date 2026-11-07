@@ -55,6 +55,7 @@ export type SessionOptions = {
   accountDir?: string
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
+  extraDirs?: string[]
   model?: string
   thinking?: string
 }
@@ -97,17 +98,18 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export type Project = { id: string; name: string; path: string; archived: boolean }
+export const WORKSHOP_ID = 'main'
 
 export type ChatInfo = {
   id: string
-  projectId?: string
-  main: boolean
-  title: string
+  name: string
+  parentId?: string
+  subagent?: boolean
+  folders: string[]
+  files: string[]
   engine: string
   archived: boolean
   createdAt: string
-  parentId?: string
   role?: ModelRole
   model?: string
   thinking?: string
@@ -130,17 +132,19 @@ export type Mods = { subagents: { enabled: boolean; limit: number } }
 
 export const DEFAULT_SUBAGENT_LIMIT = 4
 
-export const CONTEXT_KINDS = ['workshop', 'repo', 'project', 'parent', 'own'] as const
+export const CONTEXT_SECTIONS = ['agents', 'folders', 'files'] as const
 
-export type ContextKind = (typeof CONTEXT_KINDS)[number]
+export type ContextSection = (typeof CONTEXT_SECTIONS)[number]
 
-export type ContextLayer = {
-  kind: ContextKind
+export type ContextItem = {
+  section: ContextSection
   path: string
+  from: string
   enabled: boolean
-  writable: boolean
   text: string
 }
+
+export type NewChat = { parentId?: string; name: string; engine?: string; folders?: string[]; files?: string[] }
 
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
@@ -161,10 +165,8 @@ export type ChatState = ChatInfo & {
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
-  | { type: 'project.add'; path: string }
-  | { type: 'project.archive'; projectId: string; archived: boolean }
-  | { type: 'project.delete'; projectId: string }
-  | { type: 'chat.create'; projectId?: string }
+  | ({ type: 'chat.create' } & NewChat)
+  | { type: 'chat.rename'; chatId: string; name: string }
   | { type: 'chat.archive'; chatId: string; archived: boolean }
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
@@ -174,9 +176,11 @@ export type ClientMessage =
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'context.get'; chatId: string }
-  | { type: 'context.set'; chatId: string; kind: ContextKind; enabled: boolean }
-  | { type: 'context.write'; chatId: string; kind: ContextKind; text: string }
-  | { type: 'context.setDefault'; kind: ContextKind; enabled: boolean }
+  | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
+  | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
+  | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
+  | { type: 'context.write'; chatId: string; text: string }
+  | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'subagents.set'; enabled: boolean; limit: number }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'account.login'; engine: string; name: string }
@@ -192,18 +196,14 @@ export type CoreMessage =
   | {
       type: 'snapshot'
       engines: EngineInfo[]
-      projects: Project[]
       chats: ChatState[]
       accounts: EngineAccounts[]
-      contextDefaults: Record<ContextKind, boolean>
+      contextDefaults: Record<ContextSection, boolean>
       mods: Mods
       modelLists: Record<string, ModelLists>
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
-  | { type: 'project.added'; project: Project; chat: ChatState }
-  | { type: 'project.updated'; project: Project }
-  | { type: 'project.removed'; projectId: string }
   | { type: 'chat.added'; chat: ChatState }
   | { type: 'chat.updated'; chat: ChatInfo }
   | { type: 'chat.removed'; chatId: string }
@@ -212,9 +212,9 @@ export type CoreMessage =
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
-  | { type: 'chat.context'; chatId: string; layers: ContextLayer[] }
+  | { type: 'chat.context'; chatId: string; items: ContextItem[] }
   | { type: 'context.file'; path: string; text: string }
-  | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }
+  | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   | { type: 'mods.updated'; mods: Mods }
   | { type: 'models.updated'; engine: string; lists: ModelLists }
   | { type: 'error'; message: string }

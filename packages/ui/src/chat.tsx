@@ -3,15 +3,14 @@ import { AnimatePresence, m } from 'motion/react'
 import type {
   ChatStatus,
   ClientMessage,
-  ContextKind,
-  ContextLayer,
+  ContextItem,
+  ContextSection,
   EngineAccounts,
   EngineInfo,
   ModelLists,
-  Project,
 } from '@hotrod/core/types'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, Chevron, confirm, ErrorText, MOTION, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import { accountLabel, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
@@ -163,7 +162,8 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
 
 type ChatProps = {
   chat: ChatView
-  project?: Project
+  chats: ChatView[]
+  folder?: string
   engines: EngineInfo[]
   accounts?: EngineAccounts
   connected: boolean
@@ -171,13 +171,13 @@ type ChatProps = {
   openSettings: (page?: SettingsPage) => void
   contextOpen: boolean
   toggleContext: () => void
-  contextLayers?: ContextLayer[]
-  contextDefaults: Record<ContextKind, boolean>
+  contextItems?: ContextItem[]
+  contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
 }
 
 export function Chat(props: ChatProps) {
-  const { chat, project, engines, accounts, connected, send, openSettings, contextOpen, toggleContext } = props
+  const { chat, folder, engines, accounts, connected, send, openSettings, contextOpen, toggleContext } = props
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -199,15 +199,15 @@ export function Chat(props: ChatProps) {
     return () => observer.disconnect()
   }, [])
 
-  const archivedBy = project?.archived ? project : chat.archived ? chat : undefined
-  const canChange = connected && chat.status === 'idle' && !archivedBy
+  const archived = chat.archived
+  const canChange = connected && chat.status === 'idle' && !archived
   const offers = engines.find((e) => e.id === chat.engine)
   const engineOff = !offers?.enabled
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
-  const canQueue = connected && busy && !archivedBy
-  const showEngineNote = engineOff && !archivedBy && chat.status === 'idle'
+  const canQueue = connected && busy && !archived
+  const showEngineNote = engineOff && !archived && chat.status === 'idle'
   const submit = () => {
     if (!(canSend || canQueue) || !text.trim()) return
     send({ type: 'chat.send', chatId: chat.id, text })
@@ -230,20 +230,16 @@ export function Chat(props: ChatProps) {
   const levels = saved ? [...offeredLevels, chat.thinking!] : offeredLevels
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model: model || undefined, thinking: thinking || undefined })
-  const unarchive = () =>
-    project?.archived
-      ? send({ type: 'project.archive', projectId: project.id, archived: false })
-      : send({ type: 'chat.archive', chatId: chat.id, archived: false })
-  const place = project?.name ?? 'Workshop'
+  const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
 
   return (
     <div className="flex min-h-0 flex-1">
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <header className="flex h-44 shrink-0 items-center gap-6 border-b pr-12 pl-20">
           <div className="flex min-w-0 flex-1 items-baseline gap-10 whitespace-nowrap">
-            <span className="max-w-[50%] shrink-0 truncate font-semibold">{chat.main ? place : chat.title}</span>
+            <span className="max-w-[50%] shrink-0 truncate font-semibold">{chat.name}</span>
             <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
-              {project?.path ?? 'Not tied to a folder'}
+              {folder ?? 'Not tied to a folder'}
             </span>
           </div>
           <ChipSelect
@@ -307,11 +303,10 @@ export function Chat(props: ChatProps) {
             {chat.items.length === 0 && !chat.draft && (
               <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
                 <strong className="text-body font-semibold text-text">
-                  Start a chat in <span className="font-mono">{place}</span>
+                  Start a chat in <span className="font-mono">{chat.name}</span>
                 </strong>
                 <span>
-                  Each message starts <span className="font-mono">{chat.engine}</span> in{' '}
-                  {project?.path ?? 'a scratch folder'}
+                  Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
                 </span>
               </div>
             )}
@@ -333,11 +328,10 @@ export function Chat(props: ChatProps) {
           </div>
         </div>
         <div className="shrink-0 px-24 pb-16">
-          {archivedBy && (
+          {archived && (
             <div className="mx-auto mb-8 flex max-w-column items-center gap-8 text-sm text-muted">
               <span className="flex-1">
-                This {archivedBy === project ? 'project' : 'chat'} is archived. Its history stays; unarchive it to
-                continue.
+                This {CHAT_NOUN.one} is archived. Its history stays; unarchive it to continue.
               </span>
               <Button size="small" disabled={!connected} onClick={unarchive}>
                 Unarchive
@@ -398,7 +392,7 @@ export function Chat(props: ChatProps) {
                 className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
                 value={text}
                 rows={2}
-                placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
+                placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}
                 disabled={!(canSend || canQueue)}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
@@ -484,9 +478,10 @@ export function Chat(props: ChatProps) {
           >
             <ContextPanel
               chatId={chat.id}
-              layers={props.contextLayers}
+              items={props.contextItems}
+              chats={props.chats}
               contextDefaults={props.contextDefaults}
-              readOnly={!!archivedBy}
+              readOnly={archived}
               connected={connected}
               send={send}
             />

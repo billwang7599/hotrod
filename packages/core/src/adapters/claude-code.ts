@@ -97,7 +97,7 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp, model, thinking }, emit) {
+  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], model, thinking }, emit) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -115,6 +115,7 @@ export const claudeCode: Adapter = {
     ]
     if (model) args.push('--model', model)
     if (thinking) args.push('--effort', thinking)
+    for (const dir of extraDirs) args.push('--add-dir', dir)
     const env = accountEnv(accountDir, apiKey).env ?? {}
     if (hotrodMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.

@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useReducer, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useReducer, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, MotionConfig, useReducedMotion } from 'motion/react'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Button, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
 import logo from './logo.svg'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
-import { ChatNav } from './sidebar.tsx'
-import { initialState, MAIN_CHAT_ID, reduce } from './state.ts'
+import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
+import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce } from './state.ts'
 import './styles.css'
 
 const SELECTED_KEY = 'hotrod.selectedChat'
@@ -17,7 +17,7 @@ declare global {
   interface Window {
     hotrod?: {
       pickFolder(): Promise<string | null>
-      onAddProject(listener: () => void): () => void
+      onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
     }
@@ -46,8 +46,7 @@ function App() {
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
 
   useEffect(() => localStorage.setItem(SELECTED_KEY, state.selectedId), [state.selectedId])
-  const [path, setPath] = useState('')
-  const pathRef = useRef<HTMLInputElement>(null)
+  const [nameRequest, setNameRequest] = useState<NameRequest | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
   const openSettings = useCallback((page?: SettingsPage) => {
@@ -58,27 +57,19 @@ function App() {
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const toggleContext = useCallback(() => setContextOpen((open) => !open), [])
   const selected = state.chats.find((c) => c.id === state.selectedId)
-  const selectedProject = state.projects.find((p) => p.id === selected?.projectId)
   const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
-  const addProject = (e: FormEvent) => {
-    e.preventDefault()
-    if (!path.trim()) return
-    send({ type: 'project.add', path: path.trim() })
-    setPath('')
-  }
-
   const connected = state.connected
-  const pickProject = useCallback(async () => {
+  const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.hotrod) return
     const picked = await window.hotrod.pickFolder()
-    if (picked) send({ type: 'project.add', path: picked })
+    if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
-  useEffect(() => window.hotrod?.onAddProject(() => void pickProject()), [pickProject])
+  useEffect(() => window.hotrod?.onNewChatFromFolder(() => void newChatFromFolder()), [newChatFromFolder])
   const [quitting, setQuitting] = useState(false)
   useEffect(() => window.hotrod?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
@@ -96,41 +87,29 @@ function App() {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Add project"
-                title={window.hotrod ? 'Add project… (⌘O)' : 'Add project'}
+                aria-label={`New ${CHAT_NOUN.one}`}
+                title={`New ${CHAT_NOUN.one}`}
                 disabled={!connected}
-                onClick={() => (window.hotrod ? void pickProject() : pathRef.current?.focus())}
+                onClick={() => setNameRequest({ kind: 'new' })}
               >
                 +
               </Button>
             </div>
             <ChatNav
-              projects={state.projects}
               chats={state.chats}
               selectedId={state.selectedId}
               connected={connected}
               send={send}
               select={select}
+              askName={setNameRequest}
             />
-            {window.hotrod ? (
+            {window.hotrod && (
               <div className="flex items-center gap-6 border-t px-8 py-10">
-                <Button className="flex-1" disabled={!connected} onClick={() => void pickProject()}>
-                  Add project…
+                <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
+                  New {CHAT_NOUN.one} from folder…
                 </Button>
                 <span className="text-sm text-faint">⌘O</span>
               </div>
-            ) : (
-              <form className="flex items-center gap-6 border-t px-8 py-10" onSubmit={addProject}>
-                <input
-                  className="flex-1 font-mono text-sm"
-                  ref={pathRef}
-                  value={path}
-                  placeholder="/path/to/project"
-                  spellCheck={false}
-                  onChange={(e) => setPath(e.target.value)}
-                />
-                <Button disabled={!connected || !path.trim()}>Add</Button>
-              </form>
             )}
             <div className="px-8 pb-10">
               <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
@@ -187,7 +166,8 @@ function App() {
               <Chat
                 key={selected.id}
                 chat={selected}
-                project={selectedProject}
+                chats={state.chats}
+                folder={folderOf(state.chats, selected)}
                 engines={state.engines}
                 accounts={accounts}
                 connected={state.connected}
@@ -195,7 +175,7 @@ function App() {
                 openSettings={openSettings}
                 contextOpen={contextOpen}
                 toggleContext={toggleContext}
-                contextLayers={state.context?.chatId === selected.id ? state.context.layers : undefined}
+                contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists[selected.engine]}
               />
@@ -214,6 +194,13 @@ function App() {
               ))}
             </AnimatePresence>
           </div>
+          <NameDialog
+            request={nameRequest}
+            connected={connected}
+            send={send}
+            pickFolder={window.hotrod?.pickFolder}
+            close={() => setNameRequest(null)}
+          />
           <ConfirmDialog />
         </div>
       </MotionConfig>
