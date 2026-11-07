@@ -113,8 +113,7 @@ async function runCore(engine: string) {
     const env = { HOTROD_ENGINE: 'node', HOTROD_GARAGE: ${JSON.stringify(garage)}, HOTROD_PORT: '4551' }
     const hotrod = await startCore({ env, adapters: [engine] })
     closeOnSignals(hotrod.close)
-    hotrod.core.handle({ type: 'project.add', path: ${JSON.stringify(garage)} }, () => {})
-    hotrod.core.handle({ type: 'chat.send', projectId: hotrod.core.projects()[0].id, text: 'hi' }, () => {})`
+    hotrod.core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})`
   const core = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
   cleanups.push(() => void core.kill('SIGKILL'))
   const exited = new Promise<number | null>((resolve) => core.on('exit', resolve))
@@ -168,7 +167,7 @@ it('asks engines to stop, then waits for them to shut down before exiting on a s
   expect(lines.indexOf('engine got interrupt')).toBeLessThan(lines.indexOf('engine got SIGTERM'))
   expect(core.exitCode).toBeNull()
   expect(await exited).toBe(0)
-  expect(existsSync(join(garage, marker))).toBe(true)
+  expect(existsSync(join(garage, 'home', marker))).toBe(true)
   expect(alive(enginePid)).toBe(false)
 })
 

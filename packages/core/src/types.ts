@@ -81,7 +81,17 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export type Project = { id: string; name: string; path: string; engine: string }
+export type Project = { id: string; name: string; path: string; archived: boolean }
+
+export type ChatInfo = {
+  id: string
+  projectId?: string
+  main: boolean
+  title: string
+  engine: string
+  archived: boolean
+  createdAt: string
+}
 
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
@@ -91,14 +101,19 @@ export type ChatEntry = { at: string } & (
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
-export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[]; draft: string }
+export type ChatState = ChatInfo & { status: ChatStatus; entries: ChatEntry[]; draft: string }
 
 export type ClientMessage =
   | { type: 'project.add'; path: string }
-  | { type: 'project.setEngine'; projectId: string; engine: string }
-  | { type: 'chat.send'; projectId: string; text: string }
-  | { type: 'chat.interrupt'; projectId: string; force?: boolean }
-  | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
+  | { type: 'project.archive'; projectId: string; archived: boolean }
+  | { type: 'project.delete'; projectId: string }
+  | { type: 'chat.create'; projectId?: string }
+  | { type: 'chat.archive'; chatId: string; archived: boolean }
+  | { type: 'chat.delete'; chatId: string }
+  | { type: 'chat.setEngine'; chatId: string; engine: string }
+  | { type: 'chat.send'; chatId: string; text: string }
+  | { type: 'chat.interrupt'; chatId: string; force?: boolean }
+  | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -109,12 +124,16 @@ export type ClientMessage =
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
 export type CoreMessage =
-  | { type: 'snapshot'; engines: EngineInfo[]; projects: ProjectState[]; accounts: EngineAccounts[] }
+  | { type: 'snapshot'; engines: EngineInfo[]; projects: Project[]; chats: ChatState[]; accounts: EngineAccounts[] }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
-  | { type: 'project.added'; project: ProjectState }
+  | { type: 'project.added'; project: Project; chat: ChatState }
   | { type: 'project.updated'; project: Project }
-  | { type: 'chat.entry'; projectId: string; entry: ChatEntry }
-  | { type: 'chat.delta'; projectId: string; text: string }
-  | { type: 'chat.thinking'; projectId: string; text: string }
-  | { type: 'chat.status'; projectId: string; status: ChatStatus }
+  | { type: 'project.removed'; projectId: string }
+  | { type: 'chat.added'; chat: ChatState }
+  | { type: 'chat.updated'; chat: ChatInfo }
+  | { type: 'chat.removed'; chatId: string }
+  | { type: 'chat.entry'; chatId: string; entry: ChatEntry }
+  | { type: 'chat.delta'; chatId: string; text: string }
+  | { type: 'chat.thinking'; chatId: string; text: string }
+  | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'error'; message: string }
