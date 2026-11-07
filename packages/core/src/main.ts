@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { claudeCode } from './adapters/claude-code.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
+import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
 import { startServer } from './server.ts'
@@ -9,6 +10,7 @@ import type { Adapter } from './types.ts'
 
 const adapters: Record<string, Adapter> = {
   'claude-code': claudeCode,
+  pi,
   fake: createFakeAdapter(),
 }
 

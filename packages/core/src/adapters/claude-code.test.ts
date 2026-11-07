@@ -1,44 +1,10 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, EngineProcess, Machine } from '../types.ts'
+import type { EngineEvent } from '../types.ts'
 import { claudeCode } from './claude-code.ts'
+import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}.jsonl`, import.meta.url), 'utf8')
-
-function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
-  const spawned: { command: string; args: string[]; cwd: string }[] = []
-  const written: string[] = []
-  const state = { stdinClosed: false, killed: false }
-  let stdout = (_: string) => {}
-  let stderr = (_: string) => {}
-  let exit = (_: number | null) => {}
-  const proc: EngineProcess = {
-    write: (data) => written.push(data),
-    closeStdin: () => (state.stdinClosed = true),
-    kill: () => (state.killed = true),
-    onStdout: (l) => (stdout = l),
-    onStderr: (l) => (stderr = l),
-    onExit: (l) => (exit = l),
-  }
-  const machine: Machine = {
-    spawn(command, args, options) {
-      spawned.push({ command, args, cwd: options.cwd })
-      return proc
-    },
-    async run(command, args) {
-      return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
-    },
-  }
-  return {
-    machine,
-    spawned,
-    state,
-    sent: () => written.join('').split('\n').filter(Boolean).map((l) => JSON.parse(l)),
-    stdout: (chunk: string) => stdout(chunk),
-    stderr: (chunk: string) => stderr(chunk),
-    exit: (code: number | null) => exit(code),
-  }
-}
 
 function startSession(instructions = '') {
   const fake = fakeMachine()
