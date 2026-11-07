@@ -13,6 +13,7 @@ import {
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { openAccounts } from './accounts.ts'
+import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
   CONTEXT_KINDS,
   type Adapter,
@@ -46,6 +47,7 @@ type Chat = {
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Set<string>
+  mcpToken?: string
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -98,6 +100,7 @@ export function openCore(options: {
   const chats = new Map<string, Chat>()
   const allStoppedWaiters: (() => void)[] = []
   let quitting = false
+  let mcpUrl: string | undefined
   const listeners: ((message: CoreMessage) => void)[] = []
 
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
@@ -170,6 +173,8 @@ export function openCore(options: {
     chat.stopTimer = undefined
     const session = chat.session
     chat.session = undefined
+    if (chat.mcpToken) mcp.revoke(chat.mcpToken)
+    chat.mcpToken = undefined
     session?.close()
   }
 
@@ -193,6 +198,7 @@ export function openCore(options: {
     const file = join(dir, 'chat.json')
     const { context = {}, ...saved } = readJson(file)
     const info: ChatInfo = { ...fallback, ...saved, id: fallback.id, main: fallback.main }
+    if (fallback.main) info.title = fallback.title
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -210,7 +216,7 @@ export function openCore(options: {
     id,
     ...(projectId ? { projectId } : {}),
     main: true,
-    title: 'Main',
+    title: projectId ? 'Main' : 'Workshop',
     engine,
     archived: false,
     createdAt: new Date().toISOString(),
@@ -237,7 +243,7 @@ export function openCore(options: {
     loadSubchats(join(projectsDir, id, 'chats'), id)
   }
 
-  const addProject = (rawPath: string, reply: (message: CoreMessage) => void) => {
+  const addProject = (rawPath: string, name?: string, reply?: (message: CoreMessage) => void): Project => {
     const expanded = rawPath.trim().replace(/^~(?=$|\/)/, homedir())
     const path = resolve(expanded)
     if (!existsSync(path) || !statSync(path).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)
@@ -245,22 +251,24 @@ export function openCore(options: {
     const existing = [...projects.values()].find((project) => project.path === realPath)
     if (existing) {
       const project = existing.archived ? archiveProject(existing, false) : existing
-      return reply({ type: 'project.added', project, chat: state(chatFor(`${existing.id}/main`)) })
+      reply?.({ type: 'project.added', project, chat: state(chatFor(`${existing.id}/main`)) })
+      return project
     }
 
-    const name = basename(realPath) || 'root'
-    const base = name.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+/, '') || 'project'
+    const projectName = name?.trim() || basename(realPath) || 'root'
+    const base = projectName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^\.+/, '') || 'project'
     // macOS folders are case-insensitive, so "App" and "app" would share a folder.
     const taken = new Set(readdirSync(projectsDir).map((id) => id.toLowerCase()))
     let id = base
     for (let n = 2; taken.has(id.toLowerCase()); n++) id = `${base}-${n}`
 
-    const project: Project = { id, name, path: realPath, archived: false }
+    const project: Project = { id, name: projectName, path: realPath, archived: false }
     mkdirSync(join(projectsDir, id), { recursive: true })
     saveProject(project)
     projects.set(id, project)
     const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, newChatEngine(), id))
     broadcast({ type: 'project.added', project, chat: state(chat) })
+    return project
   }
 
   const archiveProject = (project: Project, archived: boolean) => {
@@ -280,15 +288,18 @@ export function openCore(options: {
     broadcast({ type: 'project.removed', projectId: project.id })
   }
 
-  const createChat = (projectId?: string) => {
+  const createChat = (projectId?: string, engine = newChatEngine()) => {
+    checkEngine(engine)
+    checkEnabled(engine)
     if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
     const dir = projectId ? join(projectsDir, projectId, 'chats', id) : join(homeChatsDir, id)
     const createdAt = new Date().toISOString()
-    const info = { id, main: false, title: NEW_CHAT_TITLE, engine: newChatEngine(), archived: false, createdAt }
+    const info = { id, main: false, title: NEW_CHAT_TITLE, engine, archived: false, createdAt }
     const chat = loadChat(dir, projectId ? { ...info, projectId } : info)
     broadcast({ type: 'chat.added', chat: state(chat) })
+    return chat.info
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -415,7 +426,14 @@ export function openCore(options: {
     }
 
     try {
-      const options = { cwd: project?.path ?? homeDir, instructions, ...accounts.sessionFor(adapter.id) }
+      chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
+      const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
+      const options = {
+        cwd: project?.path ?? homeDir,
+        instructions,
+        ...accounts.sessionFor(adapter.id),
+        ...(hotrodMcp && { hotrodMcp }),
+      }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
@@ -425,6 +443,14 @@ export function openCore(options: {
       endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
     }
   }
+
+  const mcp = openHotrodMcp({
+    chats: () => [...chats.values()].map(state),
+    projects: () => [...projects.values()],
+    addProject,
+    createChat,
+    send: (chatId, text) => send(chatFor(chatId), text),
+  })
 
   const interrupt = (chat: Chat, force: boolean) => {
     if (!chat.session) return
@@ -466,18 +492,22 @@ export function openCore(options: {
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
+    serveMcp(url: string) {
+      mcpUrl = url
+      return mcp.handle
+    },
     handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
       switch (message.type) {
         case 'engine.setEnabled':
           return setEngineEnabled(String(message.engine), message.enabled === true)
         case 'project.add':
-          return addProject(String(message.path), reply)
+          return void addProject(String(message.path), undefined, reply)
         case 'project.archive':
           return archiveProject(projectFor(message.projectId), message.archived === true)
         case 'project.delete':
           return deleteProject(projectFor(message.projectId))
         case 'chat.create':
-          return createChat(message.projectId === undefined ? undefined : String(message.projectId))
+          return void createChat(message.projectId === undefined ? undefined : String(message.projectId))
         case 'chat.archive': {
           const chat = chatFor(message.chatId)
           checkRemovable(chat)

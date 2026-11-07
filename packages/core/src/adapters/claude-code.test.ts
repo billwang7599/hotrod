@@ -38,6 +38,22 @@ describe('claudeCode adapter', () => {
     ])
   })
 
+  it("connects Hotrod's MCP server with the token in the env, and runs its tools without asking", () => {
+    const fake = fakeMachine()
+    const token = 'hotrod-token-5678'
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token }
+    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', hotrodMcp }, () => {})
+    const args = fake.spawned[0]!.args
+    expect(JSON.parse(args[args.indexOf('--mcp-config') + 1]!)).toEqual({
+      mcpServers: {
+        hotrod: { type: 'http', url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' } },
+      },
+    })
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__hotrod__*')
+    expect(args.join(' ')).not.toContain(token)
+    expect(fake.spawned[0]?.env).toEqual({ HOTROD_MCP_TOKEN: token })
+  })
+
   it('appends instructions to the system prompt when given', () => {
     const { fake } = startSession('Be brief.')
     expect(fake.spawned[0]?.args.slice(-2)).toEqual(['--append-system-prompt', 'Be brief.'])

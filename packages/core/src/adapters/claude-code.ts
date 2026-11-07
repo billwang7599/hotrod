@@ -26,7 +26,7 @@ const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 
 // Each account is its own config folder; Claude Code keys its keychain login by that folder's path.
-const accountEnv = (accountDir?: string, apiKey?: string) =>
+const accountEnv = (accountDir?: string, apiKey?: string): { env?: Record<string, string> } =>
   accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir, ...(apiKey && { ANTHROPIC_API_KEY: apiKey }) } } : {}
 
 async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
@@ -93,7 +93,7 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir, apiKey }, emit) {
+  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp }, emit) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -109,8 +109,16 @@ export const claudeCode: Adapter = {
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
     ]
+    const env = accountEnv(accountDir, apiKey).env ?? {}
+    if (hotrodMcp) {
+      // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
+      const headers = { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }
+      const config = { mcpServers: { hotrod: { type: 'http', url: hotrodMcp.url, headers } } }
+      args.push('--mcp-config', JSON.stringify(config), '--allowedTools', 'mcp__hotrod__*')
+      env.HOTROD_MCP_TOKEN = hotrodMcp.token
+    }
     if (instructions) args.push('--append-system-prompt', instructions)
-    const proc = machine.spawn('claude', args, { cwd, ...accountEnv(accountDir, apiKey) })
+    const proc = machine.spawn('claude', args, { cwd, ...(Object.keys(env).length && { env }) })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
     const pendingInputs = new Map<string, unknown>()
     let buffer = ''

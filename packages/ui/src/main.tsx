@@ -512,7 +512,7 @@ function Chat(props: ChatProps) {
     project?.archived
       ? send({ type: 'project.archive', projectId: project.id, archived: false })
       : send({ type: 'chat.archive', chatId: chat.id, archived: false })
-  const place = project?.name ?? 'Main'
+  const place = project?.name ?? 'Workshop'
 
   return (
     <div className="chat-area">
@@ -840,11 +840,11 @@ function ChatNav({ projects, chats, selectedId, connected, send, select }: Sideb
   const archivedChats = chats
     .filter((c) => c.archived && !projects.find((p) => p.id === c.projectId)?.archived)
     .sort(newestFirst)
-  const placeOf = (chat: ChatView) => projects.find((p) => p.id === chat.projectId)?.name ?? 'Main'
+  const placeOf = (chat: ChatView) => projects.find((p) => p.id === chat.projectId)?.name ?? 'Workshop'
 
   return (
     <nav className="chat-nav">
-      {main && row(main, { label: 'Main', title: 'Main: not tied to a folder', menu: undefined, sub: false })}
+      {main && row(main, { label: 'Workshop', title: 'Workshop: not tied to a folder', menu: undefined, sub: false })}
       {subchats().map((c) => row(c))}
       <button className="ghost small new-chat" disabled={!connected} onClick={() => send({ type: 'chat.create' })}>
         + New chat

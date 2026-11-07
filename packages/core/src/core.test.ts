@@ -174,7 +174,7 @@ describe('main chat and subchats', () => {
   it('opens one permanent Main chat that runs in a scratch home folder', async () => {
     const t = setup(textScript)
     expect(t.core.chats()).toEqual([
-      expect.objectContaining({ id: 'main', main: true, title: 'Main', engine: 'fake', archived: false }),
+      expect.objectContaining({ id: 'main', main: true, title: 'Workshop', engine: 'fake', archived: false }),
     ])
     expect(chatOf(t.core, 'main')?.projectId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
@@ -183,12 +183,20 @@ describe('main chat and subchats', () => {
     expect(statSync(join(t.garage, 'home')).isDirectory()).toBe(true)
     const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n')).toHaveLength(4)
-    expect(chatOf(t.core, 'main')?.title).toBe('Main')
+    expect(chatOf(t.core, 'main')?.title).toBe('Workshop')
 
     expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(/main chat/i)
     expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(/main chat/i)
     t.core.close()
     expect(entriesOf(setup(textScript, t.garage).core, 'main')).toHaveLength(4)
+  })
+
+  it('calls the root chat Workshop, even in a garage that saved it as Main', () => {
+    const garage = tempDir()
+    mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
+    const saved = { id: 'main', title: 'Main', engine: 'fake', archived: false, createdAt: at }
+    writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
+    expect(chatOf(setup(textScript, garage).core, 'main')?.title).toBe('Workshop')
   })
 
   it('creates subchats under Main and in projects, titled by their first message', async () => {

@@ -41,7 +41,13 @@ export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: str
 
 export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
 
-export type SessionOptions = { cwd: string; instructions: string; accountDir?: string; apiKey?: string }
+export type SessionOptions = {
+  cwd: string
+  instructions: string
+  accountDir?: string
+  apiKey?: string
+  hotrodMcp?: { url: string; token: string }
+}
 
 export interface Session {
   prompt(text: string): void

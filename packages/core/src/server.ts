@@ -40,7 +40,13 @@ export async function startServer(options: {
     response.writeHead(200, { 'content-type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' })
     createReadStream(file).pipe(response)
   }
-  const http = createServer(serveUi)
+  let serveMcp: ReturnType<Core['serveMcp']> | undefined
+  const http = createServer((request, response) => {
+    if (serveMcp && new URL(request.url ?? '/', 'http://core').pathname === '/mcp') {
+      return void serveMcp(request, response).catch(() => response.headersSent || response.writeHead(500).end())
+    }
+    serveUi(request, response)
+  })
   const wss = new WebSocketServer({
     server: http,
     verifyClient: (info, accept) => accept(info.origin === uiOrigin, 403, 'Origin not allowed'),
@@ -76,8 +82,10 @@ export async function startServer(options: {
     http.listen(port, '127.0.0.1', resolve)
   })
 
+  const { port: boundPort } = http.address() as AddressInfo
+  serveMcp = core.serveMcp(`http://127.0.0.1:${boundPort}/mcp`)
   return {
-    port: (http.address() as AddressInfo).port,
+    port: boundPort,
     close: () =>
       new Promise<void>((resolve) => {
         wss.clients.forEach((socket) => socket.terminate())
