@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, 
 import { createRoot } from 'react-dom/client'
 import type { Account, ChatStatus, ClientMessage, EngineAccounts, EngineInfo, Project } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
+import logo from './logo.svg'
 import { Markdown } from './markdown.tsx'
 import {
   accountLabel,
@@ -713,7 +714,10 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <span className="brand">Hotrod</span>
+          <span className="brand">
+            <img src={logo} alt="" width={18} height={18} />
+            Hotrod
+          </span>
           <button
             className="ghost icon"
             aria-label="Add project"
