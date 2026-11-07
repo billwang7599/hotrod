@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
+import { AnimatePresence, m } from 'motion/react'
 import type {
   ChatStatus,
   ClientMessage,
@@ -10,7 +11,7 @@ import type {
   Project,
 } from '@hotrod/core/types'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, Chevron, confirm, ErrorText } from './controls.tsx'
+import { Button, Chevron, confirm, ErrorText, MOTION, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import { accountLabel, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
@@ -51,16 +52,22 @@ function ChipSelect(props: ComponentProps<'select'>) {
 }
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(false)
   return (
-    <details className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel'}`}>
-      <summary
-        className={`flex h-28 list-none items-center gap-8 rounded pr-10 pl-8 hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+    <div
+      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel'}`}
+      data-open={open || undefined}
+    >
+      <button
+        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
       >
         <Chevron />
         {summary}
-      </summary>
-      {children}
-    </details>
+      </button>
+      <AnimatePresence initial={false}>{open && <m.div {...MOTION.collapse}>{children}</m.div>}</AnimatePresence>
+    </div>
   )
 }
 
@@ -70,7 +77,7 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
   switch (item.kind) {
     case 'user':
       return (
-        <div className="mt-14 max-w-[85%] self-end rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word] first:mt-0">
+        <div className="max-w-[85%] self-end rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
           {item.text}
         </div>
       )
@@ -80,7 +87,7 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
       return <ErrorText>{item.text}</ErrorText>
     case 'thinking':
       return (
-        <Row quiet summary={<span className="italic group-last:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
+        <Row quiet summary={<span className="italic group-last/item:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
           <div className="mt-2 mb-4 ml-13 max-h-320 overflow-y-auto border-l-2 pl-12 text-sm leading-[1.5] whitespace-pre-wrap">
             {item.text}
           </div>
@@ -174,6 +181,8 @@ export function Chat(props: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  const settled = useSettled()
+  const enter = settled.current && MOTION.rise.initial
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -270,13 +279,20 @@ export function Chat(props: ChatProps) {
           )}
           <Button
             variant="ghost"
-            size="small"
-            className="aria-pressed:bg-raised aria-pressed:text-text"
+            size="icon"
+            className="grid place-items-center aria-pressed:text-text"
+            aria-label="Context panel"
             aria-pressed={contextOpen}
-            title={contextOpen ? 'Hide context' : 'Show the AGENTS.md layers this chat gets'}
+            title={contextOpen ? 'Hide context' : 'Show context'}
             onClick={toggleContext}
           >
-            Context
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+              <path d="M10 2.5v11" />
+              {contextOpen && (
+                <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />
+              )}
+            </svg>
           </Button>
         </header>
         <div
@@ -300,9 +316,20 @@ export function Chat(props: ChatProps) {
               </div>
             )}
             {chat.items.map((item, i) => (
-              <ItemView key={i} item={item} chat={chat} connected={connected} send={send} />
+              <m.div
+                key={i}
+                className={`group/item flex flex-col ${item.kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
+                initial={item.kind !== 'text' && enter}
+                animate={MOTION.rise.animate}
+              >
+                <ItemView item={item} chat={chat} connected={connected} send={send} />
+              </m.div>
             ))}
-            {chat.draft && <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />}
+            {chat.draft && (
+              <m.div initial={enter} animate={MOTION.rise.animate}>
+                <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
+              </m.div>
+            )}
           </div>
         </div>
         <div className="shrink-0 px-24 pb-16">
@@ -334,30 +361,35 @@ export function Chat(props: ChatProps) {
               </Button>
             </div>
           )}
-          {chat.queue.length > 0 && (
-            <ul className="mx-auto mb-8 flex max-w-column flex-col gap-4 text-sm" aria-label="Queued messages">
-              {chat.queue.map((q) => (
-                <li
-                  key={q.id}
-                  className="flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted"
-                >
-                  <span className="flex-1 truncate" title={q.text}>
-                    {q.text}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Remove from queue"
-                    disabled={!connected}
-                    onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
-                  >
-                    ×
-                  </Button>
-                </li>
-              ))}
-              <li className="text-sm text-faint">Sends when this turn ends</li>
-            </ul>
-          )}
+          <AnimatePresence initial={false}>
+            {chat.queue.length > 0 && (
+              <m.div key="queue" {...MOTION.collapse}>
+                <ul className="mx-auto mb-8 flex max-w-column flex-col text-sm" aria-label="Queued messages">
+                  <AnimatePresence initial={false}>
+                    {chat.queue.map((q) => (
+                      <m.li key={q.id} {...MOTION.collapse}>
+                        <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
+                          <span className="flex-1 truncate" title={q.text}>
+                            {q.text}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label="Remove from queue"
+                            disabled={!connected}
+                            onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
+                          >
+                            ×
+                          </Button>
+                        </div>
+                      </m.li>
+                    ))}
+                  </AnimatePresence>
+                  <li className="text-sm text-faint">Sends when this turn ends</li>
+                </ul>
+              </m.div>
+            )}
+          </AnimatePresence>
           {!showEngineNote && (
             <div
               className={`mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
@@ -441,17 +473,26 @@ export function Chat(props: ChatProps) {
           )}
         </div>
       </main>
-      {contextOpen && (
-        <ContextPanel
-          chatId={chat.id}
-          layers={props.contextLayers}
-          contextDefaults={props.contextDefaults}
-          readOnly={!!archivedBy}
-          connected={connected}
-          send={send}
-          close={toggleContext}
-        />
-      )}
+      <AnimatePresence initial={false}>
+        {contextOpen && (
+          <m.div
+            key="context"
+            className="flex shrink-0 overflow-hidden"
+            initial={{ width: 0 }}
+            animate={{ width: 'auto' }}
+            exit={{ width: 0 }}
+          >
+            <ContextPanel
+              chatId={chat.id}
+              layers={props.contextLayers}
+              contextDefaults={props.contextDefaults}
+              readOnly={!!archivedBy}
+              connected={connected}
+              send={send}
+            />
+          </m.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

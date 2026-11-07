@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ClientMessage, ContextKind, ContextLayer } from '@hotrod/core/types'
-import { Button, Switch } from './controls.tsx'
+import { Switch } from './controls.tsx'
 
 export const CONTEXT_LABELS: Record<ContextKind, { label: string; about: string }> = {
   workshop: { label: 'Workshop', about: 'Your AGENTS.md for every chat' },
@@ -69,20 +69,16 @@ type ContextPanelProps = {
   readOnly: boolean
   connected: boolean
   send: (m: ClientMessage) => void
-  close: () => void
 }
 
-export function ContextPanel({ chatId, layers, contextDefaults, readOnly, connected, send, close }: ContextPanelProps) {
+export function ContextPanel({ chatId, layers, contextDefaults, readOnly, connected, send }: ContextPanelProps) {
   useEffect(() => {
     if (connected) send({ type: 'context.get', chatId })
   }, [chatId, connected, contextDefaults, send])
   return (
     <aside className="flex w-320 shrink-0 flex-col border-l bg-panel" aria-label="Context">
-      <header className="flex h-44 shrink-0 items-center justify-between border-b pr-8 pl-14">
+      <header className="flex h-44 shrink-0 items-center border-b px-14">
         <span className="font-semibold">Context</span>
-        <Button variant="ghost" size="icon" aria-label="Close context" onClick={close}>
-          ×
-        </Button>
       </header>
       <div className="flex flex-1 flex-col gap-10 overflow-y-auto p-12">
         <p className="text-sm text-faint">

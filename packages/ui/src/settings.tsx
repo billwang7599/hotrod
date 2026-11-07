@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { AnimatePresence, m } from 'motion/react'
 import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_KINDS,
@@ -13,7 +14,7 @@ import {
   type Mods,
 } from '@hotrod/core/types'
 import { CONTEXT_LABELS } from './context-panel.tsx'
-import { Button, confirm, ErrorText, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
+import { Button, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem, NO_LISTS } from './state.ts'
 
 type PageProps = {
@@ -436,69 +437,88 @@ function SubagentLimit({ subagents: { enabled, limit }, connected, send }: Subag
   )
 }
 
-type SettingsProps = PageProps & { page: SettingsPage; openPage: (page: SettingsPage) => void; close: () => void }
+type SettingsProps = PageProps & {
+  open: boolean
+  page: SettingsPage
+  openPage: (page: SettingsPage) => void
+  close: () => void
+}
 
-export function SettingsDialog({ page, openPage, close, ...props }: SettingsProps) {
+export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
   const pages: readonly Page[] = PAGES.filter((p) => !('shown' in p) || p.shown(props))
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
-    <Dialog.Root open onOpenChange={(open) => open || close()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-backdrop" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          onOpenAutoFocus={focus.remember}
-          onCloseAutoFocus={focus.restore}
-          className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-[10px] border bg-bg text-text shadow"
-        >
-          <Dialog.Title className="sr-only">Settings</Dialog.Title>
-          <Tabs.Root
-            className="flex min-w-0 flex-1"
-            orientation="vertical"
-            value={current.id}
-            onValueChange={(id) => openPage(id as SettingsPage)}
-          >
-            <Tabs.List
-              aria-label="Settings"
-              className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160"
+    <Dialog.Root open={open} onOpenChange={(open) => open || close()}>
+      <AnimatePresence>
+        {open && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </Dialog.Overlay>
+            <Dialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={focus.remember}
+              onCloseAutoFocus={focus.restore}
             >
-              {NAV_GROUPS.map((group) => (
-                <Fragment key={group}>
-                  <div className={NAV_LABEL}>{group}</div>
-                  {pages
-                    .filter((p) => p.group === group)
-                    .map((p) => (
-                      <Tabs.Trigger
-                        key={p.id}
-                        value={p.id}
-                        className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text"
-                      >
-                        {p.title}
-                      </Tabs.Trigger>
-                    ))}
-                </Fragment>
-              ))}
-            </Tabs.List>
-            {pages.map((p) => (
-              <Tabs.Content
-                key={p.id}
-                value={p.id}
-                className="min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2"
+              <m.div
+                className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-[10px] border bg-bg text-text shadow"
+                {...MOTION.pop}
               >
-                <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
-                {p.hint && <p className="mt-4 text-muted">{p.hint}</p>}
-                <div className="mt-16 flex flex-col">{p.body(props)}</div>
-              </Tabs.Content>
-            ))}
-          </Tabs.Root>
-          <Dialog.Close asChild>
-            <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-14 right-14">
-              ×
-            </Button>
-          </Dialog.Close>
-        </Dialog.Content>
-      </Dialog.Portal>
+                <Dialog.Title className="sr-only">Settings</Dialog.Title>
+                <Tabs.Root
+                  className="flex min-w-0 flex-1"
+                  orientation="vertical"
+                  value={current.id}
+                  onValueChange={(id) => openPage(id as SettingsPage)}
+                >
+                  <Tabs.List
+                    aria-label="Settings"
+                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160"
+                  >
+                    {NAV_GROUPS.map((group) => (
+                      <Fragment key={group}>
+                        <div className={NAV_LABEL}>{group}</div>
+                        {pages
+                          .filter((p) => p.group === group)
+                          .map((p) => (
+                            <Tabs.Trigger
+                              key={p.id}
+                              value={p.id}
+                              className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text"
+                            >
+                              {p.title}
+                            </Tabs.Trigger>
+                          ))}
+                      </Fragment>
+                    ))}
+                  </Tabs.List>
+                  {pages.map((p) => (
+                    <Tabs.Content key={p.id} value={p.id} asChild>
+                      <m.div
+                        className="min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2"
+                        initial={MOTION.fade.initial}
+                        animate={MOTION.fade.animate}
+                      >
+                        <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
+                        {p.hint && <p className="mt-4 text-muted">{p.hint}</p>}
+                        <div className="mt-16 flex flex-col">{p.body(props)}</div>
+                      </m.div>
+                    </Tabs.Content>
+                  ))}
+                </Tabs.Root>
+                <Dialog.Close asChild>
+                  <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-14 right-14">
+                    ×
+                  </Button>
+                </Dialog.Close>
+              </m.div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
     </Dialog.Root>
   )
 }
