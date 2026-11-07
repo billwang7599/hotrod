@@ -23,6 +23,7 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
     async run(command, args) {
       return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
     },
+    stopAll: async () => {},
   }
   return {
     machine,

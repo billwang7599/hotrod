@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createLocalMachine, RUN_TIMEOUT_MS, STRIPPED_ENV_KEYS } from './machine.ts'
 
@@ -105,5 +106,57 @@ describe('localMachine', () => {
     const result = await fast.run('hotrod-no-such-command', [], { cwd })
     expect(result.code).toBeNull()
     expect(result.stderr).toMatch(/ENOENT/)
+  })
+
+  it('stopAll waits for an engine that ignores SIGTERM until it is force-killed', async () => {
+    const machine = createLocalMachine({ killGraceMs: 200 })
+    const stubborn = `process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000)`
+    const proc = machine.spawn(node, ['-e', stubborn], { cwd })
+    const pid = await new Promise<number>((resolve) => proc.onStdout((chunk) => resolve(Number(chunk.trim()))))
+    leftovers.push(pid)
+    const start = performance.now()
+    await machine.stopAll()
+    expect(performance.now() - start).toBeGreaterThanOrEqual(190)
+    expect(alive(pid)).toBe(false)
+  })
+
+  it('stopAll returns as soon as engines and the processes they started have exited', async () => {
+    const machine = createLocalMachine({ killGraceMs: 5000 })
+    const grandchild = spawnGrandchild('setInterval(() => {}, 1000)', `{ stdio: 'ignore' }`)
+    const parent = `const c = ${grandchild}; setTimeout(() => console.log(c.pid), 200); setInterval(() => {}, 1000)`
+    const proc = machine.spawn(node, ['-e', parent], { cwd })
+    const pid = await new Promise<number>((resolve) => proc.onStdout((chunk) => resolve(Number(chunk.trim()))))
+    leftovers.push(pid)
+    const start = performance.now()
+    await machine.stopAll()
+    expect(alive(pid)).toBe(false)
+    expect(performance.now() - start).toBeLessThan(1000)
+  })
+})
+
+describe('when the core dies', () => {
+  const machineUrl = new URL('./machine.ts', import.meta.url).href
+  const runCore = async (death: string) => {
+    const engine = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`
+    const script = `
+      import { localMachine } from ${JSON.stringify(machineUrl)}
+      const proc = localMachine.spawn(process.execPath, ['-e', ${JSON.stringify(`console.log(process.pid); ${engine}`)}], { cwd: process.cwd() })
+      proc.onStdout((chunk) => { console.log(chunk.trim()); ${death} })
+      setInterval(() => {}, 1000)`
+    const core = spawn(node, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'ignore'] })
+    const pid = await new Promise<number>((resolve) => core.stdout.on('data', (chunk) => resolve(Number(String(chunk).trim()))))
+    leftovers.push(pid)
+    await new Promise((resolve) => core.on('exit', resolve))
+    return pid
+  }
+
+  it('kills its engines when it crashes', async () => {
+    const pid = await runCore(`setTimeout(() => { throw new Error('crash') })`)
+    await waitFor(() => !alive(pid))
+  })
+
+  it('kills its engines when it exits', async () => {
+    const pid = await runCore(`process.exit(3)`)
+    await waitFor(() => !alive(pid))
   })
 })
