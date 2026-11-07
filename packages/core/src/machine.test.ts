@@ -51,6 +51,10 @@ describe('localMachine', () => {
     }
   })
 
+  it("keeps the core's UI token from engines, so an agent can't approve its own tool calls", () => {
+    expect(STRIPPED_ENV_KEYS).toContain('HOTROD_TOKEN')
+  })
+
   it('force-kills a process that ignores SIGTERM after the grace', async () => {
     const proc = fast.spawn(
       node,

@@ -77,5 +77,5 @@ async function start() {
     event.preventDefault()
     openOutside(url)
   })
-  await window.loadURL(hotrod.uiUrl)
+  await window.loadURL(hotrod.openUrl)
 }

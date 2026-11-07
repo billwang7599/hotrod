@@ -250,7 +250,11 @@ function App() {
         )}
       </aside>
       <div className="main">
-        {!state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>}
+        {state.rejected ? (
+          <div className="banner">The core rejected this window. Open the link the core printed; it carries the token.</div>
+        ) : (
+          !state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>
+        )}
         {engine && (!engine.installed || !engine.signedIn) && (
           <div className="banner">
             {engine.id} is {engine.installed ? 'not signed in' : 'not installed'}.{engine.detail && ` ${engine.detail}`}

@@ -209,4 +209,10 @@ describe('reduce', () => {
     expect(initialState.connected).toBe(false)
     expect(run({ type: 'connection', connected: true }).connected).toBe(true)
   })
+
+  it('remembers that the core rejected the token until a connection opens', () => {
+    const rejected = run({ type: 'connection', connected: false, rejected: true })
+    expect(rejected).toMatchObject({ connected: false, rejected: true })
+    expect(reduce(rejected, { type: 'connection', connected: true })).toMatchObject({ connected: true, rejected: false })
+  })
 })

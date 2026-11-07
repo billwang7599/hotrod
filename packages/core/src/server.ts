@@ -1,10 +1,15 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { createServer, type RequestListener } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
-import type { CoreMessage, EngineInfo } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, type CoreMessage, type EngineInfo } from './types.ts'
+
+// Hashing first gives equal lengths, which timingSafeEqual needs, without leaking the token's length.
+const digest = (text: string) => createHash('sha256').update(text).digest()
+const sameToken = (given: string, token: string) => timingSafeEqual(digest(given), digest(token))
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -22,9 +27,10 @@ export async function startServer(options: {
   engines: EngineInfo[]
   port: number
   uiOrigin: string
+  token: string
   uiDir?: string
 }) {
-  const { core, engines, port, uiOrigin } = options
+  const { core, engines, port, uiOrigin, token } = options
   const uiDir = options.uiDir && resolve(options.uiDir)
   const serveUi: RequestListener = (request, response) => {
     if (!uiDir) return response.writeHead(426).end()
@@ -46,7 +52,9 @@ export async function startServer(options: {
 
   core.onMessage((message) => wss.clients.forEach((socket) => send(socket, message)))
 
-  wss.on('connection', (socket) => {
+  wss.on('connection', (socket, request) => {
+    const given = new URL(request.url ?? '/', 'ws://core').searchParams.get('token') ?? ''
+    if (!sameToken(given, token)) return socket.close(BAD_TOKEN_CLOSE_CODE, 'Missing or wrong token')
     send(socket, { type: 'snapshot', engines, projects: core.projects() })
     socket.on('message', (data) => {
       try {

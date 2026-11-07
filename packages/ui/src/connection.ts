@@ -1,15 +1,29 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { ClientMessage } from '@hotrod/core/types'
+import { BAD_TOKEN_CLOSE_CODE, type ClientMessage } from '@hotrod/core/types'
 import type { Action } from './state.ts'
 
 const DEV_CORE_URL = 'ws://127.0.0.1:4317'
 const MIN_RETRY_MS = 500
 const MAX_RETRY_MS = 10_000
+const TOKEN_KEY = 'hotrod.token'
 
-export function coreUrl(env: { DEV: boolean; VITE_HOTROD_CORE_URL?: string }, page: { protocol: string; host: string }) {
-  if (env.VITE_HOTROD_CORE_URL) return env.VITE_HOTROD_CORE_URL
-  if (env.DEV) return DEV_CORE_URL
-  return `${page.protocol === 'https:' ? 'wss' : 'ws'}://${page.host}`
+export function coreUrl(
+  env: { DEV: boolean; VITE_HOTROD_CORE_URL?: string },
+  page: { protocol: string; host: string },
+  token: string,
+) {
+  const base = env.VITE_HOTROD_CORE_URL || (env.DEV ? DEV_CORE_URL : `${page.protocol === 'https:' ? 'wss' : 'ws'}://${page.host}`)
+  const url = new URL(base)
+  url.searchParams.set('token', token)
+  return url.href
+}
+
+type TokenStorage = { getItem(key: string): string | null; setItem(key: string, value: string): void }
+
+export function readToken(hash: string, storage: TokenStorage) {
+  const fromLink = new URLSearchParams(hash.slice(1)).get('token')
+  if (fromLink) storage.setItem(TOKEN_KEY, fromLink)
+  return fromLink ?? storage.getItem(TOKEN_KEY) ?? ''
 }
 
 export function useCore(dispatch: (action: Action) => void) {
@@ -18,17 +32,20 @@ export function useCore(dispatch: (action: Action) => void) {
     let retryMs = MIN_RETRY_MS
     let timer: ReturnType<typeof setTimeout> | undefined
     let stopped = false
+    const token = readToken(location.hash, sessionStorage)
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search)
     const connect = () => {
-      const socket = new WebSocket(coreUrl(import.meta.env, location))
+      const socket = new WebSocket(coreUrl(import.meta.env, location, token))
       socketRef.current = socket
       socket.onopen = () => {
         retryMs = MIN_RETRY_MS
         dispatch({ type: 'connection', connected: true })
       }
       socket.onmessage = (e) => dispatch(JSON.parse(e.data))
-      socket.onclose = () => {
-        dispatch({ type: 'connection', connected: false })
-        if (stopped) return
+      socket.onclose = (e) => {
+        const rejected = e.code === BAD_TOKEN_CLOSE_CODE
+        dispatch({ type: 'connection', connected: false, rejected })
+        if (stopped || rejected) return
         timer = setTimeout(connect, retryMs)
         retryMs = Math.min(retryMs * 2, MAX_RETRY_MS)
       }

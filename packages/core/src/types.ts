@@ -76,6 +76,8 @@ export type ClientMessage =
   | { type: 'chat.interrupt'; projectId: string }
   | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
 
+export const BAD_TOKEN_CLOSE_CODE = 4401
+
 export type CoreMessage =
   | { type: 'snapshot'; engines: EngineInfo[]; projects: ProjectState[] }
   | { type: 'project.added'; project: ProjectState }

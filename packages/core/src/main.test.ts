@@ -7,7 +7,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { KILL_GRACE_MS } from './machine.ts'
 import { startCore } from './main.ts'
-import type { Adapter, CoreMessage } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './types.ts'
 
 const port = 4451
 const adapters: Adapter[] = [
@@ -26,12 +26,13 @@ function tempDir() {
   return dir
 }
 
-function firstMessage(origin: string) {
-  const socket = new WebSocket(`ws://127.0.0.1:${port}`, { origin })
+function firstMessage(origin: string, token: string) {
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/?token=${token}`, { origin })
   cleanups.push(() => socket.terminate())
   return new Promise<CoreMessage | number>((resolve) => {
     socket.on('message', (data) => resolve(JSON.parse(String(data))))
     socket.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0))
+    socket.on('close', (code) => resolve(code))
     socket.on('error', () => {})
   })
 }
@@ -46,14 +47,15 @@ it('starts the core from the environment and stops it', async () => {
   }
   const hotrod = await startCore({ env, adapters })
   expect(hotrod.port).toBe(port)
-  expect(await firstMessage('http://ui.test')).toMatchObject({
+  expect(await firstMessage('http://ui.test', hotrod.token)).toMatchObject({
     type: 'snapshot',
     engines: [
       { id: 'fake', installed: true, signedIn: true },
       { id: 'broken', installed: false, signedIn: false, detail: 'no binary' },
     ],
   })
-  expect(await firstMessage('http://localhost:4318')).toBe(403)
+  expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
+  expect(await firstMessage('http://ui.test', 'wrong')).toBe(BAD_TOKEN_CLOSE_CODE)
 
   hotrod.core.handle({ type: 'project.add', path: tempDir() }, () => {})
   expect(hotrod.core.projects()).toHaveLength(1)
@@ -61,6 +63,17 @@ it('starts the core from the environment and stops it', async () => {
   await hotrod.close()
   const again = await startCore({ env, adapters })
   await again.close()
+  expect(again.token).not.toBe(hotrod.token)
+  expect(again.token.length).toBeGreaterThanOrEqual(32)
+})
+
+it('takes its token from HOTROD_TOKEN and hands the UI a link that carries it', async () => {
+  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port), HOTROD_TOKEN: 'dev-token' }
+  const hotrod = await startCore({ env, adapters })
+  cleanups.push(() => hotrod.close())
+  expect(hotrod.token).toBe('dev-token')
+  expect(hotrod.openUrl).toBe('http://localhost:4318/#token=dev-token')
+  expect(await firstMessage('http://localhost:4318', 'dev-token')).toMatchObject({ type: 'snapshot' })
 })
 
 it('accepts only its own origin when it serves the UI', async () => {
@@ -71,8 +84,9 @@ it('accepts only its own origin when it serves the UI', async () => {
   })
   cleanups.push(() => hotrod.close())
   expect(hotrod.uiUrl).toBe(`http://127.0.0.1:${port}`)
-  expect(await firstMessage(hotrod.uiUrl)).toMatchObject({ type: 'snapshot' })
-  expect(await firstMessage('http://localhost:4318')).toBe(403)
+  expect(hotrod.openUrl).toBe(`http://127.0.0.1:${port}/#token=${hotrod.token}`)
+  expect(await firstMessage(hotrod.uiUrl, hotrod.token)).toMatchObject({ type: 'snapshot' })
+  expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
 })
 
 it('rejects an unknown engine', async () => {

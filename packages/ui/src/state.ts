@@ -35,6 +35,7 @@ export type ProjectView = {
 
 export type State = {
   connected: boolean
+  rejected: boolean
   engines: EngineInfo[]
   projects: ProjectView[]
   selectedId: string | null
@@ -44,12 +45,13 @@ export type State = {
 
 export type Action =
   | CoreMessage
-  | { type: 'connection'; connected: boolean }
+  | { type: 'connection'; connected: boolean; rejected?: boolean }
   | { type: 'select'; projectId: string }
   | { type: 'toast.dismiss'; id: number }
 
 export const initialState: State = {
   connected: false,
+  rejected: false,
   engines: [],
   projects: [],
   selectedId: null,
@@ -182,7 +184,7 @@ export function reduce(state: State, action: Action): State {
         nextToastId: state.nextToastId + 1,
       }
     case 'connection':
-      return { ...state, connected: action.connected }
+      return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
       return { ...state, selectedId: action.projectId }
     case 'toast.dismiss':
