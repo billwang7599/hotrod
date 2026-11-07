@@ -28,6 +28,7 @@ function chat(id: string, change: Partial<ChatState> = {}): ChatState {
     status: 'idle',
     entries: [],
     draft: '',
+    queue: [],
     ...change,
   }
 }

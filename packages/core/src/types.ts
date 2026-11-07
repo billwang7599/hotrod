@@ -119,7 +119,14 @@ export type ChatEntry = { at: string } & (
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
-export type ChatState = ChatInfo & { status: ChatStatus; entries: ChatEntry[]; draft: string }
+export type QueuedMessage = { id: string; text: string }
+
+export type ChatState = ChatInfo & {
+  status: ChatStatus
+  entries: ChatEntry[]
+  draft: string
+  queue: QueuedMessage[]
+}
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
@@ -131,6 +138,7 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.send'; chatId: string; text: string }
+  | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'context.get'; chatId: string }
@@ -167,6 +175,7 @@ export type CoreMessage =
   | { type: 'chat.delta'; chatId: string; text: string }
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
+  | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.context'; chatId: string; layers: ContextLayer[] }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }

@@ -16,6 +16,7 @@ const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatSt
   status: 'idle',
   entries,
   draft: '',
+  queue: [],
 })
 const project = (id: string): Project => ({ id, name: id, path: `/tmp/${id}`, archived: false })
 const contextDefaults = { workshop: true, repo: true, project: true, own: true }
@@ -191,6 +192,15 @@ describe('reduce', () => {
       { type: 'chat.delta', chatId: 'a', text: 'lo' },
     )
     expect(state.chats[0]!.draft).toBe('Hello')
+  })
+
+  it('shows the queue a snapshot carries and replaces it on every change', () => {
+    const queued = [{ id: 'q1', text: 'next' }]
+    const state = run(snapshot([{ ...chat('a'), status: 'running', queue: queued }]))
+    expect(state.chats[0]!.queue).toEqual(queued)
+    const more = reduce(state, { type: 'chat.queue', chatId: 'a', queue: [...queued, { id: 'q2', text: 'then' }] })
+    expect(more.chats[0]!.queue.map((q) => q.text)).toEqual(['next', 'then'])
+    expect(reduce(more, { type: 'chat.queue', chatId: 'a', queue: [] }).chats[0]!.queue).toEqual([])
   })
 
   it('streams thinking into the turn in order and drops it when the turn ends', () => {

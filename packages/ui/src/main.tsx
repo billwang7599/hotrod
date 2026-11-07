@@ -34,6 +34,8 @@ const CHAT_BUSY = 'Stop this chat first'
 const PROJECT_BUSY = 'Stop the running chats in this project first'
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
+const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
+const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
@@ -46,9 +48,9 @@ const CONTEXT_LABELS: Record<ContextKind, { label: string; about: string }> = {
 const EMPTY_LAYER = 'Empty. Instructions written here go to the engine.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
-  running: 'Working…',
-  waiting: 'Waiting for your approval…',
-  stopping: 'Stopping…',
+  running: 'Working… Enter queues a message',
+  waiting: 'Waiting for your approval… Enter queues a message',
+  stopping: 'Stopping… Enter queues a message',
 }
 
 declare global {
@@ -498,11 +500,20 @@ function Chat(props: ChatProps) {
   const engineOff = !engines.find((e) => e.id === chat.engine)?.enabled
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
+  const busy = chat.status !== 'idle'
+  const canQueue = connected && busy && !archivedBy
   const showEngineNote = engineOff && !archivedBy && chat.status === 'idle'
   const submit = () => {
-    if (!canSend || !text.trim()) return
+    if (!(canSend || canQueue) || !text.trim()) return
     send({ type: 'chat.send', chatId: chat.id, text })
     setText('')
+  }
+  const interruptAndSend = () => {
+    if (!canQueue) return
+    submit()
+    if (chat.status !== 'stopping' && window.confirm(INTERRUPT_SEND_TEXT)) {
+      send({ type: 'chat.interrupt', chatId: chat.id })
+    }
   }
   const stop = () => {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
@@ -619,32 +630,62 @@ function Chat(props: ChatProps) {
               </button>
             </div>
           )}
+          {chat.queue.length > 0 && (
+            <ul className="queue" aria-label="Queued messages">
+              {chat.queue.map((q) => (
+                <li key={q.id}>
+                  <span className="queue-text" title={q.text}>
+                    {q.text}
+                  </span>
+                  <button
+                    className="ghost icon"
+                    aria-label="Remove from queue"
+                    disabled={!connected}
+                    onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+              <li className="hint">Sends when this turn ends</li>
+            </ul>
+          )}
           {!showEngineNote && (
-            <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
+            <div className={`composer-box ${canSend || canQueue ? '' : 'disabled'}`}>
               <textarea
                 value={text}
                 rows={2}
                 placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
-                disabled={!canSend}
+                disabled={!(canSend || canQueue)}
                 onChange={(e) => setText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                    e.preventDefault()
-                    submit()
-                  }
+                  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+                  e.preventDefault()
+                  const emptyWithQueue = !text.trim() && chat.queue.length > 0
+                  if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
+                  else submit()
                 }}
               />
               <div className="composer-footer">
-                <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
-                {chat.status !== 'idle' ? (
-                  <button
-                    className={`danger stop ${chat.status}`}
-                    disabled={!connected}
-                    title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                    onClick={stop}
-                  >
-                    {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                  </button>
+                <span className="hint">
+                  {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
+                </span>
+                {busy ? (
+                  <span className="composer-actions">
+                    {text.trim() && (
+                      <button className="small" disabled={!canQueue} onClick={submit}>
+                        Queue
+                      </button>
+                    )}
+                    <button
+                      className={`danger stop ${chat.status}`}
+                      disabled={!connected}
+                      title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                      onClick={stop}
+                    >
+                      {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                    </button>
+                  </span>
                 ) : (
                   <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
                     Send

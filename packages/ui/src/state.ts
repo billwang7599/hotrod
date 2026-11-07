@@ -10,6 +10,7 @@ import type {
   EngineAccounts,
   EngineInfo,
   Project,
+  QueuedMessage,
 } from '@hotrod/core/types'
 
 export const MAIN_CHAT_ID = 'main'
@@ -37,7 +38,7 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string }
+export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string; queue: QueuedMessage[] }
 
 export type State = {
   connected: boolean
@@ -220,6 +221,8 @@ export function reduce(state: State, action: Action): State {
       })
     case 'chat.status':
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
+    case 'chat.queue':
+      return updateChat(state, action.chatId, (c) => ({ ...c, queue: action.queue }))
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, layers: action.layers } }

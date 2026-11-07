@@ -167,7 +167,7 @@ describe('projects', () => {
 
 describe('main chat and subchats', () => {
   const infoOf = (core: Core, id: string) => {
-    const { status, entries, draft, ...info } = chatOf(core, id)!
+    const { status, entries, draft, queue, ...info } = chatOf(core, id)!
     return info
   }
 
@@ -380,14 +380,6 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
     expect(t.calls[1]?.prompt).not.toContain('SECRET')
-  })
-
-  it('rejects a send while a turn runs', async () => {
-    const t = setup(permissionScript)
-    const chat = addProject(t)
-    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
-    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })).toThrow()
-    expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'user.message')).toHaveLength(1)
   })
 
   it('keeps the log across a restart', async () => {
@@ -637,7 +629,7 @@ describe('engines', () => {
     const chat = addProject(t)
     const other = createChat(t, chat.projectId)
     t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
-    const { status, entries, draft, ...info } = chatOf(t.core, chat.id)!
+    const { status, entries, draft, queue, ...info } = chatOf(t.core, chat.id)!
     expect(t.messages.at(-1)).toEqual({ type: 'chat.updated', chat: { ...info, engine: 'beta' } })
     expect(engineOf(t.core, chat.id)).toBe('beta')
     expect(engineOf(t.core, other.id)).toBe('alpha')
@@ -773,6 +765,116 @@ describe('settings', () => {
       { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ])
     expect(t.messages.filter((m) => m.type === 'engine.updated')).toHaveLength(2)
+  })
+})
+
+describe('queue', () => {
+  const userTexts = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [e.text] : []))
+  const queueOf = (core: Core, id: string) => chatOf(core, id)?.queue.map((q) => q.text)
+
+  it('queues messages sent during a turn and sends them as one prompt when it ends', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(queueOf(t.core, chat.id)).toEqual(['two', 'three'])
+    const last = t.messages.at(-1)
+    expect(last).toMatchObject({ type: 'chat.queue', chatId: chat.id, queue: [{ text: 'two' }, { text: 'three' }] })
+
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => userTexts(t.core, chat.id).length === 2)
+
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two\n\nthree'])
+    expect(t.calls[1]?.prompt?.endsWith('two\n\nthree')).toBe(true)
+    expect(queueOf(t.core, chat.id)).toEqual([])
+    expect(t.messages).toContainEqual({ type: 'chat.queue', chatId: chat.id, queue: [] })
+    expect(statusOf(t.core, chat.id)).not.toBe('idle')
+  })
+
+  it('sends the queue after a stopped or failed turn too', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => userTexts(t.core, chat.id).length === 2)
+    expect(entriesOf(t.core, chat.id).find((e) => e.type === 'turn.completed')).toMatchObject({ error: 'Interrupted' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two'])
+
+    const emits: ((event: EngineEvent) => void)[] = []
+    const failing = setup(
+      stubAdapter((_machine, _options, emit) => {
+        emits.push(emit)
+        return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+      }),
+    )
+    const other = addProject(failing)
+    failing.handle({ type: 'chat.send', chatId: other.id, text: 'go' })
+    failing.handle({ type: 'chat.send', chatId: other.id, text: 'next' })
+    emits[0]?.({ type: 'session.ended', error: 'crashed' })
+    expect(userTexts(failing.core, other.id)).toEqual(['go', 'next'])
+    expect(statusOf(failing.core, other.id)).toBe('running')
+  })
+
+  it('removes a queued message by id, ignoring one that is already gone', () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    const [two] = chatOf(t.core, chat.id)?.queue ?? []
+    if (!two) throw new Error('nothing queued')
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: two.id })
+    expect(queueOf(t.core, chat.id)).toEqual(['three'])
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.queue', queue: [{ text: 'three' }] })
+    const count = t.messages.length
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: two.id })
+    expect(t.messages).toHaveLength(count)
+  })
+
+  it('sends nothing queued while Hotrod quits', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    await t.core.close()
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(t.calls).toHaveLength(1)
+  })
+
+  it('keeps the queue and reports why when it cannot be sent', async () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two' })
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: false })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(userTexts(t.core, chat.id)).toEqual(['one'])
+    expect(queueOf(t.core, chat.id)).toEqual(['two'])
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringMatching(/is off/) })
+
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'three' })
+    expect(userTexts(t.core, chat.id)).toEqual(['one', 'two\n\nthree'])
+    expect(queueOf(t.core, chat.id)).toEqual([])
+  })
+
+  it('still refuses an empty message', () => {
+    const t = setup(permissionScript)
+    const chat = addProject(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: '  ' })).toThrow(/empty/)
+    expect(queueOf(t.core, chat.id)).toEqual([])
   })
 })
 

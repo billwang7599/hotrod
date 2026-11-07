@@ -1010,6 +1010,39 @@ select.chip option {
   padding: 0 6px 6px 12px;
 }
 
+.composer-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: var(--column);
+  margin: 0 auto 8px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+}
+
+.queue li:not(.hint) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px 2px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.queue-text {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .stop.stopping:not(:disabled) {
   animation: pulse 1.4s ease-in-out infinite;
 }

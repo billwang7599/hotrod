@@ -30,6 +30,7 @@ import {
   type EngineStatus,
   type Machine,
   type Project,
+  type QueuedMessage,
   type Session,
 } from './types.ts'
 
@@ -48,6 +49,7 @@ type Chat = {
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Set<string>
   mcpToken?: string
+  queue: QueuedMessage[]
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -122,6 +124,7 @@ export function openCore(options: {
     status: chat.status,
     entries: chat.entries,
     draft: chat.unsavedText,
+    queue: chat.queue,
   })
 
   const append = (chat: Chat, entry: ChatEntry) => {
@@ -188,6 +191,12 @@ export function openCore(options: {
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
+    if (quitting || !chat.queue.length) return
+    try {
+      sendQueue(chat)
+    } catch (error) {
+      broadcast({ type: 'error', message: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   const forceStop = (chat: Chat) =>
@@ -202,7 +211,16 @@ export function openCore(options: {
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
-    const chat: Chat = { info, dir, context, entries, status: 'idle', unsavedText: '', pendingRequests: new Set() }
+    const chat: Chat = {
+      info,
+      dir,
+      context,
+      entries,
+      status: 'idle',
+      unsavedText: '',
+      pendingRequests: new Set(),
+      queue: [],
+    }
     if (!existsSync(file)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
@@ -444,6 +462,29 @@ export function openCore(options: {
     }
   }
 
+  const setQueue = (chat: Chat, queue: QueuedMessage[]) => {
+    chat.queue = queue
+    broadcast({ type: 'chat.queue', chatId: chat.info.id, queue })
+  }
+
+  const sendQueue = (chat: Chat, text?: string) => {
+    const queue = chat.queue
+    if (queue.length) setQueue(chat, [])
+    try {
+      send(chat, [...queue.map((q) => q.text), ...(text === undefined ? [] : [text])].join('\n\n'))
+    } catch (error) {
+      if (queue.length) setQueue(chat, queue)
+      throw error
+    }
+  }
+
+  const enqueue = (chat: Chat, text: string) => {
+    if (quitting) throw new Error('Hotrod is quitting')
+    checkActive(chat)
+    if (chat.status === 'idle') return sendQueue(chat, text)
+    setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), text }])
+  }
+
   const mcp = openHotrodMcp({
     chats: () => [...chats.values()].map(state),
     projects: () => [...projects.values()],
@@ -519,7 +560,12 @@ export function openCore(options: {
           return setEngine(chatFor(message.chatId), String(message.engine))
         case 'chat.send':
           if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
-          return send(chatFor(message.chatId), message.text)
+          return enqueue(chatFor(message.chatId), message.text)
+        case 'chat.unqueue': {
+          const chat = chatFor(message.chatId)
+          if (!chat.queue.some((q) => q.id === message.id)) return
+          return setQueue(chat, chat.queue.filter((q) => q.id !== message.id))
+        }
         case 'chat.interrupt':
           return interrupt(chatFor(message.chatId), message.force === true)
         case 'context.get': {

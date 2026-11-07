@@ -110,7 +110,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   expect(b.messages.some((m) => m.type === 'chat.delta')).toBe(true)
 
   a.socket.send(JSON.stringify({ type: 'chat.send', chatId: added.chat.id, text: 'again' }))
-  await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
+  await until(() => b.messages.some((m) => m.type === 'chat.queue' && m.queue[0]?.text === 'again'))
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 })
 
