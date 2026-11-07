@@ -44,6 +44,12 @@ import {
 
 export const STOP_GRACE_MS = 60_000
 export const MAX_CHAT_DEPTH = 1
+export const HOME_INSTRUCTIONS =
+  `You are the user's personal assistant in Hotrod, running in its main chat, ${WORKSHOP_NAME}. Answer general ` +
+  'questions, help with personal tasks and use your MCP tools. You may work in any directory the user names in this ' +
+  `chat: read, edit and run commands there. No folder stays attached to ${WORKSHOP_NAME}; each message starts in a ` +
+  'scratch folder. For ongoing work in a folder, offer to make a space for it: a chat below you with that folder, ' +
+  'made with the hotrod create_chat tool. list_chats, read_chat and send_message reach the spaces that exist.'
 
 type Chat = {
   info: ChatInfo
@@ -260,7 +266,7 @@ export function openCore(options: {
     const file = join(dir, 'chat.json')
     const { context = {}, title, ...saved } = readJson(file)
     const info: ChatInfo = { ...fallback, ...(title !== undefined && { name: title }), ...saved, id: fallback.id }
-    if (info.id === WORKSHOP_ID) info.name = WORKSHOP_NAME
+    if (info.id === WORKSHOP_ID) Object.assign(info, { name: WORKSHOP_NAME, folders: [], files: [] })
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -274,7 +280,7 @@ export function openCore(options: {
       pendingRequests: new Set(),
       queue: [],
     }
-    if (!existsSync(file)) saveChat(chat)
+    if (!existsSync(file) || info.id === WORKSHOP_ID) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
@@ -432,6 +438,9 @@ export function openCore(options: {
 
   const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
     checkActive(chat)
+    if (isWorkshop(chat)) {
+      throw new Error(`${WORKSHOP_NAME} keeps no folders or files. Name a folder in its chat, or make a space for it.`)
+    }
     const path = checkPath(rawPath, section)
     if (contextItems(chat).some((item) => item.path === path)) {
       throw new Error(`${path} is already in this chat's context`)
@@ -476,12 +485,12 @@ export function openCore(options: {
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
-    const instructions = items
+    const contextText = items
       .filter((item) => item.text.trim())
       .map(({ section, path, text }) =>
         section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim(),
       )
-      .join('\n\n')
+    const instructions = [...(isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []), ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir

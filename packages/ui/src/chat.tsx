@@ -13,7 +13,15 @@ import { ContextPanel } from './context-panel.tsx'
 import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, SidePanel, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
-import { accountLabel, columnSlider, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
+import {
+  accountLabel,
+  columnSlider,
+  engineOptions,
+  MAIN_CHAT_ID,
+  modelMenu,
+  type ChatView,
+  type Item,
+} from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -284,9 +292,11 @@ export function Chat(props: ChatProps) {
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
             <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
-            <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
-              {folder ?? 'Not tied to a folder'}
-            </span>
+            {chat.id !== MAIN_CHAT_ID && (
+              <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
+                {folder ?? 'Not tied to a folder'}
+              </span>
+            )}
           </div>
           <ChipSelect
             aria-label="Engine"
