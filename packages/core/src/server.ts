@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
-import type { CoreMessage, EngineStatus } from './types.ts'
+import type { CoreMessage, EngineInfo } from './types.ts'
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -19,12 +19,12 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export async function startServer(options: {
   core: Core
-  engine: { id: string } & EngineStatus
+  engines: EngineInfo[]
   port: number
   uiOrigin: string
   uiDir?: string
 }) {
-  const { core, engine, port, uiOrigin } = options
+  const { core, engines, port, uiOrigin } = options
   const uiDir = options.uiDir && resolve(options.uiDir)
   const serveUi: RequestListener = (request, response) => {
     if (!uiDir) return response.writeHead(426).end()
@@ -47,7 +47,7 @@ export async function startServer(options: {
   core.onMessage((message) => wss.clients.forEach((socket) => send(socket, message)))
 
   wss.on('connection', (socket) => {
-    send(socket, { type: 'snapshot', engine, projects: core.projects() })
+    send(socket, { type: 'snapshot', engines, projects: core.projects() })
     socket.on('message', (data) => {
       try {
         core.handle(JSON.parse(String(data)), (message) => send(socket, message))

@@ -174,7 +174,7 @@ function App() {
   }, [state.selectedId])
   const [path, setPath] = useState('')
   const selected = state.projects.find((p) => p.id === state.selectedId)
-  const engine = state.engine
+  const engine = state.engines.find((e) => e.id === selected?.engine)
 
   const addProject = (e: FormEvent) => {
     e.preventDefault()

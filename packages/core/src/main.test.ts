@@ -3,10 +3,15 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
+import { createFakeAdapter } from './adapters/fake.ts'
 import { startCore } from './main.ts'
-import type { CoreMessage } from './types.ts'
+import type { Adapter, CoreMessage } from './types.ts'
 
 const port = 4451
+const adapters: Adapter[] = [
+  createFakeAdapter(),
+  { ...createFakeAdapter(), id: 'broken', detect: () => Promise.reject(new Error('no binary')) },
+]
 const cleanups: (() => void | Promise<void>)[] = []
 
 afterEach(async () => {
@@ -37,16 +42,22 @@ it('starts the core from the environment and stops it', async () => {
     HOTROD_PORT: String(port),
     HOTROD_UI_ORIGIN: 'http://ui.test',
   }
-  const hotrod = await startCore({ env })
+  const hotrod = await startCore({ env, adapters })
   expect(hotrod.port).toBe(port)
-  expect(await firstMessage('http://ui.test')).toMatchObject({ type: 'snapshot', engine: { id: 'fake' } })
+  expect(await firstMessage('http://ui.test')).toMatchObject({
+    type: 'snapshot',
+    engines: [
+      { id: 'fake', installed: true, signedIn: true },
+      { id: 'broken', installed: false, signedIn: false, detail: 'no binary' },
+    ],
+  })
   expect(await firstMessage('http://localhost:4318')).toBe(403)
 
   hotrod.core.handle({ type: 'project.add', path: tempDir() }, () => {})
   expect(hotrod.core.projects()).toHaveLength(1)
 
   await hotrod.close()
-  const again = await startCore({ env })
+  const again = await startCore({ env, adapters })
   await again.close()
 })
 
@@ -54,6 +65,7 @@ it('accepts only its own origin when it serves the UI', async () => {
   const hotrod = await startCore({
     env: { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port) },
     uiDir: tempDir(),
+    adapters,
   })
   cleanups.push(() => hotrod.close())
   expect(hotrod.uiUrl).toBe(`http://127.0.0.1:${port}`)

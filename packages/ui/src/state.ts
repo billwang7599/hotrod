@@ -1,4 +1,4 @@
-import type { ChatEntry, ChatStatus, CoreMessage, EngineStatus, ProjectState } from '@hotrod/core/types'
+import type { ChatEntry, ChatStatus, CoreMessage, EngineInfo, ProjectState } from '@hotrod/core/types'
 
 export type Item =
   | { kind: 'user'; text: string }
@@ -22,11 +22,19 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ProjectView = { id: string; name: string; path: string; status: ChatStatus; items: Item[]; draft: string }
+export type ProjectView = {
+  id: string
+  name: string
+  path: string
+  engine: string
+  status: ChatStatus
+  items: Item[]
+  draft: string
+}
 
 export type State = {
   connected: boolean
-  engine: ({ id: string } & EngineStatus) | null
+  engines: EngineInfo[]
   projects: ProjectView[]
   selectedId: string | null
   toasts: { id: number; message: string }[]
@@ -41,7 +49,7 @@ export type Action =
 
 export const initialState: State = {
   connected: false,
-  engine: null,
+  engines: [],
   projects: [],
   selectedId: null,
   toasts: [],
@@ -120,6 +128,7 @@ const toView = (p: ProjectState): ProjectView => ({
   id: p.id,
   name: p.name,
   path: p.path,
+  engine: p.engine,
   status: p.status,
   items: p.entries.reduce(applyEntry, []),
   draft: '',
@@ -137,13 +146,15 @@ export function reduce(state: State, action: Action): State {
     case 'snapshot': {
       const projects = action.projects.map(toView)
       const selectedId = projects.some((p) => p.id === state.selectedId) ? state.selectedId : (projects[0]?.id ?? null)
-      return { ...state, engine: action.engine, projects, selectedId }
+      return { ...state, engines: action.engines, projects, selectedId }
     }
     case 'project.added': {
       const known = state.projects.some((p) => p.id === action.project.id)
       const projects = known ? state.projects : [...state.projects, toView(action.project)]
       return { ...state, projects, selectedId: action.project.id }
     }
+    case 'project.updated':
+      return updateProject(state, action.project.id, (p) => ({ ...p, ...action.project }))
     case 'chat.entry':
       return updateProject(state, action.projectId, (p) => ({
         ...p,

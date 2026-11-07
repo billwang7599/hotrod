@@ -64,16 +64,21 @@ function tempDir() {
 
 function setup(source: FakeStep[] | Adapter, garage = tempDir()) {
   const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
-  const core = openCore({ garage, adapter, machine: localMachine, interruptGraceMs: TEST_INTERRUPT_GRACE_MS })
+  return { ...open(garage, [adapter], adapter.id), calls }
+}
+
+function open(garage: string, adapters: Adapter[], defaultEngine: string) {
+  const machine = localMachine
+  const core = openCore({ garage, adapters, defaultEngine, machine, interruptGraceMs: TEST_INTERRUPT_GRACE_MS })
   cores.push(core)
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const replies: CoreMessage[] = []
   const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, (r) => replies.push(r))
-  return { core, garage, calls, messages, replies, handle }
+  return { core, garage, messages, replies, handle }
 }
 
-function addProject(t: ReturnType<typeof setup>, dir = tempDir()) {
+function addProject(t: ReturnType<typeof open>, dir = tempDir()) {
   const before = [t.messages.length, t.replies.length]
   t.handle({ type: 'project.add', path: dir })
   const added = [...t.messages.slice(before[0]), ...t.replies.slice(before[1])].find((m) => m.type === 'project.added')
@@ -119,7 +124,7 @@ describe('projects', () => {
     expect(second.id).not.toBe('app')
     expect(t.core.projects()).toHaveLength(2)
     const saved = JSON.parse(readFileSync(join(t.garage, 'projects', 'app', 'project.json'), 'utf8'))
-    expect(saved).toEqual({ id: 'app', name: 'app', path: first.path })
+    expect(saved).toEqual({ id: 'app', name: 'app', path: first.path, engine: 'fake' })
   })
 
   it('rejects a path that is not a directory', () => {
@@ -352,6 +357,102 @@ describe('chat', () => {
     expect(prompt.match(/<\/tool_result>/gi)).toHaveLength(1)
     expect(prompt.match(/<tool_call name="Bash">([\s\S]*?)<\/tool_call>/)?.[1]).toContain('after-call')
     expect(prompt.match(/<tool_result status="ok">([\s\S]*?)<\/tool_result>/)?.[1]).toContain('after-result')
+  })
+})
+
+describe('engines', () => {
+  const alphaScript: FakeStep[] = [{ type: 'text.completed', text: 'Alpha reply' }]
+  const betaScript: FakeStep[] = [{ type: 'text.completed', text: 'Beta reply' }]
+
+  function setupEngines(garage = tempDir()) {
+    const alpha = recording({ ...createFakeAdapter(alphaScript, 0), id: 'alpha' })
+    const beta = recording({ ...createFakeAdapter(betaScript, 0), id: 'beta' })
+    const t = open(garage, [alpha.adapter, beta.adapter], 'alpha')
+    return { ...t, alpha: alpha.calls, beta: beta.calls }
+  }
+
+  const projectFile = (t: { garage: string }, id: string) => join(t.garage, 'projects', id, 'project.json')
+  const engineOf = (core: Core, id: string) => core.projects().find((p) => p.id === id)?.engine
+
+  it('rejects an unknown default engine', () => {
+    expect(() => open(tempDir(), [createFakeAdapter([], 0)], 'nope')).toThrow(/Unknown engine "nope"/)
+  })
+
+  it('gives a new project the default engine and saves it', () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    expect(project.engine).toBe('alpha')
+    expect(JSON.parse(readFileSync(projectFile(t, project.id), 'utf8')).engine).toBe('alpha')
+  })
+
+  it('gives a saved project without an engine the default', () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    const saved = JSON.parse(readFileSync(projectFile(t, project.id), 'utf8'))
+    delete saved.engine
+    writeFileSync(projectFile(t, project.id), JSON.stringify(saved))
+    t.core.close()
+    expect(engineOf(setupEngines(t.garage).core, project.id)).toBe('alpha')
+  })
+
+  it('sets a project engine, saves it and tells every client', () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    t.handle({ type: 'project.setEngine', projectId: project.id, engine: 'beta' })
+    const { id, name, path } = project
+    expect(t.messages.at(-1)).toEqual({ type: 'project.updated', project: { id, name, path, engine: 'beta' } })
+    expect(engineOf(t.core, project.id)).toBe('beta')
+    t.core.close()
+    expect(engineOf(setupEngines(t.garage).core, project.id)).toBe('beta')
+  })
+
+  it('rejects an unknown engine and a change while a turn runs', () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    expect(() => t.handle({ type: 'project.setEngine', projectId: project.id, engine: 'nope' })).toThrow(
+      /Unknown engine "nope"/,
+    )
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(() => t.handle({ type: 'project.setEngine', projectId: project.id, engine: 'beta' })).toThrow(/turn/)
+    expect(engineOf(t.core, project.id)).toBe('alpha')
+    expect(JSON.parse(readFileSync(projectFile(t, project.id), 'utf8')).engine).toBe('alpha')
+  })
+
+  it('continues a chat on another engine with the whole conversation', async () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'first question' })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+    t.handle({ type: 'project.setEngine', projectId: project.id, engine: 'beta' })
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'second question' })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    expect(t.alpha).toHaveLength(1)
+    expect(t.beta).toHaveLength(1)
+    const prompt = t.beta[0]?.prompt ?? ''
+    expect(prompt).toContain('User: first question')
+    expect(prompt).toContain('Assistant: Alpha reply')
+    expect(prompt.trimEnd().endsWith('second question')).toBe(true)
+    const texts = entriesOf(t.core, project.id).flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))
+    expect(texts).toEqual(['Alpha reply', 'Beta reply'])
+  })
+
+  it('keeps a project whose saved engine is gone and refuses to send', () => {
+    const t = setupEngines()
+    const project = addProject(t)
+    writeFileSync(projectFile(t, project.id), JSON.stringify({ ...project, engine: 'removed' }))
+    t.core.close()
+
+    const reopened = setupEngines(t.garage)
+    expect(engineOf(reopened.core, project.id)).toBe('removed')
+    expect(() => reopened.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })).toThrow(
+      /Engine "removed" is not available/,
+    )
+    expect(entriesOf(reopened.core, project.id)).toEqual([])
+    expect(statusOf(reopened.core, project.id)).toBe('idle')
+    reopened.handle({ type: 'project.setEngine', projectId: project.id, engine: 'beta' })
+    reopened.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    expect(reopened.beta).toHaveLength(1)
   })
 })
 

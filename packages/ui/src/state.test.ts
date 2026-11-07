@@ -3,11 +3,12 @@ import type { ChatEntry, CoreMessage, ProjectState } from '@hotrod/core/types'
 import { initialState, reduce, type Action, type State } from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
-const engine = { id: 'fake', installed: true, signedIn: true }
+const engines = [{ id: 'fake', installed: true, signedIn: true }]
 const project = (id: string, entries: ChatEntry[] = []): ProjectState => ({
   id,
   name: id,
   path: `/tmp/${id}`,
+  engine: 'fake',
   status: 'idle',
   entries,
 })
@@ -21,7 +22,7 @@ describe('reduce', () => {
   it('loads a snapshot, folding saved entries into items and selecting the first project', () => {
     const state = run({
       type: 'snapshot',
-      engine,
+      engines,
       projects: [
         project('a', [
           { at, type: 'user.message', text: 'hi' },
@@ -34,7 +35,7 @@ describe('reduce', () => {
         project('b'),
       ],
     })
-    expect(state.engine).toEqual(engine)
+    expect(state.engines).toEqual(engines)
     expect(state.selectedId).toBe('a')
     expect(state.projects.map((p) => p.id)).toEqual(['a', 'b'])
     expect(items(state)).toEqual([
@@ -46,23 +47,32 @@ describe('reduce', () => {
   })
 
   it('keeps the selection across a reconnect snapshot', () => {
-    const snapshot: Action = { type: 'snapshot', engine, projects: [project('a'), project('b')] }
+    const snapshot: Action = { type: 'snapshot', engines, projects: [project('a'), project('b')] }
     const state = run(snapshot, { type: 'select', projectId: 'b' }, { type: 'connection', connected: false }, snapshot)
     expect(state.selectedId).toBe('b')
   })
 
   it('adds a project and selects it', () => {
     const state = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       { type: 'project.added', project: project('b') },
     )
     expect(state.projects.map((p) => p.id)).toEqual(['a', 'b'])
     expect(state.selectedId).toBe('b')
   })
 
+  it('updates a project engine and keeps its chat', () => {
+    const state = run(
+      { type: 'snapshot', engines, projects: [project('a', [{ at, type: 'user.message', text: 'hi' }])] },
+      { type: 'project.updated', project: { id: 'a', name: 'a', path: '/tmp/a', engine: 'pi' } },
+    )
+    expect(state.projects[0]?.engine).toBe('pi')
+    expect(items(state)).toEqual([{ kind: 'user', text: 'hi' }])
+  })
+
   it('selects a re-added project instead of adding it twice', () => {
     const state = run(
-      { type: 'snapshot', engine, projects: [project('a'), project('b')] },
+      { type: 'snapshot', engines, projects: [project('a'), project('b')] },
       { type: 'project.added', project: project('a') },
     )
     expect(state.projects.map((p) => p.id)).toEqual(['a', 'b'])
@@ -71,7 +81,7 @@ describe('reduce', () => {
 
   it('shows a tool as waiting while its permission is pending', () => {
     const requested = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
       entry('a', { type: 'permission.requested', requestId: 'r1', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
     )
@@ -84,7 +94,7 @@ describe('reduce', () => {
 
   it('appends entries to the right project', () => {
     const state = run(
-      { type: 'snapshot', engine, projects: [project('a'), project('b')] },
+      { type: 'snapshot', engines, projects: [project('a'), project('b')] },
       entry('b', { type: 'user.message', text: 'hi' }),
       entry('b', { type: 'tool.started', toolId: 't1', name: 'Edit', kind: 'edit', summary: '/x', input: { file_path: '/x' } }),
       entry('b', { type: 'tool.completed', toolId: 't1', output: 'no such file', isError: true }),
@@ -98,7 +108,7 @@ describe('reduce', () => {
 
   it('accumulates deltas and clears them when the text completes', () => {
     const streaming = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       { type: 'chat.delta', projectId: 'a', text: 'Hel' },
       { type: 'chat.delta', projectId: 'a', text: 'lo' },
     )
@@ -110,7 +120,7 @@ describe('reduce', () => {
 
   it('tracks chat status', () => {
     const state = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       { type: 'chat.status', projectId: 'a', status: 'running' },
     )
     expect(state.projects[0]!.status).toBe('running')
@@ -119,7 +129,7 @@ describe('reduce', () => {
 
   it('moves a permission from pending to resolved', () => {
     const requested = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'rm x', input: { command: 'rm x' } }),
     )
     expect(items(requested)).toEqual([
@@ -133,7 +143,7 @@ describe('reduce', () => {
 
   it('stops unfinished tools and permissions when the turn ends', () => {
     const state = run(
-      { type: 'snapshot', engine, projects: [project('a')] },
+      { type: 'snapshot', engines, projects: [project('a')] },
       { type: 'chat.delta', projectId: 'a', text: 'half' },
       entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
       entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: '', input: {} }),

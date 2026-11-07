@@ -10,6 +10,7 @@ import { startServer } from './server.ts'
 import type { CoreMessage } from './types.ts'
 
 const origin = 'http://localhost:4318'
+const engines = [{ id: 'fake', installed: true, signedIn: true }]
 const cleanups: (() => void | Promise<void>)[] = []
 
 afterEach(async () => {
@@ -19,10 +20,15 @@ afterEach(async () => {
 async function start() {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const project = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const core = openCore({ garage, adapter: createFakeAdapter(undefined, 0), machine: localMachine })
+  const core = openCore({
+    garage,
+    adapters: [createFakeAdapter(undefined, 0)],
+    defaultEngine: 'fake',
+    machine: localMachine,
+  })
   const server = await startServer({
     core,
-    engine: { id: 'fake', installed: true, signedIn: true },
+    engines,
     port: 0,
     uiOrigin: origin,
   })
@@ -67,7 +73,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   await until(() => a.messages.length > 0 && b.messages.length > 0)
   expect(a.messages[0]).toEqual({
     type: 'snapshot',
-    engine: { id: 'fake', installed: true, signedIn: true },
+    engines,
     projects: [],
   })
 
@@ -76,12 +82,18 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   const added = b.messages.find((m) => m.type === 'project.added')
   if (added?.type !== 'project.added') throw new Error('no project')
 
+  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'nope' }))
+  await until(() => a.messages.some((m) => m.type === 'error'))
+  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'fake' }))
+  await until(() => b.messages.some((m) => m.type === 'project.updated'))
+  expect(b.messages.some((m) => m.type === 'error')).toBe(false)
+
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'hi' }))
   await until(() => b.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting'))
   expect(b.messages.some((m) => m.type === 'chat.delta')).toBe(true)
 
   a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'again' }))
-  await until(() => a.messages.some((m) => m.type === 'error'))
+  await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 })
 
@@ -101,10 +113,15 @@ it('serves the UI folder when given one', async () => {
   writeFileSync(join(uiDir, 'index.html'), '<html>hotrod</html>')
   writeFileSync(join(uiDir, 'assets', 'app.js'), 'console.log(1)')
   writeFileSync(join(garage, 'secret.txt'), 'secret')
-  const core = openCore({ garage, adapter: createFakeAdapter(undefined, 0), machine: localMachine })
+  const core = openCore({
+    garage,
+    adapters: [createFakeAdapter(undefined, 0)],
+    defaultEngine: 'fake',
+    machine: localMachine,
+  })
   const server = await startServer({
     core,
-    engine: { id: 'fake', installed: true, signedIn: true },
+    engines,
     port: 0,
     uiOrigin: origin,
     uiDir,
