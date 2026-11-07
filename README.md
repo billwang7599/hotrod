@@ -1,3 +1,5 @@
+<img src="packages/ui/src/logo.svg" alt="" width="72" height="72">
+
 # Hotrod
 
 A desktop app for running coding agents.

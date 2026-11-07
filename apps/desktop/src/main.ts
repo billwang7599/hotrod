@@ -5,6 +5,7 @@ import { startCore } from '@hotrod/core/main'
 
 const uiDir = fileURLToPath(new URL('../../../packages/ui/dist', import.meta.url))
 const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
+const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
@@ -16,12 +17,14 @@ start().catch((error: unknown) => {
 
 async function start() {
   await app.whenReady()
+  if (process.platform === 'darwin') app.dock?.setIcon(icon)
   const hotrod = await startCore({ uiDir })
 
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
     title: 'Hotrod',
+    icon,
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true },
   })
 
