@@ -471,18 +471,18 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
               >
                 <Dialog.Title className="sr-only">Settings</Dialog.Title>
                 <Tabs.Root
-                  className="flex min-w-0 flex-1"
+                  className="flex min-w-0 flex-1 max-[600px]:flex-col"
                   orientation="vertical"
                   value={current.id}
                   onValueChange={(id) => openPage(id as SettingsPage)}
                 >
                   <Tabs.List
                     aria-label="Settings"
-                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160"
+                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
                   >
                     {NAV_GROUPS.map((group) => (
                       <Fragment key={group}>
-                        <div className={NAV_LABEL}>{group}</div>
+                        <div className={`${NAV_LABEL} max-[600px]:hidden`}>{group}</div>
                         {pages
                           .filter((p) => p.group === group)
                           .map((p) => (
@@ -500,7 +500,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                   {pages.map((p) => (
                     <Tabs.Content key={p.id} value={p.id} asChild>
                       <m.div
-                        className="min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2"
+                        className="min-h-0 min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2 max-[600px]:px-16"
                         initial={MOTION.fade.initial}
                         animate={MOTION.fade.animate}
                       >

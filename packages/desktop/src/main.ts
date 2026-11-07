@@ -25,6 +25,9 @@ async function start() {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 375,
+    minHeight: 600,
+    useContentSize: true,
     title: 'Hotrod',
     icon,
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true },

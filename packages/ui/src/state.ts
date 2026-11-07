@@ -289,9 +289,16 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
 }
 
-const MIN_WINDOW_WIDTH_PX = 375
+export const MIN_WINDOW_PX = { width: 375, height: 600 }
+export const PANEL_PX = { sidebar: 232, context: 320 }
 const PANE_PADDING_PX = 24
-export const COLUMN_PX = { min: MIN_WINDOW_WIDTH_PX - 2 * PANE_PADDING_PX, default: 760 }
+export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, default: 760 }
+
+export function dockedPanels(windowPx: number) {
+  const sidebar = PANEL_PX.sidebar + MIN_WINDOW_PX.width
+  if (windowPx >= sidebar + PANEL_PX.context) return 'both'
+  return windowPx >= sidebar ? 'sidebar' : 'none'
+}
 
 export function storedColumn(value: string | null) {
   const px = Number(value ?? NaN)

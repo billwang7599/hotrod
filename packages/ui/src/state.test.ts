@@ -6,13 +6,16 @@ import {
   chatTree,
   COLUMN_PX,
   columnSlider,
+  dockedPanels,
   engineOptions,
   familyOf,
   folderName,
   folderOf,
   initialState,
   MAIN_CHAT_ID,
+  MIN_WINDOW_PX,
   modelMenu,
+  PANEL_PX,
   reduce,
   storedColumn,
   storedFlag,
@@ -462,5 +465,17 @@ describe('chat width', () => {
       max: COLUMN_PX.min,
       value: COLUMN_PX.min,
     })
+  })
+})
+
+describe('dockedPanels', () => {
+  it('docks a panel only while the chat keeps at least the minimum window width', () => {
+    const sidebar = PANEL_PX.sidebar + MIN_WINDOW_PX.width
+    const both = sidebar + PANEL_PX.context
+    expect(dockedPanels(MIN_WINDOW_PX.width)).toBe('none')
+    expect(dockedPanels(sidebar - 1)).toBe('none')
+    expect(dockedPanels(sidebar)).toBe('sidebar')
+    expect(dockedPanels(both - 1)).toBe('sidebar')
+    expect(dockedPanels(both)).toBe('both')
   })
 })

@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { CONTEXT_SECTIONS, type ClientMessage, type ContextItem, type ContextSection } from '@hotrod/core/types'
 import { Button, MOTION, Switch, useSettled } from './controls.tsx'
-import { folderName, type ChatView } from './state.ts'
+import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
@@ -170,7 +170,7 @@ export function ContextPanel({ chatId, items, chats, contextDefaults, readOnly, 
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) => chats.find((c) => c.id === item.from)?.name ?? item.from
   return (
-    <aside className="flex w-320 shrink-0 flex-col border-l bg-panel" aria-label="Context">
+    <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center border-b px-14">
         <span className="font-semibold">Context</span>
       </header>

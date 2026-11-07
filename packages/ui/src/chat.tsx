@@ -10,7 +10,7 @@ import type {
   ModelLists,
 } from '@hotrod/core/types'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, SidePanel, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import { accountLabel, columnSlider, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
@@ -46,7 +46,7 @@ const SELECT_ARROW =
 function ChipSelect(props: ComponentProps<'select'>) {
   return (
     <select
-      className={`h-26 max-w-220 cursor-pointer appearance-none truncate rounded border border-transparent bg-transparent bg-no-repeat bg-position-[right_8px_center] pr-24 pl-8 text-sm text-muted field-sizing-content enabled:hover:border-border enabled:hover:text-text disabled:cursor-default disabled:text-faint disabled:opacity-70 max-[900px]:max-w-150 [&_option]:bg-panel [&_option]:text-text ${SELECT_ARROW}`}
+      className={`h-26 max-w-220 min-w-0 cursor-pointer appearance-none truncate rounded border border-transparent bg-transparent bg-no-repeat bg-position-[right_8px_center] pr-24 pl-8 text-sm text-muted field-sizing-content enabled:hover:border-border enabled:hover:text-text disabled:cursor-default disabled:text-faint disabled:opacity-70 max-[900px]:max-w-150 [&_option]:bg-panel [&_option]:text-text ${SELECT_ARROW}`}
       {...props}
     />
   )
@@ -204,6 +204,7 @@ type ChatProps = {
   sidebarOpen: boolean
   toggleSidebar: () => void
   contextOpen: boolean
+  contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
   contextDefaults: Record<ContextSection, boolean>
@@ -281,8 +282,8 @@ export function Chat(props: ChatProps) {
             open={props.sidebarOpen}
             toggle={props.toggleSidebar}
           />
-          <div className="flex min-w-0 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
-            <span className="max-w-[50%] shrink-0 truncate font-semibold">{chat.name}</span>
+          <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
+            <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
             <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
               {folder ?? 'Not tied to a folder'}
             </span>
@@ -421,7 +422,7 @@ export function Chat(props: ChatProps) {
           </AnimatePresence>
           {!showEngineNote && (
             <div
-              className={`mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
+              className={`@container mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
             >
               <textarea
                 className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
@@ -438,11 +439,11 @@ export function Chat(props: ChatProps) {
                   else submit()
                 }}
               />
-              <div className="flex items-center justify-between gap-8 pr-6 pb-6 pl-12">
-                <span className="text-sm text-faint">
+              <div className="flex flex-wrap items-center justify-end gap-x-8 gap-y-4 pr-6 pb-6 pl-12">
+                <span className="mr-auto min-w-0 truncate text-sm text-faint @max-[480px]:hidden">
                   {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
                 </span>
-                <span className="flex min-w-0 items-center gap-6">
+                <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
                   {models.options.length > 1 && (
                     <ChipSelect
                       aria-label="Model"
@@ -512,13 +513,7 @@ export function Chat(props: ChatProps) {
       </main>
       <AnimatePresence initial={false}>
         {props.contextOpen && (
-          <m.div
-            key="context"
-            className="flex shrink-0 overflow-hidden"
-            initial={{ width: 0 }}
-            animate={{ width: 'auto' }}
-            exit={{ width: 0 }}
-          >
+          <SidePanel key="context" side="right" overlay={props.contextOverlay}>
             <ContextPanel
               chatId={chat.id}
               items={props.contextItems}
@@ -528,7 +523,7 @@ export function Chat(props: ChatProps) {
               connected={connected}
               send={send}
             />
-          </m.div>
+          </SidePanel>
         )}
       </AnimatePresence>
     </div>
