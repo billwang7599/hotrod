@@ -11,6 +11,7 @@ import type {
 import { ContextPanel } from './context-panel.tsx'
 import { Button, Chevron, confirm, ErrorText } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
+import type { SettingsPage } from './settings.tsx'
 import { accountLabel, engineOptions, type ChatView, type Item } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
@@ -159,7 +160,7 @@ type ChatProps = {
   accounts?: EngineAccounts
   connected: boolean
   send: (m: ClientMessage) => void
-  openSettings: () => void
+  openSettings: (page?: SettingsPage) => void
   contextOpen: boolean
   toggleContext: () => void
   contextLayers?: ContextLayer[]
@@ -252,7 +253,7 @@ export function Chat(props: ChatProps) {
               disabled={!canSend}
               onChange={(e) =>
                 e.target.value === MANAGE_ACCOUNTS
-                  ? openSettings()
+                  ? openSettings('accounts')
                   : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
               }
             >
@@ -325,7 +326,7 @@ export function Chat(props: ChatProps) {
                   </>
                 )}
               </span>
-              <Button variant="primary" size="small" onClick={openSettings}>
+              <Button variant="primary" size="small" onClick={() => openSettings('engines')}>
                 Open Settings
               </Button>
             </div>

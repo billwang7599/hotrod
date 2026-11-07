@@ -4,7 +4,7 @@ import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { Button, ConfirmDialog, Toast } from './controls.tsx'
 import logo from './logo.svg'
-import { SettingsDialog } from './settings.tsx'
+import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav } from './sidebar.tsx'
 import { initialState, MAIN_CHAT_ID, reduce } from './state.ts'
 import './styles.css'
@@ -48,6 +48,11 @@ function App() {
   const [path, setPath] = useState('')
   const pathRef = useRef<HTMLInputElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
+  const openSettings = useCallback((page?: SettingsPage) => {
+    if (page) setSettingsPage(page)
+    setSettingsOpen(true)
+  }, [])
   const [contextOpen, setContextOpen] = useState(() => localStorage.getItem(CONTEXT_OPEN_KEY) === 'true')
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const toggleContext = useCallback(() => setContextOpen((open) => !open), [])
@@ -124,7 +129,7 @@ function App() {
           </form>
         )}
         <div className="px-8 pb-10">
-          <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => setSettingsOpen(true)}>
+          <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
             <span aria-hidden="true">⚙</span>
             Settings
           </Button>
@@ -169,6 +174,8 @@ function App() {
             mods={state.mods}
             connected={connected}
             send={send}
+            page={settingsPage}
+            openPage={setSettingsPage}
             close={() => setSettingsOpen(false)}
           />
         )}
@@ -181,7 +188,7 @@ function App() {
             accounts={accounts}
             connected={state.connected}
             send={send}
-            openSettings={() => setSettingsOpen(true)}
+            openSettings={openSettings}
             contextOpen={contextOpen}
             toggleContext={toggleContext}
             contextLayers={state.context?.chatId === selected.id ? state.context.layers : undefined}

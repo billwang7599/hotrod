@@ -1,6 +1,6 @@
 import { DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage, Project } from '@hotrod/core/types'
-import { Button, Chevron, confirm } from './controls.tsx'
+import { Button, Chevron, confirm, NAV_LABEL } from './controls.tsx'
 import { MAIN_CHAT_ID, type ChatView } from './state.ts'
 
 const CHAT_BUSY = 'Stop this chat first'
@@ -11,7 +11,6 @@ const DOTS: Record<ChatStatus, string> = {
   waiting: 'bg-amber',
   stopping: 'bg-amber',
 }
-const NAV_LABEL = 'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
 const ROW_ACTION = 'hidden group-hover/row:block group-focus-within/row:block'
 
 type MenuItem = { label: string; run: () => void; danger?: boolean; disabledReason?: string }

@@ -3,6 +3,9 @@ import { AlertDialog, Switch as SwitchPrimitive } from 'radix-ui'
 
 const TOAST_MS = 6_000
 
+export const NAV_LABEL =
+  'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
+
 const BUTTON_VARIANTS = {
   default: 'enabled:bg-raised enabled:hover:bg-hover disabled:text-faint',
   primary: 'enabled:border-accent enabled:bg-accent enabled:text-on-accent enabled:hover:bg-accent-hover disabled:text-faint',

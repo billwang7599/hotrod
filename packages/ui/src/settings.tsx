@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
-import { Dialog } from 'radix-ui'
+import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_KINDS,
   type Account,
@@ -10,43 +10,138 @@ import {
   type Mods,
 } from '@hotrod/core/types'
 import { CONTEXT_LABELS } from './context-panel.tsx'
-import { Button, confirm, ErrorText, Switch, useReturnFocus } from './controls.tsx'
+import { Button, confirm, ErrorText, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem } from './state.ts'
 
-const card = (on: boolean) => `flex flex-col rounded-lg border px-12 py-10 ${on ? 'bg-bg' : ''}`
-
-function SettingRow({ title, detail, children }: { title: ReactNode; detail: ReactNode; children: ReactNode }) {
-  return (
-    <div className="flex items-center gap-12">
-      <span className="flex min-w-0 flex-1 flex-col">
-        {title}
-        {detail}
-      </span>
-      {children}
-    </div>
-  )
-}
-
-function Section({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-8">
-      <h3 className="text-xs font-semibold tracking-[0.04em] text-faint uppercase">{title}</h3>
-      <p className="text-muted">{hint}</p>
-      {children}
-    </section>
-  )
-}
-
-type EngineProps = {
-  engine: EngineInfo
-  accounts?: EngineAccounts
+type PageProps = {
+  engines: EngineInfo[]
+  accounts: EngineAccounts[]
+  contextDefaults: Record<ContextKind, boolean>
+  mods: Mods
   connected: boolean
   send: (m: ClientMessage) => void
 }
 
-function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
-  const id = engine.id
-  const login = accounts?.login
+type Page = {
+  id: string
+  group: (typeof NAV_GROUPS)[number]
+  title: string
+  hint?: string
+  shown?: (props: PageProps) => boolean
+  body: (props: PageProps) => ReactNode
+}
+
+const NAV_GROUPS = ['Options', 'Mods'] as const
+
+const PAGES = [
+  {
+    id: 'engines',
+    group: 'Options',
+    title: 'Engines',
+    hint: 'Hotrod only starts the engines you turn on here.',
+    body: ({ engines, connected, send }: PageProps) =>
+      engines.map((engine) => {
+        const problem = engineProblem(engine)
+        return (
+          <SettingRow
+            key={engine.id}
+            name={<span className="font-mono">{engine.id}</span>}
+            description={
+              <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
+                {problem ?? 'Ready'}
+                {engine.detail && ` · ${engine.detail}`}
+              </span>
+            }
+          >
+            <Switch
+              label={`${engine.id} on`}
+              checked={engine.enabled}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
+            />
+          </SettingRow>
+        )
+      }),
+  },
+  {
+    id: 'accounts',
+    group: 'Options',
+    title: 'Accounts',
+    hint: 'Each engine runs as its account marked In use. Accounts show while their engine is on.',
+    body: ({ engines, accounts, connected, send }: PageProps) => {
+      const shown = engines.flatMap((e) => (e.enabled ? accounts.filter((a) => a.engine === e.id) : []))
+      if (!shown.length) return <p className="text-muted">Turn on an engine to manage its accounts.</p>
+      return shown.map((a) => <EngineAccountsSection key={a.engine} accounts={a} connected={connected} send={send} />)
+    },
+  },
+  {
+    id: 'context',
+    group: 'Options',
+    title: 'Context',
+    hint: "Which AGENTS.md layers a chat gets unless you change it in that chat's Context panel.",
+    body: ({ contextDefaults, connected, send }: PageProps) =>
+      CONTEXT_KINDS.map((kind) => (
+        <SettingRow key={kind} name={CONTEXT_LABELS[kind].label} description={CONTEXT_LABELS[kind].about}>
+          <Switch
+            label={`${CONTEXT_LABELS[kind].label} on by default`}
+            checked={contextDefaults[kind]}
+            disabled={!connected}
+            onChange={(enabled) => send({ type: 'context.setDefault', kind, enabled })}
+          />
+        </SettingRow>
+      )),
+  },
+  {
+    id: 'mods',
+    group: 'Mods',
+    title: 'Built-in mods',
+    hint: 'Mods that ship with Hotrod. Each is off until you turn it on.',
+    body: ({ mods: { subagents }, connected, send }: PageProps) => (
+      <SettingRow
+        name="Subagents"
+        description="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
+      >
+        <Switch
+          label="Subagents"
+          checked={subagents.enabled}
+          disabled={!connected}
+          onChange={(on) => send({ type: 'subagents.set', enabled: on, limit: subagents.limit })}
+        />
+      </SettingRow>
+    ),
+  },
+  {
+    id: 'subagents',
+    group: 'Mods',
+    title: 'Subagents',
+    shown: ({ mods }: PageProps) => mods.subagents.enabled,
+    body: ({ mods, connected, send }: PageProps) => (
+      <SubagentLimit subagents={mods.subagents} connected={connected} send={send} />
+    ),
+  },
+] as const satisfies readonly Page[]
+
+export type SettingsPage = (typeof PAGES)[number]['id']
+
+type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode }
+
+function SettingRow({ name, description, children }: RowProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
+      <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
+        {name}
+        {description && <div className="text-sm text-muted">{description}</div>}
+      </div>
+      <div className="flex shrink-0 items-center gap-6">{children}</div>
+    </div>
+  )
+}
+
+type EngineAccountsProps = { accounts: EngineAccounts; connected: boolean; send: (m: ClientMessage) => void }
+
+function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProps) {
+  const id = accounts.engine
+  const login = accounts.login
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [keyName, setKeyName] = useState('')
@@ -78,131 +173,117 @@ function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
     if (!(await confirm(question))) return
     send({ type: 'account.remove', engine: id, accountId: account.id })
   }
-  const problem = engineProblem(engine)
+  const cancelLogin = (
+    <Button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine: id })}>
+      Cancel
+    </Button>
+  )
 
   return (
-    <section className={`${card(engine.enabled)} gap-8`} aria-label={`${id} settings`}>
-      <SettingRow
-        title={<span className="font-mono">{id}</span>}
-        detail={
-          <span className={`text-sm wrap-anywhere first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
-            {problem ?? 'Ready'}
-            {engine.detail && ` · ${engine.detail}`}
-          </span>
-        }
-      >
-        <Switch
-          label={`${id} on`}
-          checked={engine.enabled}
-          disabled={!connected}
-          onChange={(enabled) => send({ type: 'engine.setEnabled', engine: id, enabled })}
-        />
-      </SettingRow>
-      {engine.enabled && accounts && (
-        <div className="flex flex-col gap-8">
-          <ul className="flex flex-col rounded-lg border">
-            {accounts.accounts.map((a) => (
-              <li key={a.id} className="flex min-h-40 items-center gap-6 py-6 pr-8 pl-12 not-first:border-t">
-                <span className="flex min-w-0 flex-1 flex-col wrap-anywhere">
-                  {accountLabel(a)}
-                  {a.id === 'default' && <span className="text-sm text-faint">{id}'s own sign-in</span>}
-                </span>
-                {a.id === accounts.active ? (
-                  <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">In use</span>
-                ) : (
-                  <Button
-                    size="small"
-                    disabled={!connected}
-                    onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
-                  >
-                    Use
-                  </Button>
-                )}
-                {a.id !== 'default' && (
-                  <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
-                    Remove
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-          {!login ? (
-            <form className="flex gap-6" onSubmit={startLogin}>
-              <input
-                className="flex-1"
-                value={name}
-                placeholder="New account name, e.g. Work"
-                onChange={(e) => setName(e.target.value)}
-              />
-              <Button variant="primary" disabled={!connected || !name.trim()}>
-                Sign in…
-              </Button>
-            </form>
-          ) : login.error ? (
-            <div className="flex flex-col items-start gap-8">
-              <ErrorText>{login.error}</ErrorText>
-              <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
-            </div>
+    <section className="flex flex-col not-first:pt-24" aria-label={`${id} accounts`}>
+      <h3 className="pb-8 font-mono font-semibold">{id}</h3>
+      {accounts.accounts.map((a) => (
+        <SettingRow key={a.id} name={accountLabel(a)} description={a.id === 'default' && `${id}'s own sign-in`}>
+          {a.id === accounts.active ? (
+            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">In use</span>
           ) : (
-            <div className="flex flex-col items-start gap-8">
-              <p className="max-w-[60ch]">Signing in “{login.name}”. Finish in the browser window that opened.</p>
-              {login.url && (
+            <Button
+              size="small"
+              disabled={!connected}
+              onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
+            >
+              Use
+            </Button>
+          )}
+          {a.id !== 'default' && (
+            <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
+              Remove
+            </Button>
+          )}
+        </SettingRow>
+      ))}
+      {!login ? (
+        <SettingRow name="Add account" description="Sign in to another account in your browser.">
+          <form className="flex gap-6" onSubmit={startLogin}>
+            <input
+              className="w-160"
+              value={name}
+              placeholder="Name, e.g. Work"
+              onChange={(e) => setName(e.target.value)}
+            />
+            <Button variant="primary" disabled={!connected || !name.trim()}>
+              Sign in…
+            </Button>
+          </form>
+        </SettingRow>
+      ) : login.error ? (
+        <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
+          <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
+        </SettingRow>
+      ) : (
+        <>
+          <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
+            {!login.url && cancelLogin}
+          </SettingRow>
+          {login.url && (
+            <SettingRow
+              name="Paste a code"
+              description={
                 <>
-                  <p className="max-w-[60ch] text-muted">
-                    No window, or it is signed in to another account? Open{' '}
-                    <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
-                      this sign-in link
-                    </a>{' '}
-                    (a private window lets you pick the account), then paste the code it shows:
-                  </p>
-                  <form className="flex gap-6 self-stretch" onSubmit={submitCode}>
-                    <input
-                      className="flex-1"
-                      value={code}
-                      placeholder="Code"
-                      spellCheck={false}
-                      onChange={(e) => setCode(e.target.value)}
-                    />
-                    <Button variant="primary" disabled={!connected || !code.trim()}>
-                      Submit code
-                    </Button>
-                  </form>
+                  No window, or it is signed in to another account? Open{' '}
+                  <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                    this sign-in link
+                  </a>{' '}
+                  (a private window lets you pick the account), then paste the code it shows.
                 </>
-              )}
-              <Button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine: id })}>
-                Cancel
-              </Button>
-            </div>
+              }
+            >
+              <form className="flex gap-6" onSubmit={submitCode}>
+                <input
+                  className="w-120"
+                  value={code}
+                  placeholder="Code"
+                  spellCheck={false}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+                <Button variant="primary" disabled={!connected || !code.trim()}>
+                  Submit code
+                </Button>
+              </form>
+              {cancelLogin}
+            </SettingRow>
           )}
-          {accounts.apiKeys && (
-            <form className="flex gap-6" onSubmit={addKey}>
-              <input
-                className="flex-1"
-                value={keyName}
-                placeholder="API key name"
-                onChange={(e) => setKeyName(e.target.value)}
-              />
-              <input
-                className="flex-1"
-                type="password"
-                value={key}
-                placeholder="API key"
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(e) => setKey(e.target.value)}
-              />
-              <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add API key</Button>
-            </form>
-          )}
-        </div>
+        </>
+      )}
+      {accounts.apiKeys && (
+        <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
+          <form className="flex gap-6" onSubmit={addKey}>
+            <input
+              className="w-120"
+              value={keyName}
+              placeholder="API key name"
+              onChange={(e) => setKeyName(e.target.value)}
+            />
+            <input
+              className="w-140"
+              type="password"
+              value={key}
+              placeholder="API key"
+              autoComplete="off"
+              spellCheck={false}
+              onChange={(e) => setKey(e.target.value)}
+            />
+            <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add</Button>
+          </form>
+        </SettingRow>
       )}
     </section>
   )
 }
 
-type SubagentsProps = { subagents: Mods['subagents']; connected: boolean; send: (m: ClientMessage) => void }
+type SubagentLimitProps = { subagents: Mods['subagents']; connected: boolean; send: (m: ClientMessage) => void }
 
-function SubagentsSettings({ subagents: { enabled, limit }, connected, send }: SubagentsProps) {
+function SubagentLimit({ subagents: { enabled, limit }, connected, send }: SubagentLimitProps) {
   const [draft, setDraft] = useState(String(limit))
   useEffect(() => setDraft(String(limit)), [limit])
   const save = () => {
@@ -212,55 +293,29 @@ function SubagentsSettings({ subagents: { enabled, limit }, connected, send }: S
     } else setDraft(String(limit))
   }
   return (
-    <div className={`${card(enabled)} gap-10`}>
-      <SettingRow
-        title="Subagents"
-        detail={
-          <span className="text-muted">
-            Chats can hand a task to a new chat that reports back when it ends. Claude Code only.
-          </span>
-        }
-      >
-        <Switch
-          label="Subagents"
-          checked={enabled}
-          disabled={!connected}
-          onChange={(on) => send({ type: 'subagents.set', enabled: on, limit })}
-        />
-      </SettingRow>
-      {enabled && (
-        <label className="flex items-center gap-8 text-sm">
-          Max running per chat
-          <input
-            className="w-72"
-            type="number"
-            min={-1}
-            step={1}
-            value={draft}
-            disabled={!connected}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={save}
-            onKeyDown={(e) => e.key === 'Enter' && save()}
-          />
-          <span className="text-muted">-1 for no limit</span>
-        </label>
-      )}
-    </div>
+    <SettingRow name="Max running per chat" description="How many subagents one chat can run at once. -1 for no limit.">
+      <input
+        className="w-72"
+        aria-label="Max running per chat"
+        type="number"
+        min={-1}
+        step={1}
+        value={draft}
+        disabled={!connected}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => e.key === 'Enter' && save()}
+      />
+    </SettingRow>
   )
 }
 
-type SettingsProps = {
-  engines: EngineInfo[]
-  accounts: EngineAccounts[]
-  contextDefaults: Record<ContextKind, boolean>
-  mods: Mods
-  connected: boolean
-  send: (m: ClientMessage) => void
-  close: () => void
-}
+type SettingsProps = PageProps & { page: SettingsPage; openPage: (page: SettingsPage) => void; close: () => void }
 
-export function SettingsDialog({ engines, accounts, contextDefaults, mods, connected, send, close }: SettingsProps) {
+export function SettingsDialog({ page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
+  const pages: readonly Page[] = PAGES.filter((p) => !('shown' in p) || p.shown(props))
+  const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open onOpenChange={(open) => open || close()}>
       <Dialog.Portal>
@@ -269,53 +324,53 @@ export function SettingsDialog({ engines, accounts, contextDefaults, mods, conne
           aria-describedby={undefined}
           onOpenAutoFocus={focus.remember}
           onCloseAutoFocus={focus.restore}
-          className="fixed inset-0 m-auto h-fit max-h-[calc(100vh-64px)] w-[min(560px,calc(100vw-32px))] overflow-y-auto rounded-[10px] border bg-panel text-text shadow"
+          className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-[10px] border bg-bg text-text shadow"
         >
-          <div className="flex flex-col gap-16 px-16 pt-14 pb-18">
-            <header className="flex items-center justify-between">
-              <Dialog.Title className="text-body font-semibold">Settings</Dialog.Title>
-              <Dialog.Close asChild>
-                <Button variant="ghost" aria-label="Close">
-                  ×
-                </Button>
-              </Dialog.Close>
-            </header>
-            <Section title="Engines" hint="Hotrod only starts the engines you turn on here.">
-              {engines.map((engine) => (
-                <EngineSettings
-                  key={engine.id}
-                  engine={engine}
-                  accounts={accounts.find((a) => a.engine === engine.id)}
-                  connected={connected}
-                  send={send}
-                />
-              ))}
-            </Section>
-            <Section
-              title="Context"
-              hint="Which AGENTS.md layers a chat gets unless you change it in that chat's Context panel."
+          <Dialog.Title className="sr-only">Settings</Dialog.Title>
+          <Tabs.Root
+            className="flex min-w-0 flex-1"
+            orientation="vertical"
+            value={current.id}
+            onValueChange={(id) => openPage(id as SettingsPage)}
+          >
+            <Tabs.List
+              aria-label="Settings"
+              className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160"
             >
-              <div className={`${card(false)} gap-10`}>
-                {CONTEXT_KINDS.map((kind) => (
-                  <SettingRow
-                    key={kind}
-                    title={CONTEXT_LABELS[kind].label}
-                    detail={<span className="text-muted">{CONTEXT_LABELS[kind].about}</span>}
-                  >
-                    <Switch
-                      label={`${CONTEXT_LABELS[kind].label} on by default`}
-                      checked={contextDefaults[kind]}
-                      disabled={!connected}
-                      onChange={(enabled) => send({ type: 'context.setDefault', kind, enabled })}
-                    />
-                  </SettingRow>
-                ))}
-              </div>
-            </Section>
-            <Section title="Mods" hint="Built-in mods. Each is off until you turn it on.">
-              <SubagentsSettings subagents={mods.subagents} connected={connected} send={send} />
-            </Section>
-          </div>
+              {NAV_GROUPS.map((group) => (
+                <Fragment key={group}>
+                  <div className={NAV_LABEL}>{group}</div>
+                  {pages
+                    .filter((p) => p.group === group)
+                    .map((p) => (
+                      <Tabs.Trigger
+                        key={p.id}
+                        value={p.id}
+                        className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text"
+                      >
+                        {p.title}
+                      </Tabs.Trigger>
+                    ))}
+                </Fragment>
+              ))}
+            </Tabs.List>
+            {pages.map((p) => (
+              <Tabs.Content
+                key={p.id}
+                value={p.id}
+                className="min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2"
+              >
+                <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
+                {p.hint && <p className="mt-4 text-muted">{p.hint}</p>}
+                <div className="mt-16 flex flex-col">{p.body(props)}</div>
+              </Tabs.Content>
+            ))}
+          </Tabs.Root>
+          <Dialog.Close asChild>
+            <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-14 right-14">
+              ×
+            </Button>
+          </Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
