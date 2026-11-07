@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useReducer, useState, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { AnimatePresence, domAnimation, LazyMotion, MotionConfig, useReducedMotion } from 'motion/react'
+import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
-import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce } from './state.ts'
+import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce, storedFlag } from './state.ts'
 import './styles.css'
 
 const SELECTED_KEY = 'hotrod.selectedChat'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
+const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
 
 declare global {
   interface Window {
@@ -52,9 +53,12 @@ function App() {
     if (page) setSettingsPage(page)
     setSettingsOpen(true)
   }, [])
-  const [contextOpen, setContextOpen] = useState(() => localStorage.getItem(CONTEXT_OPEN_KEY) === 'true')
+  const [contextOpen, setContextOpen] = useState(() => storedFlag(localStorage.getItem(CONTEXT_OPEN_KEY), false))
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const toggleContext = useCallback(() => setContextOpen((open) => !open), [])
+  const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
+  useEffect(() => localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen)), [sidebarOpen])
+  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
   const selected = state.chats.find((c) => c.id === state.selectedId)
   const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
@@ -77,43 +81,55 @@ function App() {
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : TRANSITION}>
         <div className="flex h-screen">
-          <aside className="flex w-232 shrink-0 flex-col border-r bg-panel max-[900px]:w-200">
-            <div className="flex h-44 items-center justify-between pr-8 pl-16">
-              <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={`New ${CHAT_NOUN.one}`}
-                title={`New ${CHAT_NOUN.one}`}
-                disabled={!connected}
-                onClick={() => setNameRequest({ kind: 'new' })}
+          <AnimatePresence initial={false}>
+            {sidebarOpen && (
+              <m.div
+                key="sidebar"
+                className="flex shrink-0 overflow-hidden"
+                initial={{ width: 0 }}
+                animate={{ width: 'auto' }}
+                exit={{ width: 0 }}
               >
-                +
-              </Button>
-            </div>
-            <ChatNav
-              chats={state.chats}
-              selectedId={state.selectedId}
-              connected={connected}
-              send={send}
-              select={select}
-              askName={setNameRequest}
-            />
-            {window.hotrod && (
-              <div className="flex items-center gap-6 border-t px-8 py-10">
-                <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
-                  New {CHAT_NOUN.one} from folder…
-                </Button>
-                <span className="text-sm text-faint">⌘O</span>
-              </div>
+              <aside className="flex w-232 shrink-0 flex-col border-r bg-panel max-[900px]:w-200">
+                <div className="flex h-44 items-center justify-between pr-8 pl-16">
+                  <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`New ${CHAT_NOUN.one}`}
+                    title={`New ${CHAT_NOUN.one}`}
+                    disabled={!connected}
+                    onClick={() => setNameRequest({ kind: 'new' })}
+                  >
+                    +
+                  </Button>
+                </div>
+                <ChatNav
+                  chats={state.chats}
+                  selectedId={state.selectedId}
+                  connected={connected}
+                  send={send}
+                  select={select}
+                  askName={setNameRequest}
+                />
+                {window.hotrod && (
+                  <div className="flex items-center gap-6 border-t px-8 py-10">
+                    <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
+                      New {CHAT_NOUN.one} from folder…
+                    </Button>
+                    <span className="text-sm text-faint">⌘O</span>
+                  </div>
+                )}
+                <div className="px-8 pb-10">
+                  <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
+                    <span aria-hidden="true">⚙</span>
+                    Settings
+                  </Button>
+                </div>
+              </aside>
+              </m.div>
             )}
-            <div className="px-8 pb-10">
-              <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
-                <span aria-hidden="true">⚙</span>
-                Settings
-              </Button>
-            </div>
-          </aside>
+          </AnimatePresence>
           <div className="flex min-w-0 flex-1 flex-col">
             {quitting && (
               <Banner
@@ -169,6 +185,8 @@ function App() {
                 connected={state.connected}
                 send={send}
                 openSettings={openSettings}
+                sidebarOpen={sidebarOpen}
+                toggleSidebar={toggleSidebar}
                 contextOpen={contextOpen}
                 toggleContext={toggleContext}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
