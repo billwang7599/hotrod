@@ -1,6 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Account, ChatStatus, ClientMessage, EngineAccounts, EngineInfo, Project } from '@hotrod/core/types'
+import {
+  CONTEXT_KINDS,
+  type Account,
+  type ChatStatus,
+  type ClientMessage,
+  type ContextKind,
+  type ContextLayer,
+  type EngineAccounts,
+  type EngineInfo,
+  type Project,
+} from '@hotrod/core/types'
 import { useCore } from './connection.ts'
 import logo from './logo.svg'
 import { Markdown } from './markdown.tsx'
@@ -19,6 +29,7 @@ import './styles.css'
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedChat'
 const COLLAPSED_KEY = 'hotrod.collapsedProjects'
+const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const CHAT_BUSY = 'Stop this chat first'
 const PROJECT_BUSY = 'Stop the running chats in this project first'
 const MANAGE_ACCOUNTS = '__manage'
@@ -26,6 +37,13 @@ const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
+const CONTEXT_LABELS: Record<ContextKind, { label: string; about: string }> = {
+  workshop: { label: 'Workshop', about: 'Your AGENTS.md for every chat' },
+  repo: { label: 'Repo', about: "The AGENTS.md in a project's folder" },
+  project: { label: 'Project', about: 'Your notes for one project' },
+  own: { label: 'Subchat', about: "A subchat's own notes" },
+}
+const EMPTY_LAYER = 'Empty. Instructions written here go to the engine.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
   running: 'Working…',
@@ -124,6 +142,24 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
   }
 }
 
+type SwitchProps = { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }
+
+function Switch({ label, checked, disabled, onChange }: SwitchProps) {
+  return (
+    <label className="switch" title={label}>
+      <input
+        type="checkbox"
+        role="switch"
+        aria-label={label}
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span className="track" />
+    </label>
+  )
+}
+
 type EngineProps = {
   engine: EngineInfo
   accounts?: EngineAccounts
@@ -177,17 +213,12 @@ function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
             {engine.detail && ` · ${engine.detail}`}
           </span>
         </span>
-        <label className="switch" title={engine.enabled ? `Turn ${id} off` : `Turn ${id} on`}>
-          <input
-            type="checkbox"
-            role="switch"
-            aria-label={`${id} on`}
-            checked={engine.enabled}
-            disabled={!connected}
-            onChange={(e) => send({ type: 'engine.setEnabled', engine: id, enabled: e.target.checked })}
-          />
-          <span className="track" />
-        </label>
+        <Switch
+          label={`${id} on`}
+          checked={engine.enabled}
+          disabled={!connected}
+          onChange={(enabled) => send({ type: 'engine.setEnabled', engine: id, enabled })}
+        />
       </div>
       {engine.enabled && accounts && (
         <div className="engine-accounts">
@@ -277,12 +308,13 @@ function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
 type SettingsProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
+  contextDefaults: Record<ContextKind, boolean>
   connected: boolean
   send: (m: ClientMessage) => void
   close: () => void
 }
 
-function SettingsDialog({ engines, accounts, connected, send, close }: SettingsProps) {
+function SettingsDialog({ engines, accounts, contextDefaults, connected, send, close }: SettingsProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   useEffect(() => dialogRef.current?.showModal(), [])
   return (
@@ -313,8 +345,116 @@ function SettingsDialog({ engines, accounts, connected, send, close }: SettingsP
             />
           ))}
         </section>
+        <section>
+          <h3>Context</h3>
+          <p className="muted settings-hint">
+            Which AGENTS.md layers a chat gets unless you change it in that chat's Context panel.
+          </p>
+          <div className="context-defaults">
+            {CONTEXT_KINDS.map((kind) => (
+              <div key={kind} className="engine-row">
+                <span className="engine-name">
+                  {CONTEXT_LABELS[kind].label}
+                  <span className="muted">{CONTEXT_LABELS[kind].about}</span>
+                </span>
+                <Switch
+                  label={`${CONTEXT_LABELS[kind].label} on by default`}
+                  checked={contextDefaults[kind]}
+                  disabled={!connected}
+                  onChange={(enabled) => send({ type: 'context.setDefault', kind, enabled })}
+                />
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </dialog>
+  )
+}
+
+type LayerProps = {
+  layer: ContextLayer
+  chatId: string
+  own: boolean
+  readOnly: boolean
+  send: (m: ClientMessage) => void
+}
+
+function ContextLayerCard({ layer, chatId, own, readOnly, send }: LayerProps) {
+  const [text, setText] = useState(layer.text)
+  useEffect(() => setText(layer.text), [layer.text])
+  const { label } = CONTEXT_LABELS[layer.kind]
+  const editable = layer.writable && !readOnly
+  return (
+    <section className={`context-layer ${layer.enabled ? '' : 'off'}`} aria-label={`${label} context`}>
+      <div className="context-layer-header">
+        <span className="context-label">
+          {label}
+          {own && <span className="pill">This chat</span>}
+          {!layer.writable && <span className="pill">Read-only</span>}
+        </span>
+        <Switch
+          label={`Use ${label} in this chat`}
+          checked={layer.enabled}
+          disabled={readOnly}
+          onChange={(enabled) => send({ type: 'context.set', chatId, kind: layer.kind, enabled })}
+        />
+      </div>
+      <span className="context-path" title={layer.path}>
+        {layer.path}
+      </span>
+      <textarea
+        value={text}
+        rows={6}
+        spellCheck={false}
+        readOnly={!editable}
+        aria-label={`${label} AGENTS.md`}
+        placeholder={layer.writable ? EMPTY_LAYER : 'No AGENTS.md in this folder'}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text !== layer.text && send({ type: 'context.write', chatId, kind: layer.kind, text })}
+      />
+    </section>
+  )
+}
+
+type ContextPanelProps = {
+  chatId: string
+  layers?: ContextLayer[]
+  contextDefaults: Record<ContextKind, boolean>
+  readOnly: boolean
+  connected: boolean
+  send: (m: ClientMessage) => void
+  close: () => void
+}
+
+function ContextPanel({ chatId, layers, contextDefaults, readOnly, connected, send, close }: ContextPanelProps) {
+  useEffect(() => {
+    if (connected) send({ type: 'context.get', chatId })
+  }, [chatId, connected, contextDefaults, send])
+  return (
+    <aside className="context-panel" aria-label="Context">
+      <header className="context-header">
+        <span className="context-title">Context</span>
+        <button className="ghost icon" aria-label="Close context" onClick={close}>
+          ×
+        </button>
+      </header>
+      <div className="context-list">
+        <p className="hint context-hint">
+          Each message gets the layers that are on, top first. Edits apply from the next message.
+        </p>
+        {layers?.map((layer, i) => (
+          <ContextLayerCard
+            key={layer.path}
+            layer={layer}
+            chatId={chatId}
+            own={i === layers.length - 1}
+            readOnly={readOnly || !connected}
+            send={send}
+          />
+        ))}
+      </div>
+    </aside>
   )
 }
 
@@ -326,9 +466,14 @@ type ChatProps = {
   connected: boolean
   send: (m: ClientMessage) => void
   openSettings: () => void
+  contextOpen: boolean
+  toggleContext: () => void
+  contextLayers?: ContextLayer[]
+  contextDefaults: Record<ContextKind, boolean>
 }
 
-function Chat({ chat, project, engines, accounts, connected, send, openSettings }: ChatProps) {
+function Chat(props: ChatProps) {
+  const { chat, project, engines, accounts, connected, send, openSettings, contextOpen, toggleContext } = props
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -370,136 +515,158 @@ function Chat({ chat, project, engines, accounts, connected, send, openSettings 
   const place = project?.name ?? 'Main'
 
   return (
-    <main className="chat">
-      <header className="chat-header">
-        <div className="chat-title">
-          <span className="chat-name">{chat.main ? place : chat.title}</span>
-          <span className="chat-path">{project?.path ?? 'Not tied to a folder'}</span>
-        </div>
-        <select
-          className="chip"
-          aria-label="Engine"
-          value={chat.engine}
-          disabled={!canChange}
-          onChange={(e) => send({ type: 'chat.setEngine', chatId: chat.id, engine: e.target.value })}
-        >
-          {engineOptions(engines, chat.engine).map((o) => (
-            <option key={o.id} value={o.id} disabled={o.disabled}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        {accounts && !engineOff && (
+    <div className="chat-area">
+      <main className="chat">
+        <header className="chat-header">
+          <div className="chat-title">
+            <span className="chat-name">{chat.main ? place : chat.title}</span>
+            <span className="chat-path">{project?.path ?? 'Not tied to a folder'}</span>
+          </div>
           <select
             className="chip"
-            aria-label="Account"
-            value={accounts.active}
-            disabled={!canSend}
-            onChange={(e) =>
-              e.target.value === MANAGE_ACCOUNTS
-                ? openSettings()
-                : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
-            }
+            aria-label="Engine"
+            value={chat.engine}
+            disabled={!canChange}
+            onChange={(e) => send({ type: 'chat.setEngine', chatId: chat.id, engine: e.target.value })}
           >
-            {accounts.accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {accountLabel(a)}
+            {engineOptions(engines, chat.engine).map((o) => (
+              <option key={o.id} value={o.id} disabled={o.disabled}>
+                {o.label}
               </option>
             ))}
-            <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
           </select>
-        )}
-      </header>
-      <div
-        className="messages"
-        ref={listRef}
-        onScroll={(e) => {
-          const el = e.currentTarget
-          stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-        }}
-      >
-        <div className="column">
-          {chat.items.length === 0 && !chat.draft && (
-            <div className="empty">
-              <strong>
-                Start a chat in <span className="mono">{place}</span>
-              </strong>
+          {accounts && !engineOff && (
+            <select
+              className="chip"
+              aria-label="Account"
+              value={accounts.active}
+              disabled={!canSend}
+              onChange={(e) =>
+                e.target.value === MANAGE_ACCOUNTS
+                  ? openSettings()
+                  : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
+              }
+            >
+              {accounts.accounts.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {accountLabel(a)}
+                </option>
+              ))}
+              <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
+            </select>
+          )}
+          <button
+            className={`ghost small context-toggle ${contextOpen ? 'active' : ''}`}
+            aria-pressed={contextOpen}
+            title={contextOpen ? 'Hide context' : 'Show the AGENTS.md layers this chat gets'}
+            onClick={toggleContext}
+          >
+            Context
+          </button>
+        </header>
+        <div
+          className="messages"
+          ref={listRef}
+          onScroll={(e) => {
+            const el = e.currentTarget
+            stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+          }}
+        >
+          <div className="column">
+            {chat.items.length === 0 && !chat.draft && (
+              <div className="empty">
+                <strong>
+                  Start a chat in <span className="mono">{place}</span>
+                </strong>
+                <span>
+                  Each message starts <span className="mono">{chat.engine}</span> in{' '}
+                  {project?.path ?? 'a scratch folder'}
+                </span>
+              </div>
+            )}
+            {chat.items.map((item, i) => (
+              <ItemView key={i} item={item} chat={chat} connected={connected} send={send} />
+            ))}
+            {chat.draft && <Markdown className="assistant streaming" text={chat.draft} />}
+          </div>
+        </div>
+        <div className="composer">
+          {archivedBy && (
+            <div className="archived-note">
               <span>
-                Each message starts <span className="mono">{chat.engine}</span> in{' '}
-                {project?.path ?? 'a scratch folder'}
+                This {archivedBy === project ? 'project' : 'chat'} is archived. Its history stays; unarchive it to
+                continue.
               </span>
+              <button className="small" disabled={!connected} onClick={unarchive}>
+                Unarchive
+              </button>
             </div>
           )}
-          {chat.items.map((item, i) => (
-            <ItemView key={i} item={item} chat={chat} connected={connected} send={send} />
-          ))}
-          {chat.draft && <Markdown className="assistant streaming" text={chat.draft} />}
-        </div>
-      </div>
-      <div className="composer">
-        {archivedBy && (
-          <div className="archived-note">
-            <span>
-              This {archivedBy === project ? 'project' : 'chat'} is archived. Its history stays; unarchive it to continue.
-            </span>
-            <button className="small" disabled={!connected} onClick={unarchive}>
-              Unarchive
-            </button>
-          </div>
-        )}
-        {showEngineNote && (
-          <div className="engine-off-note">
-            <span>
-              {noEngineOn ? (
-                'No engine is on. Turn one on in Settings to start chatting.'
-              ) : (
-                <>
-                  <span className="mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
-                  Settings.
-                </>
-              )}
-            </span>
-            <button className="small primary" onClick={openSettings}>
-              Open Settings
-            </button>
-          </div>
-        )}
-        {!showEngineNote && (
-          <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
-            <textarea
-              value={text}
-              rows={2}
-              placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
-              disabled={!canSend}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  submit()
-                }
-              }}
-            />
-            <div className="composer-footer">
-              <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
-              {chat.status !== 'idle' ? (
-                <button
-                  className={`danger stop ${chat.status}`}
-                  disabled={!connected}
-                  title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                  onClick={stop}
-                >
-                  {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                </button>
-              ) : (
-                <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
-                  Send
-                </button>
-              )}
+          {showEngineNote && (
+            <div className="engine-off-note">
+              <span>
+                {noEngineOn ? (
+                  'No engine is on. Turn one on in Settings to start chatting.'
+                ) : (
+                  <>
+                    <span className="mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
+                    Settings.
+                  </>
+                )}
+              </span>
+              <button className="small primary" onClick={openSettings}>
+                Open Settings
+              </button>
             </div>
-          </div>
-        )}
-      </div>
-    </main>
+          )}
+          {!showEngineNote && (
+            <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
+              <textarea
+                value={text}
+                rows={2}
+                placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
+                disabled={!canSend}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    submit()
+                  }
+                }}
+              />
+              <div className="composer-footer">
+                <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
+                {chat.status !== 'idle' ? (
+                  <button
+                    className={`danger stop ${chat.status}`}
+                    disabled={!connected}
+                    title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                    onClick={stop}
+                  >
+                    {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                  </button>
+                ) : (
+                  <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                    Send
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+      {contextOpen && (
+        <ContextPanel
+          chatId={chat.id}
+          layers={props.contextLayers}
+          contextDefaults={props.contextDefaults}
+          readOnly={!!archivedBy}
+          connected={connected}
+          send={send}
+          close={toggleContext}
+        />
+      )}
+    </div>
   )
 }
 
@@ -758,6 +925,9 @@ function App() {
   const [path, setPath] = useState('')
   const pathRef = useRef<HTMLInputElement>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [contextOpen, setContextOpen] = useState(() => localStorage.getItem(CONTEXT_OPEN_KEY) === 'true')
+  useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
+  const toggleContext = useCallback(() => setContextOpen((open) => !open), [])
   const selected = state.chats.find((c) => c.id === state.selectedId)
   const selectedProject = state.projects.find((p) => p.id === selected?.projectId)
   const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
@@ -873,6 +1043,7 @@ function App() {
           <SettingsDialog
             engines={state.engines}
             accounts={state.accounts}
+            contextDefaults={state.contextDefaults}
             connected={connected}
             send={send}
             close={() => setSettingsOpen(false)}
@@ -888,6 +1059,10 @@ function App() {
             connected={state.connected}
             send={send}
             openSettings={() => setSettingsOpen(true)}
+            contextOpen={contextOpen}
+            toggleContext={toggleContext}
+            contextLayers={state.context?.chatId === selected.id ? state.context.layers : undefined}
+            contextDefaults={state.contextDefaults}
           />
         ) : (
           <div className="empty">

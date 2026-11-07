@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, CoreMessage, Project } from '@hotrod/core/types'
+import type { ChatEntry, ChatState, ContextLayer, CoreMessage, Project } from '@hotrod/core/types'
 import type { Account, EngineAccounts } from '@hotrod/core/types'
 import { accountLabel, engineOptions, initialState, MAIN_CHAT_ID, reduce, type Action, type State } from './state.ts'
 
@@ -18,8 +18,9 @@ const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatSt
   draft: '',
 })
 const project = (id: string): Project => ({ id, name: id, path: `/tmp/${id}`, archived: false })
+const contextDefaults = { workshop: true, repo: true, project: true, own: true }
 const snapshot = (chats: ChatState[], projects: Project[] = []): Action =>
-  ({ type: 'snapshot', engines, accounts: [], projects, chats })
+  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -112,7 +113,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], projects: [], chats: [] },
+      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -124,7 +125,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [] },
+      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -265,5 +266,26 @@ describe('reduce', () => {
     const rejected = run({ type: 'connection', connected: false, rejected: true })
     expect(rejected).toMatchObject({ connected: false, rejected: true })
     expect(reduce(rejected, { type: 'connection', connected: true })).toMatchObject({ connected: true, rejected: false })
+  })
+
+  it('keeps the context of the selected chat and follows file and default changes', () => {
+    const layer = (kind: ContextLayer['kind'], path: string, text = ''): ContextLayer =>
+      ({ kind, path, enabled: true, writable: kind !== 'repo', text })
+    const layers = [layer('workshop', '/g/AGENTS.md'), layer('own', '/g/chats/a/AGENTS.md')]
+    const loaded = run(
+      snapshot([chat(MAIN_CHAT_ID), chat('a'), chat('b')]),
+      { type: 'select', chatId: 'a' },
+      { type: 'chat.context', chatId: 'a', layers },
+      { type: 'chat.context', chatId: 'b', layers: [] },
+    )
+    expect(loaded.contextDefaults).toEqual(contextDefaults)
+    expect(loaded.context).toEqual({ chatId: 'a', layers })
+
+    const written = reduce(loaded, { type: 'context.file', path: '/g/AGENTS.md', text: 'rules' })
+    expect(written.context?.layers.map((l) => l.text)).toEqual(['rules', ''])
+
+    const defaults = { ...contextDefaults, own: false }
+    expect(reduce(written, { type: 'context.defaults', defaults }).contextDefaults).toEqual(defaults)
+    expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
   })
 })

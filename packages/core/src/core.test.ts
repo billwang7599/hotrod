@@ -1150,3 +1150,162 @@ describe('accounts', () => {
     })
   })
 })
+
+describe('context', () => {
+  const layersOf = (t: ReturnType<typeof open>, chatId: string) => {
+    t.handle({ type: 'context.get', chatId })
+    const reply = t.replies.findLast((m) => m.type === 'chat.context')
+    if (reply?.type !== 'chat.context' || reply.chatId !== chatId) throw new Error('no chat.context')
+    return reply.layers
+  }
+  const kinds = (t: ReturnType<typeof open>, chatId: string) => layersOf(t, chatId).map((l) => l.kind)
+  const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) => {
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+    return t.calls.at(-1)?.options.instructions ?? ''
+  }
+
+  it('gives each chat the layers from the root down to itself', () => {
+    const t = setup(textScript)
+    const repo = tempDir()
+    writeFileSync(join(repo, 'AGENTS.md'), 'REPO RULES')
+    const projectMain = addProject(t, repo)
+    const projectSub = createChat(t, projectMain.projectId)
+    const homeSub = createChat(t)
+
+    expect(kinds(t, 'main')).toEqual(['workshop'])
+    expect(kinds(t, homeSub.id)).toEqual(['workshop', 'own'])
+    expect(kinds(t, projectMain.id)).toEqual(['workshop', 'repo', 'project'])
+    expect(kinds(t, projectSub.id)).toEqual(['workshop', 'repo', 'project', 'own'])
+
+    const layers = layersOf(t, projectSub.id)
+    expect(layers.map((l) => l.path)).toEqual([
+      join(t.garage, 'AGENTS.md'),
+      join(projectMain.path, 'AGENTS.md'),
+      join(t.garage, 'projects', projectMain.projectId, 'AGENTS.md'),
+      join(t.garage, 'projects', projectMain.projectId, 'chats', projectSub.id, 'AGENTS.md'),
+    ])
+    expect(layers.map((l) => [l.enabled, l.writable, l.text])).toEqual([
+      [true, true, ''],
+      [true, false, 'REPO RULES'],
+      [true, true, ''],
+      [true, true, ''],
+    ])
+  })
+
+  it('injects the enabled layers root first, and a parent never sees its child', async () => {
+    const t = setup(textScript)
+    const repo = tempDir()
+    writeFileSync(join(repo, 'AGENTS.md'), 'REPO RULES')
+    const projectMain = addProject(t, repo)
+    const projectSub = createChat(t, projectMain.projectId)
+    const homeSub = createChat(t)
+    t.handle({ type: 'context.write', chatId: 'main', kind: 'workshop', text: 'WORKSHOP RULES' })
+    t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'PROJECT RULES' })
+    t.handle({ type: 'context.write', chatId: projectSub.id, kind: 'own', text: 'SUB RULES' })
+    t.handle({ type: 'context.write', chatId: homeSub.id, kind: 'own', text: 'HOME SUB RULES' })
+
+    const sub = await instructionsOf(t, projectSub.id)
+    const order = ['WORKSHOP RULES', 'REPO RULES', 'PROJECT RULES', 'SUB RULES'].map((text) => sub.indexOf(text))
+    expect(order.every((index, i) => index >= 0 && (i === 0 || index > order[i - 1]!))).toBe(true)
+    expect(sub).not.toContain('HOME SUB RULES')
+
+    const projectRules = await instructionsOf(t, projectMain.id)
+    expect(projectRules).toContain('PROJECT RULES')
+    expect(projectRules).not.toContain('SUB RULES')
+    expect(await instructionsOf(t, 'main')).toBe('WORKSHOP RULES')
+    expect(await instructionsOf(t, homeSub.id)).toBe('WORKSHOP RULES\n\nHOME SUB RULES')
+  })
+
+  it('turns a layer off for one chat, saves it in chat.json and tells every client', async () => {
+    const t = setup(textScript)
+    const repo = tempDir()
+    writeFileSync(join(repo, 'AGENTS.md'), 'REPO RULES')
+    const projectMain = addProject(t, repo)
+    const projectSub = createChat(t, projectMain.projectId)
+    t.handle({ type: 'context.write', chatId: 'main', kind: 'workshop', text: 'WORKSHOP RULES' })
+
+    t.handle({ type: 'context.set', chatId: projectSub.id, kind: 'repo', enabled: false })
+    const updated = t.messages.at(-1)
+    if (updated?.type !== 'chat.context') throw new Error('no chat.context')
+    expect(updated.chatId).toBe(projectSub.id)
+    expect(updated.layers.find((l) => l.kind === 'repo')?.enabled).toBe(false)
+    const file = join(t.garage, 'projects', projectMain.projectId, 'chats', projectSub.id, 'chat.json')
+    expect(JSON.parse(readFileSync(file, 'utf8')).context).toEqual({ repo: false })
+
+    expect(await instructionsOf(t, projectSub.id)).toBe('WORKSHOP RULES')
+    expect(await instructionsOf(t, projectMain.id)).toBe('WORKSHOP RULES\n\nREPO RULES')
+
+    t.handle({ type: 'context.set', chatId: 'main', kind: 'workshop', enabled: false })
+    expect(await instructionsOf(t, 'main')).toBe('')
+    expect(await instructionsOf(t, projectSub.id)).toBe('WORKSHOP RULES')
+
+    t.core.close()
+    const reopened = setup(textScript, t.garage)
+    expect(layersOf(reopened, projectSub.id).find((l) => l.kind === 'repo')?.enabled).toBe(false)
+    expect(chatOf(reopened.core, projectSub.id)).not.toHaveProperty('context')
+    expect(() => reopened.handle({ type: 'context.set', chatId: 'main', kind: 'repo', enabled: false })).toThrow(
+      /no "repo" layer/,
+    )
+  })
+
+  it('falls back to the defaults in settings.json, keeping the other settings', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    expect(t.core.contextDefaults()).toEqual({ workshop: true, repo: true, project: true, own: true })
+    const sub = createChat(t)
+    t.handle({ type: 'context.set', chatId: sub.id, kind: 'workshop', enabled: true })
+
+    t.handle({ type: 'context.setDefault', kind: 'own', enabled: false })
+    t.handle({ type: 'context.setDefault', kind: 'workshop', enabled: false })
+    const defaults = { workshop: false, repo: true, project: true, own: false }
+    expect(t.messages.at(-1)).toEqual({ type: 'context.defaults', defaults })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toEqual({
+      theme: 'dark',
+      engines: { fake: true },
+      context: { own: false, workshop: false },
+    })
+    expect(layersOf(t, sub.id).map((l) => l.enabled)).toEqual([true, false])
+    expect(layersOf(t, 'main').map((l) => l.enabled)).toEqual([false])
+    expect(() => t.handle({ type: 'context.setDefault', kind: 'nope', enabled: false } as never)).toThrow(
+      /Unknown context layer/,
+    )
+
+    t.core.close()
+    expect(setup(textScript, garage).core.contextDefaults()).toEqual(defaults)
+  })
+
+  it('writes a layer file, creating its folder, and tells every client', () => {
+    const t = setup(textScript)
+    const projectMain = addProject(t)
+    const file = join(t.garage, 'projects', projectMain.projectId, 'AGENTS.md')
+    rmSync(join(t.garage, 'projects', projectMain.projectId), { recursive: true })
+
+    t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'PROJECT RULES\n' })
+    expect(readFileSync(file, 'utf8')).toBe('PROJECT RULES\n')
+    expect(t.messages.at(-1)).toEqual({ type: 'context.file', path: file, text: 'PROJECT RULES\n' })
+    expect(layersOf(t, projectMain.id).find((l) => l.kind === 'project')?.text).toBe('PROJECT RULES\n')
+  })
+
+  it('never writes the repo layer, and keeps archived chats read-only', () => {
+    const t = setup(textScript)
+    const repo = tempDir()
+    writeFileSync(join(repo, 'AGENTS.md'), 'REPO RULES')
+    const projectMain = addProject(t, repo)
+    expect(() => t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'repo', text: 'x' })).toThrow(
+      /project folder/,
+    )
+    expect(readFileSync(join(repo, 'AGENTS.md'), 'utf8')).toBe('REPO RULES')
+
+    const sub = createChat(t)
+    t.handle({ type: 'chat.archive', chatId: sub.id, archived: true })
+    expect(() => t.handle({ type: 'context.write', chatId: sub.id, kind: 'own', text: 'x' })).toThrow(/archived/)
+    expect(() => t.handle({ type: 'context.set', chatId: sub.id, kind: 'own', enabled: false })).toThrow(/archived/)
+    t.handle({ type: 'project.archive', projectId: projectMain.projectId, archived: true })
+    expect(() =>
+      t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'x' }),
+    ).toThrow(/archived/)
+    expect(layersOf(t, sub.id)).toHaveLength(2)
+  })
+})
