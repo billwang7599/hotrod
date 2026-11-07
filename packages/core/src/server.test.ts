@@ -196,6 +196,60 @@ it('serves the UI folder when given one', async () => {
   expect(await escaped.text()).not.toContain('secret')
 })
 
+it("serves a chat's attachments with the token, images inline and anything else as a download", async () => {
+  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: localMachine })
+  const server = await startServer({ core, port: 0, uiOrigin: origin, token })
+  cleanups.push(() => {
+    core.close()
+    rmSync(garage, { recursive: true, force: true })
+  })
+  cleanups.push(() => server.close())
+  const handle = (m: Parameters<typeof core.handle>[0]) => core.handle(m, () => {})
+  handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+  const upload = (name: string, mimeType: string, text: string) => ({
+    name,
+    mimeType,
+    base64: Buffer.from(text).toString('base64'),
+  })
+  handle({
+    type: 'chat.send',
+    chatId: 'main',
+    text: 'files',
+    attachments: [upload('shot.png', 'image/png', 'png bytes'), upload('page é.html', 'text/html', '<script>')],
+  })
+  handle({ type: 'chat.create', name: 'Other' })
+  const other = core.chats().find((c) => c.name === 'Other')!
+  await until(() => core.chats().every((c) => c.status === 'idle'))
+  const base = `http://127.0.0.1:${server.port}`
+  const get = (path: string, key = token) => fetch(`${base}${path}?token=${encodeURIComponent(key)}`)
+
+  const image = await get('/chats/main/attachments/shot.png')
+  expect(image.status).toBe(200)
+  expect(image.headers.get('content-type')).toBe('image/png')
+  expect(image.headers.get('content-disposition')).toBeNull()
+  expect(image.headers.get('x-content-type-options')).toBe('nosniff')
+  expect(image.headers.get('content-security-policy')).toBe('sandbox')
+  expect(await image.text()).toBe('png bytes')
+  const page = await get(`/chats/main/attachments/${encodeURIComponent('page é.html')}`)
+  expect(page.headers.get('content-type')).toBe('application/octet-stream')
+  expect(page.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''page%20%C3%A9.html`)
+  expect(await page.text()).toBe('<script>')
+
+  expect((await get('/chats/main/attachments/shot.png', 'wrong')).status).toBe(401)
+  expect((await fetch(`${base}/chats/main/attachments/shot.png`)).status).toBe(401)
+  for (const path of [
+    '/chats/main/attachments/log.jsonl',
+    '/chats/main/attachments/%2E%2E%2Flog.jsonl',
+    '/chats/main/attachments/..%2Fchat.json',
+    '/chats/main/attachments/%E0%A4%A',
+    `/chats/${other.id}/attachments/shot.png`,
+    '/chats/nope/attachments/shot.png',
+  ]) {
+    expect((await get(path)).status, path).toBe(404)
+  }
+})
+
 it('serves no files without a UI folder', async () => {
   const { base } = await start()
   const response = await fetch(base.replace('ws:', 'http:'))

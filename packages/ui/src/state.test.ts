@@ -11,6 +11,7 @@ import {
   familyOf,
   folderName,
   folderOf,
+  formatBytes,
   initialState,
   MAIN_CHAT_ID,
   MIN_WINDOW_PX,
@@ -201,6 +202,17 @@ describe('reduce', () => {
       { kind: 'user', text: 'hi' },
       { kind: 'tool', toolId: 't1', name: 'Edit', summary: '/x', state: 'error', output: 'no such file' },
     ])
+  })
+
+  it("keeps a message's attachments, sent and queued", () => {
+    const shot = { name: 'shot.png', path: '/g/chats/a/attachments/shot.png', mimeType: 'image/png', size: 2048 }
+    const state = run(
+      snapshot([chat(MAIN_CHAT_ID), chat('a')]),
+      entry('a', { type: 'user.message', text: '', attachments: [shot] }),
+      { type: 'chat.queue', chatId: 'a', queue: [{ id: 'q1', text: 'next', attachments: [shot] }] },
+    )
+    expect(items(state)).toEqual([{ kind: 'user', text: '', attachments: [shot] }])
+    expect(state.chats[1]?.queue).toEqual([{ id: 'q1', text: 'next', attachments: [shot] }])
   })
 
   it('accumulates deltas and clears them when the text completes', () => {
@@ -469,5 +481,18 @@ describe('dockedPanels', () => {
     expect(dockedPanels(sidebar)).toBe('sidebar')
     expect(dockedPanels(both - 1)).toBe('sidebar')
     expect(dockedPanels(both)).toBe('both')
+  })
+})
+
+describe('formatBytes', () => {
+  it('shows sizes in decimal units, with one decimal below ten', () => {
+    expect([0, 999, 1500, 20_480, 2_500_000, 20_000_000].map(formatBytes)).toEqual([
+      '0 B',
+      '999 B',
+      '1.5 KB',
+      '20 KB',
+      '2.5 MB',
+      '20 MB',
+    ])
   })
 })

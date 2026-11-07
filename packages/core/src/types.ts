@@ -62,8 +62,10 @@ export type SessionOptions = {
   thinking?: string
 }
 
+export type ImageInput = { mimeType: string; base64: string }
+
 export interface Session {
-  prompt(text: string): void
+  prompt(text: string, images?: ImageInput[]): void
   interrupt(): void
   respond(requestId: string, allow: boolean): void
   close(): void
@@ -82,6 +84,7 @@ export interface Adapter {
   id: string
   detect(machine: Machine): Promise<EngineStatus>
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
+  imageInput?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
@@ -155,12 +158,21 @@ export type NewChat = { parentId?: string; name: string; engine?: string; folder
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
-  | { type: 'user.message'; text: string }
+  | { type: 'user.message'; text: string; attachments?: Attachment[] }
   | { type: 'permission.resolved'; requestId: string; allow: boolean }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
-export type QueuedMessage = { id: string; text: string }
+export const MAX_ATTACHMENT_BYTES = 20_000_000
+// Base64 grows by a third, which keeps 75 MB of files under the WebSocket's 100 MiB message limit.
+export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
+export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+export type Attachment = { name: string; path: string; mimeType: string; size: number }
+
+export type Upload = { name: string; mimeType: string; base64: string }
+
+export type QueuedMessage = { id: string; text: string; attachments?: Attachment[] }
 
 export type ChatState = ChatInfo & {
   status: ChatStatus
@@ -178,7 +190,7 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
-  | { type: 'chat.send'; chatId: string; text: string }
+  | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }

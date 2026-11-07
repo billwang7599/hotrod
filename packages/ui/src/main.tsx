@@ -63,6 +63,7 @@ function App() {
   }))
   const send = useCore(dispatch)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
+  const notify = useCallback((message: string) => dispatch({ type: 'error', message }), [])
 
   useEffect(() => localStorage.setItem(SELECTED_KEY, state.selectedId), [state.selectedId])
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null)
@@ -250,6 +251,7 @@ function App() {
                 toggleContext={toggleContext}
                 columnPx={columnPx}
                 setColumnPx={setColumnPx}
+                notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists[selected.engine]}

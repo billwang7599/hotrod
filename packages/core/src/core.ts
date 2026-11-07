@@ -11,18 +11,22 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { openAccounts } from './accounts.ts'
 import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
   CONTEXT_SECTIONS,
   DEFAULT_SUBAGENT_LIMIT,
+  IMAGE_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
   pickModel,
   pickThinking,
   WORKSHOP_ID,
   WORKSHOP_NAME,
   type Adapter,
+  type Attachment,
   type ChatEntry,
   type ChatInfo,
   type ChatState,
@@ -41,6 +45,7 @@ import {
   type NewChat,
   type QueuedMessage,
   type Session,
+  type Upload,
 } from './types.ts'
 
 export const STOP_GRACE_MS = 60_000
@@ -488,7 +493,9 @@ export function openCore(options: {
     broadcast({ type: 'context.defaults', defaults: contextDefaults() })
   }
 
-  const send = (chat: Chat, text: string) => {
+  const attachmentsDirOf = (chat: Chat) => join(chat.dir, 'attachments')
+
+  const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
@@ -497,8 +504,12 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
-    const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
-    append(chat, { at: new Date().toISOString(), type: 'user.message', text })
+    const message = withAttachments(text, attachments)
+    const prompt = chat.entries.length
+      ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${message}`
+      : message
+    const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
+    append(chat, { at: new Date().toISOString(), ...sent })
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
@@ -511,7 +522,11 @@ export function openCore(options: {
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
-    const extraDirs = folders.map((folder) => folder.path).filter((path) => path !== cwd)
+    const attachmentsDir = attachmentsDirOf(chat)
+    const extraDirs = [
+      ...folders.map((folder) => folder.path).filter((path) => path !== cwd),
+      ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
+    ]
 
     let session: Session | undefined
     const emit = (event: EngineEvent) => {
@@ -541,6 +556,11 @@ export function openCore(options: {
       const engine = engineInfo(adapter.id)
       const model = pickModel(engine, listsOf(adapter.id), chat.info)
       const thinking = pickThinking(engine, chat.info)
+      const images = adapter.imageInput
+        ? attachments
+            .filter((a) => IMAGE_TYPES.includes(a.mimeType))
+            .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
+        : []
       const options = {
         cwd,
         instructions,
@@ -553,7 +573,7 @@ export function openCore(options: {
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
-      session.prompt(prompt)
+      session.prompt(prompt, images)
     } catch (error) {
       if (chat.status === 'idle') return
       endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
@@ -565,22 +585,68 @@ export function openCore(options: {
     broadcast({ type: 'chat.queue', chatId: chat.info.id, queue })
   }
 
-  const sendQueue = (chat: Chat, text?: string) => {
+  const sendQueue = (chat: Chat, message?: Omit<QueuedMessage, 'id'>) => {
     const queue = chat.queue
     if (queue.length) setQueue(chat, [])
+    const parts = message ? [...queue, message] : queue
     try {
-      send(chat, [...queue.map((q) => q.text), ...(text === undefined ? [] : [text])].join('\n\n'))
+      const text = parts.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
+      send(chat, text, parts.flatMap((part) => part.attachments ?? []))
     } catch (error) {
       if (queue.length) setQueue(chat, queue)
       throw error
     }
   }
 
-  const enqueue = (chat: Chat, text: string) => {
+  const enqueue = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     checkActive(chat)
-    if (chat.status === 'idle') return sendQueue(chat, text)
-    setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), text }])
+    const message = { text, ...(attachments.length && { attachments }) }
+    if (chat.status === 'idle') return sendQueue(chat, message)
+    setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
+  }
+
+  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown) => {
+    if (uploads !== undefined && !Array.isArray(uploads)) throw new Error('Attachments must be a list')
+    const files = (uploads ?? []).map((upload: Partial<Upload>) => {
+      const { name, mimeType, base64 } = upload ?? {}
+      if (typeof name !== 'string' || typeof mimeType !== 'string' || typeof base64 !== 'string') {
+        throw new Error('Each attachment needs a name, a type and its contents')
+      }
+      const bytes = Buffer.from(base64, 'base64')
+      if (bytes.length > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`${name} is larger than ${MAX_ATTACHMENT_BYTES / 1_000_000} MB, the most one attachment can be`)
+      }
+      return { name, mimeType: mimeType || 'application/octet-stream', bytes }
+    })
+    if (files.reduce((total, file) => total + file.bytes.length, 0) > MAX_ATTACHMENTS_TOTAL_BYTES) {
+      throw new Error(`One message can carry at most ${MAX_ATTACHMENTS_TOTAL_BYTES / 1_000_000} MB of attachments`)
+    }
+    const text = typeof rawText === 'string' && rawText.trim() ? rawText : ''
+    if (!text && !files.length) throw new Error('Message is empty')
+
+    const dir = attachmentsDirOf(chat)
+    if (files.length) mkdirSync(dir, { recursive: true })
+    const attachments = files.map(({ name, mimeType, bytes }): Attachment => {
+      const clean = basename(name).replace(/[\x00-\x1f\x7f\\]/g, '').replace(/^[.\s]+/, '').trim() || 'attachment'
+      const dot = clean.lastIndexOf('.')
+      const [stem, extension] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, '']
+      for (let copy = 1; ; copy++) {
+        const path = join(dir, copy === 1 ? clean : `${stem}-${copy}${extension}`)
+        try {
+          writeFileSync(path, bytes, { flag: 'wx' })
+          return { name, path, mimeType, size: bytes.length }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        }
+      }
+    })
+    try {
+      enqueue(chat, text, attachments)
+    } catch (error) {
+      for (const { path } of attachments) rmSync(path, { force: true })
+      throw error
+    }
   }
 
   const mcp = openHotrodMcp({
@@ -635,6 +701,13 @@ export function openCore(options: {
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
+    attachment(chatId: string, file: string) {
+      const chat = chats.get(chatId)
+      if (!chat) return undefined
+      const path = join(attachmentsDirOf(chat), file)
+      const sent = chat.entries.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []) : []))
+      return [...sent, ...chat.queue.flatMap((q) => q.attachments ?? [])].find((a) => a.path === path)
+    },
     serveMcp(url: string) {
       mcpUrl = url
       return mcp.handle
@@ -664,12 +737,13 @@ export function openCore(options: {
         case 'chat.setModel':
           return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
         case 'chat.send':
-          if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
-          return enqueue(chatFor(message.chatId), message.text)
+          return sendMessage(chatFor(message.chatId), message.text, message.attachments)
         case 'chat.unqueue': {
           const chat = chatFor(message.chatId)
-          if (!chat.queue.some((q) => q.id === message.id)) return
-          return setQueue(chat, chat.queue.filter((q) => q.id !== message.id))
+          const removed = chat.queue.find((q) => q.id === message.id)
+          if (!removed) return
+          for (const { path } of removed.attachments ?? []) rmSync(path, { force: true })
+          return setQueue(chat, chat.queue.filter((q) => q !== removed))
         }
         case 'chat.interrupt':
           return interrupt(chatFor(message.chatId), message.force === true)
@@ -760,6 +834,12 @@ const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
   return realpathSync(path)
 }
 
+function withAttachments(text: string, attachments: Attachment[] = []) {
+  if (!attachments.length) return text
+  const list = ['Attached files:', ...attachments.map((a) => `- ${a.path} (${a.mimeType})`)].join('\n')
+  return text ? `${text}\n\n${list}` : list
+}
+
 function transcript(entries: ChatEntry[]) {
   const results = new Map<string, { output: string; isError: boolean }>()
   for (const entry of entries) {
@@ -767,7 +847,7 @@ function transcript(entries: ChatEntry[]) {
   }
   const lines: string[] = []
   for (const entry of entries) {
-    if (entry.type === 'user.message') lines.push(`User: ${entry.text}`)
+    if (entry.type === 'user.message') lines.push(`User: ${withAttachments(entry.text, entry.attachments)}`)
     if (entry.type === 'text.completed') lines.push(`Assistant: ${entry.text}`)
     if (entry.type === 'tool.started') {
       const call = `<tool_call name="${entry.name}">${escapeClosingTags(JSON.stringify(entry.input) ?? '')}</tool_call>`

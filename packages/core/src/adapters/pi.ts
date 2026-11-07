@@ -44,6 +44,7 @@ const textOf = (content: any): string =>
 
 export const pi: Adapter = {
   id: 'pi',
+  imageInput: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
@@ -164,8 +165,9 @@ export const pi: Adapter = {
     })
 
     return {
-      prompt(text) {
-        send({ type: 'prompt', message: text })
+      prompt(text, images = []) {
+        const attached = images.map(({ mimeType, base64 }) => ({ type: 'image', data: base64, mimeType }))
+        send({ type: 'prompt', message: text, ...(attached.length && { images: attached }) })
         emit({ type: 'turn.started' })
       },
       interrupt() {

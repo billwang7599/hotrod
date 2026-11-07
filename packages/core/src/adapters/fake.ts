@@ -44,6 +44,7 @@ export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'hig
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
   return {
     id: 'fake',
+    imageInput: true,
     detect: async () => ({
       installed: true,
       signedIn: true,

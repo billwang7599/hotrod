@@ -18,6 +18,13 @@ export function coreUrl(
   return url.href
 }
 
+export function attachmentUrl(socketUrl: string, chatId: string, path: string) {
+  const url = new URL(socketUrl)
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:'
+  url.pathname = `/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(path.split('/').at(-1) ?? '')}`
+  return url.href
+}
+
 type TokenStorage = { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
 export function readToken(hash: string, storage: TokenStorage) {

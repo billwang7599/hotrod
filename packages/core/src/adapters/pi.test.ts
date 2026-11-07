@@ -76,6 +76,17 @@ describe('pi adapter', () => {
     ])
   })
 
+  it('adds images to the prompt command, and says it takes image input', () => {
+    const { fake, session } = startSession()
+    session.prompt('What is this?', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    session.prompt('And this?', [])
+    expect(fake.sent()).toEqual([
+      { type: 'prompt', message: 'What is this?', images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }] },
+      { type: 'prompt', message: 'And this?' },
+    ])
+    expect(pi.imageInput).toBe(true)
+  })
+
   it('runs a tool without asking and reports its output', () => {
     const { fake, events, session } = startSession()
     session.prompt('Run ls with the bash tool, then reply with one word.')

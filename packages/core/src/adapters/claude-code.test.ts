@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { EngineEvent, LoginEvent, SessionOptions } from '../types.ts'
-import { claudeCode } from './claude-code.ts'
+import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${name}.jsonl`, import.meta.url), 'utf8')
@@ -94,6 +94,45 @@ describe('claudeCode adapter', () => {
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
       { type: 'turn.completed' },
+    ])
+  })
+
+  it('sends images as base64 image blocks after the text, and says it takes image input', () => {
+    const { fake, session } = startSession()
+    session.prompt('What is this?', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    expect(fake.sent()).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is this?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } },
+          ],
+        },
+      },
+    ])
+    expect(claudeCode.imageInput).toBe(true)
+  })
+
+  it('leaves out images over the API limit, which the prompt already names by path', () => {
+    const { fake, session } = startSession()
+    const fits = 'a'.repeat(MAX_IMAGE_BASE64_CHARS)
+    session.prompt('Look', [
+      { mimeType: 'image/png', base64: fits },
+      { mimeType: 'image/jpeg', base64: `${fits}a` },
+    ])
+    expect(fake.sent()).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Look' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: fits } },
+          ],
+        },
+      },
     ])
   })
 

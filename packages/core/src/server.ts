@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
-import { BAD_TOKEN_CLOSE_CODE, type CoreMessage } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, IMAGE_TYPES, type CoreMessage } from './types.ts'
 
 // Hashing first gives equal lengths, which timingSafeEqual needs, without leaking the token's length.
 const digest = (text: string) => createHash('sha256').update(text).digest()
@@ -21,6 +21,8 @@ const CONTENT_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
   '.woff2': 'font/woff2',
 }
+
+const ATTACHMENT_PATH = /^\/chats\/([^/]+)\/attachments\/([^/]+)$/
 
 export async function startServer(options: {
   core: Core
@@ -42,8 +44,27 @@ export async function startServer(options: {
   }
   let serveMcp: ReturnType<Core['serveMcp']> | undefined
   const http = createServer((request, response) => {
-    if (serveMcp && new URL(request.url ?? '/', 'http://core').pathname === '/mcp') {
+    const url = new URL(request.url ?? '/', 'http://core')
+    if (serveMcp && url.pathname === '/mcp') {
       return void serveMcp(request, response).catch(() => response.headersSent || response.writeHead(500).end())
+    }
+    const attachment = url.pathname.match(ATTACHMENT_PATH)
+    if (attachment) {
+      if (!sameToken(url.searchParams.get('token') ?? '', token)) return response.writeHead(401).end()
+      let found
+      try {
+        found = core.attachment(decodeURIComponent(attachment[1]!), decodeURIComponent(attachment[2]!))
+      } catch {}
+      if (!found || !existsSync(found.path)) return response.writeHead(404).end()
+      // The UI shares this origin in the desktop app, so nothing but a plain image may render here.
+      const inline = IMAGE_TYPES.includes(found.mimeType)
+      response.writeHead(200, {
+        'content-type': inline ? found.mimeType : 'application/octet-stream',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': 'sandbox',
+        ...(!inline && { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.name)}` }),
+      })
+      return void createReadStream(found.path).pipe(response)
     }
     serveUi(request, response)
   })

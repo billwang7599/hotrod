@@ -17,8 +17,11 @@ import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.t
 import { localMachine } from './machine.ts'
 import {
   DEFAULT_SUBAGENT_LIMIT,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
   WORKSHOP_NAME,
   type Adapter,
+  type ImageInput,
   type ChatEntry,
   type ChatState,
   type CoreMessage,
@@ -52,7 +55,13 @@ const permissionScript: FakeStep[] = [
 ]
 
 function recording(adapter: Adapter) {
-  const calls: { options: SessionOptions; prompt?: string; interrupted?: boolean; closed: boolean }[] = []
+  const calls: {
+    options: SessionOptions
+    prompt?: string
+    images?: ImageInput[]
+    interrupted?: boolean
+    closed: boolean
+  }[] = []
   const wrapped: Adapter = {
     ...adapter,
     start(machine, options, emit) {
@@ -61,9 +70,10 @@ function recording(adapter: Adapter) {
       const session = adapter.start(machine, options, emit)
       return {
         ...session,
-        prompt(text) {
+        prompt(text, images) {
           call.prompt = text
-          session.prompt(text)
+          call.images = images
+          session.prompt(text, images)
         },
         interrupt() {
           call.interrupted = true
@@ -907,6 +917,188 @@ describe('queue', () => {
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
     expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: '  ' })).toThrow(/empty/)
     expect(queueOf(t.core, chat.id)).toEqual([])
+  })
+})
+
+describe('attachments', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a', 'hex')
+  const BIG_JPEG = Buffer.alloc(6 * 1024 * 1024)
+  const upload = (name: string, mimeType: string, bytes: Buffer | string) => ({
+    name,
+    mimeType,
+    base64: Buffer.from(bytes).toString('base64'),
+  })
+  const attachmentsDir = (t: { garage: string }, id: string) => join(t.garage, 'chats', id, 'attachments')
+  const sentAttachments = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [e.attachments ?? []] : []))
+
+  it('saves uploads as files in the chat folder, never clobbering, and logs them without their bytes', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({
+      type: 'chat.send',
+      chatId: chat.id,
+      text: 'look',
+      attachments: [
+        upload('image.png', 'image/png', PNG),
+        upload('image.png', 'image/png', 'second'),
+        upload('../.notes.txt', 'text/plain', 'hello'),
+      ],
+    })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const again = [upload('image.png', 'image/png', 'x')]
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'again', attachments: again })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+
+    expect(sentAttachments(t.core, chat.id)).toEqual([
+      [
+        { name: 'image.png', path: join(dir, 'image.png'), mimeType: 'image/png', size: PNG.length },
+        { name: 'image.png', path: join(dir, 'image-2.png'), mimeType: 'image/png', size: 6 },
+        { name: '../.notes.txt', path: join(dir, 'notes.txt'), mimeType: 'text/plain', size: 5 },
+      ],
+      [{ name: 'image.png', path: join(dir, 'image-3.png'), mimeType: 'image/png', size: 1 }],
+    ])
+    expect(readFileSync(join(dir, 'image.png'))).toEqual(PNG)
+    expect(readFileSync(join(dir, 'image-2.png'), 'utf8')).toBe('second')
+    expect(readFileSync(join(dir, 'notes.txt'), 'utf8')).toBe('hello')
+    expect(readFileSync(join(t.garage, 'chats', chat.id, 'log.jsonl'), 'utf8')).not.toContain('"base64"')
+  })
+
+  it('sends files with no text, and refuses a message with neither', async () => {
+    const t = setup(textScript)
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: '  ' })).toThrow('Message is empty')
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [] })).toThrow(
+      'Message is empty',
+    )
+    t.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(entriesOf(t.core, 'main')[0]).toMatchObject({ type: 'user.message', text: '' })
+    expect(existsSync(join(attachmentsDir(t, 'main'), 'a.txt'))).toBe(true)
+  })
+
+  it('refuses a file over the size cap, or files over the total for one message, saving nothing', () => {
+    const t = setup(textScript)
+    const huge = upload('huge.bin', 'application/octet-stream', Buffer.alloc(MAX_ATTACHMENT_BYTES + 1))
+    const send = (attachments: ReturnType<typeof upload>[]) =>
+      t.handle({ type: 'chat.send', chatId: 'main', text: 'hi', attachments })
+    expect(() => send([upload('ok.txt', 'text/plain', 'ok'), huge])).toThrow(`huge.bin is larger than`)
+    const big = upload('big.bin', 'application/octet-stream', Buffer.alloc(MAX_ATTACHMENT_BYTES))
+    const count = Math.floor(MAX_ATTACHMENTS_TOTAL_BYTES / MAX_ATTACHMENT_BYTES) + 1
+    expect(() => send(Array(count).fill(big))).toThrow('at most')
+    expect(existsSync(attachmentsDir(t, 'main'))).toBe(false)
+    expect(t.calls).toEqual([])
+  })
+
+  it('lists every file by path in the prompt and sends every supported image as image input', async () => {
+    const t = setup(textScript)
+    t.handle({
+      type: 'chat.send',
+      chatId: 'main',
+      text: 'what is this?',
+      attachments: [
+        upload('shot.png', 'image/png', PNG),
+        upload('big.jpg', 'image/jpeg', BIG_JPEG),
+        upload('report.pdf', 'application/pdf', '%PDF'),
+        upload('icon.svg', 'image/svg+xml', '<svg/>'),
+      ],
+    })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const dir = attachmentsDir(t, 'main')
+    expect(t.calls[0]?.prompt).toBe(
+      'what is this?\n\nAttached files:\n' +
+        `- ${dir}/shot.png (image/png)\n- ${dir}/big.jpg (image/jpeg)\n` +
+        `- ${dir}/report.pdf (application/pdf)\n- ${dir}/icon.svg (image/svg+xml)`,
+    )
+    expect(t.calls[0]?.images).toEqual([
+      { mimeType: 'image/png', base64: PNG.toString('base64') },
+      { mimeType: 'image/jpeg', base64: BIG_JPEG.toString('base64') },
+    ])
+
+    const blind = setup({ ...createFakeAdapter(textScript, 0), imageInput: false })
+    blind.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [upload('a.png', 'image/png', PNG)] })
+    await until(() => statusOf(blind.core, 'main') === 'idle')
+    expect(blind.calls[0]?.prompt).toBe(`Attached files:\n- ${attachmentsDir(blind, 'main')}/a.png (image/png)`)
+    expect(blind.calls[0]?.images).toEqual([])
+  })
+
+  it('replays earlier files as paths only, sending images only with their own turn', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'first', attachments: [upload('one.png', 'image/png', PNG)] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'second', attachments: [upload('two.png', 'image/png', 'b')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const prompt = t.calls[1]?.prompt ?? ''
+    expect(prompt).toContain(`User: first\n\nAttached files:\n- ${dir}/one.png (image/png)`)
+    expect(prompt.endsWith(`second\n\nAttached files:\n- ${dir}/two.png (image/png)`)).toBe(true)
+    expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: Buffer.from('b').toString('base64') }])
+  })
+
+  it("gives the engine the chat's own attachments folder once it exists, and never a parent's", async () => {
+    const t = setup(textScript)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[0]?.options.extraDirs).toBeUndefined()
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'see', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'again' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[1]?.options.extraDirs).toEqual([attachmentsDir(t, 'main')])
+    expect(t.calls[2]?.options.extraDirs).toEqual([attachmentsDir(t, 'main')])
+
+    const child = createChat(t, { name: 'Child' })
+    t.handle({ type: 'chat.send', chatId: child.id, text: 'hi' })
+    await until(() => statusOf(t.core, child.id) === 'idle')
+    expect(t.calls[3]?.options.extraDirs).toBeUndefined()
+    expect(t.calls[3]?.prompt).not.toContain('a.txt')
+  })
+
+  it('saves files sent during a turn at once, sends them with the queue, and deletes an unqueued one', async () => {
+    const t = setup(permissionScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two', attachments: [upload('two.png', 'image/png', PNG)] })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments: [upload('three.txt', 'text/plain', '3')] })
+    expect(readFileSync(join(dir, 'two.png'))).toEqual(PNG)
+    const queue = chatOf(t.core, chat.id)?.queue ?? []
+    expect(queue.map((q) => q.attachments?.map((a) => a.path))).toEqual([
+      [join(dir, 'two.png')],
+      [join(dir, 'three.txt')],
+    ])
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: queue[1]!.id })
+    expect(existsSync(join(dir, 'three.txt'))).toBe(false)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'four', attachments: [upload('four.txt', 'text/plain', '4')] })
+
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => sentAttachments(t.core, chat.id).length === 2)
+
+    const merged = entriesOf(t.core, chat.id).findLast((e) => e.type === 'user.message')
+    expect(merged).toMatchObject({ text: 'two\n\nfour' })
+    expect(sentAttachments(t.core, chat.id)[1]?.map((a) => a.path)).toEqual([
+      join(dir, 'two.png'),
+      join(dir, 'four.txt'),
+    ])
+    expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: PNG.toString('base64') }])
+  })
+
+  it('keeps no files from a refused message, and deletes them with the chat', async () => {
+    const t = setup(textScript)
+    const chat = createChat(t, { name: 'Old' })
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.archive', chatId: chat.id, archived: true })
+    const attachments = [upload('b.txt', 'text/plain', 'b')]
+    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi', attachments })).toThrow('archived')
+    expect(existsSync(join(dir, 'b.txt'))).toBe(false)
+    t.handle({ type: 'chat.delete', chatId: chat.id })
+    expect(existsSync(dir)).toBe(false)
   })
 })
 

@@ -27,6 +27,8 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
 
 const OUTPUT_TAIL_CHARS = 2000
+// Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
+export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024
 // The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
 const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
@@ -55,6 +57,7 @@ function summarize(kind: ToolKind, input: any): string {
 
 export const claudeCode: Adapter = {
   id: 'claude-code',
+  imageInput: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
@@ -220,8 +223,12 @@ export const claudeCode: Adapter = {
     })
 
     return {
-      prompt(text) {
-        send({ type: 'user', message: { role: 'user', content: text } })
+      prompt(text, images = []) {
+        const blocks = images
+          .filter(({ base64 }) => base64.length <= MAX_IMAGE_BASE64_CHARS)
+          .map(({ mimeType, base64 }) => ({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }))
+        const content = blocks.length ? [{ type: 'text', text }, ...blocks] : text
+        send({ type: 'user', message: { role: 'user', content } })
         emit({ type: 'turn.started' })
       },
       interrupt() {

@@ -1,6 +1,7 @@
 import { DEFAULT_SUBAGENT_LIMIT, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
 import type {
   Account,
+  Attachment,
   ChatEntry,
   ChatInfo,
   ChatState,
@@ -18,7 +19,7 @@ import type {
 export const MAIN_CHAT_ID = WORKSHOP_ID
 
 export type Item =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; attachments?: Attachment[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | {
@@ -90,8 +91,10 @@ function setToolState(items: Item[], toolId: string | undefined, state: 'running
 
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
-    case 'user.message':
-      return [...items, { kind: 'user', text: entry.text }]
+    case 'user.message': {
+      const { text, attachments } = entry
+      return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+    }
     case 'text.completed':
       return [...items, { kind: 'text', text: entry.text }]
     case 'tool.started':
@@ -328,6 +331,12 @@ export const modelMenu = (chat: ChatView, engine?: EngineInfo, lists = NO_LISTS)
   thinking: pickThinking(engine, chat),
   levels: engine?.thinking ?? [],
 })
+
+export function formatBytes(bytes: number) {
+  if (bytes < 1000) return `${bytes} B`
+  const [value, unit] = bytes < 1_000_000 ? [bytes / 1000, 'KB'] : [bytes / 1_000_000, 'MB']
+  return `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)} ${unit}`
+}
 
 export function accountLabel(account: Account) {
   const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'
