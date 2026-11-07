@@ -310,6 +310,18 @@ pre {
   border-radius: 6px;
 }
 
+.permission-input summary {
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.permission-input pre {
+  margin-top: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
 .permission-actions {
   display: flex;
   gap: 8px;

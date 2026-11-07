@@ -1,4 +1,4 @@
-import type { ChatEntry, ChatStatus, CoreMessage, EngineStatus, ProjectState, ToolKind } from '@hotrod/core/types'
+import type { ChatEntry, ChatStatus, CoreMessage, EngineStatus, ProjectState } from '@hotrod/core/types'
 
 export type Item =
   | { kind: 'user'; text: string }
@@ -7,8 +7,7 @@ export type Item =
       kind: 'tool'
       toolId: string
       name: string
-      toolKind: ToolKind
-      input: unknown
+      summary: string
       state: 'running' | 'waiting' | 'done' | 'error' | 'stopped'
       output: string
     }
@@ -17,7 +16,7 @@ export type Item =
       requestId: string
       toolId?: string
       name: string
-      toolKind: ToolKind
+      summary: string
       input: unknown
       outcome: 'pending' | 'allowed' | 'denied' | 'cancelled'
     }
@@ -68,8 +67,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
           kind: 'tool',
           toolId: entry.toolId,
           name: entry.name,
-          toolKind: entry.kind,
-          input: entry.input,
+          summary: entry.summary,
           state: 'running',
           output: '',
         },
@@ -88,7 +86,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
           requestId: entry.requestId,
           ...(entry.toolId ? { toolId: entry.toolId } : {}),
           name: entry.name,
-          toolKind: entry.kind,
+          summary: entry.summary,
           input: entry.input,
           outcome: 'pending',
         },

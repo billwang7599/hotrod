@@ -4,9 +4,17 @@ export type EngineEvent =
   | { type: 'turn.started' }
   | { type: 'text.delta'; text: string }
   | { type: 'text.completed'; text: string }
-  | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; input: unknown }
+  | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown }
   | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
-  | { type: 'permission.requested'; requestId: string; toolId?: string; name: string; kind: ToolKind; input: unknown }
+  | {
+      type: 'permission.requested'
+      requestId: string
+      toolId?: string
+      name: string
+      kind: ToolKind
+      summary: string
+      input: unknown
+    }
   | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 

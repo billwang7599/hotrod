@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientMessage, ToolKind } from '@hotrod/core/types'
+import type { ClientMessage } from '@hotrod/core/types'
 import { initialState, reduce, type Action, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
@@ -44,23 +44,6 @@ function useCore(dispatch: (action: Action) => void) {
   }, [])
 }
 
-// Input shapes are engine-specific; these keys cover Claude Code's tools.
-function summarize(kind: ToolKind, input: unknown): string {
-  const fields = (input && typeof input === 'object' ? input : {}) as Record<string, unknown>
-  const pick = (...keys: string[]) => keys.map((k) => fields[k]).find((v) => typeof v === 'string') as string | undefined
-  const summary =
-    kind === 'shell'
-      ? pick('command')
-      : kind === 'edit' || kind === 'read'
-        ? pick('file_path', 'path', 'notebook_path')
-        : kind === 'search'
-          ? pick('pattern', 'query')
-          : kind === 'fetch'
-            ? pick('url', 'query')
-            : undefined
-  return (summary ?? JSON.stringify(input) ?? '').replace(/\s+/g, ' ')
-}
-
 type ItemProps = { item: Item; project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }
 
 function ItemView({ item, project, connected, send }: ItemProps) {
@@ -76,7 +59,7 @@ function ItemView({ item, project, connected, send }: ItemProps) {
         <details className={`tool ${item.state}`}>
           <summary>
             <span className="tool-name">{item.name}</span>
-            <span className="tool-input">{summarize(item.toolKind, item.input)}</span>
+            <span className="tool-input">{item.summary}</span>
             <span className="tool-state">{item.state === 'waiting' ? 'waiting for approval' : item.state}</span>
           </summary>
           <pre>
@@ -93,7 +76,11 @@ function ItemView({ item, project, connected, send }: ItemProps) {
           <div className="permission-title">
             Allow <strong>{item.name}</strong>?
           </div>
-          <pre>{summarize(item.toolKind, item.input)}</pre>
+          <pre>{item.summary}</pre>
+          <details className="permission-input">
+            <summary>Full input</summary>
+            <pre>{JSON.stringify(item.input, null, 2)}</pre>
+          </details>
           {item.outcome === 'pending' && project.status === 'waiting' ? (
             <div className="permission-actions">
               <button className="approve" disabled={!connected} onClick={() => respond(true)}>

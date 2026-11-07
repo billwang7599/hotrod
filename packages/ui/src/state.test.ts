@@ -27,7 +27,7 @@ describe('reduce', () => {
           { at, type: 'user.message', text: 'hi' },
           { at, type: 'turn.started' },
           { at, type: 'text.completed', text: 'hello' },
-          { at, type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', input: { command: 'ls' } },
+          { at, type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: { command: 'ls' } },
           { at, type: 'tool.completed', toolId: 't1', output: 'README.md', isError: false },
           { at, type: 'turn.completed', error: 'boom' },
         ]),
@@ -40,7 +40,7 @@ describe('reduce', () => {
     expect(items(state)).toEqual([
       { kind: 'user', text: 'hi' },
       { kind: 'text', text: 'hello' },
-      { kind: 'tool', toolId: 't1', name: 'Bash', toolKind: 'shell', input: { command: 'ls' }, state: 'done', output: 'README.md' },
+      { kind: 'tool', toolId: 't1', name: 'Bash', summary: 'ls', state: 'done', output: 'README.md' },
       { kind: 'error', text: 'boom' },
     ])
   })
@@ -72,8 +72,8 @@ describe('reduce', () => {
   it('shows a tool as waiting while its permission is pending', () => {
     const requested = run(
       { type: 'snapshot', engine, projects: [project('a')] },
-      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', input: {} }),
-      entry('a', { type: 'permission.requested', requestId: 'r1', toolId: 't1', name: 'Bash', kind: 'shell', input: {} }),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
+      entry('a', { type: 'permission.requested', requestId: 'r1', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
     )
     expect(items(requested)[0]).toMatchObject({ toolId: 't1', state: 'waiting' })
     const allowed = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: true }))
@@ -86,13 +86,13 @@ describe('reduce', () => {
     const state = run(
       { type: 'snapshot', engine, projects: [project('a'), project('b')] },
       entry('b', { type: 'user.message', text: 'hi' }),
-      entry('b', { type: 'tool.started', toolId: 't1', name: 'Edit', kind: 'edit', input: { file_path: '/x' } }),
+      entry('b', { type: 'tool.started', toolId: 't1', name: 'Edit', kind: 'edit', summary: '/x', input: { file_path: '/x' } }),
       entry('b', { type: 'tool.completed', toolId: 't1', output: 'no such file', isError: true }),
     )
     expect(items(state, 'a')).toEqual([])
     expect(items(state, 'b')).toEqual([
       { kind: 'user', text: 'hi' },
-      { kind: 'tool', toolId: 't1', name: 'Edit', toolKind: 'edit', input: { file_path: '/x' }, state: 'error', output: 'no such file' },
+      { kind: 'tool', toolId: 't1', name: 'Edit', summary: '/x', state: 'error', output: 'no such file' },
     ])
   })
 
@@ -120,10 +120,10 @@ describe('reduce', () => {
   it('moves a permission from pending to resolved', () => {
     const requested = run(
       { type: 'snapshot', engine, projects: [project('a')] },
-      entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', input: { command: 'rm x' } }),
+      entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'rm x', input: { command: 'rm x' } }),
     )
     expect(items(requested)).toEqual([
-      { kind: 'permission', requestId: 'r1', name: 'Bash', toolKind: 'shell', input: { command: 'rm x' }, outcome: 'pending' },
+      { kind: 'permission', requestId: 'r1', name: 'Bash', summary: 'rm x', input: { command: 'rm x' }, outcome: 'pending' },
     ])
     const denied = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false }))
     expect(items(denied)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied' })
@@ -135,8 +135,8 @@ describe('reduce', () => {
     const state = run(
       { type: 'snapshot', engine, projects: [project('a')] },
       { type: 'chat.delta', projectId: 'a', text: 'half' },
-      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', input: {} }),
-      entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', input: {} }),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
+      entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
       entry('a', { type: 'turn.completed' }),
     )
     expect(items(state).map((i) => ('state' in i ? i.state : 'outcome' in i ? i.outcome : i.kind))).toEqual([
