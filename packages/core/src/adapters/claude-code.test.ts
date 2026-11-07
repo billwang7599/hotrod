@@ -4,7 +4,7 @@ import type { EngineEvent } from '../types.ts'
 import { claudeCode } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
-const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}.jsonl`, import.meta.url), 'utf8')
+const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${name}.jsonl`, import.meta.url), 'utf8')
 
 function startSession(instructions = '') {
   const fake = fakeMachine()
