@@ -5,7 +5,6 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
-import { KILL_GRACE_MS } from './machine.ts'
 import { startCore } from './main.ts'
 import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './types.ts'
 
@@ -102,10 +101,13 @@ async function runCore(engine: string) {
     const engine = {
       id: 'node',
       detect: async () => ({ installed: true, signedIn: true }),
-      start(machine, { cwd }) {
+      start(machine, { cwd }, emit) {
         const proc = machine.spawn(process.execPath, ['-e', ${JSON.stringify(engine)}], { cwd })
-        proc.onStdout((chunk) => console.log(chunk.trim()))
-        return { prompt() {}, interrupt() {}, respond() {}, close: () => proc.kill() }
+        proc.onStdout((chunk) => {
+          console.log(chunk.trim())
+          if (chunk.includes('turn ended')) emit({ type: 'turn.completed', error: 'Interrupted' })
+        })
+        return { prompt() {}, interrupt: () => proc.write('interrupt\\n'), respond() {}, close: () => proc.kill() }
       },
     }
     const env = { HOTROD_ENGINE: 'node', HOTROD_GARAGE: ${JSON.stringify(garage)}, HOTROD_PORT: '4551' }
@@ -116,11 +118,26 @@ async function runCore(engine: string) {
   const core = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
   cleanups.push(() => void core.kill('SIGKILL'))
   const exited = new Promise<number | null>((resolve) => core.on('exit', resolve))
-  const enginePid = await new Promise<number>((resolve) =>
-    core.stdout.on('data', (chunk) => resolve(Number(String(chunk).trim()))),
-  )
+  const lines: string[] = []
+  const waiters: { match: RegExp; resolve: (line: string) => void }[] = []
+  let buffered = ''
+  core.stdout.setEncoding('utf8').on('data', (chunk: string) => {
+    const parts = (buffered + chunk).split('\n')
+    buffered = parts.pop() ?? ''
+    for (const line of parts) {
+      lines.push(line)
+      for (const waiter of waiters.filter((w) => w.match.test(line))) waiter.resolve(line)
+    }
+  })
+  const nextLine = (match: RegExp) =>
+    new Promise<string>((resolve) => {
+      const seen = lines.find((line) => match.test(line))
+      if (seen) resolve(seen)
+      else waiters.push({ match, resolve })
+    })
+  const enginePid = Number(await nextLine(/^\d+$/))
   cleanups.push(() => void (alive(enginePid) && process.kill(enginePid, 'SIGKILL')))
-  return { core, exited, enginePid, garage }
+  return { core, exited, enginePid, garage, lines, nextLine }
 }
 
 const alive = (pid: number) => {
@@ -132,27 +149,63 @@ const alive = (pid: number) => {
   }
 }
 
-it('waits for engines to finish shutting down before exiting on a signal', async () => {
-  const cleanupMs = 300
+const onInterrupt = (reaction: string) =>
+  `process.stdin.on('data', () => { console.log('engine got interrupt'); ${reaction} })`
+
+it('asks engines to stop, then waits for them to shut down before exiting on a signal', async () => {
   const marker = 'stopped-cleanly'
   const engine = `console.log(process.pid); setInterval(() => {}, 1000)
-    process.on('SIGTERM', () => setTimeout(() => { require('node:fs').writeFileSync('${marker}', ''); process.exit(0) }, ${cleanupMs}))`
-  const { core, exited, enginePid, garage } = await runCore(engine)
+    ${onInterrupt(`console.log('turn ended')`)}
+    process.on('SIGTERM', () => {
+      console.log('engine got SIGTERM')
+      setTimeout(() => { require('node:fs').writeFileSync('${marker}', ''); process.exit(0) }, 200)
+    })`
+  const { core, exited, enginePid, garage, lines, nextLine } = await runCore(engine)
   core.kill('SIGTERM')
+  await nextLine(/Ctrl\+C again/)
+  await nextLine(/engine got SIGTERM/)
+  expect(lines).toContain('engine got interrupt')
+  expect(lines.indexOf('engine got interrupt')).toBeLessThan(lines.indexOf('engine got SIGTERM'))
+  expect(core.exitCode).toBeNull()
   expect(await exited).toBe(0)
   expect(existsSync(join(garage, marker))).toBe(true)
   expect(alive(enginePid)).toBe(false)
 })
 
-it('exits at once on a second signal and still kills its engines', async () => {
-  const engine = `console.log(process.pid); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`
-  const { core, exited, enginePid } = await runCore(engine)
+it('stops waiting for the turn on a second signal: SIGTERM, then exit', async () => {
+  const engine = `console.log(process.pid); setInterval(() => {}, 1000)
+    ${onInterrupt('')}
+    process.on('SIGTERM', () => { console.log('engine got SIGTERM'); process.exit(0) })`
+  const { core, exited, enginePid, lines, nextLine } = await runCore(engine)
   core.kill('SIGTERM')
-  await new Promise((resolve) => setTimeout(resolve, 200))
-  expect(core.exitCode).toBeNull()
-  const start = performance.now()
+  await nextLine(/engine got interrupt/)
+  expect(lines).not.toContain('engine got SIGTERM')
   core.kill('SIGTERM')
+  await nextLine(/force quitting/i)
+  await nextLine(/engine got SIGTERM/)
   expect(await exited).not.toBe(0)
-  expect(performance.now() - start).toBeLessThan(KILL_GRACE_MS / 2)
   expect(alive(enginePid)).toBe(false)
 })
+
+it('exits at once on a third signal and still kills engines that ignore SIGTERM', async () => {
+  const engine = `console.log(process.pid); setInterval(() => {}, 1000)
+    ${onInterrupt('')}
+    process.on('SIGTERM', () => console.log('engine ignores SIGTERM'))`
+  const { core, exited, enginePid, nextLine } = await runCore(engine)
+  core.kill('SIGTERM')
+  await nextLine(/engine got interrupt/)
+  core.kill('SIGTERM')
+  await nextLine(/engine ignores SIGTERM/)
+  expect(core.exitCode).toBeNull()
+  core.kill('SIGTERM')
+  expect(await exited).not.toBe(0)
+  await waitFor(() => !alive(enginePid))
+})
+
+async function waitFor(check: () => boolean, timeoutMs = 2000) {
+  const start = performance.now()
+  while (!check()) {
+    if (performance.now() - start > timeoutMs) throw new Error('timed out waiting')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}

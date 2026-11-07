@@ -144,7 +144,8 @@ pre {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
-.dot.waiting {
+.dot.waiting,
+.dot.stopping {
   background: var(--amber);
 }
 
@@ -174,6 +175,12 @@ pre {
   background: #3a2a12;
   color: var(--amber);
   border-bottom: 1px solid var(--border);
+}
+
+.banner.quitting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .empty {

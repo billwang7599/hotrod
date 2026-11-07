@@ -3,7 +3,7 @@ import type { EngineProcess, Machine } from './types.ts'
 
 type SpawnOptions = { cwd: string; env?: Record<string, string> }
 
-export const KILL_GRACE_MS = 3000
+export const KILL_GRACE_MS = 5000
 export const RUN_TIMEOUT_MS = 10000
 export const STDERR_TAIL_CHARS = 2000
 const GROUP_POLL_MS = 50

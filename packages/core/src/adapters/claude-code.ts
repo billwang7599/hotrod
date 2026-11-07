@@ -116,7 +116,6 @@ export const claudeCode: Adapter = {
     let buffer = ''
     let interrupted = false
     let closed = false
-    let exited = false
     let interruptCount = 0
 
     const handle = (msg: any) => {
@@ -199,7 +198,6 @@ export const claudeCode: Adapter = {
       }
     })
     proc.onExit((code, stderrTail) => {
-      exited = true
       if (code === 0 || closed) return emit({ type: 'session.ended' })
       emit({ type: 'session.ended', error: stderrTail.trim() || `Claude Code exited with code ${code}` })
     })
@@ -225,7 +223,7 @@ export const claudeCode: Adapter = {
       close() {
         closed = true
         proc.closeStdin()
-        if (!exited) proc.kill()
+        proc.kill()
       },
     }
   },

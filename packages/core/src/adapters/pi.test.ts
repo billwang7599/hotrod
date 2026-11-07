@@ -248,11 +248,11 @@ describe('pi adapter', () => {
     expect(events).toEqual([{ type: 'session.ended' }])
   })
 
-  it('does not kill a process that already exited', () => {
+  it('kills on close even after the engine exited, to reach what it started', () => {
     const { fake, session } = startSession()
     fake.exit(0)
     session.close()
-    expect(fake.state.killed).toBe(false)
+    expect(fake.state.killed).toBe(true)
   })
 })
 

@@ -57,7 +57,6 @@ export const pi: Adapter = {
     let buffer = ''
     let turnError: string | undefined
     let closed = false
-    let exited = false
 
     const endTurn = (error?: string) => {
       turnError = undefined
@@ -119,7 +118,6 @@ export const pi: Adapter = {
       }
     })
     proc.onExit((code, stderrTail) => {
-      exited = true
       if (code === 0 || closed) return emit({ type: 'session.ended' })
       emit({ type: 'session.ended', error: stderrTail.trim() || `pi exited with code ${code}` })
     })
@@ -136,7 +134,7 @@ export const pi: Adapter = {
       close() {
         closed = true
         proc.closeStdin()
-        if (!exited) proc.kill()
+        proc.kill()
       },
     }
   },

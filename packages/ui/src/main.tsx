@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Account, ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
+import type { Account, ChatStatus, ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
 import { accountLabel, engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
@@ -9,10 +9,22 @@ import './styles.css'
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedProject'
 const MANAGE_ACCOUNTS = '__manage'
+const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
+const PLACEHOLDERS: Record<ChatStatus, string> = {
+  idle: 'Message',
+  running: 'Working…',
+  waiting: 'Waiting for your approval…',
+  stopping: 'Stopping…',
+}
 
 declare global {
   interface Window {
-    hotrod?: { pickFolder(): Promise<string | null>; onAddProject(listener: () => void): () => void }
+    hotrod?: {
+      pickFolder(): Promise<string | null>
+      onAddProject(listener: () => void): () => void
+      onQuitting(listener: () => void): () => void
+      forceQuit(): Promise<void>
+    }
   }
 }
 
@@ -235,6 +247,10 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
     send({ type: 'chat.send', projectId: project.id, text })
     setText('')
   }
+  const stop = () => {
+    if (project.status !== 'stopping') return send({ type: 'chat.interrupt', projectId: project.id })
+    if (window.confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', projectId: project.id, force: true })
+  }
 
   return (
     <main className="chat">
@@ -295,9 +311,7 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
         <textarea
           value={text}
           rows={3}
-          placeholder={
-            project.status === 'waiting' ? 'Waiting for your approval…' : project.status === 'running' ? 'Working…' : 'Message'
-          }
+          placeholder={PLACEHOLDERS[project.status]}
           disabled={!canSend}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -308,8 +322,8 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
           }}
         />
         {project.status !== 'idle' ? (
-          <button className="stop" disabled={!connected} onClick={() => send({ type: 'chat.interrupt', projectId: project.id })}>
-            Stop
+          <button className="stop" disabled={!connected} onClick={stop}>
+            {project.status === 'stopping' ? 'Stopping…' : 'Stop'}
           </button>
         ) : (
           <button disabled={!canSend || !text.trim()} onClick={submit}>
@@ -367,6 +381,8 @@ function App() {
     if (picked) send({ type: 'project.add', path: picked })
   }, [connected, send])
   useEffect(() => window.hotrod?.onAddProject(() => void pickProject()), [pickProject])
+  const [quitting, setQuitting] = useState(false)
+  useEffect(() => window.hotrod?.onQuitting(() => setQuitting(true)), [])
 
   return (
     <div className="app">
@@ -405,10 +421,18 @@ function App() {
         )}
       </aside>
       <div className="main">
+        {quitting && (
+          <div className="banner quitting">
+            Stopping engines…
+            <button className="stop" onClick={() => void window.hotrod?.forceQuit()}>
+              Force quit
+            </button>
+          </div>
+        )}
         {state.rejected ? (
           <div className="banner">The core rejected this window. Open the link the core printed; it carries the token.</div>
         ) : (
-          !state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>
+          !state.connected && !quitting && <div className="banner">Disconnected from the core. Reconnecting…</div>
         )}
         {engine && (!engine.installed || !signedIn) && (
           <div className="banner">

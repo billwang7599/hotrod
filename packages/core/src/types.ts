@@ -83,7 +83,7 @@ export type EngineAccounts = {
 
 export type Project = { id: string; name: string; path: string; engine: string }
 
-export type ChatStatus = 'idle' | 'running' | 'waiting'
+export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string }
@@ -97,7 +97,7 @@ export type ClientMessage =
   | { type: 'project.add'; path: string }
   | { type: 'project.setEngine'; projectId: string; engine: string }
   | { type: 'chat.send'; projectId: string; text: string }
-  | { type: 'chat.interrupt'; projectId: string }
+  | { type: 'chat.interrupt'; projectId: string; force?: boolean }
   | { type: 'permission.respond'; projectId: string; requestId: string; allow: boolean }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }

@@ -40,19 +40,25 @@ export async function startCore(
     uiUrl,
     token,
     openUrl: `${uiUrl}/#token=${encodeURIComponent(token)}`,
-    close: async () => {
-      await Promise.all([core.close(), server.close()])
+    close: async (force = false) => {
+      await Promise.all([core.close(force), server.close()])
     },
   }
 }
 
-export function closeOnSignals(close: () => Promise<void>) {
-  let closing = false
+export function closeOnSignals(close: (force?: boolean) => Promise<void>) {
+  let signals = 0
   const shutdown = async () => {
-    if (closing) process.exit(1)
-    closing = true
-    await close()
-    process.exit(0)
+    signals++
+    if (signals === 1) {
+      console.log('Stopping engines… press Ctrl+C again to force quit.')
+      await close()
+      process.exit(signals > 1 ? 1 : 0)
+    }
+    if (signals > 2) process.exit(1)
+    console.log('Force quitting… press Ctrl+C again to quit now.')
+    await close(true)
+    process.exit(1)
   }
   // Engines sit in their own process groups, so a closed terminal's SIGHUP reaches only the core.
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, shutdown)
