@@ -1,0 +1,25 @@
+{"type":"system","subtype":"init","cwd":"/tmp/project","model":"claude-haiku-5-5","permissionMode":"default","tools":["Task","AskUserQuestion","Bash","CronCreate","CronDelete","CronList","DesignSync","Edit","EnterPlanMode","EnterWorktree","ExitPlanMode","ExitWorktree","ListAgents","Monitor","NotebookEdit","PublishPlugin","PushNotification","Read","RemoteTrigger","ReportFindings","ScheduleWakeup","SendMessage","ShareOnboardingGuide","TaskStop","ToolSearch","WebFetch","WebSearch","Workflow","Write"],"mcp_servers":[],"claude_code_version":"2.1.319"}
+{"type":"stream_event","event":{"type":"message_start"},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_011eNwvXLH1mQVZbDCmJvRyH","name":"Bash","input":{}}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":""}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\": \"echo hi >"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" a.txt"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\", \"description\": \"Write"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\\""}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"hi\\\" into a.txt"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"\"}"}},"parent_tool_use_id":null}
+{"type":"assistant","message":{"model":"claude-haiku-5-5","id":"msg_011CgnbV7xCxejZMsRPyoid1","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_011eNwvXLH1mQVZbDCmJvRyH","name":"Bash","input":{"command":"echo hi > a.txt","description":"Write \"hi\" into a.txt"}}],"stop_reason":null,"stop_sequence":null,"input_transformations":[]},"parent_tool_use_id":null,"request_id":"req_011CgnbV7ipcTGrm572MDtma","wire_tool_inputs":{"toolu_011eNwvXLH1mQVZbDCmJvRyH":{"command":"echo hi > a.txt","description":"Write \"hi\" into a.txt"}}}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"message_delta"},"parent_tool_use_id":null}
+{"type":"control_request","request_id":"de66ecb3-0e29-4144-ade3-d72a3112773f","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"echo hi > a.txt","description":"Write \"hi\" into a.txt"},"description":"Write \"hi\" into a.txt","blocked_path":"/tmp/project/a.txt","tool_use_id":"toolu_011eNwvXLH1mQVZbDCmJvRyH"}}
+{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}
+{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_011eNwvXLH1mQVZbDCmJvRyH","type":"tool_result","content":"(Bash completed with no output)","is_error":false}]},"parent_tool_use_id":null,"tool_use_result":{"stdout":"","stderr":"","interrupted":false,"isImage":false,"noOutputExpected":false}}
+{"type":"stream_event","event":{"type":"message_start"},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Done"}},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"."}},"parent_tool_use_id":null}
+{"type":"assistant","message":{"model":"claude-haiku-5-5","id":"msg_011CgnbVjFzBrzZNiRn19oHF","type":"message","role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":null,"stop_sequence":null,"input_transformations":[]},"parent_tool_use_id":null,"request_id":"req_011CgnbVj1riVYoNbhP5i9rb"}
+{"type":"stream_event","event":{"type":"content_block_stop","index":0},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"message_delta"},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"message_stop"},"parent_tool_use_id":null}
+{"stop_reason":"end_turn","permission_denials":[],"terminal_reason":"completed","is_error":false,"num_turns":2,"subtype":"success","api_error_status":null,"result":"Done.","type":"result","duration_ms":12579}
