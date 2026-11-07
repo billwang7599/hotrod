@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { Account, ChatStatus, ClientMessage, EngineAccounts, EngineInfo } from '@hotrod/core/types'
+import type { Account, ChatStatus, ClientMessage, EngineAccounts, EngineInfo, Project } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
+import logo from './logo.svg'
 import { Markdown } from './markdown.tsx'
-import { accountLabel, engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
+import {
+  accountLabel,
+  engineOptions,
+  initialState,
+  MAIN_CHAT_ID,
+  reduce,
+  type ChatView,
+  type Item,
+} from './state.ts'
 import './styles.css'
 
 const TOAST_MS = 6_000
-const SELECTED_KEY = 'hotrod.selectedProject'
+const SELECTED_KEY = 'hotrod.selectedChat'
+const COLLAPSED_KEY = 'hotrod.collapsedProjects'
+const CHAT_BUSY = 'Stop this chat first'
+const PROJECT_BUSY = 'Stop the running chats in this project first'
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
@@ -31,9 +43,9 @@ declare global {
   }
 }
 
-type ItemProps = { item: Item; project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }
+type ItemProps = { item: Item; chat: ChatView; connected: boolean; send: (m: ClientMessage) => void }
 
-function ItemView({ item, project, connected, send }: ItemProps) {
+function ItemView({ item, chat, connected, send }: ItemProps) {
   switch (item.kind) {
     case 'user':
       return <div className="user">{item.text}</div>
@@ -82,7 +94,7 @@ function ItemView({ item, project, connected, send }: ItemProps) {
         )
       }
       const respond = (allow: boolean) =>
-        send({ type: 'permission.respond', projectId: project.id, requestId: item.requestId, allow })
+        send({ type: 'permission.respond', chatId: chat.id, requestId: item.requestId, allow })
       return (
         <div className="permission">
           <div className="permission-title">
@@ -93,7 +105,7 @@ function ItemView({ item, project, connected, send }: ItemProps) {
             <summary>Full input</summary>
             {fullInput}
           </details>
-          {project.status === 'waiting' ? (
+          {chat.status === 'waiting' ? (
             <div className="permission-actions">
               <button className="primary" disabled={!connected} onClick={() => respond(true)}>
                 Approve
@@ -103,7 +115,7 @@ function ItemView({ item, project, connected, send }: ItemProps) {
               </button>
             </div>
           ) : (
-            <div className="permission-note">{project.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
+            <div className="permission-note">{chat.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
           )}
         </div>
       )
@@ -256,7 +268,8 @@ function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
 }
 
 type ChatProps = {
-  project: ProjectView
+  chat: ChatView
+  project?: Project
   engines: EngineInfo[]
   accounts?: EngineAccounts
   connected: boolean
@@ -264,7 +277,7 @@ type ChatProps = {
   manageAccounts: () => void
 }
 
-function Chat({ project, engines, accounts, connected, send, manageAccounts }: ChatProps) {
+function Chat({ chat, project, engines, accounts, connected, send, manageAccounts }: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -272,7 +285,7 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
   useLayoutEffect(() => {
     const list = listRef.current
     if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
-  }, [project.items, project.draft, project.status])
+  }, [chat.items, chat.draft, chat.status])
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -284,32 +297,38 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
     return () => observer.disconnect()
   }, [])
 
-  const canSend = connected && project.status === 'idle'
+  const archivedBy = project?.archived ? project : chat.archived ? chat : undefined
+  const canSend = connected && chat.status === 'idle' && !archivedBy
   const submit = () => {
     if (!canSend || !text.trim()) return
-    send({ type: 'chat.send', projectId: project.id, text })
+    send({ type: 'chat.send', chatId: chat.id, text })
     setText('')
   }
   const stop = () => {
-    if (project.status !== 'stopping') return send({ type: 'chat.interrupt', projectId: project.id })
-    if (window.confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', projectId: project.id, force: true })
+    if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
+    if (window.confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
+  const unarchive = () =>
+    project?.archived
+      ? send({ type: 'project.archive', projectId: project.id, archived: false })
+      : send({ type: 'chat.archive', chatId: chat.id, archived: false })
+  const place = project?.name ?? 'Main'
 
   return (
     <main className="chat">
       <header className="chat-header">
         <div className="chat-title">
-          <span className="chat-name">{project.name}</span>
-          <span className="chat-path">{project.path}</span>
+          <span className="chat-name">{chat.main ? place : chat.title}</span>
+          <span className="chat-path">{project?.path ?? 'Not tied to a folder'}</span>
         </div>
         <select
           className="chip"
           aria-label="Engine"
-          value={project.engine}
+          value={chat.engine}
           disabled={!canSend}
-          onChange={(e) => send({ type: 'project.setEngine', projectId: project.id, engine: e.target.value })}
+          onChange={(e) => send({ type: 'chat.setEngine', chatId: chat.id, engine: e.target.value })}
         >
-          {engineOptions(engines, project.engine).map((o) => (
+          {engineOptions(engines, chat.engine).map((o) => (
             <option key={o.id} value={o.id}>
               {o.label}
             </option>
@@ -345,28 +364,39 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
         }}
       >
         <div className="column">
-          {project.items.length === 0 && !project.draft && (
+          {chat.items.length === 0 && !chat.draft && (
             <div className="empty">
               <strong>
-                Start a chat in <span className="mono">{project.name}</span>
+                Start a chat in <span className="mono">{place}</span>
               </strong>
               <span>
-                Each message starts <span className="mono">{project.engine}</span> in {project.path}
+                Each message starts <span className="mono">{chat.engine}</span> in{' '}
+                {project?.path ?? 'a scratch folder'}
               </span>
             </div>
           )}
-          {project.items.map((item, i) => (
-            <ItemView key={i} item={item} project={project} connected={connected} send={send} />
+          {chat.items.map((item, i) => (
+            <ItemView key={i} item={item} chat={chat} connected={connected} send={send} />
           ))}
-          {project.draft && <Markdown className="assistant streaming" text={project.draft} />}
+          {chat.draft && <Markdown className="assistant streaming" text={chat.draft} />}
         </div>
       </div>
       <div className="composer">
+        {archivedBy && (
+          <div className="archived-note">
+            <span>
+              This {archivedBy === project ? 'project' : 'chat'} is archived. Its history stays; unarchive it to continue.
+            </span>
+            <button className="small" disabled={!connected} onClick={unarchive}>
+              Unarchive
+            </button>
+          </div>
+        )}
         <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
           <textarea
             value={text}
             rows={2}
-            placeholder={PLACEHOLDERS[project.status]}
+            placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
             disabled={!canSend}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -377,15 +407,15 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
             }}
           />
           <div className="composer-footer">
-            <span className="hint">{project.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
-            {project.status !== 'idle' ? (
+            <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
+            {chat.status !== 'idle' ? (
               <button
-                className={`danger stop ${project.status}`}
+                className={`danger stop ${chat.status}`}
                 disabled={!connected}
-                title={project.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
                 onClick={stop}
               >
-                {project.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
               </button>
             ) : (
               <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
@@ -414,18 +444,249 @@ function Toast({ id, message, dismiss }: { id: number; message: string; dismiss:
   )
 }
 
+type MenuItem = { label: string; run: () => void; danger?: boolean; disabledReason?: string }
+
+function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
+  const [position, setPosition] = useState<{ top: number; right: number } | null>(null)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!position) return
+    const onPointer = (e: MouseEvent) => ref.current?.contains(e.target as Node) || setPosition(null)
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPosition(null)
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [position])
+  return (
+    <div className={`row-menu ${position ? 'open' : ''}`} ref={ref}>
+      <button
+        className="ghost icon"
+        aria-label={`More for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={!!position}
+        onClick={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect()
+          setPosition(position ? null : { top: rect.bottom + 4, right: window.innerWidth - rect.right })
+        }}
+      >
+        ⋯
+      </button>
+      {position && (
+        <div className="menu" role="menu" style={position}>
+          {items.map((item) => (
+            <button
+              key={item.label}
+              role="menuitem"
+              className={item.danger ? 'danger' : ''}
+              disabled={!!item.disabledReason}
+              title={item.disabledReason}
+              onClick={() => {
+                setPosition(null)
+                item.run()
+              }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type RowProps = {
+  chat: ChatView
+  label: string
+  title?: string
+  selected: boolean
+  sub?: boolean
+  select: () => void
+  menu?: MenuItem[]
+}
+
+function ChatRow({ chat, label, title, selected, sub, select, menu }: RowProps) {
+  return (
+    <div className={`chat-row ${selected ? 'selected' : ''} ${sub ? 'sub' : ''} ${menu ? 'has-menu' : ''}`}>
+      <button className="chat-link" title={title ?? label} onClick={select}>
+        <span className={`dot ${chat.status}`} />
+        <span className="chat-label">{label}</span>
+        <span className="chat-engine">{chat.engine}</span>
+      </button>
+      {menu && <RowMenu label={label} items={menu} />}
+    </div>
+  )
+}
+
+const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.createdAt)
+
+function readCollapsed(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]')
+  } catch {
+    return []
+  }
+}
+
+type SidebarProps = {
+  projects: Project[]
+  chats: ChatView[]
+  selectedId: string
+  connected: boolean
+  send: (m: ClientMessage) => void
+  select: (chatId: string) => void
+}
+
+function ChatNav({ projects, chats, selectedId, connected, send, select }: SidebarProps) {
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  useEffect(() => localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed)), [collapsed])
+  const toggle = (id: string) => setCollapsed((c) => (c.includes(id) ? c.filter((x) => x !== id) : [...c, id]))
+
+  const main = chats.find((c) => c.id === MAIN_CHAT_ID)
+  const subchats = (projectId?: string) =>
+    chats.filter((c) => !c.main && !c.archived && c.projectId === projectId).sort(newestFirst)
+  const projectBusy = (id: string) => chats.some((c) => c.projectId === id && c.status !== 'idle')
+  const offline = connected ? undefined : 'Disconnected from the core'
+
+  const chatMenu = (chat: ChatView): MenuItem[] => {
+    const disabledReason = offline ?? (chat.status !== 'idle' ? CHAT_BUSY : undefined)
+    const remove = () => {
+      if (window.confirm(`Delete “${chat.title}”? Its messages are deleted from Hotrod.`)) {
+        send({ type: 'chat.delete', chatId: chat.id })
+      }
+    }
+    return [
+      {
+        label: chat.archived ? 'Unarchive' : 'Archive',
+        disabledReason,
+        run: () => send({ type: 'chat.archive', chatId: chat.id, archived: !chat.archived }),
+      },
+      { label: 'Delete…', danger: true, disabledReason, run: remove },
+    ]
+  }
+  const projectMenu = (project: Project): MenuItem[] => {
+    const disabledReason = offline ?? (projectBusy(project.id) ? PROJECT_BUSY : undefined)
+    const remove = () => {
+      const folder = `The folder ${project.path} stays on disk.`
+      if (window.confirm(`Remove ${project.name} from Hotrod and delete its chats? ${folder}`)) send({ type: 'project.delete', projectId: project.id })
+    }
+    return [
+      {
+        label: project.archived ? 'Unarchive' : 'Archive',
+        disabledReason,
+        run: () => send({ type: 'project.archive', projectId: project.id, archived: !project.archived }),
+      },
+      { label: 'Delete…', danger: true, disabledReason, run: remove },
+    ]
+  }
+  const row = (chat: ChatView, props: Partial<RowProps> = {}) => (
+    <ChatRow
+      key={chat.id}
+      chat={chat}
+      label={chat.title}
+      selected={chat.id === selectedId}
+      select={() => select(chat.id)}
+      menu={chatMenu(chat)}
+      sub
+      {...props}
+    />
+  )
+
+  const activeProjects = projects.filter((p) => !p.archived)
+  const archivedProjects = projects.filter((p) => p.archived)
+  const archivedChats = chats
+    .filter((c) => c.archived && !projects.find((p) => p.id === c.projectId)?.archived)
+    .sort(newestFirst)
+  const placeOf = (chat: ChatView) => projects.find((p) => p.id === chat.projectId)?.name ?? 'Main'
+
+  return (
+    <nav className="chat-nav">
+      {main && row(main, { label: 'Main', title: 'Main: not tied to a folder', menu: undefined, sub: false })}
+      {subchats().map((c) => row(c))}
+      <button className="ghost small new-chat" disabled={!connected} onClick={() => send({ type: 'chat.create' })}>
+        + New chat
+      </button>
+
+      <div className="nav-label">Projects</div>
+      {activeProjects.length === 0 && <div className="nav-empty">No projects yet</div>}
+      {activeProjects.map((project) => {
+        const open = !collapsed.includes(project.id)
+        const projectMain = chats.find((c) => c.projectId === project.id && c.main)
+        return (
+          <section key={project.id} className="project-section">
+            <div className="chat-row section-header has-menu">
+              <button
+                className="chat-link"
+                title={project.path}
+                aria-expanded={open}
+                onClick={() => toggle(project.id)}
+              >
+                <span className={`disclosure ${open ? 'open' : ''}`} />
+                <span className="chat-label">{project.name}</span>
+              </button>
+              <button
+                className="ghost icon add-chat"
+                aria-label={`New chat in ${project.name}`}
+                title={`New chat in ${project.name}`}
+                disabled={!connected}
+                onClick={() => send({ type: 'chat.create', projectId: project.id })}
+              >
+                +
+              </button>
+              <RowMenu label={project.name} items={projectMenu(project)} />
+            </div>
+            {open && projectMain && row(projectMain, { label: 'Main', title: project.path, menu: undefined })}
+            {open && subchats(project.id).map((c) => row(c))}
+          </section>
+        )
+      })}
+
+      {(archivedProjects.length > 0 || archivedChats.length > 0) && (
+        <details className="archived-group">
+          <summary className="nav-label">
+            <span className="disclosure" />
+            Archived ({archivedProjects.length + archivedChats.length})
+          </summary>
+          {archivedProjects.map((project) => {
+            const projectMain = chats.find((c) => c.projectId === project.id && c.main)
+            return (
+              projectMain && (
+                <ChatRow
+                  key={project.id}
+                  chat={projectMain}
+                  label={project.name}
+                  title={`${project.path} (archived project)`}
+                  selected={chats.some((c) => c.projectId === project.id && c.id === selectedId)}
+                  select={() => select(projectMain.id)}
+                  menu={projectMenu(project)}
+                />
+              )
+            )
+          })}
+          {archivedChats.map((c) => row(c, { title: `${c.title} (in ${placeOf(c)})`, sub: false }))}
+        </details>
+      )}
+    </nav>
+  )
+}
+
 function App() {
-  const [state, dispatch] = useReducer(reduce, initialState, (s) => ({ ...s, selectedId: localStorage.getItem(SELECTED_KEY) }))
+  const [state, dispatch] = useReducer(reduce, initialState, (s) => ({
+    ...s,
+    selectedId: localStorage.getItem(SELECTED_KEY) ?? MAIN_CHAT_ID,
+  }))
   const send = useCore(dispatch)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
 
-  useEffect(() => {
-    if (state.selectedId) localStorage.setItem(SELECTED_KEY, state.selectedId)
-  }, [state.selectedId])
+  useEffect(() => localStorage.setItem(SELECTED_KEY, state.selectedId), [state.selectedId])
   const [path, setPath] = useState('')
   const pathRef = useRef<HTMLInputElement>(null)
   const [managing, setManaging] = useState<string | null>(null)
-  const selected = state.projects.find((p) => p.id === state.selectedId)
+  const selected = state.chats.find((c) => c.id === state.selectedId)
+  const selectedProject = state.projects.find((p) => p.id === selected?.projectId)
+  const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
@@ -453,7 +714,10 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="sidebar-header">
-          <span className="brand">Hotrod</span>
+          <span className="brand">
+            <img src={logo} alt="" width={18} height={18} />
+            Hotrod
+          </span>
           <button
             className="ghost icon"
             aria-label="Add project"
@@ -464,20 +728,14 @@ function App() {
             +
           </button>
         </div>
-        <nav className="projects">
-          {state.projects.map((p) => (
-            <button
-              key={p.id}
-              className={`project ${p.id === state.selectedId ? 'selected' : ''}`}
-              title={p.path}
-              onClick={() => dispatch({ type: 'select', projectId: p.id })}
-            >
-              <span className={`dot ${p.status}`} />
-              <span className="project-name">{p.name}</span>
-              <span className="project-engine">{p.engine}</span>
-            </button>
-          ))}
-        </nav>
+        <ChatNav
+          projects={state.projects}
+          chats={state.chats}
+          selectedId={state.selectedId}
+          connected={connected}
+          send={send}
+          select={select}
+        />
         {window.hotrod ? (
           <div className="add-project">
             <button disabled={!connected} onClick={() => void pickProject()}>
@@ -538,7 +796,8 @@ function App() {
         {selected ? (
           <Chat
             key={selected.id}
-            project={selected}
+            chat={selected}
+            project={selectedProject}
             engines={state.engines}
             accounts={accounts}
             connected={state.connected}
@@ -547,10 +806,7 @@ function App() {
           />
         ) : (
           <div className="empty">
-            <strong>No projects yet</strong>
-            <span>
-              {window.hotrod ? 'Add a project folder with + or ⌘O.' : 'Paste a project folder’s path in the sidebar.'}
-            </span>
+            <strong>{state.connected ? 'Loading…' : 'Connecting to the core…'}</strong>
           </div>
         )}
       </div>

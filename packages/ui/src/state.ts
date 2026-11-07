@@ -1,12 +1,16 @@
 import type {
   Account,
   ChatEntry,
+  ChatInfo,
+  ChatState,
   ChatStatus,
   CoreMessage,
   EngineAccounts,
   EngineInfo,
-  ProjectState,
+  Project,
 } from '@hotrod/core/types'
+
+export const MAIN_CHAT_ID = 'main'
 
 export type Item =
   | { kind: 'user'; text: string }
@@ -31,23 +35,16 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ProjectView = {
-  id: string
-  name: string
-  path: string
-  engine: string
-  status: ChatStatus
-  items: Item[]
-  draft: string
-}
+export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string }
 
 export type State = {
   connected: boolean
   rejected: boolean
   engines: EngineInfo[]
   accounts: EngineAccounts[]
-  projects: ProjectView[]
-  selectedId: string | null
+  projects: Project[]
+  chats: ChatView[]
+  selectedId: string
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -55,7 +52,7 @@ export type State = {
 export type Action =
   | CoreMessage
   | { type: 'connection'; connected: boolean; rejected?: boolean }
-  | { type: 'select'; projectId: string }
+  | { type: 'select'; chatId: string }
   | { type: 'toast.dismiss'; id: number }
 
 export const initialState: State = {
@@ -64,7 +61,8 @@ export const initialState: State = {
   engines: [],
   accounts: [],
   projects: [],
-  selectedId: null,
+  chats: [],
+  selectedId: MAIN_CHAT_ID,
   toasts: [],
   nextToastId: 1,
 }
@@ -137,30 +135,28 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   }
 }
 
-const toView = (p: ProjectState): ProjectView => ({
-  id: p.id,
-  name: p.name,
-  path: p.path,
-  engine: p.engine,
-  status: p.status,
-  items: p.entries.reduce(applyEntry, []),
-  draft: p.draft,
-})
+const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
 
-function updateProject(state: State, id: string, update: (p: ProjectView) => ProjectView): State {
-  return { ...state, projects: state.projects.map((p) => (p.id === id ? update(p) : p)) }
+function updateChat(state: State, id: string, update: (c: ChatView) => ChatView): State {
+  return { ...state, chats: state.chats.map((c) => (c.id === id ? update(c) : c)) }
 }
+
+const keepSelection = (state: State): State =>
+  state.chats.some((c) => c.id === state.selectedId) ? state : { ...state, selectedId: MAIN_CHAT_ID }
 
 const endsText = (entry: ChatEntry) =>
   entry.type === 'text.completed' || entry.type === 'turn.completed' || entry.type === 'session.ended'
 
 export function reduce(state: State, action: Action): State {
   switch (action.type) {
-    case 'snapshot': {
-      const projects = action.projects.map(toView)
-      const selectedId = projects.some((p) => p.id === state.selectedId) ? state.selectedId : (projects[0]?.id ?? null)
-      return { ...state, engines: action.engines, accounts: action.accounts, projects, selectedId }
-    }
+    case 'snapshot':
+      return keepSelection({
+        ...state,
+        engines: action.engines,
+        accounts: action.accounts,
+        projects: action.projects,
+        chats: action.chats.map(toView),
+      })
     case 'accounts.updated': {
       const { engine } = action.accounts
       const known = state.accounts.some((a) => a.engine === engine)
@@ -170,31 +166,52 @@ export function reduce(state: State, action: Action): State {
       return { ...state, accounts }
     }
     case 'project.added': {
-      const known = state.projects.some((p) => p.id === action.project.id)
-      const projects = known ? state.projects : [...state.projects, toView(action.project)]
-      return { ...state, projects, selectedId: action.project.id }
+      const { project, chat } = action
+      const known = state.projects.some((p) => p.id === project.id)
+      return {
+        ...state,
+        projects: known ? state.projects.map((p) => (p.id === project.id ? project : p)) : [...state.projects, project],
+        chats: state.chats.some((c) => c.id === chat.id) ? state.chats : [...state.chats, toView(chat)],
+        selectedId: chat.id,
+      }
     }
     case 'project.updated':
-      return updateProject(state, action.project.id, (p) => ({ ...p, ...action.project }))
+      return { ...state, projects: state.projects.map((p) => (p.id === action.project.id ? action.project : p)) }
+    case 'project.removed':
+      return keepSelection({
+        ...state,
+        projects: state.projects.filter((p) => p.id !== action.projectId),
+        chats: state.chats.filter((c) => c.projectId !== action.projectId),
+      })
+    case 'chat.added':
+      return {
+        ...state,
+        chats: state.chats.some((c) => c.id === action.chat.id) ? state.chats : [...state.chats, toView(action.chat)],
+        selectedId: action.chat.id,
+      }
+    case 'chat.updated':
+      return updateChat(state, action.chat.id, (c) => ({ ...c, ...action.chat }))
+    case 'chat.removed':
+      return keepSelection({ ...state, chats: state.chats.filter((c) => c.id !== action.chatId) })
     case 'chat.entry':
-      return updateProject(state, action.projectId, (p) => ({
-        ...p,
-        items: applyEntry(p.items, action.entry),
-        draft: endsText(action.entry) ? '' : p.draft,
+      return updateChat(state, action.chatId, (c) => ({
+        ...c,
+        items: applyEntry(c.items, action.entry),
+        draft: endsText(action.entry) ? '' : c.draft,
       }))
     case 'chat.delta':
-      return updateProject(state, action.projectId, (p) => ({ ...p, draft: p.draft + action.text }))
+      return updateChat(state, action.chatId, (c) => ({ ...c, draft: c.draft + action.text }))
     case 'chat.thinking':
-      return updateProject(state, action.projectId, (p) => {
-        const last = p.items.at(-1)
+      return updateChat(state, action.chatId, (c) => {
+        const last = c.items.at(-1)
         const items: Item[] =
           last?.kind === 'thinking'
-            ? [...p.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
-            : [...p.items, { kind: 'thinking', text: action.text }]
-        return { ...p, items }
+            ? [...c.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
+            : [...c.items, { kind: 'thinking', text: action.text }]
+        return { ...c, items }
       })
     case 'chat.status':
-      return updateProject(state, action.projectId, (p) => ({ ...p, status: action.status }))
+      return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
     case 'error':
       return {
         ...state,
@@ -204,7 +221,7 @@ export function reduce(state: State, action: Action): State {
     case 'connection':
       return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
-      return { ...state, selectedId: action.projectId }
+      return { ...state, selectedId: action.chatId }
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }

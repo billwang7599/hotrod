@@ -55,7 +55,8 @@ export async function startServer(options: {
   wss.on('connection', (socket, request) => {
     const given = new URL(request.url ?? '/', 'ws://core').searchParams.get('token') ?? ''
     if (!sameToken(given, token)) return socket.close(BAD_TOKEN_CLOSE_CODE, 'Missing or wrong token')
-    send(socket, { type: 'snapshot', engines, projects: core.projects(), accounts: core.accounts() })
+    const { projects, chats, accounts } = core
+    send(socket, { type: 'snapshot', engines, projects: projects(), chats: chats(), accounts: accounts() })
     socket.on('message', (data) => {
       try {
         core.handle(JSON.parse(String(data)), (message) => send(socket, message))

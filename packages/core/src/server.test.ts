@@ -90,6 +90,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     type: 'snapshot',
     engines,
     projects: [],
+    chats: [expect.objectContaining({ id: 'main', title: 'Main' })],
     accounts: [{ engine: 'fake', active: 'default' }],
   })
 
@@ -98,17 +99,17 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   const added = b.messages.find((m) => m.type === 'project.added')
   if (added?.type !== 'project.added') throw new Error('no project')
 
-  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'nope' }))
+  a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'nope' }))
   await until(() => a.messages.some((m) => m.type === 'error'))
-  a.socket.send(JSON.stringify({ type: 'project.setEngine', projectId: added.project.id, engine: 'fake' }))
-  await until(() => b.messages.some((m) => m.type === 'project.updated'))
+  a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'fake' }))
+  await until(() => b.messages.some((m) => m.type === 'chat.updated'))
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 
-  a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'hi' }))
+  a.socket.send(JSON.stringify({ type: 'chat.send', chatId: added.chat.id, text: 'hi' }))
   await until(() => b.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting'))
   expect(b.messages.some((m) => m.type === 'chat.delta')).toBe(true)
 
-  a.socket.send(JSON.stringify({ type: 'chat.send', projectId: added.project.id, text: 'again' }))
+  a.socket.send(JSON.stringify({ type: 'chat.send', chatId: added.chat.id, text: 'again' }))
   await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 })
@@ -118,7 +119,7 @@ it('answers bad messages with an error', async () => {
   const a = connect(url, { origin })
   await until(() => a.messages.length > 0)
   a.socket.send('not json')
-  a.socket.send(JSON.stringify({ type: 'chat.send', projectId: 'nope', text: 'hi' }))
+  a.socket.send(JSON.stringify({ type: 'chat.send', chatId: 'nope', text: 'hi' }))
   await until(() => a.messages.filter((m) => m.type === 'error').length === 2)
 })
 
