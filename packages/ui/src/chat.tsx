@@ -509,6 +509,7 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
+  const hint = chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
   const canAttach = canSend || canQueue
@@ -807,8 +808,8 @@ export function Chat(props: ChatProps) {
                   else submit()
                 }}
               />
-              <div className="flex flex-wrap items-center justify-end gap-x-8 gap-y-4 pr-6 pb-6 pl-6">
-                <span className="mr-auto flex min-w-0 items-center gap-6">
+              <div className="flex items-center gap-8 px-6 pb-6">
+                <span className="flex min-w-0 flex-1 items-center gap-6">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -830,8 +831,10 @@ export function Chat(props: ChatProps) {
                       e.target.value = ''
                     }}
                   />
-                  <span className="min-w-0 truncate text-sm text-faint @max-[480px]:hidden">
-                    {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
+                  <span className="@container min-w-0 flex-1">
+                    <span className="block truncate text-sm text-faint @max-[8rem]:hidden" title={hint}>
+                      {hint}
+                    </span>
                   </span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
