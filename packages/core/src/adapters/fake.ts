@@ -34,12 +34,9 @@ const demoScript: FakeStep[] = [
   ),
 ]
 
-export const FAKE_MODELS = [
-  { id: 'fake-large', label: 'Fake Large' },
-  { id: 'fake-small', label: 'Fake Small' },
-]
+export const FAKE_MODELS = ['fake-large', 'fake-small']
 export const FAKE_THINKING = ['low', 'high']
-export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high', cheapModel: 'fake-small' }
+export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
 
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
   return {

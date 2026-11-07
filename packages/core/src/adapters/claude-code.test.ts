@@ -62,7 +62,7 @@ describe('claudeCode adapter', () => {
 
   it('passes the model and effort only when set', async () => {
     const { models = [], thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
-    const model = models.at(-1)!.id
+    const model = models.at(-1)!
     const { fake } = startSession('', { model, thinking: thinking[0] })
     const args = fake.spawned[0]?.args ?? []
     expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', model])
@@ -403,31 +403,27 @@ describe('claudeCode.complete', () => {
 
 describe('claudeCode.detect', () => {
   it('reports installed and signed in, with the effort levels from claude --help', async () => {
-    expect(await claudeCode.detect(fakeMachine(detected).machine)).toMatchObject({
+    const status = await claudeCode.detect(fakeMachine(detected).machine)
+    expect(status).toMatchObject({
       installed: true,
       signedIn: true,
       detail: '2.1.319 (Claude Code)',
       thinking: ['low', 'medium', 'high', 'xhigh', 'max'],
-      cheapModel: 'claude-haiku-5-5',
     })
+    expect(status).not.toHaveProperty('cheapModel')
   })
 
-  it('offers full model ids with the names people know, newest first, previous versions included', async () => {
+  it('offers the full model ids Claude Code accepts, previous versions included', async () => {
     const { models = [] } = await claudeCode.detect(fakeMachine(detected).machine)
-    const ids = models.map((m) => m.id)
-    expect(models).toContainEqual({ id: 'claude-opus-4-8', label: 'Opus 4.8' })
-    expect(models).toContainEqual({ id: 'claude-opus-5', label: 'Opus 5' })
-    expect(models).toContainEqual({ id: 'claude-haiku-4-5', label: 'Haiku 4.5' })
-    expect(ids.indexOf('claude-opus-5-5')).toBeLessThan(ids.indexOf('claude-opus-5'))
-    expect(ids.indexOf('claude-opus-5')).toBeLessThan(ids.indexOf('claude-opus-4-8'))
-    expect(ids.every((id) => id.startsWith('claude-') && !/\d{8}$/.test(id))).toBe(true)
+    expect(models).toEqual(expect.arrayContaining(['claude-opus-5-5', 'claude-opus-4-8', 'claude-haiku-4-5']))
+    expect(models.every((id) => typeof id === 'string' && id.startsWith('claude-'))).toBe(true)
   })
 
   it('names the model and effort Claude Code starts on with no flags, both of them offered', async () => {
     const { models = [], thinking = [], defaultModel, defaultThinking } = await claudeCode.detect(
       fakeMachine(detected).machine,
     )
-    expect(models.map((m) => m.id)).toContain(defaultModel)
+    expect(models).toContain(defaultModel)
     expect(thinking).toContain(defaultThinking)
   })
 

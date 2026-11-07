@@ -1,5 +1,4 @@
 import { type AccountStatus, type Adapter, type Machine, type ToolKind } from '../shared.ts'
-import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -21,11 +20,26 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   fetch: ['url', 'query'],
 }
 
-const MODELS = CLAUDE_MODELS.map((id) => ({ id, label: claudeLabel(id) ?? id }))
+// Claude Code has no list command, so these are the ids it accepts.
+const MODELS = [
+  'claude-fable-5-1',
+  'claude-fable-5',
+  'claude-opus-5-5',
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-5',
+  'claude-sonnet-5-5',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+  'claude-haiku-5-5',
+  'claude-haiku-4-5',
+]
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
 const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
-const CHEAP_MODEL = CLAUDE_MODELS.find((id) => id.startsWith('claude-haiku-'))
 
 const CLEAN_ARGS = [
   '--no-session-persistence',
@@ -75,7 +89,7 @@ export const claudeCode: Adapter = {
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
     const detail = version.stdout.trim()
-    const offers = { models: MODELS, thinking: EFFORTS, ...DEFAULTS, cheapModel: CHEAP_MODEL }
+    const offers = { models: MODELS, thinking: EFFORTS, ...DEFAULTS }
     return { installed: true, signedIn, detail, ...offers }
   },
 

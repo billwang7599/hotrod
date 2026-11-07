@@ -43,14 +43,13 @@ export type EngineStatus = {
   installed: boolean
   signedIn: boolean
   detail?: string
-  models?: ModelOption[]
+  models?: string[]
   thinking?: string[]
   defaultModel?: string
   defaultThinking?: string
-  cheapModel?: string
 }
 
-export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
+export type EngineInfo = Omit<EngineStatus, 'models'> & { id: string; enabled: boolean; models?: ModelOption[] }
 
 export type SessionOptions = {
   cwd: string
@@ -136,14 +135,14 @@ export type ModelRole = (typeof MODEL_ROLES)[number]
 
 export type ModelLists = Record<ModelRole, string[]>
 
-export function pickModel(engine: EngineStatus | undefined, lists: ModelLists, chat: Pick<ChatInfo, 'model' | 'role'>) {
+export function pickModel(engine: EngineInfo | undefined, lists: ModelLists, chat: Pick<ChatInfo, 'model' | 'role'>) {
   const offers = (id?: string) => engine?.models?.some((m) => m.id === id) ?? false
   if (offers(chat.model)) return chat.model
   const list = lists[chat.role ?? 'chat']
   return (list?.length ? list : lists.chat).find(offers) ?? engine?.defaultModel
 }
 
-export const pickThinking = (engine: EngineStatus | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
+export const pickThinking = (engine: EngineInfo | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
   chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
 
 export type Mods = { subagents: { enabled: boolean; limit: number } }

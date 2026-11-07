@@ -270,10 +270,7 @@ it('serves no files without a UI folder', async () => {
 })
 
 const heldOffers = {
-  models: [
-    { id: 'large', label: 'Large' },
-    { id: 'small', label: 'Small' },
-  ],
+  models: ['large', 'small'],
   thinking: ['low', 'high'],
 }
 
@@ -433,7 +430,7 @@ it("starts a subagent on its role's list, keeping only its parent's thinking lev
   const handle = handleOn(core)
   await core.refreshEngines()
   handle({ type: 'subagents.set', enabled: true, limit: -1 })
-  const [large, small] = heldOffers.models.map((m) => m.id) as [string, string]
+  const [large, small] = heldOffers.models as [string, string]
   const thinking = heldOffers.thinking[1]
   handle({ type: 'chat.setModel', chatId: 'main', model: large, thinking })
   handle({ type: 'models.setList', engine: 'held', role: 'chat', models: [small] })

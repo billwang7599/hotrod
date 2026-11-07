@@ -1,5 +1,4 @@
 import { type Adapter, type ToolKind } from '../shared.ts'
-import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -60,24 +59,12 @@ export const pi: Adapter = {
         if (msg.type === 'response' && msg.success) answers[msg.command] = msg.data
       } catch {}
     }
-    const rows = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
-      provider && id && !/-\d{8}$/.test(id) ? [{ provider: String(provider), model: String(id) }] : [],
+    const models = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
+      provider && id ? [`${provider}/${id}`] : [],
     )
-    const providers = [...new Set(rows.map((row) => row.provider))]
-    const rank = (model: string) => {
-      const index = CLAUDE_MODELS.indexOf(model)
-      return index < 0 ? CLAUDE_MODELS.length : index
-    }
-    const models = rows
-      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || rank(a.model) - rank(b.model))
-      .map(({ provider, model }) => {
-        const id = `${provider}/${model}`
-        return { id, label: claudeLabel(model) ?? id }
-      })
     const { model: started, thinkingLevel } = answers.get_state ?? {}
     const startedId = `${started?.provider}/${started?.id}`
-    const defaultModel = models.some((m) => m.id === startedId) ? startedId : models[0]?.id
-    const cheapModel = models.find((m) => m.id.includes('/claude-haiku-'))?.id
+    const defaultModel = models.includes(startedId) ? startedId : undefined
     return {
       installed: true,
       signedIn: models.length > 0,
@@ -86,7 +73,6 @@ export const pi: Adapter = {
       thinking: THINKING,
       ...(defaultModel && { defaultModel }),
       ...(THINKING.includes(thinkingLevel) && { defaultThinking: thinkingLevel }),
-      ...(cheapModel && { cheapModel }),
     }
   },
 

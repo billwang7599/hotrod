@@ -349,7 +349,7 @@ describe('pi.detect', () => {
     stderr: '',
   })
 
-  it('asks pi over RPC for its models and the model and thinking level it starts on with no flags', async () => {
+  it('asks pi over RPC for its model ids, as listed, and the model and thinking level it starts on', async () => {
     const fake = fakeMachine({
       'pi --version': version,
       [rpc]: answers(listed, ['anthropic', 'claude-haiku-5-5'], 'xhigh'),
@@ -358,16 +358,10 @@ describe('pi.detect', () => {
       installed: true,
       signedIn: true,
       detail: '1.5.0',
-      models: [
-        { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
-        { id: 'anthropic/claude-haiku-5-5', label: 'Haiku 5.5' },
-        { id: 'anthropic/claude-haiku-4-5', label: 'Haiku 4.5' },
-        { id: 'openai/gpt-5', label: 'openai/gpt-5' },
-      ],
+      models: listed.map(([provider, id]) => `${provider}/${id}`),
       thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
       defaultModel: 'anthropic/claude-haiku-5-5',
       defaultThinking: 'xhigh',
-      cheapModel: 'anthropic/claude-haiku-5-5',
     })
     const input = fake.ran.find((r) => r.args.includes('rpc'))?.input ?? ''
     expect(input.split('\n').filter(Boolean).map((l) => JSON.parse(l).type)).toEqual([
@@ -376,15 +370,11 @@ describe('pi.detect', () => {
     ])
   })
 
-  it('falls back to the first model when pi would start on one it hides', async () => {
-    const fake = fakeMachine({
-      'pi --version': version,
-      [rpc]: answers(listed, ['anthropic', 'claude-haiku-4-5-20251001'], 'medium'),
-    })
-    expect(await pi.detect(fake.machine)).toMatchObject({
-      defaultModel: 'anthropic/claude-opus-4-8',
-      defaultThinking: 'medium',
-    })
+  it('leaves out a start model pi does not list', async () => {
+    const fake = fakeMachine({ 'pi --version': version, [rpc]: answers(listed, ['anthropic', 'gone'], 'medium') })
+    const detected = await pi.detect(fake.machine)
+    expect(detected).toMatchObject({ defaultThinking: 'medium' })
+    expect(detected.defaultModel).toBeUndefined()
   })
 
   it('reports signed out when pi has no models', async () => {
@@ -392,7 +382,6 @@ describe('pi.detect', () => {
     const detected = await pi.detect(machine)
     expect(detected).toMatchObject({ installed: true, signedIn: false, detail: '1.5.0', models: [] })
     expect(detected.defaultModel).toBeUndefined()
-    expect(detected.cheapModel).toBeUndefined()
   })
 
   it('reports not installed', async () => {

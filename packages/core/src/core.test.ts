@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
+import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, SUMMARY_MODELS, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
   COMPACT_MIN_CHARS,
@@ -42,7 +42,7 @@ import {
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
-const otherModel = FAKE_MODELS.find((m) => m.id !== FAKE_DEFAULTS.defaultModel)!.id
+const otherModel = FAKE_MODELS.find((m) => m !== FAKE_DEFAULTS.defaultModel)!
 const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
 
 const textScript: FakeStep[] = [
@@ -701,13 +701,13 @@ describe('engines', () => {
       /thinking level "nope"/,
     )
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0]!.id })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0]! })).toThrow(/turn/)
     expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
   })
 
   it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
     const alpha = createFakeAdapter([], 0)
-    const betaOffers = { models: FAKE_MODELS.filter((m) => m.id !== otherModel), thinking: FAKE_THINKING }
+    const betaOffers = { models: FAKE_MODELS.filter((m) => m !== otherModel), thinking: FAKE_THINKING }
     const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
@@ -717,7 +717,7 @@ describe('engines', () => {
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    const betaModel = betaOffers.models[0]!.id
+    const betaModel = betaOffers.models[0]!
     t.handle({ type: 'chat.setModel', chatId: 'main', model: betaModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: betaModel, thinking })
@@ -822,6 +822,52 @@ describe('settings', () => {
       { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ])
     expect(t.messages.filter((m) => m.type === 'engine.updated')).toHaveLength(2)
+  })
+
+  it('names and orders each engine\'s models, newest Claude first per provider, snapshots hidden', async () => {
+    const session = () => ({ prompt() {}, interrupt() {}, respond() {}, close() {} })
+    const listing = (id: string, models: string[], defaultModel: string): Adapter => ({
+      ...stubAdapter(session),
+      id,
+      detect: async () => ({ installed: true, signedIn: true, models, defaultModel }),
+    })
+    const prefixed = [
+      'openai/gpt-5',
+      'anthropic/claude-haiku-4-5',
+      'anthropic/claude-haiku-4-5-20251001',
+      'anthropic/claude-opus-4-8',
+      'anthropic/claude-haiku-5-5',
+      'anthropic/claude-fable-5',
+      'anthropic/claude-opus-5',
+      'anthropic/claude-opus-5-5',
+    ]
+    const engines = [
+      listing('pi', prefixed, 'anthropic/claude-haiku-4-5-20251001'),
+      listing('claude-code', ['claude-haiku-4-5', 'claude-opus-5-5', 'claude-sonnet-5'], 'claude-opus-5-5'),
+    ]
+    const t = open(tempDir(), engines, 'pi', TEST_STOP_GRACE_MS, [])
+    await t.core.refreshEngines()
+    const [pi, claude] = t.core.engines()
+    expect(pi).toMatchObject({
+      models: [
+        { id: 'openai/gpt-5', label: 'openai/gpt-5' },
+        { id: 'anthropic/claude-fable-5', label: 'Fable 5' },
+        { id: 'anthropic/claude-opus-5-5', label: 'Opus 5.5' },
+        { id: 'anthropic/claude-opus-5', label: 'Opus 5' },
+        { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
+        { id: 'anthropic/claude-haiku-5-5', label: 'Haiku 5.5' },
+        { id: 'anthropic/claude-haiku-4-5', label: 'Haiku 4.5' },
+      ],
+      defaultModel: 'openai/gpt-5',
+    })
+    expect(claude).toMatchObject({
+      models: [
+        { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+        { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+        { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+      ],
+      defaultModel: 'claude-opus-5-5',
+    })
   })
 })
 
@@ -1217,10 +1263,18 @@ describe('memory', () => {
   }
 
   function setupMemory(
-    options: { garage?: string; script?: FakeStep[]; complete?: Adapter['complete']; others?: Adapter[] } = {},
+    options: {
+      garage?: string
+      script?: FakeStep[]
+      complete?: Adapter['complete']
+      others?: Adapter[]
+      models?: string[]
+    } = {},
   ) {
     const { garage = tempDir(), script = textScript, others = [] } = options
-    const fake = createFakeAdapter(script, 0)
+    const models = options.models ?? [...FAKE_MODELS, SUMMARY_MODELS[0]!]
+    const plain = createFakeAdapter(script, 0)
+    const fake: Adapter = { ...plain, detect: async (machine) => ({ ...(await plain.detect(machine)), models }) }
     const completions: CompleteOptions[] = []
     const complete = options.complete ?? fake.complete!
     const { adapter, calls } = recording({
@@ -1264,7 +1318,7 @@ describe('memory', () => {
 
     expect(t.completions[0]).toMatchObject({
       cwd: join(t.garage, 'home'),
-      model: FAKE_DEFAULTS.cheapModel,
+      model: SUMMARY_MODELS[0],
       timeoutMs: COMPLETE_TIMEOUT_MS,
     })
     expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
@@ -1302,6 +1356,17 @@ describe('memory', () => {
     await until(() => statusOf(t.core, 'main') === 'idle')
     await t.core.close()
     expect(t.completions).toHaveLength(1)
+  })
+
+  it('writes summaries with the first listed model an engine that is on offers, with or without a provider', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const models = [`x/${SUMMARY_MODELS[1]}`, `x/${SUMMARY_MODELS[0]}`, ...FAKE_MODELS]
+    const offersNone = stubAdapter(() => ({ prompt() {}, interrupt() {}, respond() {}, close() {} }))
+    const t = setupMemory({ garage, models, others: [offersNone] })
+    await t.core.refreshEngines()
+    await until(() => t.completions.length > 0)
+    expect(t.completions[0]?.model).toBe(`x/${SUMMARY_MODELS[0]}`)
   })
 
   it('shows one error when summaries fail', async () => {
@@ -1918,7 +1983,7 @@ describe('context', () => {
 })
 
 describe('models', () => {
-  const [newest, older] = FAKE_MODELS.map((m) => m.id) as [string, string]
+  const [newest, older] = FAKE_MODELS as [string, string]
   const { defaultModel, defaultThinking } = FAKE_DEFAULTS
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {

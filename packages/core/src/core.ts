@@ -132,7 +132,7 @@ export function openCore(options: {
     subagents: [],
     ...settings.models?.[engine],
   })
-  const detected = new Map<string, EngineStatus>()
+  const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
     const status = detected.get(id) ?? { installed: false, signedIn: false }
@@ -764,7 +764,7 @@ export function openCore(options: {
       await Promise.all(
         adapters.map(async (adapter) => {
           try {
-            detected.set(adapter.id, await adapter.detect(machine))
+            detected.set(adapter.id, nameModels(await adapter.detect(machine)))
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
             detected.set(adapter.id, { installed: false, signedIn: false, detail })
@@ -887,11 +887,43 @@ export function openCore(options: {
   }
 }
 
+export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5']
+
+const summaryModelOf = (engine?: EngineInfo) =>
+  SUMMARY_MODELS.map((id) => engine?.models?.find((m) => m.id === id || m.id.endsWith(`/${id}`))?.id).find(Boolean)
+
 function pickMemory(engines: EngineInfo[], saved: MemorySettings) {
   const engine = saved.engine
     ? engines.find((e) => e.id === saved.engine)
-    : engines.find((e) => e.enabled && e.cheapModel)
-  return { engine: engine?.id, model: saved.model ?? engine?.cheapModel }
+    : engines.find((e) => e.enabled && summaryModelOf(e))
+  return { engine: engine?.id, model: saved.model ?? summaryModelOf(engine) }
+}
+
+const CLAUDE_FAMILIES = ['fable', 'opus', 'sonnet', 'haiku']
+const CLAUDE_ID = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/
+// A dated snapshot like claude-haiku-4-5-20251001 repeats the model its alias names.
+const SNAPSHOT_ID = /-\d{8}$/
+
+const providerOf = (id: string) => id.slice(0, id.lastIndexOf('/') + 1)
+
+function describeModel(id: string) {
+  const [, family = '', major = '', minor] = id.slice(providerOf(id).length).match(CLAUDE_ID) ?? []
+  const known = CLAUDE_FAMILIES.indexOf(family)
+  const rank = known < 0 ? CLAUDE_FAMILIES.length : known
+  if (!family) return { label: id, rank, version: 0 }
+  const label = `${family[0]!.toUpperCase()}${family.slice(1)} ${major}${minor === undefined ? '' : `.${minor}`}`
+  return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
+}
+
+function nameModels({ models, defaultModel, ...status }: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
+  if (!models) return { ...status, ...(defaultModel && { defaultModel }) }
+  const providers = [...new Set(models.map(providerOf))]
+  const named = models
+    .filter((id) => !SNAPSHOT_ID.test(id))
+    .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
+    .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
+  const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
+  return { ...status, models: named.map(({ id, label }) => ({ id, label })), ...(shown && { defaultModel: shown }) }
 }
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
