@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startCore } from '@hotrod/core/main'
 
-const uiDir = fileURLToPath(new URL('../../../packages/ui/dist', import.meta.url))
+const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))
 const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
