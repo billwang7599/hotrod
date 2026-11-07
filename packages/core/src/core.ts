@@ -17,6 +17,8 @@ import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
   CONTEXT_KINDS,
   DEFAULT_SUBAGENT_LIMIT,
+  MODEL_ROLES,
+  pickModel,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
@@ -30,6 +32,8 @@ import {
   type EngineInfo,
   type EngineStatus,
   type Machine,
+  type ModelLists,
+  type ModelRole,
   type Mods,
   type Project,
   type QueuedMessage,
@@ -76,6 +80,7 @@ export function openCore(options: {
     engines: Record<string, boolean>
     context?: Partial<Record<ContextKind, boolean>>
     mods?: Partial<Mods>
+    models?: Record<string, Partial<ModelLists>>
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextKind, boolean> => ({
@@ -89,6 +94,13 @@ export function openCore(options: {
   const mods = (): Mods => ({
     subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT, ...settings.mods?.subagents },
   })
+  const listsOf = (engine: string): ModelLists => ({
+    chat: [],
+    planning: [],
+    searching: [],
+    subagents: [],
+    ...settings.models?.[engine],
+  })
   const detected = new Map<string, EngineStatus>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => ({
@@ -100,6 +112,7 @@ export function openCore(options: {
     const { models = [], thinking = [] } = detected.get(engine) ?? {}
     return { models, thinking }
   }
+  const offersModel = (engine: string, model?: string) => offered(engine).models.some((m) => m.id === model)
   const checkEnabled = (engine: string) => {
     if (!isEnabled(engine)) throw new Error(`Engine "${engine}" is off. Turn it on in Settings.`)
   }
@@ -130,6 +143,16 @@ export function openCore(options: {
     settings.mods = { ...settings.mods, subagents: { enabled, limit } }
     saveSettings()
     broadcast({ type: 'mods.updated', mods: mods() })
+  }
+  const setModelList = (engine: string, role: unknown, models: unknown) => {
+    checkEngine(engine)
+    if (!MODEL_ROLES.includes(role as ModelRole)) throw new Error(`Unknown model role "${role}"`)
+    if (!Array.isArray(models) || !models.every((id) => typeof id === 'string' && id)) {
+      throw new Error('A model list must be a list of model ids')
+    }
+    settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: models } }
+    saveSettings()
+    broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
   }
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
@@ -341,7 +364,7 @@ export function openCore(options: {
     broadcast({ type: 'project.removed', projectId: project.id })
   }
 
-  const createChat = (projectId?: string, engine = newChatEngine(), parentId?: string) => {
+  const createChat = (projectId?: string, engine = newChatEngine(), parentId?: string, role?: ModelRole) => {
     checkEngine(engine)
     checkEnabled(engine)
     if (projectId !== undefined && projectFor(projectId).archived) throw new Error('This project is archived')
@@ -362,8 +385,8 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt,
-      ...(parentId !== undefined && { parentId }),
-      ...(parent?.info.engine === engine && { model: parent.info.model, thinking: parent.info.thinking }),
+      ...(parentId !== undefined && { parentId, role: role ?? 'subagents' }),
+      ...(parent?.info.engine === engine && { thinking: parent.info.thinking }),
     }
     const chat = loadChat(dir, info)
     broadcast({ type: 'chat.added', chat: state(chat) })
@@ -398,12 +421,11 @@ export function openCore(options: {
     checkEngine(engine)
     checkEnabled(engine)
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
-    const { models, thinking } = offered(engine)
-    const { model, thinking: level } = chat.info
+    const { model, thinking } = chat.info
     updateChat(chat, {
       engine,
-      model: model && models.includes(model) ? model : undefined,
-      thinking: level && thinking.includes(level) ? level : undefined,
+      model: offersModel(engine, model) ? model : undefined,
+      thinking: thinking && offered(engine).thinking.includes(thinking) ? thinking : undefined,
     })
   }
 
@@ -411,7 +433,7 @@ export function openCore(options: {
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')
     const { engine } = chat.info
     const offers = offered(engine)
-    if (model && !offers.models.includes(model)) throw new Error(`Engine "${engine}" offers no model "${model}"`)
+    if (model && !offersModel(engine, model)) throw new Error(`Engine "${engine}" offers no model "${model}"`)
     if (thinking && !offers.thinking.includes(thinking)) {
       throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
     }
@@ -527,12 +549,13 @@ export function openCore(options: {
     try {
       chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
+      const model = pickModel(offered(adapter.id).models, listsOf(adapter.id), chat.info)
       const options = {
         cwd: project?.path ?? homeDir,
         instructions,
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
-        ...(chat.info.model && { model: chat.info.model }),
+        ...(model && { model }),
         ...(chat.info.thinking && { thinking: chat.info.thinking }),
       }
       session = adapter.start(machine, options, emit)
@@ -613,6 +636,7 @@ export function openCore(options: {
     setEngineEnabled,
     contextDefaults,
     mods,
+    modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     projects: () => [...projects.values()],
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
@@ -665,6 +689,8 @@ export function openCore(options: {
           return setContextDefault(checkKind(message.kind), message.enabled === true)
         case 'subagents.set':
           return setSubagents(message.enabled === true, message.limit)
+        case 'models.setList':
+          return setModelList(String(message.engine), message.role, message.models)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
         case 'account.login':

@@ -62,9 +62,10 @@ describe('claudeCode adapter', () => {
 
   it('passes the model and effort only when set', async () => {
     const { models = [], thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
-    const { fake } = startSession('', { model: models.at(-1), thinking: thinking[0] })
+    const model = models.at(-1)!.id
+    const { fake } = startSession('', { model, thinking: thinking[0] })
     const args = fake.spawned[0]?.args ?? []
-    expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', models.at(-1)])
+    expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', model])
     expect(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2)).toEqual(['--effort', thinking[0]])
     expect(startSession().fake.spawned[0]?.args).not.toContain('--model')
     expect(startSession().fake.spawned[0]?.args).not.toContain('--effort')
@@ -86,7 +87,7 @@ describe('claudeCode adapter', () => {
       { type: 'turn.started' },
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', model: 'claude-haiku-5-5' },
     ])
   })
 
@@ -137,7 +138,7 @@ describe('claudeCode adapter', () => {
       { type: 'text.delta', text: 'Done' },
       { type: 'text.delta', text: '.' },
       { type: 'text.completed', text: 'Done.' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', model: 'claude-haiku-5-5' },
     ])
     session.respond(requestId, true)
     expect(fake.sent().at(-1)).toEqual({
@@ -163,7 +164,7 @@ describe('claudeCode adapter', () => {
       output: 'The user denied this tool call.',
       isError: true,
     })
-    expect(events.at(-1)).toEqual({ type: 'turn.completed' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', model: 'claude-haiku-5-5' })
   })
 
   it('reports an error result and a nonzero exit with the stderr tail', () => {
@@ -176,7 +177,7 @@ describe('claudeCode adapter', () => {
       'to it. Run --model to pick a different model.'
     expect(events.slice(-3)).toEqual([
       { type: 'text.completed', text: message },
-      { type: 'turn.completed', error: message },
+      { type: 'turn.completed', error: message, model: 'claude-nonexistent-9' },
       {
         type: 'session.ended',
         error: 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}',
@@ -202,7 +203,7 @@ describe('claudeCode adapter', () => {
     session.interrupt()
     expect(fake.sent()[1]).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } })
     fake.stdout(fixture('interrupted'))
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', model: 'claude-haiku-5-5' })
   })
 
   it('joins a line split across chunks', () => {
@@ -289,14 +290,24 @@ describe('claudeCode adapter', () => {
 })
 
 describe('claudeCode.detect', () => {
-  it('reports installed and signed in, with the model aliases and effort levels from claude --help', async () => {
-    expect(await claudeCode.detect(fakeMachine(detected).machine)).toEqual({
+  it('reports installed and signed in, with the effort levels from claude --help', async () => {
+    expect(await claudeCode.detect(fakeMachine(detected).machine)).toMatchObject({
       installed: true,
       signedIn: true,
       detail: '2.1.319 (Claude Code)',
-      models: ['fable', 'opus', 'sonnet', 'haiku'],
       thinking: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
+  })
+
+  it('offers full model ids with the names people know, newest first, previous versions included', async () => {
+    const { models = [] } = await claudeCode.detect(fakeMachine(detected).machine)
+    const ids = models.map((m) => m.id)
+    expect(models).toContainEqual({ id: 'claude-opus-4-8', label: 'Opus 4.8' })
+    expect(models).toContainEqual({ id: 'claude-opus-5', label: 'Opus 5' })
+    expect(models).toContainEqual({ id: 'claude-haiku-4-5', label: 'Haiku 4.5' })
+    expect(ids.indexOf('claude-opus-5-5')).toBeLessThan(ids.indexOf('claude-opus-5'))
+    expect(ids.indexOf('claude-opus-5')).toBeLessThan(ids.indexOf('claude-opus-4-8'))
+    expect(ids.every((id) => id.startsWith('claude-') && !/\d{8}$/.test(id))).toBe(true)
   })
 
   it('reports signed out', async () => {

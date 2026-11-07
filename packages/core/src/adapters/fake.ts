@@ -34,7 +34,10 @@ const demoScript: FakeStep[] = [
   ),
 ]
 
-export const FAKE_MODELS = ['fake-small', 'fake-large']
+export const FAKE_MODELS = [
+  { id: 'fake-large', label: 'Fake Large' },
+  { id: 'fake-small', label: 'Fake Small' },
+]
 export const FAKE_THINKING = ['low', 'high']
 
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
@@ -65,7 +68,8 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
       logout: async () => {},
       apiKeys: true,
     },
-    start(_machine, _options, emit) {
+    start(_machine, options, emit) {
+      const model = options.model ?? FAKE_MODELS[0]!.id
       let timer: ReturnType<typeof setTimeout> | undefined
       let pending: { requestId: string; toolId: string; output: string; rest: FakeStep[] } | undefined
       let active = false
@@ -81,7 +85,7 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
           const [step, ...rest] = steps
           if (!step) {
             active = false
-            return emit({ type: 'turn.completed' })
+            return emit({ type: 'turn.completed', model })
           }
           if (step.type !== 'permission') {
             emit(step)
@@ -113,7 +117,7 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
         interrupt() {
           if (!active) return
           stop()
-          emit({ type: 'turn.completed', error: 'Interrupted' })
+          emit({ type: 'turn.completed', error: 'Interrupted', model })
         },
         close: stop,
       }

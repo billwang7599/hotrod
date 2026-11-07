@@ -172,6 +172,7 @@ function App() {
             accounts={state.accounts}
             contextDefaults={state.contextDefaults}
             mods={state.mods}
+            modelLists={state.modelLists}
             connected={connected}
             send={send}
             page={settingsPage}
@@ -193,6 +194,7 @@ function App() {
             toggleContext={toggleContext}
             contextLayers={state.context?.chatId === selected.id ? state.context.layers : undefined}
             contextDefaults={state.contextDefaults}
+            modelLists={state.modelLists[selected.engine]}
           />
         ) : (
           <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">

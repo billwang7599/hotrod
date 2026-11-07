@@ -1,4 +1,5 @@
 import type { AccountStatus, Adapter, Machine, ToolKind } from '../types.ts'
+import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -20,8 +21,7 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   fetch: ['url', 'query'],
 }
 
-// Claude Code has no list command; these are the aliases `claude --help` names.
-const MODELS = ['fable', 'opus', 'sonnet', 'haiku']
+const MODELS = CLAUDE_MODELS.map((id) => ({ id, label: claudeLabel(id) ?? id }))
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 const OUTPUT_TAIL_CHARS = 2000
@@ -131,10 +131,14 @@ export const claudeCode: Adapter = {
     let interrupted = false
     let closed = false
     let interruptCount = 0
+    let ranModel: string | undefined
 
     const handle = (msg: any) => {
       const subagent = msg.parent_tool_use_id != null
       switch (msg.type) {
+        case 'system':
+          if (msg.subtype === 'init' && typeof msg.model === 'string') ranModel = msg.model
+          return
         case 'stream_event': {
           const delta = msg.event?.delta
           if (subagent) return
@@ -190,7 +194,7 @@ export const claudeCode: Adapter = {
               ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
               : undefined
           interrupted = false
-          emit(error ? { type: 'turn.completed', error } : { type: 'turn.completed' })
+          emit({ type: 'turn.completed', ...(error && { error }), ...(ranModel && { model: ranModel }) })
         }
       }
     }

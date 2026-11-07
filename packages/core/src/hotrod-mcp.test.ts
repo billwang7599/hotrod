@@ -56,8 +56,8 @@ async function start(subagents = { enabled: false, limit: 4 }) {
       projects.push(project)
       return project
     },
-    createChat(projectId, engine, parentId) {
-      calls.push(parentId ? ['createChat', projectId, engine, parentId] : ['createChat', projectId, engine])
+    createChat(projectId, engine, parentId, role) {
+      calls.push(['createChat', projectId, engine, ...(parentId ? [parentId] : []), ...(role ? [role] : [])])
       const created = chat('dddd0001', { ...(projectId && { projectId }), ...(parentId && { parentId }) })
       chats.push(created)
       return created
@@ -284,22 +284,23 @@ describe('Hotrod MCP server', () => {
     })
 
     it("spawns a subagent in the parent's place with the parent's engine, and starts it with the task", async () => {
-      const { calls, json, grant } = await on()
+      const { calls, json, tool, grant } = await on()
       expect(await json(grant('app/main'), 'spawn_subagent', { task: 'Read the tests' })).toEqual({
         chatId: 'dddd0001',
       })
-      expect(await json(grant('main'), 'spawn_subagent', { task: 'Search', engine: 'pi' })).toEqual({
-        chatId: 'dddd0001',
-      })
+      const search = { task: 'Search', engine: 'pi', role: 'searching' }
+      expect(await json(grant('main'), 'spawn_subagent', search)).toEqual({ chatId: 'dddd0001' })
       expect(await json(grant('bbbb0001'), 'spawn_subagent', { task: 'Lint' })).toEqual({ chatId: 'dddd0001' })
       expect(calls).toEqual([
         ['createChat', 'app', 'fake', 'app/main'],
         ['send', 'dddd0001', 'Read the tests'],
-        ['createChat', undefined, 'pi', 'main'],
+        ['createChat', undefined, 'pi', 'main', 'searching'],
         ['send', 'dddd0001', 'Search'],
         ['createChat', 'app', 'fake', 'bbbb0001'],
         ['send', 'dddd0001', 'Lint'],
       ])
+      expect((await tool(grant('main'), 'spawn_subagent', { task: 'Go', role: 'chat' })).isError).toBe(true)
+      expect(calls).toHaveLength(6)
     })
 
     it('counts running, waiting and stopping subagents against the limit, never idle ones', async () => {

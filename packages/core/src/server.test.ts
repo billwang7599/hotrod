@@ -90,6 +90,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     projects: [],
     chats: [expect.objectContaining({ id: 'main', title: 'Workshop' })],
     accounts: [{ engine: 'fake', active: 'default' }],
+    modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
   })
 
   a.socket.send(JSON.stringify({ type: 'project.add', path: project }))
@@ -168,7 +169,13 @@ it('serves no files without a UI folder', async () => {
   expect(response.ok).toBe(false)
 })
 
-const heldOffers = { models: ['small', 'large'], thinking: ['low', 'high'] }
+const heldOffers = {
+  models: [
+    { id: 'large', label: 'Large' },
+    { id: 'small', label: 'Small' },
+  ],
+  thinking: ['low', 'high'],
+}
 
 async function startHeld() {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
@@ -331,17 +338,30 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   expect((await json(workshop, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([subchat.id])
 })
 
-it("starts a subagent on its parent's model and thinking level", async () => {
-  const { core, json, send, sessionOf } = await startHeld()
+it("starts a subagent on Auto with its role's list, keeping only its parent's thinking level", async () => {
+  const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
   handle({ type: 'subagents.set', enabled: true, limit: -1 })
-  const [model, thinking] = [heldOffers.models[1], heldOffers.thinking[1]]
-  handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
-  const parent = send('main', 'Plan it')
-  const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Go' })
-  expect(chatIn(core, chatId)).toMatchObject({ model, thinking })
-  expect(sessionOf(chatId).options).toMatchObject({ model, thinking })
+  const [large, small] = heldOffers.models.map((m) => m.id) as [string, string]
+  const thinking = heldOffers.thinking[1]
+  handle({ type: 'chat.setModel', chatId: 'main', model: large, thinking })
+  handle({ type: 'models.setList', engine: 'held', role: 'chat', models: [small] })
+  handle({ type: 'models.setList', engine: 'held', role: 'planning', models: [large] })
+  const token = send('main', 'Plan it').options.hotrodMcp!.token
+
+  const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
+  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', thinking })
+  expect(chatIn(core, helper).model).toBeUndefined()
+  expect(sessionOf(helper).options).toMatchObject({ model: small, thinking })
+
+  const planner = (await json(token, 'spawn_subagent', { task: 'Plan', role: 'planning' })).chatId
+  expect(sessionOf(planner).options.model).toBe(large)
+  expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
+
+  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [large] })
+  const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
+  expect(sessionOf(next).options.model).toBe(large)
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy", async () => {

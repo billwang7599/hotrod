@@ -6,13 +6,14 @@ import type {
   ContextLayer,
   EngineAccounts,
   EngineInfo,
+  ModelLists,
   Project,
 } from '@hotrod/core/types'
 import { ContextPanel } from './context-panel.tsx'
 import { Button, Chevron, confirm, ErrorText } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
-import { accountLabel, engineOptions, type ChatView, type Item } from './state.ts'
+import { accountLabel, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -165,6 +166,7 @@ type ChatProps = {
   toggleContext: () => void
   contextLayers?: ContextLayer[]
   contextDefaults: Record<ContextKind, boolean>
+  modelLists?: ModelLists
 }
 
 export function Chat(props: ChatProps) {
@@ -213,9 +215,10 @@ export function Chat(props: ChatProps) {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
     if (await confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
-  const withSaved = (list: string[] = [], saved?: string) => (saved && !list.includes(saved) ? [...list, saved] : list)
-  const models = withSaved(offers?.models, chat.model)
-  const levels = withSaved(offers?.thinking, chat.thinking)
+  const models = modelMenu(chat, offers, props.modelLists)
+  const offeredLevels = offers?.thinking ?? []
+  const saved = chat.thinking && !offeredLevels.includes(chat.thinking)
+  const levels = saved ? [...offeredLevels, chat.thinking!] : offeredLevels
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model: model || undefined, thinking: thinking || undefined })
   const unarchive = () =>
@@ -379,18 +382,17 @@ export function Chat(props: ChatProps) {
                   {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
                 </span>
                 <span className="flex min-w-0 items-center gap-6">
-                  {models.length > 0 && (
+                  {models.options.length > 1 && (
                     <ChipSelect
                       aria-label="Model"
-                      title="Model, from the next message"
-                      value={chat.model ?? ''}
+                      title="Model, from the next message. Auto follows the lists in Settings."
+                      value={models.value}
                       disabled={!canChange}
                       onChange={(e) => setModel(e.target.value, chat.thinking)}
                     >
-                      <option value="">Default model</option>
-                      {models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
+                      {models.options.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
                         </option>
                       ))}
                     </ChipSelect>

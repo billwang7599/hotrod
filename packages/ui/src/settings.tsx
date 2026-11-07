@@ -2,22 +2,26 @@ import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'r
 import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_KINDS,
+  MODEL_ROLES,
   type Account,
   type ClientMessage,
   type ContextKind,
   type EngineAccounts,
   type EngineInfo,
+  type ModelLists,
+  type ModelRole,
   type Mods,
 } from '@hotrod/core/types'
 import { CONTEXT_LABELS } from './context-panel.tsx'
 import { Button, confirm, ErrorText, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
-import { accountLabel, engineProblem } from './state.ts'
+import { accountLabel, engineProblem, NO_LISTS } from './state.ts'
 
 type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextKind, boolean>
   mods: Mods
+  modelLists: Record<string, ModelLists>
   connected: boolean
   send: (m: ClientMessage) => void
 }
@@ -32,6 +36,13 @@ type Page = {
 }
 
 const NAV_GROUPS = ['Options', 'Mods'] as const
+
+const ROLES: Record<ModelRole, { name: string; about: string }> = {
+  chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
+  planning: { name: 'Planning', about: 'Subagents started to plan. Empty uses Chat.' },
+  searching: { name: 'Searching', about: 'Subagents started to search. Empty uses Chat.' },
+  subagents: { name: 'Subagents', about: 'Every other subagent. Empty uses Chat.' },
+}
 
 const PAGES = [
   {
@@ -72,6 +83,25 @@ const PAGES = [
       const shown = engines.flatMap((e) => (e.enabled ? accounts.filter((a) => a.engine === e.id) : []))
       if (!shown.length) return <p className="text-muted">Turn on an engine to manage its accounts.</p>
       return shown.map((a) => <EngineAccountsSection key={a.engine} accounts={a} connected={connected} send={send} />)
+    },
+  },
+  {
+    id: 'models',
+    group: 'Options',
+    title: 'Models',
+    hint: 'A chat on Auto runs the first model in its list that the engine offers, else the engine default.',
+    body: ({ engines, modelLists, connected, send }: PageProps) => {
+      const on = engines.filter((e) => e.enabled)
+      if (!on.length) return <p className="text-muted">Turn on an engine to order its models.</p>
+      return on.map((engine) => (
+        <EngineModels
+          key={engine.id}
+          engine={engine}
+          lists={modelLists[engine.id] ?? NO_LISTS}
+          connected={connected}
+          send={send}
+        />
+      ))
     },
   },
   {
@@ -123,9 +153,9 @@ const PAGES = [
 
 export type SettingsPage = (typeof PAGES)[number]['id']
 
-type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode }
+type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode; below?: ReactNode }
 
-function SettingRow({ name, description, children }: RowProps) {
+function SettingRow({ name, description, children, below }: RowProps) {
   return (
     <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
       <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
@@ -133,7 +163,103 @@ function SettingRow({ name, description, children }: RowProps) {
         {description && <div className="text-sm text-muted">{description}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-6">{children}</div>
+      {below && <div className="basis-full">{below}</div>}
     </div>
+  )
+}
+
+type EngineModelsProps = {
+  engine: EngineInfo
+  lists: ModelLists
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
+
+function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
+  const offered = engine.models ?? []
+  const labelOf = (id: string) => offered.find((m) => m.id === id)?.label
+  return (
+    <section className="flex flex-col not-first:pt-24" aria-label={`${engine.id} models`}>
+      <h3 className="pb-8 font-mono font-semibold">{engine.id}</h3>
+      {!offered.length && (
+        <p className="text-muted">
+          {engine.id} lists no models{engineProblem(engine) && ` (${engineProblem(engine)})`}.
+        </p>
+      )}
+      {offered.length > 0 &&
+        MODEL_ROLES.map((role) => {
+          const list = lists[role]
+          const { name, about } = ROLES[role]
+          const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
+          const move = (from: number, to: number) => {
+            const next = [...list]
+            next.splice(to, 0, ...next.splice(from, 1))
+            setList(next)
+          }
+          const items = list.map((id, i) => {
+            const label = labelOf(id)
+            return (
+              <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
+                <span className="w-16 text-sm text-faint">{i + 1}</span>
+                <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
+                  {label ?? `${id} (not offered, skipped)`}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${label ?? id} up`}
+                  disabled={!connected || i === 0}
+                  onClick={() => move(i, i - 1)}
+                >
+                  ↑
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${label ?? id} down`}
+                  disabled={!connected || i === list.length - 1}
+                  onClick={() => move(i, i + 1)}
+                >
+                  ↓
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${label ?? id}`}
+                  disabled={!connected}
+                  onClick={() => setList(list.filter((m) => m !== id))}
+                >
+                  ×
+                </Button>
+              </li>
+            )
+          })
+          const addable = offered.filter((m) => !list.includes(m.id))
+          return (
+            <SettingRow
+              key={role}
+              name={name}
+              description={about}
+              below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
+            >
+              <select
+                className="h-control rounded border bg-bg px-8"
+                aria-label={`Add a ${name} model for ${engine.id}`}
+                value=""
+                disabled={!connected || !addable.length}
+                onChange={(e) => setList([...list, e.target.value])}
+              >
+                <option value="">Add model…</option>
+                {addable.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </SettingRow>
+          )
+        })}
+    </section>
   )
 }
 
