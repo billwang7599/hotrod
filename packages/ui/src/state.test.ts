@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatEntry, CoreMessage, ProjectState } from '@hotrod/core/types'
-import { initialState, reduce, type Action, type State } from './state.ts'
+import { engineOptions, initialState, reduce, type Action, type State } from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
 const engines = [{ id: 'fake', installed: true, signedIn: true }]
@@ -68,6 +68,20 @@ describe('reduce', () => {
     )
     expect(state.projects[0]?.engine).toBe('pi')
     expect(items(state)).toEqual([{ kind: 'user', text: 'hi' }])
+  })
+
+  it('lists engine options with their problems, keeping an unknown saved engine', () => {
+    const listed = [
+      { id: 'claude-code', installed: true, signedIn: true },
+      { id: 'pi', installed: true, signedIn: false },
+      { id: 'codex', installed: false, signedIn: false },
+    ]
+    expect(engineOptions(listed, 'pi')).toEqual([
+      { id: 'claude-code', label: 'claude-code' },
+      { id: 'pi', label: 'pi (not signed in)' },
+      { id: 'codex', label: 'codex (not installed)' },
+    ])
+    expect(engineOptions(listed, 'gone').at(-1)).toEqual({ id: 'gone', label: 'gone (unknown)' })
   })
 
   it('selects a re-added project instead of adding it twice', () => {

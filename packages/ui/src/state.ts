@@ -179,3 +179,11 @@ export function reduce(state: State, action: Action): State {
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
 }
+
+export function engineOptions(engines: EngineInfo[], current: string): { id: string; label: string }[] {
+  const options = engines.map((e) => ({
+    id: e.id,
+    label: !e.installed ? `${e.id} (not installed)` : !e.signedIn ? `${e.id} (not signed in)` : e.id,
+  }))
+  return options.some((o) => o.id === current) ? options : [...options, { id: current, label: `${current} (unknown)` }]
+}

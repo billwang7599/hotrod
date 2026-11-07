@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ClientMessage } from '@hotrod/core/types'
+import type { ClientMessage, EngineInfo } from '@hotrod/core/types'
 import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
-import { initialState, reduce, type Item, type ProjectView } from './state.ts'
+import { engineOptions, initialState, reduce, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
 const TOAST_MS = 6_000
@@ -70,7 +70,9 @@ function ItemView({ item, project, connected, send }: ItemProps) {
   }
 }
 
-function Chat({ project, connected, send }: { project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }) {
+type ChatProps = { project: ProjectView; engines: EngineInfo[]; connected: boolean; send: (m: ClientMessage) => void }
+
+function Chat({ project, engines, connected, send }: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -102,6 +104,19 @@ function Chat({ project, connected, send }: { project: ProjectView; connected: b
       <header className="chat-header">
         <span className="chat-name">{project.name}</span>
         <span className="chat-path">{project.path}</span>
+        <select
+          className="engine-select"
+          aria-label="Engine"
+          value={project.engine}
+          disabled={!canSend}
+          onChange={(e) => send({ type: 'project.setEngine', projectId: project.id, engine: e.target.value })}
+        >
+          {engineOptions(engines, project.engine).map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
       </header>
       <div
         className="messages"
@@ -204,7 +219,8 @@ function App() {
               onClick={() => dispatch({ type: 'select', projectId: p.id })}
             >
               <span className={`dot ${p.status}`} />
-              {p.name}
+              <span className="project-name">{p.name}</span>
+              <span className="project-engine">{p.engine}</span>
             </button>
           ))}
         </nav>
@@ -234,7 +250,7 @@ function App() {
           </div>
         )}
         {selected ? (
-          <Chat key={selected.id} project={selected} connected={state.connected} send={send} />
+          <Chat key={selected.id} project={selected} engines={state.engines} connected={state.connected} send={send} />
         ) : (
           <div className="empty">Add a project folder to start.</div>
         )}
