@@ -10,10 +10,12 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
 app.setPath('userData', join(app.getPath('appData'), 'Hotrod Desktop'))
-start().catch((error: unknown) => {
-  dialog.showErrorBox('Hotrod could not start', errorText(error))
-  app.exit(1)
-})
+if (!app.requestSingleInstanceLock()) app.quit()
+else
+  start().catch((error: unknown) => {
+    dialog.showErrorBox('Hotrod could not start', errorText(error))
+    app.exit(1)
+  })
 
 async function start() {
   await app.whenReady()
@@ -66,6 +68,10 @@ async function start() {
     app.quit()
   })
   app.on('window-all-closed', () => app.quit())
+  app.on('second-instance', () => {
+    if (window.isMinimized()) window.restore()
+    window.focus()
+  })
   ipcMain.handle('force-quit', confirmForceQuit)
   const onSignal = () => {
     if (forcing) app.exit(1)

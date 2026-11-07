@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs'
+import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -26,7 +27,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
-async function start() {
+async function start(port = 0) {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const project = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const core = openCore({
@@ -35,16 +36,16 @@ async function start() {
     defaultEngine: 'fake',
     machine: localMachine,
   })
-  const server = await startServer({
-    core,
-    port: 0,
-    uiOrigin: origin,
-    token,
-  })
   cleanups.push(() => {
     core.close()
     rmSync(garage, { recursive: true, force: true })
     rmSync(project, { recursive: true, force: true })
+  })
+  const server = await startServer({
+    core,
+    port,
+    uiOrigin: origin,
+    token,
   })
   cleanups.push(() => server.close())
   const base = `ws://127.0.0.1:${server.port}`
@@ -74,6 +75,21 @@ it('rejects other origins', async () => {
     )
     expect(status).toBe(403)
   }
+})
+
+it('rejects with a readable error when the port is taken, leaving nothing uncaught', async () => {
+  const taken = createServer()
+  await new Promise<void>((resolve) => taken.listen(0, '127.0.0.1', resolve))
+  cleanups.push(() => new Promise<void>((resolve) => taken.close(() => resolve())))
+  const { port } = taken.address() as AddressInfo
+  const uncaught: unknown[] = []
+  const onUncaught = (error: unknown) => uncaught.push(error)
+  process.on('uncaughtException', onUncaught)
+  cleanups.push(() => void process.off('uncaughtException', onUncaught))
+
+  await expect(start(port)).rejects.toThrow(`Port ${port} is in use. Is Hotrod already running?`)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  expect(uncaught).toEqual([])
 })
 
 it('closes connections without the right token before sending anything', async () => {
