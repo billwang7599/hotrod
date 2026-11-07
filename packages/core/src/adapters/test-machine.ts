@@ -1,8 +1,14 @@
-import type { EngineProcess, Machine } from '../types.ts'
+import type { EngineProcess, Machine } from '../shared.ts'
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
   const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string> }[] = []
-  const ran: { command: string; args: string[]; env?: Record<string, string>; input?: string }[] = []
+  const ran: {
+    command: string
+    args: string[]
+    env?: Record<string, string>
+    input?: string
+    timeoutMs?: number
+  }[] = []
   const written: string[] = []
   const state = { stdinClosed: false, killed: false }
   let stdout = (_: string) => {}
@@ -20,9 +26,10 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
       return proc
     },
     async run(command, args, options) {
-      const { env, input } = options
-      ran.push({ command, args, ...(env && { env }), ...(input && { input }) })
-      return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
+      const { env, input, timeoutMs } = options
+      ran.push({ command, args, ...(env && { env }), ...(input && { input }), ...(timeoutMs && { timeoutMs }) })
+      const result = runResults[[command, ...args].join(' ')] ?? runResults[command]
+      return result ?? { code: 127, stdout: '', stderr: 'not found' }
     },
     stopAll: async () => {},
   }

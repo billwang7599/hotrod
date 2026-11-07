@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, LoginEvent, SessionOptions } from '../types.ts'
-import { claudeCode } from './claude-code.ts'
+import { type EngineEvent, type LoginEvent, type SessionOptions } from '../shared.ts'
+import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${name}.jsonl`, import.meta.url), 'utf8')
@@ -62,7 +62,7 @@ describe('claudeCode adapter', () => {
 
   it('passes the model and effort only when set', async () => {
     const { models = [], thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
-    const model = models.at(-1)!.id
+    const model = models.at(-1)!
     const { fake } = startSession('', { model, thinking: thinking[0] })
     const args = fake.spawned[0]?.args ?? []
     expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', model])
@@ -75,6 +75,19 @@ describe('claudeCode adapter', () => {
     const args = startSession('', { extraDirs: ['/tmp/a', '/tmp/b'] }).fake.spawned[0]!.args
     expect(args.filter((_, i) => args[i - 1] === '--add-dir')).toEqual(['/tmp/a', '/tmp/b'])
     expect(startSession().fake.spawned[0]?.args).not.toContain('--add-dir')
+  })
+
+  it('lets Claude Code read the files it is given without asking, next to the Hotrod tools', () => {
+    const readFiles = ['/tmp/a b/shot [1], (2).png', '/tmp/doc.pdf']
+    const rules = ['Read(//tmp/a b/shot \\[1\\], (2).png)', 'Read(//tmp/doc.pdf)']
+    const allowed = (args: string[]) => args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 4)
+    const args = startSession('Be brief.', { readFiles }).fake.spawned[0]!.args
+    expect(allowed(args)).toEqual([...rules, '--append-system-prompt'])
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const both = startSession('', { readFiles, hotrodMcp }).fake.spawned[0]!.args
+    expect(allowed(both)).toEqual(['mcp__hotrod__*', ...rules])
+    expect(both.filter((arg) => arg === '--allowedTools')).toHaveLength(1)
+    expect(startSession('', { readFiles: [] }).fake.spawned[0]?.args).not.toContain('--allowedTools')
   })
 
   it('appends instructions to the system prompt when given', () => {
@@ -94,6 +107,45 @@ describe('claudeCode adapter', () => {
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
       { type: 'turn.completed' },
+    ])
+  })
+
+  it('sends images as base64 image blocks after the text, and says it takes image input', () => {
+    const { fake, session } = startSession()
+    session.prompt('What is this?', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    expect(fake.sent()).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'What is this?' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } },
+          ],
+        },
+      },
+    ])
+    expect(claudeCode.imageInput).toBe(true)
+  })
+
+  it('leaves out images over the API limit, which the prompt already names by path', () => {
+    const { fake, session } = startSession()
+    const fits = 'a'.repeat(MAX_IMAGE_BASE64_CHARS)
+    session.prompt('Look', [
+      { mimeType: 'image/png', base64: fits },
+      { mimeType: 'image/jpeg', base64: `${fits}a` },
+    ])
+    expect(fake.sent()).toEqual([
+      {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'Look' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: fits } },
+          ],
+        },
+      },
     ])
   })
 
@@ -295,32 +347,83 @@ describe('claudeCode adapter', () => {
   })
 })
 
+describe('claudeCode.complete', () => {
+  const request = {
+    cwd: '/tmp/home',
+    system: 'Summarize.',
+    prompt: 'the items',
+    schema: { type: 'object' },
+    model: 'claude-haiku-5-5',
+    timeoutMs: 1234,
+  }
+  const reply = (fields: Record<string, unknown>, code = 0) => ({
+    claude: { code, stdout: JSON.stringify({ type: 'result', is_error: false, result: '', ...fields }), stderr: '' },
+  })
+
+  it('runs one clean prompt with no tools, the system prompt and the schema, prompt on stdin', async () => {
+    const fake = fakeMachine(reply({ structured_output: { summaries: [] } }))
+    expect(await claudeCode.complete!(fake.machine, request)).toBe('{"summaries":[]}')
+    expect(fake.ran).toEqual([
+      {
+        command: 'claude',
+        args: [
+          '-p',
+          '--no-session-persistence',
+          '--setting-sources', '',
+          '--strict-mcp-config',
+          '--disable-slash-commands',
+          '--settings', '{"autoMemoryEnabled":false}',
+          '--tools', '',
+          '--output-format', 'json',
+          '--model', 'claude-haiku-5-5',
+          '--system-prompt', 'Summarize.',
+          '--json-schema', '{"type":"object"}',
+        ],
+        input: 'the items',
+        timeoutMs: request.timeoutMs,
+      },
+    ])
+  })
+
+  it('returns the text without a schema, and uses the account', async () => {
+    const fake = fakeMachine(reply({ result: 'plain text' }))
+    const { schema, ...plain } = request
+    expect(await claudeCode.complete!(fake.machine, { ...plain, accountDir: '/acct', apiKey: 'k' })).toBe('plain text')
+    expect(fake.ran[0]?.args).not.toContain('--json-schema')
+    expect(fake.ran[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/acct', ANTHROPIC_API_KEY: 'k' })
+  })
+
+  it('fails with what Claude Code said, such as a usage limit', async () => {
+    const limited = reply({ is_error: true, result: "You've hit your 5-hour limit" }, 1)
+    await expect(claudeCode.complete!(fakeMachine(limited).machine, request)).rejects.toThrow('5-hour limit')
+    const crashed = { claude: { code: 1, stdout: '', stderr: 'boom' } }
+    await expect(claudeCode.complete!(fakeMachine(crashed).machine, request)).rejects.toThrow('boom')
+  })
+})
+
 describe('claudeCode.detect', () => {
   it('reports installed and signed in, with the effort levels from claude --help', async () => {
-    expect(await claudeCode.detect(fakeMachine(detected).machine)).toMatchObject({
+    const status = await claudeCode.detect(fakeMachine(detected).machine)
+    expect(status).toMatchObject({
       installed: true,
       signedIn: true,
       detail: '2.1.319 (Claude Code)',
       thinking: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
+    expect(status).not.toHaveProperty('cheapModel')
   })
 
-  it('offers full model ids with the names people know, newest first, previous versions included', async () => {
+  it('offers the full model ids Claude Code accepts, previous versions included', async () => {
     const { models = [] } = await claudeCode.detect(fakeMachine(detected).machine)
-    const ids = models.map((m) => m.id)
-    expect(models).toContainEqual({ id: 'claude-opus-4-8', label: 'Opus 4.8' })
-    expect(models).toContainEqual({ id: 'claude-opus-5', label: 'Opus 5' })
-    expect(models).toContainEqual({ id: 'claude-haiku-4-5', label: 'Haiku 4.5' })
-    expect(ids.indexOf('claude-opus-5-5')).toBeLessThan(ids.indexOf('claude-opus-5'))
-    expect(ids.indexOf('claude-opus-5')).toBeLessThan(ids.indexOf('claude-opus-4-8'))
-    expect(ids.every((id) => id.startsWith('claude-') && !/\d{8}$/.test(id))).toBe(true)
+    expect(models).toEqual(expect.arrayContaining(['claude-opus-5-5', 'claude-opus-4-8', 'claude-haiku-4-5']))
+    expect(models.every((id) => typeof id === 'string' && id.startsWith('claude-'))).toBe(true)
   })
 
   it('names the model and effort Claude Code starts on with no flags, both of them offered', async () => {
     const { models = [], thinking = [], defaultModel, defaultThinking } = await claudeCode.detect(
       fakeMachine(detected).machine,
     )
-    expect(models.map((m) => m.id)).toContain(defaultModel)
+    expect(models).toContain(defaultModel)
     expect(thinking).toContain(defaultThinking)
   })
 

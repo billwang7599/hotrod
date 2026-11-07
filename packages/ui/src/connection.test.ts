@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest'
-import { coreUrl, readToken } from './connection.ts'
+import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 
 const page = { protocol: 'http:', host: '127.0.0.1:5000' }
 
@@ -34,4 +34,14 @@ test('the token comes from the link, then survives a reload without it', () => {
   expect(readToken('', storage)).toBe('abc')
   expect(readToken('#token=new', storage)).toBe('new')
   expect(readToken('#other=1', storage)).toBe('new')
+})
+
+test("an attachment's URL is the core's HTTP address with the token, one escaped file name per chat", () => {
+  const path = '/garage/chats/main/attachments/my shot#1.png'
+  expect(attachmentUrl('ws://127.0.0.1:4317/?token=a%2Bb', 'main', path)).toBe(
+    'http://127.0.0.1:4317/chats/main/attachments/my%20shot%231.png?token=a%2Bb',
+  )
+  expect(attachmentUrl('wss://example.test/?token=t', 'ab12', '/x/a.pdf')).toBe(
+    'https://example.test/chats/ab12/attachments/a.pdf?token=t',
+  )
 })

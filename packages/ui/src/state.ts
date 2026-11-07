@@ -1,6 +1,7 @@
-import { DEFAULT_SUBAGENT_LIMIT, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/shared'
 import type {
   Account,
+  Attachment,
   ChatEntry,
   ChatInfo,
   ChatState,
@@ -13,12 +14,12 @@ import type {
   ModelLists,
   Mods,
   QueuedMessage,
-} from '@hotrod/core/types'
+} from '@hotrod/core/shared'
 
 export const MAIN_CHAT_ID = WORKSHOP_ID
 
 export type Item =
-  | { kind: 'user'; text: string }
+  | { kind: 'user'; text: string; attachments?: Attachment[] }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | {
@@ -90,8 +91,10 @@ function setToolState(items: Item[], toolId: string | undefined, state: 'running
 
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
-    case 'user.message':
-      return [...items, { kind: 'user', text: entry.text }]
+    case 'user.message': {
+      const { text, attachments } = entry
+      return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+    }
     case 'text.completed':
       return [...items, { kind: 'text', text: entry.text }]
     case 'tool.started':
@@ -235,6 +238,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, mods: action.mods }
     case 'models.updated':
       return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
+    case 'memory.updated':
+      return state
     case 'error':
       return {
         ...state,
@@ -328,6 +333,23 @@ export const modelMenu = (chat: ChatView, engine?: EngineInfo, lists = NO_LISTS)
   thinking: pickThinking(engine, chat),
   levels: engine?.thinking ?? [],
 })
+
+export function formatBytes(bytes: number) {
+  if (bytes < 1000) return `${bytes} B`
+  const [value, unit] = bytes < 1_000_000 ? [bytes / 1000, 'KB'] : [bytes / 1_000_000, 'MB']
+  return `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)} ${unit}`
+}
+
+export const MAX_PREVIEW_BYTES = 1_000_000
+
+export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
+  if (chat.id === MAIN_CHAT_ID || chat.archived || !items) return undefined
+  const pinned = items.some((i) => i.section === 'files' && i.from === chat.id && i.path === path)
+  return pinned ? 'pinned' : 'unpinned'
+}
+
+export const previewText = (bytes: Uint8Array) =>
+  looksBinary(bytes) ? undefined : new TextDecoder().decode(bytes.subarray(0, MAX_PREVIEW_BYTES), { stream: true })
 
 export function accountLabel(account: Account) {
   const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'

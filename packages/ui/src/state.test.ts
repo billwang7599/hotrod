@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage } from '@hotrod/core/types'
-import type { Account, EngineAccounts } from '@hotrod/core/types'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage } from '@hotrod/core/shared'
+import type { Account, EngineAccounts } from '@hotrod/core/shared'
 import {
   accountLabel,
   chatTree,
@@ -11,11 +11,15 @@ import {
   familyOf,
   folderName,
   folderOf,
+  formatBytes,
   initialState,
   MAIN_CHAT_ID,
+  MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
   modelMenu,
   PANEL_PX,
+  pinState,
+  previewText,
   reduce,
   storedColumn,
   storedFlag,
@@ -46,7 +50,7 @@ const mods = { subagents: { enabled: false, limit: 4 } }
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
 const snapshot = (chats: ChatState[]): Action =>
-  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists })
+  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists, memory: {} })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -143,7 +147,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists, memory: {} },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -155,7 +159,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists },
+      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists, memory: {} },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -201,6 +205,17 @@ describe('reduce', () => {
       { kind: 'user', text: 'hi' },
       { kind: 'tool', toolId: 't1', name: 'Edit', summary: '/x', state: 'error', output: 'no such file' },
     ])
+  })
+
+  it("keeps a message's attachments, sent and queued", () => {
+    const shot = { name: 'shot.png', path: '/g/chats/a/attachments/shot.png', mimeType: 'image/png', size: 2048 }
+    const state = run(
+      snapshot([chat(MAIN_CHAT_ID), chat('a')]),
+      entry('a', { type: 'user.message', text: '', attachments: [shot] }),
+      { type: 'chat.queue', chatId: 'a', queue: [{ id: 'q1', text: 'next', attachments: [shot] }] },
+    )
+    expect(items(state)).toEqual([{ kind: 'user', text: '', attachments: [shot] }])
+    expect(state.chats[1]?.queue).toEqual([{ id: 'q1', text: 'next', attachments: [shot] }])
   })
 
   it('accumulates deltas and clears them when the text completes', () => {
@@ -469,5 +484,42 @@ describe('dockedPanels', () => {
     expect(dockedPanels(sidebar)).toBe('sidebar')
     expect(dockedPanels(both - 1)).toBe('sidebar')
     expect(dockedPanels(both)).toBe('both')
+  })
+})
+
+describe('formatBytes', () => {
+  it('shows sizes in decimal units, with one decimal below ten', () => {
+    expect([0, 999, 1500, 20_480, 2_500_000, 20_000_000].map(formatBytes)).toEqual([
+      '0 B',
+      '999 B',
+      '1.5 KB',
+      '20 KB',
+      '2.5 MB',
+      '20 MB',
+    ])
+  })
+})
+
+describe('attachments', () => {
+  const view = (id: string, change: Partial<ChatState> = {}) =>
+    reduce(initialState, snapshot([chat(id, [], change)])).chats[0]!
+  const path = '/g/chats/a/attachments/shot.png'
+  const file = (from: string, filePath = path): ContextItem =>
+    ({ section: 'files', path: filePath, from, enabled: false, text: '', binary: true })
+
+  it('offers a pin outside Home and archived chats, pinned while the chat itself lists the file', () => {
+    expect(pinState(view('a'), [file('a')], path)).toBe('pinned')
+    expect(pinState(view('a'), [file('a', '/g/other.png'), file(MAIN_CHAT_ID)], path)).toBe('unpinned')
+    expect(pinState(view('a'), undefined, path)).toBeUndefined()
+    expect(pinState(view(MAIN_CHAT_ID), [], path)).toBeUndefined()
+    expect(pinState(view('a', { archived: true }), [file('a')], path)).toBeUndefined()
+  })
+
+  it('previews text up to the cap without a broken last character, and nothing for a file that is not text', () => {
+    const bytes = (text: string) => new TextEncoder().encode(text)
+    expect(previewText(bytes('hello <b>'))).toBe('hello <b>')
+    expect(previewText(new Uint8Array([104, 105, 0, 33]))).toBeUndefined()
+    const long = 'a'.repeat(MAX_PREVIEW_BYTES - 1)
+    expect(previewText(bytes(`${long}éz`))).toBe(long)
   })
 })

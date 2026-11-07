@@ -11,18 +11,34 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import { openAccounts } from './accounts.ts'
 import { openHotrodMcp } from './hotrod-mcp.ts'
 import {
+  MEMORY_INSTRUCTIONS,
+  memoryPrompt,
+  memoryView,
+  messagesOf,
+  openCompactor,
+  openSummaries,
+  withAttachments,
+  ZOOM_INSTRUCTIONS,
+  type Summaries,
+} from './memory.ts'
+import {
   CONTEXT_SECTIONS,
   DEFAULT_SUBAGENT_LIMIT,
+  IMAGE_TYPES,
+  looksBinary,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
   pickModel,
   pickThinking,
   WORKSHOP_ID,
   WORKSHOP_NAME,
   type Adapter,
+  type Attachment,
   type ChatEntry,
   type ChatInfo,
   type ChatState,
@@ -35,15 +51,18 @@ import {
   type EngineInfo,
   type EngineStatus,
   type Machine,
+  type MemorySettings,
   type ModelLists,
   type ModelRole,
   type Mods,
   type NewChat,
   type QueuedMessage,
   type Session,
-} from './types.ts'
+  type Upload,
+} from './shared.ts'
 
 export const STOP_GRACE_MS = 60_000
+const PARENT_VIEW_FILE = 'parent-view.md'
 export const MAX_CHAT_DEPTH = 1
 export const HOME_INSTRUCTIONS =
   `You are the user's personal assistant in Hotrod, running in its main chat, ${WORKSHOP_NAME}. Answer general ` +
@@ -64,6 +83,7 @@ type Chat = {
   pendingRequests: Set<string>
   mcpToken?: string
   queue: QueuedMessage[]
+  summaries: Summaries
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -74,8 +94,12 @@ export function openCore(options: {
   defaultEngine: string
   machine: Machine
   stopGraceMs?: number
+  compactDebounceMs?: number
 }) {
-  const { garage, adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
+  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
+  mkdirSync(options.garage, { recursive: true })
+  // Context paths are saved resolved, so attachment paths must be too for a pin to match its file.
+  const garage = realpathSync(options.garage)
   const adapterFor = (engine: string) => adapters.find((adapter) => adapter.id === engine)
   const checkEngine = (engine: string) => {
     if (!adapterFor(engine)) {
@@ -90,6 +114,7 @@ export function openCore(options: {
     mods?: Partial<Mods>
     models?: Record<string, Partial<ModelLists>>
     defaultThinking?: Record<string, string>
+    memory?: MemorySettings
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -107,7 +132,7 @@ export function openCore(options: {
     subagents: [],
     ...settings.models?.[engine],
   })
-  const detected = new Map<string, EngineStatus>()
+  const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
     const status = detected.get(id) ?? { installed: false, signedIn: false }
@@ -115,6 +140,7 @@ export function openCore(options: {
     const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
     return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
   }
+  const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const offered = (engine: string) => {
     const { models = [], thinking = [] } = detected.get(engine) ?? {}
     return { models, thinking }
@@ -168,6 +194,20 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
+  const setMemory = (engine?: string, model?: string) => {
+    if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
+    if (engine !== undefined) {
+      checkEngine(engine)
+      if (!adapterFor(engine)?.complete) throw new Error(`Engine "${engine}" can't write summaries`)
+      checkEnabled(engine)
+      if (model !== undefined && !offersModel(engine, model)) {
+        throw new Error(`Engine "${engine}" offers no model "${model}"`)
+      }
+    }
+    settings.memory = { ...(engine && { engine }), ...(model && { model }) }
+    saveSettings()
+    broadcast({ type: 'memory.updated', memory: settings.memory })
+  }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
     writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
@@ -194,6 +234,25 @@ export function openCore(options: {
     isBusy: (engine) => [...chats.values()].some((chat) => chat.info.engine === engine && chat.status !== 'idle'),
   })
   void accounts.refresh()
+
+  const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
+  const takesMcp = (engine: string) => adapterFor(engine)?.hotrodMcp === true && mcpUrl !== undefined
+
+  const compactor = openCompactor({
+    chat: (chatId) => {
+      const chat = chats.get(chatId)
+      return chat && memoryOf(chat)
+    },
+    async complete(request) {
+      const { engine, model } = pickMemory(engineInfos(), settings.memory ?? {})
+      const adapter = engine === undefined ? undefined : adapterFor(engine)
+      if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
+      checkEnabled(adapter.id)
+      return adapter.complete(machine, { ...request, cwd: homeDir, model, ...accounts.sessionFor(adapter.id) })
+    },
+    onFailure: (reason) => broadcast({ type: 'error', message: `Memory summaries are failing: ${reason}. Retrying.` }),
+    ...(compactDebounceMs !== undefined && { debounceMs: compactDebounceMs }),
+  })
 
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
@@ -249,6 +308,7 @@ export function openCore(options: {
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
+    compactor.touch(chat.info.id)
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
@@ -291,6 +351,7 @@ export function openCore(options: {
       unsavedText: '',
       pendingRequests: new Set(),
       queue: [],
+      summaries: openSummaries(join(dir, 'summaries.jsonl')),
     }
     if (!existsSync(file) || info.id === WORKSHOP_ID) saveChat(chat)
     chats.set(info.id, chat)
@@ -333,11 +394,16 @@ export function openCore(options: {
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
+    const parentMemory = spec.subagent ? memoryOf(parent) : undefined
     const info: ChatInfo = {
       id,
       name,
       parentId: parent.info.id,
-      ...(spec.subagent && { subagent: true, role: spec.role ?? 'subagents' }),
+      ...(parentMemory && {
+        subagent: true,
+        role: spec.role ?? 'subagents',
+        parentMessages: parentMemory.messages.length,
+      }),
       folders,
       files,
       engine,
@@ -346,6 +412,10 @@ export function openCore(options: {
       ...(spec.subagent && parent.info.engine === engine && { thinking: parent.info.thinking }),
     }
     const chat = loadChat(join(chatsDir, id), info)
+    if (parentMemory?.messages.length) {
+      const view = memoryView(parentMemory.messages, parentMemory.summaries, { zoom: takesMcp(engine) })
+      writeFileSync(join(chat.dir, PARENT_VIEW_FILE), view)
+    }
     broadcast({ type: 'chat.added', chat: state(chat) })
     return chat.info
   }
@@ -434,8 +504,10 @@ export function openCore(options: {
         if (seen.has(path)) return []
         seen.add(path)
         const item = { section, path, from: owner.info.id }
-        const text = readText(section === 'folders' ? join(path, 'AGENTS.md') : path)
-        return [{ ...item, enabled: switchOf(chat, item), text }]
+        const bytes = readBytes(section === 'folders' ? join(path, 'AGENTS.md') : path)
+        const binary = section === 'files' && looksBinary(bytes)
+        const text = binary ? '' : bytes.toString('utf8')
+        return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
       })
     })
   }
@@ -488,7 +560,9 @@ export function openCore(options: {
     broadcast({ type: 'context.defaults', defaults: contextDefaults() })
   }
 
-  const send = (chat: Chat, text: string) => {
+  const attachmentsDirOf = (chat: Chat) => join(chat.dir, 'attachments')
+
+  const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
@@ -497,21 +571,40 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
-    const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
-    append(chat, { at: new Date().toISOString(), type: 'user.message', text })
+    const message = withAttachments(text, attachments)
+    const zoomable = takesMcp(adapter.id)
+    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable })
+    const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
+    append(chat, { at: new Date().toISOString(), ...sent })
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
-    const contextText = items
-      .filter((item) => item.text.trim())
-      .map(({ section, path, text }) =>
-        section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim(),
-      )
-    const instructions = [...(isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []), ...contextText].join('\n\n')
+    const contextText = items.flatMap(({ section, path, text, binary }) => {
+      if (binary) {
+        return [`The file ${path} is not text, so it isn't pasted here. Open it with your tools when you need it.`]
+      }
+      if (!text.trim()) return []
+      return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
+    })
+    const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
+    const role = isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []
+    const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
+    const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
+    const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
+    const memory = [
+      MEMORY_INSTRUCTIONS,
+      ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
+      ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
+    ]
+    const instructions = [...role, ...memory, ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
-    const extraDirs = folders.map((folder) => folder.path).filter((path) => path !== cwd)
+    const attachmentsDir = attachmentsDirOf(chat)
+    const extraDirs = [
+      ...folders.map((folder) => folder.path).filter((path) => path !== cwd),
+      ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
+    ]
 
     let session: Session | undefined
     const emit = (event: EngineEvent) => {
@@ -536,15 +629,21 @@ export function openCore(options: {
     }
 
     try {
-      chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
+      chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
       const engine = engineInfo(adapter.id)
       const model = pickModel(engine, listsOf(adapter.id), chat.info)
       const thinking = pickThinking(engine, chat.info)
+      const images = adapter.imageInput
+        ? attachments
+            .filter((a) => IMAGE_TYPES.includes(a.mimeType))
+            .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
+        : []
       const options = {
         cwd,
         instructions,
         ...(extraDirs.length && { extraDirs }),
+        ...(readFiles.length && { readFiles }),
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
@@ -553,7 +652,7 @@ export function openCore(options: {
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
       chat.session = session
-      session.prompt(prompt)
+      session.prompt(prompt, images)
     } catch (error) {
       if (chat.status === 'idle') return
       endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
@@ -565,22 +664,68 @@ export function openCore(options: {
     broadcast({ type: 'chat.queue', chatId: chat.info.id, queue })
   }
 
-  const sendQueue = (chat: Chat, text?: string) => {
+  const sendQueue = (chat: Chat, message?: Omit<QueuedMessage, 'id'>) => {
     const queue = chat.queue
     if (queue.length) setQueue(chat, [])
+    const parts = message ? [...queue, message] : queue
     try {
-      send(chat, [...queue.map((q) => q.text), ...(text === undefined ? [] : [text])].join('\n\n'))
+      const text = parts.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
+      send(chat, text, parts.flatMap((part) => part.attachments ?? []))
     } catch (error) {
       if (queue.length) setQueue(chat, queue)
       throw error
     }
   }
 
-  const enqueue = (chat: Chat, text: string) => {
+  const enqueue = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     checkActive(chat)
-    if (chat.status === 'idle') return sendQueue(chat, text)
-    setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), text }])
+    const message = { text, ...(attachments.length && { attachments }) }
+    if (chat.status === 'idle') return sendQueue(chat, message)
+    setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
+  }
+
+  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown) => {
+    if (uploads !== undefined && !Array.isArray(uploads)) throw new Error('Attachments must be a list')
+    const files = (uploads ?? []).map((upload: Partial<Upload>) => {
+      const { name, mimeType, base64 } = upload ?? {}
+      if (typeof name !== 'string' || typeof mimeType !== 'string' || typeof base64 !== 'string') {
+        throw new Error('Each attachment needs a name, a type and its contents')
+      }
+      const bytes = Buffer.from(base64, 'base64')
+      if (bytes.length > MAX_ATTACHMENT_BYTES) {
+        throw new Error(`${name} is larger than ${MAX_ATTACHMENT_BYTES / 1_000_000} MB, the most one attachment can be`)
+      }
+      return { name, mimeType: mimeType || 'application/octet-stream', bytes }
+    })
+    if (files.reduce((total, file) => total + file.bytes.length, 0) > MAX_ATTACHMENTS_TOTAL_BYTES) {
+      throw new Error(`One message can carry at most ${MAX_ATTACHMENTS_TOTAL_BYTES / 1_000_000} MB of attachments`)
+    }
+    const text = typeof rawText === 'string' && rawText.trim() ? rawText : ''
+    if (!text && !files.length) throw new Error('Message is empty')
+
+    const dir = attachmentsDirOf(chat)
+    if (files.length) mkdirSync(dir, { recursive: true })
+    const attachments = files.map(({ name, mimeType, bytes }): Attachment => {
+      const clean = basename(name).replace(/[\x00-\x1f\x7f\\]/g, '').replace(/^[.\s]+/, '').trim() || 'attachment'
+      const dot = clean.lastIndexOf('.')
+      const [stem, extension] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, '']
+      for (let copy = 1; ; copy++) {
+        const path = join(dir, copy === 1 ? clean : `${stem}-${copy}${extension}`)
+        try {
+          writeFileSync(path, bytes, { flag: 'wx' })
+          return { name, path, mimeType, size: bytes.length }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+        }
+      }
+    })
+    try {
+      enqueue(chat, text, attachments)
+    } catch (error) {
+      for (const { path } of attachments) rmSync(path, { force: true })
+      throw error
+    }
   }
 
   const mcp = openHotrodMcp({
@@ -592,6 +737,7 @@ export function openCore(options: {
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
     subagents: () => mods().subagents,
+    memory: (chatId) => memoryOf(chatFor(chatId)),
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
@@ -613,12 +759,12 @@ export function openCore(options: {
   }
 
   return {
-    engines: () => adapters.map((adapter) => engineInfo(adapter.id)),
+    engines: engineInfos,
     async refreshEngines() {
       await Promise.all(
         adapters.map(async (adapter) => {
           try {
-            detected.set(adapter.id, await adapter.detect(machine))
+            detected.set(adapter.id, nameModels(await adapter.detect(machine)))
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error)
             detected.set(adapter.id, { installed: false, signedIn: false, detail })
@@ -626,15 +772,27 @@ export function openCore(options: {
           broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
         }),
       )
+      const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
+      // Summaries need a detected engine, so the backlog waits for this.
+      const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
+      for (const chat of byActivity) compactor.touch(chat.info.id)
     },
     setEngineEnabled,
     contextDefaults,
     mods,
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
+    memory: () => settings.memory ?? {},
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
+    attachment(chatId: string, file: string) {
+      const chat = chats.get(chatId)
+      if (!chat) return undefined
+      const path = join(attachmentsDirOf(chat), file)
+      const sent = chat.entries.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []) : []))
+      return [...sent, ...chat.queue.flatMap((q) => q.attachments ?? [])].find((a) => a.path === path)
+    },
     serveMcp(url: string) {
       mcpUrl = url
       return mcp.handle
@@ -664,12 +822,13 @@ export function openCore(options: {
         case 'chat.setModel':
           return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
         case 'chat.send':
-          if (typeof message.text !== 'string' || !message.text.trim()) throw new Error('Message is empty')
-          return enqueue(chatFor(message.chatId), message.text)
+          return sendMessage(chatFor(message.chatId), message.text, message.attachments)
         case 'chat.unqueue': {
           const chat = chatFor(message.chatId)
-          if (!chat.queue.some((q) => q.id === message.id)) return
-          return setQueue(chat, chat.queue.filter((q) => q.id !== message.id))
+          const removed = chat.queue.find((q) => q.id === message.id)
+          if (!removed) return
+          for (const { path } of removed.attachments ?? []) rmSync(path, { force: true })
+          return setQueue(chat, chat.queue.filter((q) => q !== removed))
         }
         case 'chat.interrupt':
           return interrupt(chatFor(message.chatId), message.force === true)
@@ -693,6 +852,8 @@ export function openCore(options: {
           return setContextDefault(message.section, message.enabled === true)
         case 'subagents.set':
           return setSubagents(message.enabled === true, message.limit)
+        case 'memory.set':
+          return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':
           return setModelList(String(message.engine), message.role, message.models)
         case 'permission.respond':
@@ -715,6 +876,7 @@ export function openCore(options: {
     },
     async close(force = false) {
       quitting = true
+      compactor.close()
       for (const chat of chats.values()) {
         if (chat.status === 'idle') stopSession(chat)
         else interrupt(chat, force)
@@ -725,15 +887,54 @@ export function openCore(options: {
   }
 }
 
+export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5']
+
+const summaryModelOf = (engine?: EngineInfo) =>
+  SUMMARY_MODELS.map((id) => engine?.models?.find((m) => m.id === id || m.id.endsWith(`/${id}`))?.id).find(Boolean)
+
+function pickMemory(engines: EngineInfo[], saved: MemorySettings) {
+  const engine = saved.engine
+    ? engines.find((e) => e.id === saved.engine)
+    : engines.find((e) => e.enabled && summaryModelOf(e))
+  return { engine: engine?.id, model: saved.model ?? summaryModelOf(engine) }
+}
+
+const CLAUDE_FAMILIES = ['fable', 'opus', 'sonnet', 'haiku']
+const CLAUDE_ID = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/
+// A dated snapshot like claude-haiku-4-5-20251001 repeats the model its alias names.
+const SNAPSHOT_ID = /-\d{8}$/
+
+const providerOf = (id: string) => id.slice(0, id.lastIndexOf('/') + 1)
+
+function describeModel(id: string) {
+  const [, family = '', major = '', minor] = id.slice(providerOf(id).length).match(CLAUDE_ID) ?? []
+  const known = CLAUDE_FAMILIES.indexOf(family)
+  const rank = known < 0 ? CLAUDE_FAMILIES.length : known
+  if (!family) return { label: id, rank, version: 0 }
+  const label = `${family[0]!.toUpperCase()}${family.slice(1)} ${major}${minor === undefined ? '' : `.${minor}`}`
+  return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
+}
+
+function nameModels({ models, defaultModel, ...status }: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
+  if (!models) return { ...status, ...(defaultModel && { defaultModel }) }
+  const providers = [...new Set(models.map(providerOf))]
+  const named = models
+    .filter((id) => !SNAPSHOT_ID.test(id))
+    .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
+    .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
+  const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
+  return { ...status, models: named.map(({ id, label }) => ({ id, label })), ...(shown && { defaultModel: shown }) }
+}
+
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
 const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 
-const readText = (file: string) => {
+const readBytes = (file: string) => {
   try {
-    return readFileSync(file, 'utf8')
+    return readFileSync(file)
   } catch {
-    return ''
+    return Buffer.alloc(0)
   }
 }
 
@@ -759,28 +960,3 @@ const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
   }
   return realpathSync(path)
 }
-
-function transcript(entries: ChatEntry[]) {
-  const results = new Map<string, { output: string; isError: boolean }>()
-  for (const entry of entries) {
-    if (entry.type === 'tool.completed') results.set(entry.toolId, entry)
-  }
-  const lines: string[] = []
-  for (const entry of entries) {
-    if (entry.type === 'user.message') lines.push(`User: ${entry.text}`)
-    if (entry.type === 'text.completed') lines.push(`Assistant: ${entry.text}`)
-    if (entry.type === 'tool.started') {
-      const call = `<tool_call name="${entry.name}">${escapeClosingTags(JSON.stringify(entry.input) ?? '')}</tool_call>`
-      const result = results.get(entry.toolId)
-      if (!result) lines.push(`${call}\n<tool_result status="none" />`)
-      else {
-        const status = result.isError ? 'error' : 'ok'
-        lines.push(`${call}\n<tool_result status="${status}">\n${escapeClosingTags(result.output)}\n</tool_result>`)
-      }
-    }
-    if (entry.type === 'turn.completed' && entry.error) lines.push(`[Turn ended early: ${entry.error}]`)
-  }
-  return `This is the conversation so far:\n\n${lines.join('\n\n')}`
-}
-
-const escapeClosingTags = (text: string) => text.replace(/<\/(tool_call|tool_result)/gi, '<\\/$1')

@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
-import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './types.ts'
+import { messagesOf, openSummaries, zoom } from './memory.ts'
+import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -32,10 +33,15 @@ function chat(id: string, change: Partial<ChatState> = {}): ChatState {
   }
 }
 
+const said = (...texts: string[]): ChatEntry[] =>
+  texts.map((text, i) => (i % 2 ? { at, type: 'text.completed', text } : { at, type: 'user.message', text }))
+
 async function start(subagents = { enabled: false, limit: 4 }) {
+  const dir = mkdtempSync(join(tmpdir(), 'hotrod-mcp-'))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   const chats: ChatState[] = [
-    chat('main'),
-    chat('aaaa0001', { folders: ['/tmp/app'] }),
+    chat('main', { entries: said('hello', 'hi there') }),
+    chat('aaaa0001', { folders: ['/tmp/app'], entries: said('build it', 'on it', 'and test it', 'done') }),
     chat('bbbb0001'),
     chat('cccc0001', { parentId: 'aaaa0001' }),
   ]
@@ -51,6 +57,11 @@ async function start(subagents = { enabled: false, limit: 4 }) {
       return created
     },
     subagents: () => subagents,
+    memory(chatId) {
+      const found = chats.find((c) => c.id === chatId)
+      if (!found) throw new Error(`Unknown chat "${chatId}"`)
+      return { messages: messagesOf(found.entries), summaries: openSummaries(join(dir, `${chatId}.jsonl`)) }
+    },
     send(chatId, text) {
       calls.push(['send', chatId, text])
     },
@@ -106,16 +117,16 @@ describe('Hotrod MCP server', () => {
     expect((await rpc(token, 'tools/list')).status).toBe(401)
   })
 
-  it('gives no token to a chat that can neither nest chats nor spawn subagents', async () => {
-    const { mcp } = await start()
-    expect(mcp.grant('bbbb0001')).toBeUndefined()
-    expect(mcp.grant('cccc0001')).toBeUndefined()
+  it('gives a chat that can neither nest chats nor spawn subagents only zoom and date', async () => {
+    const { mcp, names } = await start()
+    expect(await names('bbbb0001')).toEqual(['date', 'zoom'])
+    expect(await names('cccc0001')).toEqual(['date', 'zoom'])
     expect(mcp.grant('nope')).toBeUndefined()
   })
 
   it('offers the chat tools to every chat that may nest chats', async () => {
     const { names } = await start()
-    const tools = ['create_chat', 'list_chats', 'read_chat', 'send_message']
+    const tools = ['create_chat', 'date', 'list_chats', 'read_chat', 'send_message', 'zoom']
     expect(await names('main')).toEqual(tools)
     expect(await names('aaaa0001')).toEqual(tools)
   })
@@ -217,14 +228,16 @@ describe('Hotrod MCP server', () => {
     it('offers spawn_subagent to every chat but a subagent, only while the mod is on', async () => {
       const off = await start()
       expect(await off.names('main')).not.toContain('spawn_subagent')
-      expect(off.mcp.grant('bbbb0001')).toBeUndefined()
+      expect(await off.names('bbbb0001')).toEqual(['date', 'zoom'])
 
       const { names, mcp, chats } = await on()
       expect(await names('main')).toContain('spawn_subagent')
       expect(await names('aaaa0001')).toContain('spawn_subagent')
-      expect(await names('bbbb0001')).toEqual(['list_chats', 'read_chat', 'send_message', 'spawn_subagent'])
+      const tools = ['date', 'list_chats', 'read_chat', 'send_message', 'spawn_subagent', 'zoom']
+      expect(await names('bbbb0001')).toEqual(tools)
       chats.push(chat('eeee0001', { parentId: 'bbbb0001', subagent: true }))
-      expect(mcp.grant('eeee0001')).toBeUndefined()
+      expect(await names('eeee0001')).toEqual(['date', 'zoom'])
+      expect(mcp.grant('eeee0001')).toBeDefined()
     })
 
     it('refuses to spawn once the mod is turned off mid-session', async () => {
@@ -302,6 +315,41 @@ describe('Hotrod MCP server', () => {
       expect((await tool(grant('main'), 'send_message', { chatId: 's1', text: 'hi' })).isError).toBe(true)
       expect(await tool(grant('bbbb0001'), 'send_message', { chatId: 's2', text: 'hi' })).toMatchObject({
         isError: false,
+      })
+    })
+  })
+
+  describe('memory', () => {
+    it("zooms into and dates the caller's own messages only", async () => {
+      const { chats, tool, grant } = await start()
+      const own = messagesOf(chats.find((c) => c.id === 'aaaa0001')!.entries)
+      const token = grant('aaaa0001')
+      expect(await tool(token, 'zoom', { id: 2 })).toEqual({ isError: false, text: zoom(own, openSummaries(''), 2) })
+      expect((await tool(token, 'zoom', { id: 0, n: 4 })).text).toBe(
+        '0+2|user: build it talk: on it\n2+2|user: and test it talk: done',
+      )
+      expect(await tool(token, 'date', { id: 3 })).toEqual({ isError: false, text: at })
+      expect(await tool(grant('main'), 'zoom', { id: 2 })).toEqual({
+        isError: true,
+        text: 'No message 2; this chat has messages 0 to 1',
+      })
+    })
+
+    it('lets a subagent read its parent as it was at launch, and no other chat', async () => {
+      const { chats, tool, grant } = await start()
+      chats.push(chat('s1', { parentId: 'aaaa0001', subagent: true, parentMessages: 2, entries: said('go') }))
+      const token = grant('s1')
+      expect((await tool(token, 'zoom', { id: 1, parent: true })).text).toMatch(/^1\|talk, .*\n\non it$/)
+      expect(await tool(token, 'date', { id: 0, parent: true })).toEqual({ isError: false, text: at })
+      expect(await tool(token, 'zoom', { id: 2, parent: true })).toEqual({
+        isError: true,
+        text: 'No message 2; this chat has messages 0 to 1',
+      })
+      expect((await tool(token, 'zoom', { id: 0, n: 4, parent: true })).text).toBe('0+2|user: build it talk: on it')
+      expect((await tool(token, 'zoom', { id: 0 })).text).toMatch(/\n\ngo$/)
+      expect(await tool(grant('cccc0001'), 'zoom', { id: 0, parent: true })).toEqual({
+        isError: true,
+        text: "Only a subagent can read its parent chat's memory",
       })
     })
   })

@@ -7,28 +7,42 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
+import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, SUMMARY_MODELS, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
+  COMPACT_MIN_CHARS,
+  COMPLETE_TIMEOUT_MS,
+  MEMORY_INSTRUCTIONS,
+  MESSAGE_MAX_CHARS,
+  messagesOf,
+  openSummaries,
+  pendingOf,
+} from './memory.ts'
+import {
   DEFAULT_SUBAGENT_LIMIT,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
   WORKSHOP_NAME,
   type Adapter,
+  type ImageInput,
   type ChatEntry,
   type ChatState,
+  type CompleteOptions,
   type CoreMessage,
   type EngineEvent,
   type SessionOptions,
-} from './types.ts'
+} from './shared.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
-const otherModel = FAKE_MODELS.find((m) => m.id !== FAKE_DEFAULTS.defaultModel)!.id
+const otherModel = FAKE_MODELS.find((m) => m !== FAKE_DEFAULTS.defaultModel)!
 const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
 
 const textScript: FakeStep[] = [
@@ -52,7 +66,13 @@ const permissionScript: FakeStep[] = [
 ]
 
 function recording(adapter: Adapter) {
-  const calls: { options: SessionOptions; prompt?: string; interrupted?: boolean; closed: boolean }[] = []
+  const calls: {
+    options: SessionOptions
+    prompt?: string
+    images?: ImageInput[]
+    interrupted?: boolean
+    closed: boolean
+  }[] = []
   const wrapped: Adapter = {
     ...adapter,
     start(machine, options, emit) {
@@ -61,9 +81,10 @@ function recording(adapter: Adapter) {
       const session = adapter.start(machine, options, emit)
       return {
         ...session,
-        prompt(text) {
+        prompt(text, images) {
           call.prompt = text
-          session.prompt(text)
+          call.images = images
+          session.prompt(text, images)
         },
         interrupt() {
           call.interrupted = true
@@ -83,7 +104,7 @@ let dirs: string[] = []
 let cores: Core[] = []
 
 function tempDir() {
-  const dir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
   dirs.push(dir)
   return dir
 }
@@ -506,23 +527,27 @@ describe('chat', () => {
     expect(t.calls[0]?.prompt).toBe('first question')
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second question' })
-    const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt).toContain('first question')
-    expect(prompt).toContain('Done')
-    expect(prompt).toMatch(/Bash.*touch x/)
-    expect(prompt.trimEnd().endsWith('second question')).toBe(true)
-    expect(prompt.indexOf('first question')).toBeLessThan(prompt.indexOf('Done'))
-
-    expect(prompt).toContain('<tool_result status="ok">\ncreated\n</tool_result>')
+    expect(t.calls[1]?.prompt).toBe(
+      [
+        'This is the conversation so far:',
+        '<message id="0" kind="user">\nfirst question\n</message>',
+        '<message id="1" kind="tool">\nBash {"command":"touch x"}\n</message>',
+        '<message id="2" kind="echo">\ncreated\n</message>',
+        '<message id="3" kind="talk">\nDone\n</message>',
+        'New message from the user:',
+        'second question',
+      ].join('\n\n'),
+    )
 
     const instructions = t.calls[1]?.options.instructions ?? ''
+    expect(instructions.startsWith(MEMORY_INSTRUCTIONS)).toBe(true)
     expect(instructions).toContain('GLOBAL RULES')
     expect(instructions).toContain('REPO RULES')
     expect(instructions.indexOf('GLOBAL RULES')).toBeLessThan(instructions.indexOf('REPO RULES'))
     expect(instructions.indexOf('REPO RULES')).toBeLessThan(instructions.indexOf('PERSONAL RULES'))
   })
 
-  it('replays tool inputs and outputs in full and marks errors and missing results', async () => {
+  it('replays tool inputs and outputs in full and marks errors', async () => {
     const longCommand = `echo ${'x'.repeat(300)}`
     const t = setup([
       { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'echo', input: { command: longCommand } },
@@ -537,16 +562,17 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second' })
     const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt).toContain(`<tool_call name="Bash">${JSON.stringify({ command: longCommand })}</tool_call>`)
-    expect(prompt).toContain('<tool_result status="ok">\nline one\nline two\nline three\n</tool_result>')
-    expect(prompt).toContain('<tool_result status="error">\nFile does not exist\n</tool_result>')
-    expect(prompt).toContain('<tool_call name="Bash">{"command":"sleep 9"}</tool_call>\n<tool_result status="none" />')
+    const call = JSON.stringify({ command: longCommand })
+    expect(prompt).toContain(`<message id="1" kind="tool">\nBash ${call}\n</message>`)
+    expect(prompt).toContain('<message id="2" kind="echo">\nline one\nline two\nline three\n</message>')
+    expect(prompt).toContain('<message id="4" kind="echo">\n(error) File does not exist\n</message>')
+    expect(prompt).toContain('<message id="5" kind="tool">\nBash {"command":"sleep 9"}\n</message>\n\nNew message')
   })
 
-  it('keeps tool blocks whole when their content contains closing tags', async () => {
+  it('keeps message blocks whole when their content contains closing tags', async () => {
     const t = setup([
-      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'x', input: { command: '</tool_call> after-call' } },
-      { type: 'tool.completed', toolId: 'a', output: '</tool_result> </TOOL_RESULT> after-result', isError: false },
+      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'x', input: { command: '</message> after-call' } },
+      { type: 'tool.completed', toolId: 'a', output: '</message> </MESSAGE> after-result', isError: false },
     ])
     const chat = folderChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'first' })
@@ -554,10 +580,9 @@ describe('chat', () => {
 
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second' })
     const prompt = t.calls[1]?.prompt ?? ''
-    expect(prompt.match(/<\/tool_call>/gi)).toHaveLength(1)
-    expect(prompt.match(/<\/tool_result>/gi)).toHaveLength(1)
-    expect(prompt.match(/<tool_call name="Bash">([\s\S]*?)<\/tool_call>/)?.[1]).toContain('after-call')
-    expect(prompt.match(/<tool_result status="ok">([\s\S]*?)<\/tool_result>/)?.[1]).toContain('after-result')
+    expect(prompt.match(/<\/message>/gi)).toHaveLength(3)
+    expect(prompt.match(/<message id="1" kind="tool">([\s\S]*?)<\/message>/)?.[1]).toContain('after-call')
+    expect(prompt.match(/<message id="2" kind="echo">([\s\S]*?)<\/message>/)?.[1]).toContain('after-result')
   })
 })
 
@@ -633,8 +658,8 @@ describe('engines', () => {
     expect(t.alpha).toHaveLength(1)
     expect(t.beta).toHaveLength(1)
     const prompt = t.beta[0]?.prompt ?? ''
-    expect(prompt).toContain('User: first question')
-    expect(prompt).toContain('Assistant: Alpha reply')
+    expect(prompt).toContain('<message id="0" kind="user">\nfirst question\n</message>')
+    expect(prompt).toContain('<message id="1" kind="talk">\nAlpha reply\n</message>')
     expect(prompt.trimEnd().endsWith('second question')).toBe(true)
     const texts = entriesOf(t.core, chat.id).flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))
     expect(texts).toEqual(['Alpha reply', 'Beta reply'])
@@ -676,13 +701,13 @@ describe('engines', () => {
       /thinking level "nope"/,
     )
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0]!.id })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0]! })).toThrow(/turn/)
     expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
   })
 
   it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
     const alpha = createFakeAdapter([], 0)
-    const betaOffers = { models: FAKE_MODELS.filter((m) => m.id !== otherModel), thinking: FAKE_THINKING }
+    const betaOffers = { models: FAKE_MODELS.filter((m) => m !== otherModel), thinking: FAKE_THINKING }
     const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
@@ -692,7 +717,7 @@ describe('engines', () => {
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    const betaModel = betaOffers.models[0]!.id
+    const betaModel = betaOffers.models[0]!
     t.handle({ type: 'chat.setModel', chatId: 'main', model: betaModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: betaModel, thinking })
@@ -797,6 +822,52 @@ describe('settings', () => {
       { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ])
     expect(t.messages.filter((m) => m.type === 'engine.updated')).toHaveLength(2)
+  })
+
+  it('names and orders each engine\'s models, newest Claude first per provider, snapshots hidden', async () => {
+    const session = () => ({ prompt() {}, interrupt() {}, respond() {}, close() {} })
+    const listing = (id: string, models: string[], defaultModel: string): Adapter => ({
+      ...stubAdapter(session),
+      id,
+      detect: async () => ({ installed: true, signedIn: true, models, defaultModel }),
+    })
+    const prefixed = [
+      'openai/gpt-5',
+      'anthropic/claude-haiku-4-5',
+      'anthropic/claude-haiku-4-5-20251001',
+      'anthropic/claude-opus-4-8',
+      'anthropic/claude-haiku-5-5',
+      'anthropic/claude-fable-5',
+      'anthropic/claude-opus-5',
+      'anthropic/claude-opus-5-5',
+    ]
+    const engines = [
+      listing('pi', prefixed, 'anthropic/claude-haiku-4-5-20251001'),
+      listing('claude-code', ['claude-haiku-4-5', 'claude-opus-5-5', 'claude-sonnet-5'], 'claude-opus-5-5'),
+    ]
+    const t = open(tempDir(), engines, 'pi', TEST_STOP_GRACE_MS, [])
+    await t.core.refreshEngines()
+    const [pi, claude] = t.core.engines()
+    expect(pi).toMatchObject({
+      models: [
+        { id: 'openai/gpt-5', label: 'openai/gpt-5' },
+        { id: 'anthropic/claude-fable-5', label: 'Fable 5' },
+        { id: 'anthropic/claude-opus-5-5', label: 'Opus 5.5' },
+        { id: 'anthropic/claude-opus-5', label: 'Opus 5' },
+        { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
+        { id: 'anthropic/claude-haiku-5-5', label: 'Haiku 5.5' },
+        { id: 'anthropic/claude-haiku-4-5', label: 'Haiku 4.5' },
+      ],
+      defaultModel: 'openai/gpt-5',
+    })
+    expect(claude).toMatchObject({
+      models: [
+        { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+        { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+        { id: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+      ],
+      defaultModel: 'claude-opus-5-5',
+    })
   })
 })
 
@@ -910,6 +981,203 @@ describe('queue', () => {
   })
 })
 
+describe('attachments', () => {
+  const PNG = Buffer.from('89504e470d0a1a0a', 'hex')
+  const BIG_JPEG = Buffer.alloc(6 * 1024 * 1024)
+  const upload = (name: string, mimeType: string, bytes: Buffer | string) => ({
+    name,
+    mimeType,
+    base64: Buffer.from(bytes).toString('base64'),
+  })
+  const attachmentsDir = (t: { garage: string }, id: string) => join(t.garage, 'chats', id, 'attachments')
+  const sentAttachments = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [e.attachments ?? []] : []))
+
+  it('saves uploads as files in the chat folder, never clobbering, and logs them without their bytes', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({
+      type: 'chat.send',
+      chatId: chat.id,
+      text: 'look',
+      attachments: [
+        upload('image.png', 'image/png', PNG),
+        upload('image.png', 'image/png', 'second'),
+        upload('../.notes.txt', 'text/plain', 'hello'),
+      ],
+    })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const again = [upload('image.png', 'image/png', 'x')]
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'again', attachments: again })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+
+    expect(sentAttachments(t.core, chat.id)).toEqual([
+      [
+        { name: 'image.png', path: join(dir, 'image.png'), mimeType: 'image/png', size: PNG.length },
+        { name: 'image.png', path: join(dir, 'image-2.png'), mimeType: 'image/png', size: 6 },
+        { name: '../.notes.txt', path: join(dir, 'notes.txt'), mimeType: 'text/plain', size: 5 },
+      ],
+      [{ name: 'image.png', path: join(dir, 'image-3.png'), mimeType: 'image/png', size: 1 }],
+    ])
+    expect(readFileSync(join(dir, 'image.png'))).toEqual(PNG)
+    expect(readFileSync(join(dir, 'image-2.png'), 'utf8')).toBe('second')
+    expect(readFileSync(join(dir, 'notes.txt'), 'utf8')).toBe('hello')
+    expect(readFileSync(join(t.garage, 'chats', chat.id, 'log.jsonl'), 'utf8')).not.toContain('"base64"')
+  })
+
+  it('sends files with no text, and refuses a message with neither', async () => {
+    const t = setup(textScript)
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: '  ' })).toThrow('Message is empty')
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [] })).toThrow(
+      'Message is empty',
+    )
+    t.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(entriesOf(t.core, 'main')[0]).toMatchObject({ type: 'user.message', text: '' })
+    expect(existsSync(join(attachmentsDir(t, 'main'), 'a.txt'))).toBe(true)
+  })
+
+  it('refuses a file over the size cap, or files over the total for one message, saving nothing', () => {
+    const t = setup(textScript)
+    const huge = upload('huge.bin', 'application/octet-stream', Buffer.alloc(MAX_ATTACHMENT_BYTES + 1))
+    const send = (attachments: ReturnType<typeof upload>[]) =>
+      t.handle({ type: 'chat.send', chatId: 'main', text: 'hi', attachments })
+    expect(() => send([upload('ok.txt', 'text/plain', 'ok'), huge])).toThrow(`huge.bin is larger than`)
+    const big = upload('big.bin', 'application/octet-stream', Buffer.alloc(MAX_ATTACHMENT_BYTES))
+    const count = Math.floor(MAX_ATTACHMENTS_TOTAL_BYTES / MAX_ATTACHMENT_BYTES) + 1
+    expect(() => send(Array(count).fill(big))).toThrow('at most')
+    expect(existsSync(attachmentsDir(t, 'main'))).toBe(false)
+    expect(t.calls).toEqual([])
+  })
+
+  it('lists every file by path in the prompt and sends every supported image as image input', async () => {
+    const t = setup(textScript)
+    t.handle({
+      type: 'chat.send',
+      chatId: 'main',
+      text: 'what is this?',
+      attachments: [
+        upload('shot.png', 'image/png', PNG),
+        upload('big.jpg', 'image/jpeg', BIG_JPEG),
+        upload('report.pdf', 'application/pdf', '%PDF'),
+        upload('icon.svg', 'image/svg+xml', '<svg/>'),
+      ],
+    })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const dir = attachmentsDir(t, 'main')
+    expect(t.calls[0]?.prompt).toBe(
+      'what is this?\n\nAttached files:\n' +
+        `- ${dir}/shot.png (image/png)\n- ${dir}/big.jpg (image/jpeg)\n` +
+        `- ${dir}/report.pdf (application/pdf)\n- ${dir}/icon.svg (image/svg+xml)`,
+    )
+    expect(t.calls[0]?.images).toEqual([
+      { mimeType: 'image/png', base64: PNG.toString('base64') },
+      { mimeType: 'image/jpeg', base64: BIG_JPEG.toString('base64') },
+    ])
+
+    const blind = setup({ ...createFakeAdapter(textScript, 0), imageInput: false })
+    blind.handle({ type: 'chat.send', chatId: 'main', text: '', attachments: [upload('a.png', 'image/png', PNG)] })
+    await until(() => statusOf(blind.core, 'main') === 'idle')
+    expect(blind.calls[0]?.prompt).toBe(`Attached files:\n- ${attachmentsDir(blind, 'main')}/a.png (image/png)`)
+    expect(blind.calls[0]?.images).toEqual([])
+  })
+
+  it('replays earlier files as paths only, sending images only with their own turn', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'first', attachments: [upload('one.png', 'image/png', PNG)] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'second', attachments: [upload('two.png', 'image/png', 'b')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const prompt = t.calls[1]?.prompt ?? ''
+    expect(prompt).toContain(`kind="user">\nfirst\n\nAttached files:\n- ${dir}/one.png (image/png)\n</message>`)
+    expect(prompt.endsWith(`second\n\nAttached files:\n- ${dir}/two.png (image/png)`)).toBe(true)
+    expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: Buffer.from('b').toString('base64') }])
+  })
+
+  it("gives the engine the chat's own attachments folder once it exists, and never a parent's", async () => {
+    const t = setup(textScript)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[0]?.options.extraDirs).toBeUndefined()
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'see', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'again' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[1]?.options.extraDirs).toEqual([attachmentsDir(t, 'main')])
+    expect(t.calls[2]?.options.extraDirs).toEqual([attachmentsDir(t, 'main')])
+
+    const child = createChat(t, { name: 'Child' })
+    t.handle({ type: 'chat.send', chatId: child.id, text: 'hi' })
+    await until(() => statusOf(t.core, child.id) === 'idle')
+    expect(t.calls[3]?.options.extraDirs).toBeUndefined()
+    expect(t.calls[3]?.prompt).not.toContain('a.txt')
+  })
+
+  it('saves files sent during a turn at once, sends them with the queue, and deletes an unqueued one', async () => {
+    const t = setup(permissionScript)
+    const chat = folderChat(t)
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'two', attachments: [upload('two.png', 'image/png', PNG)] })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments: [upload('three.txt', 'text/plain', '3')] })
+    expect(readFileSync(join(dir, 'two.png'))).toEqual(PNG)
+    const queue = chatOf(t.core, chat.id)?.queue ?? []
+    expect(queue.map((q) => q.attachments?.map((a) => a.path))).toEqual([
+      [join(dir, 'two.png')],
+      [join(dir, 'three.txt')],
+    ])
+    t.handle({ type: 'chat.unqueue', chatId: chat.id, id: queue[1]!.id })
+    expect(existsSync(join(dir, 'three.txt'))).toBe(false)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'four', attachments: [upload('four.txt', 'text/plain', '4')] })
+
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => sentAttachments(t.core, chat.id).length === 2)
+
+    const merged = entriesOf(t.core, chat.id).findLast((e) => e.type === 'user.message')
+    expect(merged).toMatchObject({ text: 'two\n\nfour' })
+    expect(sentAttachments(t.core, chat.id)[1]?.map((a) => a.path)).toEqual([
+      join(dir, 'two.png'),
+      join(dir, 'four.txt'),
+    ])
+    expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: PNG.toString('base64') }])
+  })
+
+  it('pins a sent file to the context by its saved path, even in a garage reached through a symlink', async () => {
+    const garage = join(tempDir(), 'garage')
+    symlinkSync(tempDir(), garage)
+    const t = setup(textScript, garage)
+    const chat = createChat(t, { name: 'App' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments: [upload('notes.md', 'text/markdown', 'N')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const path = sentAttachments(t.core, chat.id)[0]![0]!.path
+
+    t.handle({ type: 'context.add', chatId: chat.id, section: 'files', path })
+    expect(chatOf(t.core, chat.id)?.files).toEqual([path])
+    t.handle({ type: 'context.remove', chatId: chat.id, section: 'files', path })
+    expect(chatOf(t.core, chat.id)?.files).toEqual([])
+  })
+
+  it('keeps no files from a refused message, and deletes them with the chat', async () => {
+    const t = setup(textScript)
+    const chat = createChat(t, { name: 'Old' })
+    const dir = attachmentsDir(t, chat.id)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi', attachments: [upload('a.txt', 'text/plain', 'a')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.archive', chatId: chat.id, archived: true })
+    const attachments = [upload('b.txt', 'text/plain', 'b')]
+    expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi', attachments })).toThrow('archived')
+    expect(existsSync(join(dir, 'b.txt'))).toBe(false)
+    t.handle({ type: 'chat.delete', chatId: chat.id })
+    expect(existsSync(dir)).toBe(false)
+  })
+})
+
 describe('interrupt', () => {
   const ignoresInterrupt = (onInterrupt: (emit: (event: EngineEvent) => void) => void = () => {}) =>
     stubAdapter((_machine, _options, emit) => ({
@@ -980,6 +1248,166 @@ describe('interrupt', () => {
     expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'turn.completed')).toHaveLength(1)
   })
 
+})
+
+describe('memory', () => {
+  const longReply = (id: number) => `reply ${id} `.padEnd((MESSAGE_MAX_CHARS * 3) / 4, '.')
+
+  function writeLog(garage: string, chatId: string, count: number) {
+    const dir = join(garage, 'chats', chatId)
+    mkdirSync(dir, { recursive: true })
+    const entries: ChatEntry[] = Array.from({ length: count }, (_, i) =>
+      i % 2 ? { at, type: 'text.completed', text: longReply(i) } : { at, type: 'user.message', text: `question ${i}` },
+    )
+    writeFileSync(join(dir, 'log.jsonl'), entries.map((e) => JSON.stringify(e) + '\n').join(''))
+  }
+
+  function setupMemory(
+    options: {
+      garage?: string
+      script?: FakeStep[]
+      complete?: Adapter['complete']
+      others?: Adapter[]
+      models?: string[]
+    } = {},
+  ) {
+    const { garage = tempDir(), script = textScript, others = [] } = options
+    const models = options.models ?? [...FAKE_MODELS, SUMMARY_MODELS[0]!]
+    const plain = createFakeAdapter(script, 0)
+    const fake: Adapter = { ...plain, detect: async (machine) => ({ ...(await plain.detect(machine)), models }) }
+    const completions: CompleteOptions[] = []
+    const complete = options.complete ?? fake.complete!
+    const { adapter, calls } = recording({
+      ...fake,
+      complete(machine, request) {
+        completions.push(request)
+        return complete(machine, request)
+      },
+    })
+    const adapters = [...others, adapter]
+    const core = openCore({ garage, adapters, defaultEngine: 'fake', machine: localMachine, compactDebounceMs: 0 })
+    cores.push(core)
+    for (const { id } of adapters) core.handle({ type: 'engine.setEnabled', engine: id, enabled: true }, () => {})
+    const messages: CoreMessage[] = []
+    core.onMessage((m) => messages.push(m))
+    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
+    return { core, garage, calls, completions, messages, handle }
+  }
+
+  const summarized = (t: { core: Core; garage: string }, chatId: string) =>
+    pendingOf(messagesOf(entriesOf(t.core, chatId)), openSummaries(join(t.garage, 'chats', chatId, 'summaries.jsonl')))
+      .length === 0
+
+  it('gives every chat the memory instructions after the role instructions', async () => {
+    const t = setupMemory()
+    writeFileSync(join(t.garage, 'AGENTS.md'), 'RULES')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    expect(t.calls[0]?.options.instructions).toBe([HOME_INSTRUCTIONS, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+    const chat = createChat({ ...t, replies: [] }, { name: 'App' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+    expect(t.calls[1]?.options.instructions).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+  })
+
+  it('summarizes a backlog once engines are detected, and the next prompt shows the summary lines', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({ garage })
+    expect(t.completions).toHaveLength(0)
+    await t.core.refreshEngines()
+    await until(() => summarized(t, 'main'))
+
+    expect(t.completions[0]).toMatchObject({
+      cwd: join(t.garage, 'home'),
+      model: SUMMARY_MODELS[0],
+      timeoutMs: COMPLETE_TIMEOUT_MS,
+    })
+    expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'next' })
+    const prompt = t.calls[0]?.prompt ?? ''
+    expect(prompt).toContain('\n0+1|user: question 0\n1+1|talk: summary of 1+1\n')
+    expect(prompt).toContain('<message id="39" kind="talk">')
+    expect(prompt.endsWith('New message from the user:\n\nnext')).toBe(true)
+  })
+
+  it('summarizes after a turn ends, but only once the messages pass COMPACT_MIN_CHARS', async () => {
+    const reply = 'r'.repeat(COMPACT_MIN_CHARS / 4 - 'q'.length)
+    const t = setupMemory({ script: [{ type: 'text.completed', text: reply }] })
+    await t.core.refreshEngines()
+    for (let i = 0; i < 4; i++) {
+      t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+      await until(() => statusOf(t.core, 'main') === 'idle')
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(t.completions).toHaveLength(0)
+
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    await until(() => t.completions.length > 0 && summarized(t, 'main'))
+  })
+
+  it('never makes a turn wait for summaries, and quits with a summary call still out', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({ garage, complete: () => new Promise<string>(() => {}) })
+    await t.core.refreshEngines()
+    await until(() => t.completions.length === 1)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    expect(t.calls).toHaveLength(1)
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    await t.core.close()
+    expect(t.completions).toHaveLength(1)
+  })
+
+  it('writes summaries with the first listed model an engine that is on offers, with or without a provider', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const models = [`x/${SUMMARY_MODELS[1]}`, `x/${SUMMARY_MODELS[0]}`, ...FAKE_MODELS]
+    const offersNone = stubAdapter(() => ({ prompt() {}, interrupt() {}, respond() {}, close() {} }))
+    const t = setupMemory({ garage, models, others: [offersNone] })
+    await t.core.refreshEngines()
+    await until(() => t.completions.length > 0)
+    expect(t.completions[0]?.model).toBe(`x/${SUMMARY_MODELS[0]}`)
+  })
+
+  it('shows one error when summaries fail', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({
+      garage,
+      complete: async () => {
+        throw new Error('usage limit reached')
+      },
+    })
+    await t.core.refreshEngines()
+    await until(() => t.messages.some((m) => m.type === 'error'))
+    expect(t.messages.filter((m) => m.type === 'error')).toEqual([
+      { type: 'error', message: 'Memory summaries are failing: usage limit reached. Retrying.' },
+    ])
+  })
+
+  it('uses the summary engine and model that are set, saved in settings.json', async () => {
+    const cannot = stubAdapter(() => {
+      throw new Error('never started')
+    })
+    const script: FakeStep[] = [{ type: 'text.completed', text: 'r'.repeat(COMPACT_MIN_CHARS) }]
+    const t = setupMemory({ script, others: [cannot] })
+    await t.core.refreshEngines()
+    expect(() => t.handle({ type: 'memory.set', engine: 'stub' })).toThrow(/can't write summaries/)
+    expect(() => t.handle({ type: 'memory.set', engine: 'fake', model: 'nope' })).toThrow(/offers no model "nope"/)
+    expect(() => t.handle({ type: 'memory.set', model: otherModel })).toThrow(/engine/)
+    expect(t.core.memory()).toEqual({})
+
+    t.handle({ type: 'memory.set', engine: 'fake', model: otherModel })
+    const memory = { engine: 'fake', model: otherModel }
+    expect(t.messages.at(-1)).toEqual({ type: 'memory.updated', memory })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).memory).toEqual(memory)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
+    await until(() => t.completions.length > 0 && summarized(t, 'main'))
+    expect(new Set(t.completions.map((c) => c.model))).toEqual(new Set([otherModel]))
+
+    t.handle({ type: 'memory.set' })
+    expect(t.core.memory()).toEqual({})
+  })
 })
 
 describe('quit', () => {
@@ -1307,6 +1735,9 @@ describe('context', () => {
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
     (await sessionOf(t, chatId)).instructions
+      .split('\n\n')
+      .filter((part) => part !== MEMORY_INSTRUCTIONS)
+      .join('\n\n')
   const reopenWithSubagent = (t: ReturnType<typeof setup>, parentId: string) => {
     t.core.close()
     const id = 'subagent'
@@ -1382,6 +1813,43 @@ describe('context', () => {
     expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
     expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: b })
     expect(await sessionOf(t, 'main')).toMatchObject({ cwd: home })
+  })
+
+  it('gives a file that is not text by path with read access, never pasted, down to the subagents', async () => {
+    const first = setup(textScript)
+    const chat = createChat(first, { name: 'App' })
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+    const attachments = [
+      { name: 'shot.png', mimeType: 'image/png', base64: png.toString('base64') },
+      { name: 'notes.md', mimeType: 'text/markdown', base64: Buffer.from('NOTES').toString('base64') },
+    ]
+    first.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments })
+    await until(() => statusOf(first.core, chat.id) === 'idle')
+    const sent = entriesOf(first.core, chat.id)[0]
+    if (sent?.type !== 'user.message') throw new Error('no message')
+    const [image, notes] = (sent.attachments ?? []).map((a) => a.path) as [string, string]
+    add(first, chat.id, 'files', image)
+    add(first, chat.id, 'files', notes)
+    const { t, subagentId } = reopenWithSubagent(first, chat.id)
+
+    expect(itemsOf(t, subagentId).filter((item) => item.section === 'files')).toEqual([
+      { section: 'files', path: image, from: chat.id, enabled: true, text: '', binary: true },
+      { section: 'files', path: notes, from: chat.id, enabled: true, text: 'NOTES' },
+    ])
+    const byPath = `The file ${image} is not text, so it isn't pasted here. Open it with your tools when you need it.`
+    const own = await sessionOf(t, chat.id)
+    const before = t.calls.length
+    await sessionOf(t, subagentId)
+    const subagent = t.calls[before]!.options
+    for (const options of [own, subagent]) {
+      const file = `<file path="${notes}">\nNOTES\n</file>`
+      expect(options.instructions).toBe([MEMORY_INSTRUCTIONS, byPath, file].join('\n\n'))
+      expect(options.readFiles).toEqual([image])
+    }
+    expect(subagent).not.toHaveProperty('extraDirs')
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'context.set', chatId: chat.id, path: image, enabled: false })
+    expect(await sessionOf(t, chat.id)).not.toHaveProperty('readFiles')
   })
 
   it('adds and removes folders and files, checking each path, and tells the chat and the chats below it', () => {
@@ -1515,7 +1983,7 @@ describe('context', () => {
 })
 
 describe('models', () => {
-  const [newest, older] = FAKE_MODELS.map((m) => m.id) as [string, string]
+  const [newest, older] = FAKE_MODELS as [string, string]
   const { defaultModel, defaultThinking } = FAKE_DEFAULTS
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {

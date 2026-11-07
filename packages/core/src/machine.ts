@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import type { EngineProcess, Machine } from './types.ts'
+import type { EngineProcess, Machine } from './shared.ts'
 
 type SpawnOptions = { cwd: string; env?: Record<string, string> }
 
@@ -103,7 +103,8 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     }
   }
 
-  function run(command: string, args: string[], options: SpawnOptions & { input?: string }) {
+  function run(command: string, args: string[], options: SpawnOptions & { input?: string; timeoutMs?: number }) {
+    const timeoutMs = options.timeoutMs ?? runTimeoutMs
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawnProcess(command, args, options)
       let stdout = ''
@@ -111,12 +112,12 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
       const timeout = setTimeout(() => {
         timedOut = true
         child.kill()
-      }, runTimeoutMs)
+      }, timeoutMs)
       child.onStdout((chunk) => (stdout += chunk))
       child.onExit((code, stderr) => {
         clearTimeout(timeout)
         if (!timedOut) return resolve({ code, stdout, stderr })
-        resolve({ code: null, stdout, stderr: `${stderr}${command} timed out after ${runTimeoutMs}ms` })
+        resolve({ code: null, stdout, stderr: `${stderr}${command} timed out after ${timeoutMs}ms` })
       })
       if (options.input) child.write(options.input)
       child.closeStdin()

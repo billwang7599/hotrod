@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import type { EngineEvent, SessionOptions } from '../types.ts'
+import { type EngineEvent, type SessionOptions } from '../shared.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -74,6 +74,17 @@ describe('pi adapter', () => {
       { type: 'text.completed', text: 'Hello there' },
       { type: 'turn.completed' },
     ])
+  })
+
+  it('adds images to the prompt command, and says it takes image input', () => {
+    const { fake, session } = startSession()
+    session.prompt('What is this?', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    session.prompt('And this?', [])
+    expect(fake.sent()).toEqual([
+      { type: 'prompt', message: 'What is this?', images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }] },
+      { type: 'prompt', message: 'And this?' },
+    ])
+    expect(pi.imageInput).toBe(true)
   })
 
   it('runs a tool without asking and reports its output', () => {
@@ -276,6 +287,42 @@ describe('pi adapter', () => {
   })
 })
 
+describe('pi.complete', () => {
+  const request = { cwd: '/tmp/home', system: 'Summarize.', prompt: 'the items', schema: {}, model: 'anthropic/x', timeoutMs: 1234 }
+
+  it('prints one clean reply with no tools and no thinking, prompt on stdin', async () => {
+    const fake = fakeMachine({ pi: { code: 0, stdout: '{"summaries":[]}\n', stderr: '' } })
+    expect(await pi.complete!(fake.machine, request)).toBe('{"summaries":[]}\n')
+    expect(fake.ran).toEqual([
+      {
+        command: 'pi',
+        args: [
+          '-p',
+          '--no-session',
+          '--no-extensions',
+          '--no-skills',
+          '--no-prompt-templates',
+          '--no-mcp',
+          '--no-context-files',
+          '--no-approve',
+          '--no-tools',
+          '--offline',
+          '--model', 'anthropic/x',
+          '--thinking', 'off',
+          '--system-prompt', 'Summarize.',
+        ],
+        input: 'the items',
+        timeoutMs: request.timeoutMs,
+      },
+    ])
+  })
+
+  it('fails with what pi said', async () => {
+    const fake = fakeMachine({ pi: { code: 1, stdout: '', stderr: 'No API key for anthropic' } })
+    await expect(pi.complete!(fake.machine, request)).rejects.toThrow('No API key for anthropic')
+  })
+})
+
 describe('pi.detect', () => {
   const version = { code: 0, stdout: '1.5.0\n', stderr: '' }
 
@@ -302,7 +349,7 @@ describe('pi.detect', () => {
     stderr: '',
   })
 
-  it('asks pi over RPC for its models and the model and thinking level it starts on with no flags', async () => {
+  it('asks pi over RPC for its model ids, as listed, and the model and thinking level it starts on', async () => {
     const fake = fakeMachine({
       'pi --version': version,
       [rpc]: answers(listed, ['anthropic', 'claude-haiku-5-5'], 'xhigh'),
@@ -311,12 +358,7 @@ describe('pi.detect', () => {
       installed: true,
       signedIn: true,
       detail: '1.5.0',
-      models: [
-        { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
-        { id: 'anthropic/claude-haiku-5-5', label: 'Haiku 5.5' },
-        { id: 'anthropic/claude-haiku-4-5', label: 'Haiku 4.5' },
-        { id: 'openai/gpt-5', label: 'openai/gpt-5' },
-      ],
+      models: listed.map(([provider, id]) => `${provider}/${id}`),
       thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
       defaultModel: 'anthropic/claude-haiku-5-5',
       defaultThinking: 'xhigh',
@@ -328,15 +370,11 @@ describe('pi.detect', () => {
     ])
   })
 
-  it('falls back to the first model when pi would start on one it hides', async () => {
-    const fake = fakeMachine({
-      'pi --version': version,
-      [rpc]: answers(listed, ['anthropic', 'claude-haiku-4-5-20251001'], 'medium'),
-    })
-    expect(await pi.detect(fake.machine)).toMatchObject({
-      defaultModel: 'anthropic/claude-opus-4-8',
-      defaultThinking: 'medium',
-    })
+  it('leaves out a start model pi does not list', async () => {
+    const fake = fakeMachine({ 'pi --version': version, [rpc]: answers(listed, ['anthropic', 'gone'], 'medium') })
+    const detected = await pi.detect(fake.machine)
+    expect(detected).toMatchObject({ defaultThinking: 'medium' })
+    expect(detected.defaultModel).toBeUndefined()
   })
 
   it('reports signed out when pi has no models', async () => {

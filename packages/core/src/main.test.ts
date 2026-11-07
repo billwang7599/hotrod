@@ -6,7 +6,7 @@ import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { startCore } from './main.ts'
-import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './shared.ts'
 
 const port = 4451
 const adapters: Adapter[] = [

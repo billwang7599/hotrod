@@ -1,5 +1,4 @@
-import type { AccountStatus, Adapter, Machine, ToolKind } from '../types.ts'
-import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
+import { type AccountStatus, type Adapter, type Machine, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -21,12 +20,38 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   fetch: ['url', 'query'],
 }
 
-const MODELS = CLAUDE_MODELS.map((id) => ({ id, label: claudeLabel(id) ?? id }))
+// Claude Code has no list command, so these are the ids it accepts.
+const MODELS = [
+  'claude-fable-5-1',
+  'claude-fable-5',
+  'claude-opus-5-5',
+  'claude-opus-5',
+  'claude-opus-4-8',
+  'claude-opus-4-7',
+  'claude-opus-4-6',
+  'claude-opus-4-5',
+  'claude-sonnet-5-5',
+  'claude-sonnet-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-4-5',
+  'claude-haiku-5-5',
+  'claude-haiku-4-5',
+]
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
 const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
 
+const CLEAN_ARGS = [
+  '--no-session-persistence',
+  '--setting-sources', '',
+  '--strict-mcp-config',
+  '--disable-slash-commands',
+  '--settings', '{"autoMemoryEnabled":false}',
+]
+
 const OUTPUT_TAIL_CHARS = 2000
+// Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
+export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024
 // The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
 const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
@@ -55,13 +80,17 @@ function summarize(kind: ToolKind, input: any): string {
 
 export const claudeCode: Adapter = {
   id: 'claude-code',
+  imageInput: true,
+  hotrodMcp: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
     const version = await machine.run('claude', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
-    return { installed: true, signedIn, detail: version.stdout.trim(), models: MODELS, thinking: EFFORTS, ...DEFAULTS }
+    const detail = version.stdout.trim()
+    const offers = { models: MODELS, thinking: EFFORTS, ...DEFAULTS }
+    return { installed: true, signedIn, detail, ...offers }
   },
 
   accounts: {
@@ -99,7 +128,24 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], model, thinking }, emit) {
+  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey }) {
+    const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
+    args.push('--system-prompt', system)
+    if (schema) args.push('--json-schema', JSON.stringify(schema))
+    const options = { cwd, input: prompt, timeoutMs, ...accountEnv(accountDir, apiKey) }
+    const { code, stdout, stderr } = await machine.run('claude', args, options)
+    let reply: any
+    try {
+      reply = JSON.parse(stdout)
+    } catch {}
+    if (code !== 0 || !reply || reply.is_error) {
+      throw new Error(reply?.result || stderr.trim() || `Claude Code exited with code ${code}`)
+    }
+    return reply.structured_output === undefined ? String(reply.result ?? '') : JSON.stringify(reply.structured_output)
+  },
+
+  start(machine, options, emit) {
+    const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking } = options
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -107,11 +153,7 @@ export const claudeCode: Adapter = {
       '--verbose',
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
-      '--no-session-persistence',
-      '--setting-sources', '',
-      '--strict-mcp-config',
-      '--disable-slash-commands',
-      '--settings', '{"autoMemoryEnabled":false}',
+      ...CLEAN_ARGS,
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
     ]
@@ -119,13 +161,17 @@ export const claudeCode: Adapter = {
     if (thinking) args.push('--effort', thinking)
     for (const dir of extraDirs) args.push('--add-dir', dir)
     const env = accountEnv(accountDir, apiKey).env ?? {}
+    // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
+    const allowed = readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`)
     if (hotrodMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
       const headers = { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }
       const config = { mcpServers: { hotrod: { type: 'http', url: hotrodMcp.url, headers } } }
-      args.push('--mcp-config', JSON.stringify(config), '--allowedTools', 'mcp__hotrod__*')
+      args.push('--mcp-config', JSON.stringify(config))
+      allowed.unshift('mcp__hotrod__*')
       env.HOTROD_MCP_TOKEN = hotrodMcp.token
     }
+    if (allowed.length) args.push('--allowedTools', ...allowed)
     if (instructions) args.push('--append-system-prompt', instructions)
     const proc = machine.spawn('claude', args, { cwd, ...(Object.keys(env).length && { env }) })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
@@ -220,8 +266,12 @@ export const claudeCode: Adapter = {
     })
 
     return {
-      prompt(text) {
-        send({ type: 'user', message: { role: 'user', content: text } })
+      prompt(text, images = []) {
+        const blocks = images
+          .filter(({ base64 }) => base64.length <= MAX_IMAGE_BASE64_CHARS)
+          .map(({ mimeType, base64 }) => ({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }))
+        const content = blocks.length ? [{ type: 'text', text }, ...blocks] : text
+        send({ type: 'user', message: { role: 'user', content } })
         emit({ type: 'turn.started' })
       },
       interrupt() {

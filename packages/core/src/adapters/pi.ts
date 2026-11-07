@@ -1,5 +1,4 @@
-import type { Adapter, ToolKind } from '../types.ts'
-import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
+import { type Adapter, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -21,8 +20,7 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
 
 const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
-const RPC_ARGS = [
-  '--mode', 'rpc',
+const CLEAN_ARGS = [
   '--no-session',
   '--no-extensions',
   '--no-skills',
@@ -31,6 +29,8 @@ const RPC_ARGS = [
   '--no-context-files',
   '--no-approve',
 ]
+
+const RPC_ARGS = ['--mode', 'rpc', ...CLEAN_ARGS]
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
@@ -44,6 +44,7 @@ const textOf = (content: any): string =>
 
 export const pi: Adapter = {
   id: 'pi',
+  imageInput: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
@@ -58,23 +59,12 @@ export const pi: Adapter = {
         if (msg.type === 'response' && msg.success) answers[msg.command] = msg.data
       } catch {}
     }
-    const rows = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
-      provider && id && !/-\d{8}$/.test(id) ? [{ provider: String(provider), model: String(id) }] : [],
+    const models = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
+      provider && id ? [`${provider}/${id}`] : [],
     )
-    const providers = [...new Set(rows.map((row) => row.provider))]
-    const rank = (model: string) => {
-      const index = CLAUDE_MODELS.indexOf(model)
-      return index < 0 ? CLAUDE_MODELS.length : index
-    }
-    const models = rows
-      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || rank(a.model) - rank(b.model))
-      .map(({ provider, model }) => {
-        const id = `${provider}/${model}`
-        return { id, label: claudeLabel(model) ?? id }
-      })
     const { model: started, thinkingLevel } = answers.get_state ?? {}
     const startedId = `${started?.provider}/${started?.id}`
-    const defaultModel = models.some((m) => m.id === startedId) ? startedId : models[0]?.id
+    const defaultModel = models.includes(startedId) ? startedId : undefined
     return {
       installed: true,
       signedIn: models.length > 0,
@@ -84,6 +74,15 @@ export const pi: Adapter = {
       ...(defaultModel && { defaultModel }),
       ...(THINKING.includes(thinkingLevel) && { defaultThinking: thinkingLevel }),
     }
+  },
+
+  async complete(machine, { cwd, system, prompt, model, timeoutMs }) {
+    const args = ['-p', ...CLEAN_ARGS, '--no-tools', '--offline', '--model', model, '--thinking', 'off']
+    args.push('--system-prompt', system)
+    const options = { cwd, input: prompt, timeoutMs }
+    const { code, stdout, stderr } = await machine.run('pi', args, options)
+    if (code !== 0) throw new Error(stderr.trim() || `pi exited with code ${code}`)
+    return stdout
   },
 
   start(machine, { cwd, instructions, extraDirs = [], model, thinking }, emit) {
@@ -164,8 +163,9 @@ export const pi: Adapter = {
     })
 
     return {
-      prompt(text) {
-        send({ type: 'prompt', message: text })
+      prompt(text, images = []) {
+        const attached = images.map(({ mimeType, base64 }) => ({ type: 'image', data: base64, mimeType }))
+        send({ type: 'prompt', message: text, ...(attached.length && { images: attached }) })
         emit({ type: 'turn.started' })
       },
       interrupt() {

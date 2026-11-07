@@ -1,14 +1,30 @@
-import { useLayoutEffect, useRef, useState, type ComponentProps, type CSSProperties, type ReactNode } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type CSSProperties,
+  type DragEvent,
+  type ReactNode,
+} from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import type {
-  ChatStatus,
-  ClientMessage,
-  ContextItem,
-  ContextSection,
-  EngineAccounts,
-  EngineInfo,
-  ModelLists,
-} from '@hotrod/core/types'
+import { Dialog } from 'radix-ui'
+import {
+  IMAGE_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_TOTAL_BYTES,
+  type Attachment,
+  type ChatStatus,
+  type ClientMessage,
+  type ContextItem,
+  type ContextSection,
+  type EngineAccounts,
+  type EngineInfo,
+  type ModelLists,
+  type Upload,
+} from '@hotrod/core/shared'
+import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, SidePanel, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
@@ -17,8 +33,12 @@ import {
   accountLabel,
   columnSlider,
   engineOptions,
+  formatBytes,
   MAIN_CHAT_ID,
+  MAX_PREVIEW_BYTES,
   modelMenu,
+  pinState,
+  previewText,
   type ChatView,
   type Item,
 } from './state.ts'
@@ -50,6 +70,10 @@ const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: '
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
   'h-12 w-96 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
+const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
+const FILE_ACTION =
+  'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
+const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
 const SELECT_ARROW =
   'bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20fill=%27none%27%20stroke=%27%238b8e96%27%20stroke-width=%271.5%27/%3E%3C/svg%3E)]'
 
@@ -112,14 +136,231 @@ function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
   )
 }
 
-type ItemProps = { item: Item; chat: ChatView; connected: boolean; send: (m: ClientMessage) => void }
+type Pending = Upload & { id: string; size: number; preview?: string }
 
-function ItemView({ item, chat, connected, send }: ItemProps) {
+function PaperclipIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+      <path
+        d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l6-6a2.3 2.3 0 0 1 3.3 3.3l-6 6a1.2 1.2 0 0 1-1.7-1.7L10 4"
+        strokeWidth="1.4"
+      />
+    </svg>
+  )
+}
+
+function FileLabel({ name, size, actions }: { name: string; size: number; actions?: ReactNode }) {
+  return (
+    <span className="flex min-w-0 flex-col leading-[1.35]">
+      <span className="truncate text-ui">{name}</span>
+      <span className="grid text-sm text-faint *:col-start-1 *:row-start-1">
+        <span className="transition-opacity duration-150 group-focus-within/file:opacity-0 group-hover/file:opacity-0">
+          {formatBytes(size)}
+        </span>
+        {actions}
+      </span>
+    </span>
+  )
+}
+
+function PinIcon() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M5 1.5h6M6.5 1.5v4.5L3.5 9.5h9L9.5 6V1.5M8 9.5v5" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+type SentAttachmentProps = {
+  chat: ChatView
+  attachment: Attachment
+  contextItems?: ContextItem[]
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
+
+function SentAttachment({ chat, attachment, contextItems, connected, send }: SentAttachmentProps) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState<string | null>()
+  const { name, size, mimeType, path } = attachment
+  const url = attachmentUrl(coreUrl(import.meta.env, location, readToken('', sessionStorage)), chat.id, path)
+  const kind = IMAGE_TYPES.includes(mimeType) ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'file'
+  const pin = pinState(chat, contextItems, path)
+
+  useEffect(() => {
+    if (!open || kind !== 'file') return
+    const abort = new AbortController()
+    setText(undefined)
+    void (async () => {
+      try {
+        const response = await fetch(url, { signal: abort.signal })
+        if (!response.ok || !response.body) throw new Error(String(response.status))
+        const reader = response.body.getReader()
+        const chunks: Uint8Array<ArrayBuffer>[] = []
+        for (let total = 0; total < MAX_PREVIEW_BYTES; ) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          total += value.length
+        }
+        void reader.cancel()
+        setText(previewText(new Uint8Array(await new Blob(chunks).arrayBuffer())) ?? null)
+      } catch {
+        if (!abort.signal.aborted) setText(null)
+      }
+    })()
+    return () => abort.abort()
+  }, [open, kind, url])
+
+  const actions = (
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Trigger asChild>
+          <button className={FILE_ACTION} aria-label={`Open ${name}`} title="Preview">
+            Open
+          </button>
+        </Dialog.Trigger>
+        <AnimatePresence>
+          {open && (
+            <Dialog.Portal forceMount>
+              <Dialog.Overlay forceMount asChild>
+                <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+              </Dialog.Overlay>
+              <Dialog.Content forceMount asChild aria-describedby={undefined}>
+                <m.div
+                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-[10px] border bg-panel shadow"
+                  {...MOTION.pop}
+                >
+                  <header className="flex h-40 shrink-0 items-center gap-8 border-b pr-8 pl-12">
+                    <Dialog.Title className="min-w-0 flex-1 truncate font-semibold">{name}</Dialog.Title>
+                    <Dialog.Close asChild>
+                      <Button variant="ghost" size="icon" aria-label="Close">
+                        ×
+                      </Button>
+                    </Dialog.Close>
+                  </header>
+                  {kind === 'image' && (
+                    <img
+                      src={url}
+                      alt={name}
+                      className="mx-auto block max-h-[calc(100vh-74px)] max-w-[calc(100vw-34px)] object-contain"
+                    />
+                  )}
+                  {kind === 'pdf' && (
+                    <iframe src={url} title={name} className="h-[calc(100vh-74px)] w-[min(900px,calc(100vw-34px))]" />
+                  )}
+                  {kind === 'file' && (
+                    <>
+                      {typeof text === 'string' ? (
+                        <pre className="min-h-0 w-[min(880px,calc(100vw-34px))] flex-1 overflow-auto px-12 py-10 text-sm leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+                          {text}
+                        </pre>
+                      ) : (
+                        <p className="px-12 py-16 text-muted">
+                          {text === undefined ? 'Loading…' : 'No preview for this kind of file.'}
+                        </p>
+                      )}
+                      <div className="flex shrink-0 items-center gap-8 border-t py-8 pr-8 pl-12 text-sm text-muted">
+                        <span className="min-w-0 flex-1 truncate">
+                          {mimeType} · {formatBytes(size)}
+                          {typeof text === 'string' &&
+                            size > MAX_PREVIEW_BYTES &&
+                            ` · showing the first ${formatBytes(MAX_PREVIEW_BYTES)}`}
+                        </span>
+                        <a
+                          href={url}
+                          download={name}
+                          className="flex h-24 items-center rounded border bg-raised px-8 text-text hover:bg-hover"
+                        >
+                          Download
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </m.div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          )}
+        </AnimatePresence>
+      </Dialog.Root>
+      {pin && (
+        <button
+          className={FILE_ACTION}
+          disabled={!connected}
+          aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
+          title={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}
+          onClick={() =>
+            send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
+          }
+        >
+          {pin === 'pinned' ? 'Unpin' : 'Pin'}
+        </button>
+      )}
+    </>
+  )
+  return (
+    <div className="group/file relative">
+      {kind === 'image' ? (
+        <>
+          <img
+            src={url}
+            alt={name}
+            title={name}
+            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain"
+          />
+          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow ${REVEAL}`}>{actions}</span>
+        </>
+      ) : (
+        <div className={`${FILE_CHIP} h-40 bg-panel`} title={name}>
+          <FileLabel name={name} size={size} actions={<span className={`-ml-5 flex ${REVEAL}`}>{actions}</span>} />
+        </div>
+      )}
+      {pin === 'pinned' && (
+        <span
+          className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
+          role="img"
+          aria-label="Pinned to the context"
+          title="Pinned to this chat's context"
+        >
+          <PinIcon />
+        </span>
+      )}
+    </div>
+  )
+}
+
+type ItemProps = {
+  item: Item
+  chat: ChatView
+  contextItems?: ContextItem[]
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
+
+function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
   switch (item.kind) {
     case 'user':
       return (
-        <div className="max-w-[85%] self-end rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
-          {item.text}
+        <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
+          {item.attachments && (
+            <div className="flex flex-wrap justify-end gap-6">
+              {item.attachments.map((a) => (
+                <SentAttachment
+                  key={a.path}
+                  chat={chat}
+                  attachment={a}
+                  contextItems={contextItems}
+                  connected={connected}
+                  send={send}
+                />
+              ))}
+            </div>
+          )}
+          {item.text && (
+            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+              {item.text}
+            </div>
+          )}
         </div>
       )
     case 'text':
@@ -221,11 +462,18 @@ type ChatProps = {
   modelLists?: ModelLists
   columnPx: number
   setColumnPx: (px: number) => void
+  notify: (message: string) => void
 }
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings } = props
   const [text, setText] = useState('')
+  const [pending, setPending] = useState<Pending[]>([])
+  const pendingRef = useRef(pending)
+  pendingRef.current = pending
+  const fileInput = useRef<HTMLInputElement>(null)
+  const dragDepth = useRef(0)
+  const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
@@ -248,6 +496,12 @@ export function Chat(props: ChatProps) {
     return () => observer.disconnect()
   }, [])
 
+  useEffect(() => () => pendingRef.current.forEach((p) => p.preview && URL.revokeObjectURL(p.preview)), [])
+
+  useEffect(() => {
+    if (connected) send({ type: 'context.get', chatId: chat.id })
+  }, [chat.id, connected, props.contextDefaults, send])
+
   const archived = chat.archived
   const canChange = connected && chat.status === 'idle' && !archived
   const offers = engines.find((e) => e.id === chat.engine)
@@ -257,10 +511,50 @@ export function Chat(props: ChatProps) {
   const busy = chat.status !== 'idle'
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
+  const canAttach = canSend || canQueue
+  const hasContent = text.trim() !== '' || pending.length > 0
+  const unattach = (removed: Pending[]) => {
+    removed.forEach((p) => p.preview && URL.revokeObjectURL(p.preview))
+    setPending((list) => list.filter((p) => !removed.includes(p)))
+  }
+  const attach = async (files: File[]) => {
+    let totalBytes = pendingRef.current.reduce((sum, p) => sum + p.size, 0)
+    for (const file of files) {
+      const name = file.name || 'attachment'
+      try {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          const limit = formatBytes(MAX_ATTACHMENT_BYTES)
+          props.notify(`${name} is ${formatBytes(file.size)}. Attachments can be at most ${limit} each.`)
+          continue
+        }
+        if (totalBytes + file.size > MAX_ATTACHMENTS_TOTAL_BYTES) {
+          const limit = formatBytes(MAX_ATTACHMENTS_TOTAL_BYTES)
+          props.notify(`${name} doesn't fit: one message carries at most ${limit} of attachments. Send it in another.`)
+          continue
+        }
+        totalBytes += file.size
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result).replace(/^[^,]*,/, ''))
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(file)
+        })
+        const mimeType = file.type || 'application/octet-stream'
+        const preview = IMAGE_TYPES.includes(mimeType) ? URL.createObjectURL(file) : undefined
+        const added = { id: crypto.randomUUID(), name, mimeType, base64, size: file.size, preview }
+        setPending((list) => [...list, added])
+      } catch {
+        props.notify(`Could not read ${name}`)
+      }
+    }
+  }
+  const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files')
   const submit = () => {
-    if (!(canSend || canQueue) || !text.trim()) return
-    send({ type: 'chat.send', chatId: chat.id, text })
+    if (!canAttach || !hasContent) return
+    const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
+    send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
     setText('')
+    unattach(pending)
   }
   const interruptAndSend = async () => {
     if (!canQueue) return
@@ -280,7 +574,37 @@ export function Chat(props: ChatProps) {
 
   return (
     <div className="flex min-h-0 flex-1" style={{ '--column': `${props.columnPx}px` } as CSSProperties}>
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <main
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        onDragEnter={(e) => {
+          if (!carriesFiles(e)) return
+          dragDepth.current++
+          setDragging(true)
+        }}
+        onDragLeave={(e) => {
+          if (!carriesFiles(e) || --dragDepth.current > 0) return
+          setDragging(false)
+        }}
+        onDragOver={(e) => carriesFiles(e) && e.preventDefault()}
+        onDrop={(e) => {
+          if (!carriesFiles(e)) return
+          e.preventDefault()
+          dragDepth.current = 0
+          setDragging(false)
+          if (canAttach) void attach([...e.dataTransfer.files])
+        }}
+      >
+        <AnimatePresence>
+          {dragging && (
+            <m.div
+              key="drop"
+              className="pointer-events-none absolute inset-8 z-10 grid place-items-center rounded-lg border-2 border-dashed border-accent bg-bg/85 text-body text-muted"
+              {...MOTION.fade}
+            >
+              {canAttach ? 'Drop files to attach' : "Files can't be attached here right now"}
+            </m.div>
+          )}
+        </AnimatePresence>
         <header className="flex h-44 shrink-0 items-center gap-6 border-b px-12">
           <PanelToggle
             side="left"
@@ -362,7 +686,7 @@ export function Chat(props: ChatProps) {
                 initial={item.kind !== 'text' && enter}
                 animate={MOTION.rise.animate}
               >
-                <ItemView item={item} chat={chat} connected={connected} send={send} />
+                <ItemView item={item} chat={chat} contextItems={props.contextItems} connected={connected} send={send} />
               </m.div>
             ))}
             {chat.draft && (
@@ -408,8 +732,14 @@ export function Chat(props: ChatProps) {
                     {chat.queue.map((q) => (
                       <m.li key={q.id} {...MOTION.collapse}>
                         <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
-                          <span className="flex-1 truncate" title={q.text}>
-                            {q.text}
+                          <span className="flex min-w-0 flex-1 items-center gap-6" title={q.text}>
+                            {q.text && <span className="truncate">{q.text}</span>}
+                            {q.attachments && (
+                              <span className="flex min-w-0 shrink-0 items-center gap-4 text-faint last:shrink">
+                                <PaperclipIcon />
+                                <span className="truncate">{q.attachments.map((a) => a.name).join(', ')}</span>
+                              </span>
+                            )}
                           </span>
                           <Button
                             variant="ghost"
@@ -433,6 +763,29 @@ export function Chat(props: ChatProps) {
             <div
               className={`@container mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
             >
+              {pending.length > 0 && (
+                <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
+                  {pending.map((p) => (
+                    <li key={p.id} className="relative min-w-0">
+                      {p.preview ? (
+                        <img src={p.preview} alt={p.name} title={p.name} className="block size-48 rounded-lg border object-cover" />
+                      ) : (
+                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20`} title={p.name}>
+                          <FileLabel name={p.name} size={p.size} />
+                        </div>
+                      )}
+                      <button
+                        className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted hover:text-text"
+                        aria-label={`Remove ${p.name}`}
+                        title="Remove"
+                        onClick={() => unattach([p])}
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <textarea
                 className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
                 value={text}
@@ -440,17 +793,46 @@ export function Chat(props: ChatProps) {
                 placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}
                 disabled={!(canSend || canQueue)}
                 onChange={(e) => setText(e.target.value)}
+                onPaste={(e) => {
+                  const { types, files } = e.clipboardData
+                  if (types.includes('text/plain') || !files.length) return
+                  e.preventDefault()
+                  void attach([...files])
+                }}
                 onKeyDown={(e) => {
                   if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
                   e.preventDefault()
-                  const emptyWithQueue = !text.trim() && chat.queue.length > 0
+                  const emptyWithQueue = !hasContent && chat.queue.length > 0
                   if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
                   else submit()
                 }}
               />
-              <div className="flex flex-wrap items-center justify-end gap-x-8 gap-y-4 pr-6 pb-6 pl-12">
-                <span className="mr-auto min-w-0 truncate text-sm text-faint @max-[480px]:hidden">
-                  {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
+              <div className="flex flex-wrap items-center justify-end gap-x-8 gap-y-4 pr-6 pb-6 pl-6">
+                <span className="mr-auto flex min-w-0 items-center gap-6">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="grid shrink-0 place-items-center"
+                    aria-label="Attach files"
+                    title="Attach files, or paste or drop them here"
+                    disabled={!canAttach}
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    <PaperclipIcon />
+                  </Button>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      void attach([...(e.target.files ?? [])])
+                      e.target.value = ''
+                    }}
+                  />
+                  <span className="min-w-0 truncate text-sm text-faint @max-[480px]:hidden">
+                    {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
+                  </span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
                   {menu.model && (
@@ -485,7 +867,7 @@ export function Chat(props: ChatProps) {
                   )}
                   {busy ? (
                     <>
-                      {text.trim() && (
+                      {hasContent && (
                         <Button size="small" disabled={!canQueue} onClick={submit}>
                           Queue
                         </Button>
@@ -501,7 +883,7 @@ export function Chat(props: ChatProps) {
                       </Button>
                     </>
                   ) : (
-                    <Button variant="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                    <Button variant="primary" disabled={!canSend || !hasContent} onClick={submit}>
                       Send
                     </Button>
                   )}
@@ -526,7 +908,6 @@ export function Chat(props: ChatProps) {
               chatId={chat.id}
               items={props.contextItems}
               chats={props.chats}
-              contextDefaults={props.contextDefaults}
               readOnly={archived}
               connected={connected}
               send={send}

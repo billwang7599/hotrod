@@ -13,7 +13,7 @@ import {
   type ModelLists,
   type ModelRole,
   type Mods,
-} from '@hotrod/core/types'
+} from '@hotrod/core/shared'
 import { SECTIONS } from './context-panel.tsx'
 import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
 import { accountLabel, engineProblem, NO_LISTS } from './state.ts'

@@ -136,6 +136,11 @@ describe('localMachine', () => {
     expect(performance.now() - start).toBeGreaterThanOrEqual(290)
   })
 
+  it('lets one run take longer than the default timeout', async () => {
+    const result = await fast.run(node, ['-e', 'setTimeout(() => console.log("done"), 500)'], { cwd, timeoutMs: 2000 })
+    expect(result).toMatchObject({ code: 0, stdout: 'done\n' })
+  })
+
   it('gives up on a run that takes too long', async () => {
     const start = performance.now()
     const hang = `process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000)`

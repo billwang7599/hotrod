@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Account, Adapter, CoreMessage, EngineAccounts, LoginFlow, Machine } from './types.ts'
+import type { Account, Adapter, CoreMessage, EngineAccounts, LoginFlow, Machine } from './shared.ts'
 
 const DEFAULT_ID = 'default'
 const MAX_NAME_CHARS = 60

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { Adapter, EngineEvent, ToolKind } from '../types.ts'
+import type { Adapter, EngineEvent, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent
@@ -34,16 +34,18 @@ const demoScript: FakeStep[] = [
   ),
 ]
 
-export const FAKE_MODELS = [
-  { id: 'fake-large', label: 'Fake Large' },
-  { id: 'fake-small', label: 'Fake Small' },
-]
+export const FAKE_MODELS = ['fake-large', 'fake-small']
 export const FAKE_THINKING = ['low', 'high']
 export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
 
 export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
   return {
     id: 'fake',
+    imageInput: true,
+    async complete(_machine, { prompt }) {
+      const keys = [...prompt.matchAll(/<item key="([^"]+)"/g)].map(([, key]) => key)
+      return JSON.stringify({ summaries: keys.map((key) => ({ key, text: `summary of ${key}` })) })
+    },
     detect: async () => ({
       installed: true,
       signedIn: true,

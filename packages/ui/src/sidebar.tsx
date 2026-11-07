@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
-import type { ChatStatus, ClientMessage } from '@hotrod/core/types'
+import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { chatTree, familyOf, folderName, folderOf, MAIN_CHAT_ID, type ChatView, type TreeRow } from './state.ts'
 

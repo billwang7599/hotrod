@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { BAD_TOKEN_CLOSE_CODE, type ClientMessage } from '@hotrod/core/types'
+import { BAD_TOKEN_CLOSE_CODE, type ClientMessage } from '@hotrod/core/shared'
 import type { Action } from './state.ts'
 
 const DEV_CORE_URL = 'ws://127.0.0.1:4317'
@@ -15,6 +15,13 @@ export function coreUrl(
   const base = env.VITE_HOTROD_CORE_URL || (env.DEV ? DEV_CORE_URL : `${page.protocol === 'https:' ? 'wss' : 'ws'}://${page.host}`)
   const url = new URL(base)
   url.searchParams.set('token', token)
+  return url.href
+}
+
+export function attachmentUrl(socketUrl: string, chatId: string, path: string) {
+  const url = new URL(socketUrl)
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:'
+  url.pathname = `/chats/${encodeURIComponent(chatId)}/attachments/${encodeURIComponent(path.split('/').at(-1) ?? '')}`
   return url.href
 }
 
