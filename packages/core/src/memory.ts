@@ -4,7 +4,7 @@ import type { Attachment, ChatEntry, CompletionRequest } from './types.ts'
 export const LINE_MAX_CHARS = 280
 export const LINE_CHARS_PER_LEVEL = 40
 export const SUMMARY_CLIP_FACTOR = 2
-export const PLACEHOLDER_PREVIEW_CHARS = 150
+const PREVIOUS_PREVIEW_CHARS = 150
 export const MESSAGE_MAX_CHARS = 4_000
 export const TAIL_MAX_CHARS = 40_000
 export const COMPACT_MIN_CHARS = TAIL_MAX_CHARS / 2
@@ -18,6 +18,7 @@ export const ITEM_MAX_ATTEMPTS = 3
 export const COMPACT_DEBOUNCE_MS = 2_000
 export const RETRY_BASE_MS = 10_000
 export const RETRY_MAX_MS = 600_000
+export const COMPLETE_TIMEOUT_MS = 180_000
 
 export const MEMORY_INSTRUCTIONS =
   'Each message you get starts with your memory of this chat: the whole conversation, oldest first. Older ' +
@@ -70,13 +71,9 @@ const SUMMARIES_SCHEMA = {
   additionalProperties: false,
 }
 
-const VIEW_HEADER =
-  'This is the conversation so far, oldest first. Older messages are one-line summaries (id+n|text covers the n ' +
-  'messages from id on); recent ones are in full.'
-
 export type MessageKind = 'user' | 'work' | 'talk' | 'tool' | 'echo' | 'note'
 export type MemoryMessage = { id: number; kind: MessageKind; at: string; text: string }
-export type Summary = { id: number; n: number; text: string }
+export type Summary = { id: number; n: number; text: string; at: string }
 export type Summaries = ReturnType<typeof openSummaries>
 type Block = { id: number; n: number }
 type LineOf = (id: number, n: number) => string | undefined
@@ -108,20 +105,19 @@ export function messagesOf(entries: ChatEntry[]): MemoryMessage[] {
 const keyOf = (id: number, n: number) => `${id}+${n}`
 
 export function openSummaries(file: string) {
-  const texts = new Map<string, string>()
+  const records = new Map<string, Summary>()
   for (const line of (existsSync(file) ? readFileSync(file, 'utf8') : '').split('\n')) {
     try {
-      const { id, n, text } = JSON.parse(line)
-      texts.set(keyOf(id, n), text)
+      const { id, n, text, at } = JSON.parse(line)
+      if (typeof text === 'string' && text && typeof at === 'string') records.set(keyOf(id, n), { id, n, text, at })
     } catch {}
   }
   return {
-    get: (id: number, n: number) => texts.get(keyOf(id, n)),
+    get: (id: number, n: number) => records.get(keyOf(id, n)),
     add(summaries: Summary[]) {
       if (!summaries.length) return
-      const at = new Date().toISOString()
-      appendFileSync(file, summaries.map((summary) => JSON.stringify({ ...summary, at }) + '\n').join(''))
-      for (const { id, n, text } of summaries) texts.set(keyOf(id, n), text)
+      appendFileSync(file, summaries.map((summary) => JSON.stringify(summary) + '\n').join(''))
+      for (const summary of summaries) records.set(keyOf(summary.id, summary.n), summary)
     },
   }
 }
@@ -141,7 +137,9 @@ function lineReader(messages: MemoryMessage[], summaries: Summaries): LineOf {
     if (id + n > messages.length) return undefined
     const key = keyOf(id, n)
     if (memo.has(key)) return memo.get(key)
-    let line = summaries.get(id, n)
+    // A summary names its last message's time, so one left over from other numbering is ignored and redone.
+    const stored = summaries.get(id, n)
+    let line = stored?.at === messages[id + n - 1]!.at ? stored.text : undefined
     if (line === undefined && n === 1) {
       const { kind, text } = messages[id]!
       const verbatim = oneLine(`${kind}: ${text}`)
@@ -167,10 +165,16 @@ function blockLines(messages: MemoryMessage[], lineOf: LineOf, { id, n }: Block,
   const left = n > 1 ? lineOf(id, half) : undefined
   const right = n > 1 ? lineOf(id + half, half) : undefined
   if (left !== undefined && right !== undefined) return [`${id}+${half}|${left}`, `${id + half}+${half}|${right}`]
-  const missing = zoomable ? '(not summarized yet: zoom it)' : '(not summarized yet)'
-  if (n > 1) return [`${id}+${n}|${missing}`]
-  const { kind, text } = messages[id]!
-  return [`${id}+1|${oneLine(`${kind}: ${text}`).slice(0, PLACEHOLDER_PREVIEW_CHARS)}… ${missing}`]
+  const missing = zoomable ? ' (not summarized yet: zoom it)' : ''
+  return [`${id}+${n}|${fallbackLine(messages, lineOf, { id, n })}${missing}`]
+}
+
+function fallbackLine(messages: MemoryMessage[], lineOf: LineOf, { id, n }: Block): string {
+  if (n === 1) return clip(oneLine(`${messages[id]!.kind}: ${messages[id]!.text}`), lineMaxChars(1))
+  const halfChars = Math.floor((lineMaxChars(n) - 1) / 2)
+  const half = (start: number) =>
+    clip(lineOf(start, n / 2) ?? fallbackLine(messages, lineOf, { id: start, n: n / 2 }), halfChars)
+  return `${half(id)} ${half(id + n / 2)}`
 }
 
 function coverOf(ranges: [number, number][], perLevel: number): Block[] {
@@ -195,7 +199,7 @@ function coverOf(ranges: [number, number][], perLevel: number): Block[] {
 function fullMessage({ id, kind, text }: MemoryMessage, zoomable: boolean) {
   const rest = zoomable ? `; zoom(${id}) for the rest` : ''
   const body =
-    text.length > MESSAGE_MAX_CHARS
+    zoomable && text.length > MESSAGE_MAX_CHARS
       ? `${text.slice(0, MESSAGE_MAX_CHARS)}… cut at ${MESSAGE_MAX_CHARS} of ${text.length} chars${rest}`
       : text
   return `<message id="${id}" kind="${kind}">\n${escapeTag(body, 'message')}\n</message>`
@@ -241,13 +245,13 @@ export function memoryPrompt(
   const items = [...lines, ...[...full].map(([id, text]) => ({ id, text, full: true }))]
   items.sort((a, b) => a.id - b.id)
   const body = items.map((item, i) => (i > 0 && ('full' in item || 'full' in items[i - 1]!) ? '\n\n' : '\n') + item.text)
-  const header = lines.length ? VIEW_HEADER : 'This is the conversation so far:'
-  return `${header}\n${body.join('')}\n\nNew message from the user:\n\n${message}`
+  return `This is the conversation so far:\n${body.join('')}\n\nNew message from the user:\n\n${message}`
 }
 
 const checkId = (messages: MemoryMessage[], id: number) => {
   if (!Number.isInteger(id) || id < 0 || id >= messages.length) {
-    throw new Error(`No message ${id}; this chat has messages 0 to ${messages.length - 1}`)
+    const has = messages.length ? `messages 0 to ${messages.length - 1}` : 'no messages yet'
+    throw new Error(`No message ${id}; this chat has ${has}`)
   }
   return messages[id]!
 }
@@ -317,22 +321,22 @@ function itemInput(messages: MemoryMessage[], lineOf: LineOf, { id, n }: Block) 
       : text
   const previous = messages[id - 1]
   const context = previous
-    ? `(previous: ${previous.kind}: ${oneLine(previous.text).slice(0, PLACEHOLDER_PREVIEW_CHARS)})\n`
+    ? `(previous: ${previous.kind}: ${oneLine(previous.text).slice(0, PREVIOUS_PREVIEW_CHARS)})\n`
     : ''
   return `<item key="${key}" kind="${kind}" max_chars="${lineMaxChars(1)}">\n${context}${escapeTag(body, 'item')}\n</item>`
 }
 
 function parseReply(reply: string) {
   const start = reply.indexOf('{')
-  const end = reply.lastIndexOf('}')
   try {
-    const { summaries } = JSON.parse(reply.slice(start, end + 1))
+    const { summaries } = JSON.parse(reply.slice(start, reply.lastIndexOf('}') + 1))
     if (start < 0 || !Array.isArray(summaries)) return undefined
-    const texts = new Map<string, string>()
+    const lines = new Map<string, string>()
     for (const { key, text } of summaries) {
-      if (typeof key === 'string' && typeof text === 'string' && text.trim()) texts.set(key, text)
+      const line = typeof text === 'string' ? oneLine(text.replace(/\b\d+\+\d+\|/g, '')) : ''
+      if (typeof key === 'string' && line) lines.set(key, line)
     }
-    return texts
+    return lines
   } catch {
     return undefined
   }
@@ -343,6 +347,7 @@ type CompactorChat = { messages: MemoryMessage[]; summaries: Summaries }
 export function openCompactor(options: {
   chat(chatId: string): CompactorChat | undefined
   complete(request: CompletionRequest): Promise<string>
+  onFailure?(reason: string): void
   debounceMs?: number
   retryBaseMs?: number
   retryMaxMs?: number
@@ -355,35 +360,41 @@ export function openCompactor(options: {
     minChars = COMPACT_MIN_CHARS,
   } = options
   const touched = new Set<string>()
-  const attempts = new Map<string, number>()
+  const backoffs = new Map<string, { failures: number; batchMaxItems: number; retryAtMs: number }>()
+  // mark: how many calls had succeeded at the item's first failed try, then at its last try alone.
+  const items = new Map<string, { tries: number; mark: number; alone: boolean }>()
+  let successes = 0
+  let failing = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let running = false
   let closed = false
-  let failures = 0
-  let batchMaxItems = BATCH_MAX_ITEMS
-  let retryAtMs = 0
 
   const schedule = (delayMs: number) => {
     if (closed) return
     clearTimeout(timer)
-    timer = setTimeout(run, Math.max(delayMs, retryAtMs - Date.now()))
+    timer = setTimeout(run, delayMs)
   }
 
   const nextJob = () => {
     for (const chatId of [...touched].reverse()) {
+      if ((backoffs.get(chatId)?.retryAtMs ?? 0) > Date.now()) continue
       const chat = options.chat(chatId)
       const chars = chat?.messages.reduce((sum, m) => sum + m.text.length, 0) ?? 0
       const pending = chat && chars > minChars ? pendingOf(chat.messages, chat.summaries) : []
-      if (chat && pending.length) return { chatId, ...chat, pending }
+      const failedAlone = (block: Block) => items.get(`${chatId}:${keyOf(block.id, block.n)}`)?.alone === true
+      if (chat && pending.length) {
+        return { chatId, ...chat, pending: [...pending.filter((b) => !failedAlone(b)), ...pending.filter(failedAlone)] }
+      }
       touched.delete(chatId)
     }
   }
 
-  const fail = (batchItems: number) => {
-    failures++
-    batchMaxItems = Math.max(1, Math.floor(batchItems / 2))
-    retryAtMs = Date.now() + Math.min(retryMaxMs, retryBaseMs * 2 ** (failures - 1))
-    schedule(0)
+  const fail = (chatId: string, batchItems: number, reason: string) => {
+    const failures = (backoffs.get(chatId)?.failures ?? 0) + 1
+    const retryAtMs = Date.now() + Math.min(retryMaxMs, retryBaseMs * 2 ** (failures - 1))
+    backoffs.set(chatId, { failures, batchMaxItems: Math.max(1, Math.floor(batchItems / 2)), retryAtMs })
+    if (!failing) options.onFailure?.(reason)
+    failing = true
   }
 
   async function run() {
@@ -395,39 +406,54 @@ export function openCompactor(options: {
         const lineOf = lineReader(messages, summaries)
         const batch: (Block & { input: string })[] = []
         let promptChars = 0
-        for (const block of pending.slice(0, batchMaxItems)) {
+        for (const block of pending.slice(0, backoffs.get(chatId)?.batchMaxItems ?? BATCH_MAX_ITEMS)) {
           const input = itemInput(messages, lineOf, block)
           if (batch.length && promptChars + 2 + input.length > BATCH_MAX_INPUT_CHARS) break
           promptChars += (batch.length ? 2 : 0) + input.length
           batch.push({ ...block, input })
         }
-        let reply: string
+        let lines: Map<string, string> | undefined
+        let reason = ''
         try {
           const prompt = batch.map((item) => item.input).join('\n\n')
-          reply = await options.complete({ system: COMPACTOR_INSTRUCTIONS, prompt, schema: SUMMARIES_SCHEMA })
-        } catch {
-          return fail(batch.length)
+          const reply = await options.complete({
+            system: COMPACTOR_INSTRUCTIONS,
+            prompt,
+            schema: SUMMARIES_SCHEMA,
+            timeoutMs: COMPLETE_TIMEOUT_MS,
+          })
+          lines = parseReply(reply)
+          if (!lines) reason = `the reply wasn't JSON (${clip(oneLine(reply), 200) || 'empty'})`
+        } catch (error) {
+          reason = error instanceof Error ? error.message : String(error)
         }
         if (closed) return
-        const texts = parseReply(reply)
-        const answered = texts !== undefined || batch.length === 1
+        if (lines) successes++
         const written: Summary[] = []
         for (const { id, n } of batch) {
-          const attemptKey = `${chatId}:${keyOf(id, n)}`
-          const text = texts?.get(keyOf(id, n))
-          if (text !== undefined) {
-            attempts.delete(attemptKey)
+          const itemKey = `${chatId}:${keyOf(id, n)}`
+          const at = messages[id + n - 1]!.at
+          const line = lines?.get(keyOf(id, n))
+          if (line !== undefined) {
+            items.delete(itemKey)
             const kind = n === 1 ? messages[id]!.kind : undefined
-            const line = oneLine(text.replace(/\b\d+\+\d+\|/g, ''))
             const tagged = kind && !line.startsWith(`${kind}:`) ? `${kind}: ${line}` : line
-            written.push({ id, n, text: clip(tagged, lineMaxChars(n) * SUMMARY_CLIP_FACTOR) })
+            written.push({ id, n, text: clip(tagged, lineMaxChars(n) * SUMMARY_CLIP_FACTOR), at })
             continue
           }
-          const tries = (attempts.get(attemptKey) ?? 0) + (answered ? 1 : 0)
-          attempts.set(attemptKey, tries)
-          if (tries < ITEM_MAX_ATTEMPTS) continue
-          attempts.delete(attemptKey)
-          written.push({ id, n, text: fallbackLine(messages, lineOf, { id, n }) })
+          // A failed call counts against one item only when it was sent alone and the engine has worked since its
+          // last try, so an outage never turns items into fallbacks.
+          const item = items.get(itemKey)
+          const alone = lines === undefined && batch.length === 1
+          const counts = lines !== undefined || (alone && item !== undefined && successes > item.mark)
+          const tries = (item?.tries ?? 0) + (counts ? 1 : 0)
+          if (tries < ITEM_MAX_ATTEMPTS) {
+            const mark = alone || !item ? successes : item.mark
+            items.set(itemKey, { tries, mark, alone: alone || item?.alone === true })
+            continue
+          }
+          items.delete(itemKey)
+          written.push({ id, n, text: fallbackLine(messages, lineOf, { id, n }), at })
         }
         try {
           summaries.add(written)
@@ -435,13 +461,18 @@ export function openCompactor(options: {
           touched.delete(chatId)
           continue
         }
-        if (!written.length) return fail(batch.length)
-        failures = 0
-        batchMaxItems = BATCH_MAX_ITEMS
+        if (lines && written.length) {
+          backoffs.delete(chatId)
+          failing = false
+        } else {
+          fail(chatId, batch.length, reason || 'the model left every item out')
+        }
       }
     } finally {
       running = false
     }
+    const retryAtMs = Math.min(...[...touched].map((chatId) => backoffs.get(chatId)?.retryAtMs ?? Infinity))
+    if (retryAtMs < Infinity) schedule(retryAtMs - Date.now())
   }
 
   return {
@@ -455,11 +486,4 @@ export function openCompactor(options: {
       clearTimeout(timer)
     },
   }
-}
-
-// Written when the model keeps leaving an item out, so one bad item can't stall the tree above it.
-function fallbackLine(messages: MemoryMessage[], lineOf: LineOf, { id, n }: Block) {
-  if (n === 1) return clip(oneLine(`${messages[id]!.kind}: ${messages[id]!.text}`), lineMaxChars(1))
-  const halfChars = Math.floor(lineMaxChars(n) / 2)
-  return `${clip(lineOf(id, n / 2) ?? '', halfChars)} ${clip(lineOf(id + n / 2, n / 2) ?? '', halfChars)}`
 }

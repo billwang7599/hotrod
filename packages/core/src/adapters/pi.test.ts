@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { COMPLETE_TIMEOUT_MS, type EngineEvent, type SessionOptions } from '../types.ts'
+import { type EngineEvent, type SessionOptions } from '../types.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -288,7 +288,7 @@ describe('pi adapter', () => {
 })
 
 describe('pi.complete', () => {
-  const request = { cwd: '/tmp/home', system: 'Summarize.', prompt: 'the items', schema: {}, model: 'anthropic/x' }
+  const request = { cwd: '/tmp/home', system: 'Summarize.', prompt: 'the items', schema: {}, model: 'anthropic/x', timeoutMs: 1234 }
 
   it('prints one clean reply with no tools and no thinking, prompt on stdin', async () => {
     const fake = fakeMachine({ pi: { code: 0, stdout: '{"summaries":[]}\n', stderr: '' } })
@@ -312,7 +312,7 @@ describe('pi.complete', () => {
           '--system-prompt', 'Summarize.',
         ],
         input: 'the items',
-        timeoutMs: COMPLETE_TIMEOUT_MS,
+        timeoutMs: request.timeoutMs,
       },
     ])
   })

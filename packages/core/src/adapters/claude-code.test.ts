@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { COMPLETE_TIMEOUT_MS, type EngineEvent, type LoginEvent, type SessionOptions } from '../types.ts'
+import { type EngineEvent, type LoginEvent, type SessionOptions } from '../types.ts'
 import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
@@ -354,6 +354,7 @@ describe('claudeCode.complete', () => {
     prompt: 'the items',
     schema: { type: 'object' },
     model: 'claude-haiku-5-5',
+    timeoutMs: 1234,
   }
   const reply = (fields: Record<string, unknown>, code = 0) => ({
     claude: { code, stdout: JSON.stringify({ type: 'result', is_error: false, result: '', ...fields }), stderr: '' },
@@ -379,7 +380,7 @@ describe('claudeCode.complete', () => {
           '--json-schema', '{"type":"object"}',
         ],
         input: 'the items',
-        timeoutMs: COMPLETE_TIMEOUT_MS,
+        timeoutMs: request.timeoutMs,
       },
     ])
   })

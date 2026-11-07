@@ -11,7 +11,6 @@ import {
   LINES_PER_LEVEL,
   MEMORY_INSTRUCTIONS,
   MESSAGE_MAX_CHARS,
-  PLACEHOLDER_PREVIEW_CHARS,
   SUMMARY_CLIP_FACTOR,
   TAIL_MAX_CHARS,
   VIEW_MAX_CHARS,
@@ -40,6 +39,7 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }))
 let stores = 0
 const store = () => openSummaries(join(dir, `summaries-${stores++}.jsonl`))
 
+const longText = (count: number) => chat(count, (id) => `message ${id} `.padEnd(LINE_MAX_CHARS + 10, '.'))
 const at = (id: number) => new Date(Date.UTC(2026, 10, 6) + id * 60_000).toISOString()
 const KINDS: MessageKind[] = ['user', 'talk', 'tool', 'echo', 'talk']
 const chat = (count: number, textOf = (id: number) => `message ${id}`): MemoryMessage[] =>
@@ -56,7 +56,15 @@ const summarizeAll = (
   summaries: Summaries,
   textOf = (id: number, n: number) => `talk: block ${id}+${n}`,
   skip = (_id: number, _n: number) => false,
-) => summaries.add(blocks(messages.length).flatMap(({ id, n }) => (skip(id, n) ? [] : [{ id, n, text: textOf(id, n) }])))
+) =>
+  put(
+    messages,
+    summaries,
+    blocks(messages.length).flatMap(({ id, n }) => (skip(id, n) ? [] : [{ id, n, text: textOf(id, n) }])),
+  )
+
+const put = (messages: MemoryMessage[], summaries: Summaries, list: { id: number; n: number; text: string }[]) =>
+  summaries.add(list.map((summary) => ({ ...summary, at: messages[summary.id + summary.n - 1]!.at })))
 
 // Long enough that two of them never fit in their parent's line, so every block needs its own summary.
 const wide = (label: string, n: number) => `${label} `.padEnd(Math.ceil(lineMaxChars(n) * 0.6), '.')
@@ -122,19 +130,30 @@ describe('openSummaries', () => {
     const file = join(dir, 'summaries.jsonl')
     const summaries = openSummaries(file)
     summaries.add([
-      { id: 0, n: 2, text: 'first' },
-      { id: 2, n: 1, text: 'leaf' },
+      { id: 0, n: 2, text: 'first', at: at(1) },
+      { id: 2, n: 1, text: 'leaf', at: at(2) },
     ])
-    summaries.add([{ id: 0, n: 2, text: 'second' }])
-    expect(summaries.get(0, 2)).toBe('second')
+    summaries.add([{ id: 0, n: 2, text: 'second', at: at(1) }])
+    expect(summaries.get(0, 2)?.text).toBe('second')
     appendFileSync(file, '{"id":4,"n')
 
     const reopened = openSummaries(file)
-    expect(reopened.get(0, 2)).toBe('second')
-    expect(reopened.get(2, 1)).toBe('leaf')
+    expect(reopened.get(0, 2)?.text).toBe('second')
+    expect(reopened.get(2, 1)?.text).toBe('leaf')
     expect(reopened.get(4, 1)).toBeUndefined()
     const [first] = readFileSync(file, 'utf8').split('\n')
-    expect(JSON.parse(first!)).toEqual({ id: 0, n: 2, text: 'first', at: expect.any(String) })
+    expect(JSON.parse(first!)).toEqual({ id: 0, n: 2, text: 'first', at: at(1) })
+  })
+
+  it("ignores a summary whose last message's time doesn't match, so it is redone", () => {
+    const messages = longText(2)
+    const summaries = store()
+    summaries.add([
+      { id: 0, n: 1, text: 'user: right', at: messages[0]!.at },
+      { id: 1, n: 1, text: 'talk: moved', at: at(99) },
+    ])
+    expect(zoom(messages, summaries, 0, 2)).toContain('0+1|user: right')
+    expect(pendingOf(messages, summaries)).toEqual([{ id: 1, n: 1 }])
   })
 })
 
@@ -147,11 +166,11 @@ describe('lines', () => {
     const summaries = store()
     expect(zoom(messages, summaries, 0, 2).split('\n')).toEqual([
       `0+1|user: ${short.slice(0, 10)} ${short.slice(11)}`,
-      `1+1|${`talk: ${long}`.slice(0, PLACEHOLDER_PREVIEW_CHARS)}… (not summarized yet: zoom it)`,
+      `1+1|${`talk: ${long}`.slice(0, LINE_MAX_CHARS - 1)}… (not summarized yet: zoom it)`,
     ])
     expect(pendingOf(messages, summaries)).toEqual([{ id: 1, n: 1 }])
 
-    summaries.add([{ id: 1, n: 1, text: 'talk: a long y' }])
+    put(messages, summaries, [{ id: 1, n: 1, text: 'talk: a long y' }])
     expect(zoom(messages, summaries, 0, 2)).toContain('1+1|talk: a long y')
     expect(pendingOf(messages, summaries)).toEqual([])
   })
@@ -185,15 +204,15 @@ describe('memoryPrompt', () => {
     expect(prompt.endsWith('</message>\n\nNew message from the user:\n\nhi')).toBe(true)
   })
 
-  it('cuts a long message in the recent tail and says how to get the rest', () => {
+  it('cuts a long message in the recent tail only when the rest can be zoomed', () => {
     const text = 'y'.repeat(MESSAGE_MAX_CHARS + 500)
     const prompt = memoryPrompt(chat(1, () => text), store(), 'hi', { zoom: true })
     expect(prompt).toContain(
       `\n${'y'.repeat(MESSAGE_MAX_CHARS)}… cut at ${MESSAGE_MAX_CHARS} of ${text.length} chars; zoom(0) for the rest\n`,
     )
     const blind = memoryPrompt(chat(1, () => text), store(), 'hi', { zoom: false })
-    expect(blind).toContain(`… cut at ${MESSAGE_MAX_CHARS} of ${text.length} chars\n`)
-    expect(blind).not.toContain('zoom')
+    expect(blind).toContain(`\n${text}\n`)
+    expect(blind).not.toMatch(/cut at|zoom/)
   })
 
   it('escapes closing message tags inside a message', () => {
@@ -267,7 +286,7 @@ describe('memoryPrompt', () => {
     expect(prompt.indexOf('<message id="20"')).toBeLessThan(prompt.indexOf('\n21+1|'))
   })
 
-  it('splits a block missing its summary when its halves are ready, else shows a placeholder', () => {
+  it('splits a block missing its summary when its halves are ready, else shows what its parts say, clipped', () => {
     const messages = chat(2000, (id) => `message ${id} `.padEnd(600, '.'))
     const all = store()
     summarizeAll(messages, all, wideText)
@@ -285,12 +304,15 @@ describe('memoryPrompt', () => {
 
     const missing = store()
     summarizeAll(messages, missing, wideText, (i, size) => i === id && (size === n || size === half))
-    expect(linesOf(memoryPrompt(messages, missing, 'hi', { zoom: true }))[0]).toEqual({
-      id,
-      n,
-      text: '(not summarized yet: zoom it)',
-    })
-    expect(linesOf(memoryPrompt(messages, missing, 'hi', { zoom: false }))[0]?.text).toBe('(not summarized yet)')
+    const zoomable = linesOf(memoryPrompt(messages, missing, 'hi', { zoom: true }))[0]!
+    expect(zoomable).toMatchObject({ id, n })
+    expect(zoomable.text).toMatch(/ \(not summarized yet: zoom it\)$/)
+    const blind = linesOf(memoryPrompt(messages, missing, 'hi', { zoom: false }))[0]!
+    expect(blind).toMatchObject({ id, n })
+    expect(blind.text).not.toContain('not summarized')
+    expect(blind.text.length).toBeLessThanOrEqual(lineMaxChars(n))
+    expect(blind.text).toContain(wideText(id, half / 2).slice(0, 20))
+    expect(blind.text).toContain(wideText(id + half, half).slice(0, 20))
   })
 })
 
@@ -316,7 +338,7 @@ describe('zoom and dateOf', () => {
   it('opens a block into its two halves, and a block past the end into what exists', () => {
     const messages = chat(6)
     const summaries = store()
-    summaries.add([
+    put(messages, summaries, [
       { id: 0, n: 2, text: 'talk: first pair' },
       { id: 2, n: 2, text: 'talk: second pair' },
       { id: 0, n: 4, text: 'talk: first four' },
@@ -334,6 +356,7 @@ describe('zoom and dateOf', () => {
     expect(() => zoom(messages, summaries, 0, 3)).toThrow('power of 2')
     expect(() => zoom(messages, summaries, 2, 4)).toThrow('multiple of n')
     expect(() => dateOf(messages, 9)).toThrow('No message 9')
+    expect(() => zoom([], summaries, 0)).toThrow('No message 0; this chat has no messages yet')
   })
 
   it('gives the date and time of a message', () => {
@@ -353,7 +376,15 @@ describe('instructions', () => {
 describe('openCompactor', () => {
   const keysOf = (request: CompletionRequest) => [...request.prompt.matchAll(/<item key="([^"]+)"/g)].map(([, k]) => k!)
 
-  function summarizer(options: { omit?: string[]; failures?: number; text?: (key: string) => string } = {}) {
+  function summarizer(
+    options: {
+      omit?: string[]
+      failures?: number
+      fail?: (request: CompletionRequest) => boolean
+      reply?: string
+      text?: (key: string) => string
+    } = {},
+  ) {
     const requests: (CompletionRequest & { atMs: number })[] = []
     let active = 0
     let maxActive = 0
@@ -364,7 +395,8 @@ describe('openCompactor', () => {
       maxActive = Math.max(maxActive, active)
       await new Promise((resolve) => setTimeout(resolve, 1))
       active--
-      if (failures-- > 0) throw new Error('rate limited')
+      if (failures-- > 0 || options.fail?.(request)) throw new Error('rate limited')
+      if (options.reply !== undefined) return options.reply
       const keys = keysOf(request).filter((key) => !options.omit?.includes(key))
       const text = options.text ?? ((key: string) => wide(`summary of ${key}`, Number(key.split('+')[1])))
       return JSON.stringify({ summaries: keys.map((key) => ({ key, text: text(key) })) })
@@ -399,8 +431,8 @@ describe('openCompactor', () => {
       if (keys.length > 1) expect(request.prompt.length).toBeLessThanOrEqual(BATCH_MAX_INPUT_CHARS)
       expect(request.schema).toBeDefined()
     }
-    expect(summaries.get(3, 1)).toMatch(new RegExp(`^${messages[3]!.kind}: summary of 3\\+1 \\.+$`))
-    expect(summaries.get(0, 256)).toMatch(/^summary of 0\+256 \.+$/)
+    expect(summaries.get(3, 1)?.text).toMatch(new RegExp(`^${messages[3]!.kind}: summary of 3\\+1 \\.+$`))
+    expect(summaries.get(0, 256)?.text).toMatch(/^summary of 0\+256 \.+$/)
     const node = model.requests.map((r) => r.prompt).find((p) => p.includes('<item key="0+256"'))!
     expect(node).toMatch(/\n0\+128\|summary of 0\+128 \.+\n128\+128\|summary of 128\+128 \.+\n/)
   })
@@ -481,6 +513,128 @@ describe('openCompactor', () => {
     expect(keysOf(four!)).toHaveLength(BATCH_MAX_ITEMS)
   })
 
+  it('backs off only the chat whose call failed', async () => {
+    const chats: Record<string, { messages: MemoryMessage[]; summaries: Summaries }> = {
+      a: { messages: longChat(30, 'alpha'), summaries: store() },
+      b: { messages: longChat(30, 'beta'), summaries: store() },
+    }
+    const model = summarizer({ fail: (request) => request.prompt.includes('alpha') })
+    const compactor = openCompactor({
+      chat: (id) => chats[id],
+      complete: model.complete,
+      debounceMs: 0,
+      minChars: 0,
+      retryBaseMs: 60_000,
+    })
+    compactor.touch('b')
+    compactor.touch('a')
+    await until(() => pendingOf(chats.b!.messages, chats.b!.summaries).length === 0)
+    compactor.close()
+    expect(model.requests[0]!.prompt).toContain('alpha')
+    expect(model.requests.filter((r) => r.prompt.includes('alpha'))).toHaveLength(1)
+  })
+
+  for (const outage of ['throws', 'prints an error and exits 0'] as const) {
+    it(`never writes fallbacks while every call fails (the engine ${outage})`, async () => {
+      const messages = longChat(30)
+      const summaries = store()
+      const before = pendingOf(messages, summaries)
+      const model = summarizer(outage === 'throws' ? { fail: () => true } : { reply: 'Error: usage limit reached' })
+      const compactor = openCompactor({
+        chat: () => ({ messages, summaries }),
+        complete: model.complete,
+        debounceMs: 0,
+        minChars: 0,
+        retryBaseMs: 1,
+        retryMaxMs: 2,
+      })
+      compactor.touch('a')
+      await until(() => model.requests.filter((r) => keysOf(r).length === 1).length >= 4 * ITEM_MAX_ATTEMPTS)
+      compactor.close()
+      expect(pendingOf(messages, summaries)).toEqual(before)
+    })
+  }
+
+  it('writes a fallback line for an item whose calls keep failing while other calls work', async () => {
+    const messages = longChat(30)
+    const summaries = store()
+    const bad = '<item key="3+1"'
+    const model = summarizer({ fail: (request) => request.prompt.includes(bad) })
+    const compactor = openCompactor({
+      chat: () => ({ messages, summaries }),
+      complete: model.complete,
+      debounceMs: 0,
+      minChars: 0,
+      retryBaseMs: 1,
+      retryMaxMs: 2,
+    })
+    const aloneAfter = (start: number) => model.requests.slice(start).some((r) => keysOf(r).join() === '3+1')
+    compactor.touch('a')
+    for (let round = 0; round <= ITEM_MAX_ATTEMPTS && !summaries.get(3, 1); round++) {
+      if (round > 0) {
+        const id = messages.length
+        messages.push({ id, kind: 'talk', at: at(id), text: `more ${id} `.padEnd(LINE_MAX_CHARS + 10, '.') })
+        compactor.touch('a')
+        await until(() => summaries.get(id, 1) !== undefined)
+      }
+      const start = model.requests.length
+      await until(() => aloneAfter(start) || summaries.get(3, 1) !== undefined)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    compactor.close()
+    expect(summaries.get(3, 1)?.text).toBe(
+      `${messages[3]!.kind}: ${messages[3]!.text}`.slice(0, LINE_MAX_CHARS - 1) + '…',
+    )
+    expect(pendingOf(messages, summaries)).toEqual([])
+  })
+
+  it('reports a failure once per streak, not once per retry', async () => {
+    const messages = longChat(30)
+    const summaries = store()
+    let down = true
+    const model = summarizer({ fail: () => down })
+    const reports: string[] = []
+    const compactor = openCompactor({
+      chat: () => ({ messages, summaries }),
+      complete: model.complete,
+      debounceMs: 0,
+      minChars: 0,
+      retryBaseMs: 1,
+      retryMaxMs: 2,
+      onFailure: (reason) => reports.push(reason),
+    })
+    compactor.touch('a')
+    await until(() => model.requests.length >= 5)
+    expect(reports).toEqual(['rate limited'])
+    down = false
+    await until(() => pendingOf(messages, summaries).length === 0)
+    down = true
+    messages.push({ id: 30, kind: 'talk', at: at(30), text: 'more '.padEnd(LINE_MAX_CHARS + 10, '.') })
+    compactor.touch('a')
+    const start = model.requests.length
+    await until(() => model.requests.length >= start + 3)
+    compactor.close()
+    expect(reports).toEqual(['rate limited', 'rate limited'])
+  })
+
+  it('treats an empty summary as left out', async () => {
+    const messages = longChat(1)
+    const summaries = store()
+    const model = summarizer({ text: (key) => `${key}|` })
+    const compactor = openCompactor({
+      chat: () => ({ messages, summaries }),
+      complete: model.complete,
+      debounceMs: 0,
+      minChars: 0,
+      retryBaseMs: 1,
+    })
+    compactor.touch('a')
+    await until(() => pendingOf(messages, summaries).length === 0)
+    compactor.close()
+    expect(model.requests).toHaveLength(ITEM_MAX_ATTEMPTS)
+    expect(summaries.get(0, 1)?.text).toBe(`user: ${messages[0]!.text}`.slice(0, LINE_MAX_CHARS - 1) + '…')
+  })
+
   it('writes a fallback line for an item the model keeps leaving out', async () => {
     const messages = longChat(30)
     const summaries = store()
@@ -496,7 +650,7 @@ describe('openCompactor', () => {
     await until(() => pendingOf(messages, summaries).length === 0)
     compactor.close()
     expect(model.requests.filter((r) => keysOf(r).includes('3+1'))).toHaveLength(ITEM_MAX_ATTEMPTS)
-    expect(summaries.get(3, 1)).toBe(`${messages[3]!.kind}: ${messages[3]!.text}`.slice(0, LINE_MAX_CHARS - 1) + '…')
+    expect(summaries.get(3, 1)?.text).toBe(`${messages[3]!.kind}: ${messages[3]!.text}`.slice(0, LINE_MAX_CHARS - 1) + '…')
   })
 
   it('clips a summary that runs past its line length', async () => {
@@ -512,8 +666,8 @@ describe('openCompactor', () => {
     compactor.touch('a')
     await until(() => pendingOf(messages, summaries).length === 0)
     compactor.close()
-    expect(summaries.get(0, 1)).toHaveLength(lineMaxChars(1) * SUMMARY_CLIP_FACTOR)
-    expect(summaries.get(0, 4)).toHaveLength(lineMaxChars(4) * SUMMARY_CLIP_FACTOR)
+    expect(summaries.get(0, 1)?.text).toHaveLength(lineMaxChars(1) * SUMMARY_CLIP_FACTOR)
+    expect(summaries.get(0, 4)?.text).toHaveLength(lineMaxChars(4) * SUMMARY_CLIP_FACTOR)
   })
 
   it('drops line keys a summary copied from its halves', async () => {
@@ -529,7 +683,7 @@ describe('openCompactor', () => {
     compactor.touch('a')
     await until(() => pendingOf(messages, summaries).length === 0)
     compactor.close()
-    expect(summaries.get(0, 2)).toBe('user: a talk: b')
+    expect(summaries.get(0, 2)?.text).toBe('user: a talk: b')
   })
 
   it('stops on close and drops a reply that arrives after it', async () => {

@@ -66,9 +66,7 @@ export type SessionOptions = {
 
 export type ImageInput = { mimeType: string; base64: string }
 
-export const COMPLETE_TIMEOUT_MS = 180_000
-
-export type CompletionRequest = { system: string; prompt: string; schema?: object }
+export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 export type CompleteOptions = CompletionRequest & { cwd: string; model: string; accountDir?: string; apiKey?: string }
 
@@ -149,13 +147,6 @@ export const pickThinking = (engine: EngineStatus | undefined, chat: Pick<ChatIn
 export type Mods = { subagents: { enabled: boolean; limit: number } }
 
 export type MemorySettings = { engine?: string; model?: string }
-
-export function pickMemory(engines: EngineInfo[], saved: MemorySettings) {
-  const engine = saved.engine
-    ? engines.find((e) => e.id === saved.engine)
-    : engines.find((e) => e.enabled && e.cheapModel)
-  return { engine: engine?.id, model: saved.model ?? engine?.cheapModel }
-}
 
 export const DEFAULT_SUBAGENT_LIMIT = 4
 

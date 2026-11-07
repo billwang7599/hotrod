@@ -31,7 +31,6 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
-  pickMemory,
   pickModel,
   pickThinking,
   WORKSHOP_ID,
@@ -245,6 +244,7 @@ export function openCore(options: {
       checkEnabled(adapter.id)
       return adapter.complete(machine, { ...request, cwd: homeDir, model, ...accounts.sessionFor(adapter.id) })
     },
+    onFailure: (reason) => broadcast({ type: 'error', message: `Memory summaries are failing: ${reason}. Retrying.` }),
     ...(compactDebounceMs !== undefined && { debounceMs: compactDebounceMs }),
   })
 
@@ -748,7 +748,7 @@ export function openCore(options: {
         }),
       )
       const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
-      // Summaries need a detected engine, so the backlog waits for this; the latest chat goes first.
+      // Summaries need a detected engine, so the backlog waits for this.
       const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
       for (const chat of byActivity) compactor.touch(chat.info.id)
     },
@@ -860,6 +860,13 @@ export function openCore(options: {
       await machine.stopAll()
     },
   }
+}
+
+function pickMemory(engines: EngineInfo[], saved: MemorySettings) {
+  const engine = saved.engine
+    ? engines.find((e) => e.id === saved.engine)
+    : engines.find((e) => e.enabled && e.cheapModel)
+  return { engine: engine?.id, model: saved.model ?? engine?.cheapModel }
 }
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)

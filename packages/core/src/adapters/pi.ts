@@ -1,4 +1,4 @@
-import { COMPLETE_TIMEOUT_MS, type Adapter, type ToolKind } from '../types.ts'
+import { type Adapter, type ToolKind } from '../types.ts'
 import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
@@ -90,10 +90,10 @@ export const pi: Adapter = {
     }
   },
 
-  async complete(machine, { cwd, system, prompt, model }) {
+  async complete(machine, { cwd, system, prompt, model, timeoutMs }) {
     const args = ['-p', ...CLEAN_ARGS, '--no-tools', '--offline', '--model', model, '--thinking', 'off']
     args.push('--system-prompt', system)
-    const options = { cwd, input: prompt, timeoutMs: COMPLETE_TIMEOUT_MS }
+    const options = { cwd, input: prompt, timeoutMs }
     const { code, stdout, stderr } = await machine.run('pi', args, options)
     if (code !== 0) throw new Error(stderr.trim() || `pi exited with code ${code}`)
     return stdout

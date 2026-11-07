@@ -16,7 +16,15 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
-import { COMPACT_MIN_CHARS, MEMORY_INSTRUCTIONS, messagesOf, openSummaries, pendingOf } from './memory.ts'
+import {
+  COMPACT_MIN_CHARS,
+  COMPLETE_TIMEOUT_MS,
+  MEMORY_INSTRUCTIONS,
+  MESSAGE_MAX_CHARS,
+  messagesOf,
+  openSummaries,
+  pendingOf,
+} from './memory.ts'
 import {
   DEFAULT_SUBAGENT_LIMIT,
   MAX_ATTACHMENT_BYTES,
@@ -1197,7 +1205,7 @@ describe('interrupt', () => {
 })
 
 describe('memory', () => {
-  const longReply = (id: number) => `reply ${id} `.padEnd(3000, '.')
+  const longReply = (id: number) => `reply ${id} `.padEnd((MESSAGE_MAX_CHARS * 3) / 4, '.')
 
   function writeLog(garage: string, chatId: string, count: number) {
     const dir = join(garage, 'chats', chatId)
@@ -1254,7 +1262,11 @@ describe('memory', () => {
     await t.core.refreshEngines()
     await until(() => summarized(t, 'main'))
 
-    expect(t.completions[0]).toMatchObject({ cwd: join(t.garage, 'home'), model: FAKE_DEFAULTS.cheapModel })
+    expect(t.completions[0]).toMatchObject({
+      cwd: join(t.garage, 'home'),
+      model: FAKE_DEFAULTS.cheapModel,
+      timeoutMs: COMPLETE_TIMEOUT_MS,
+    })
     expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'next' })
     const prompt = t.calls[0]?.prompt ?? ''
@@ -1290,6 +1302,22 @@ describe('memory', () => {
     await until(() => statusOf(t.core, 'main') === 'idle')
     await t.core.close()
     expect(t.completions).toHaveLength(1)
+  })
+
+  it('shows one error when summaries fail', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({
+      garage,
+      complete: async () => {
+        throw new Error('usage limit reached')
+      },
+    })
+    await t.core.refreshEngines()
+    await until(() => t.messages.some((m) => m.type === 'error'))
+    expect(t.messages.filter((m) => m.type === 'error')).toEqual([
+      { type: 'error', message: 'Memory summaries are failing: usage limit reached. Retrying.' },
+    ])
   })
 
   it('uses the summary engine and model that are set, saved in settings.json', async () => {

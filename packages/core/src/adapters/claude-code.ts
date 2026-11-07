@@ -1,4 +1,4 @@
-import { COMPLETE_TIMEOUT_MS, type AccountStatus, type Adapter, type Machine, type ToolKind } from '../types.ts'
+import { type AccountStatus, type Adapter, type Machine, type ToolKind } from '../types.ts'
 import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
@@ -113,11 +113,11 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  async complete(machine, { cwd, system, prompt, schema, model, accountDir, apiKey }) {
+  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey }) {
     const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
     args.push('--system-prompt', system)
     if (schema) args.push('--json-schema', JSON.stringify(schema))
-    const options = { cwd, input: prompt, timeoutMs: COMPLETE_TIMEOUT_MS, ...accountEnv(accountDir, apiKey) }
+    const options = { cwd, input: prompt, timeoutMs, ...accountEnv(accountDir, apiKey) }
     const { code, stdout, stderr } = await machine.run('claude', args, options)
     let reply: any
     try {
