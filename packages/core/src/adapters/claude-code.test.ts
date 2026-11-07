@@ -77,6 +77,19 @@ describe('claudeCode adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--add-dir')
   })
 
+  it('lets Claude Code read the files it is given without asking, next to the Hotrod tools', () => {
+    const readFiles = ['/tmp/a b/shot [1], (2).png', '/tmp/doc.pdf']
+    const rules = ['Read(//tmp/a b/shot \\[1\\], (2).png)', 'Read(//tmp/doc.pdf)']
+    const allowed = (args: string[]) => args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 4)
+    const args = startSession('Be brief.', { readFiles }).fake.spawned[0]!.args
+    expect(allowed(args)).toEqual([...rules, '--append-system-prompt'])
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const both = startSession('', { readFiles, hotrodMcp }).fake.spawned[0]!.args
+    expect(allowed(both)).toEqual(['mcp__hotrod__*', ...rules])
+    expect(both.filter((arg) => arg === '--allowedTools')).toHaveLength(1)
+    expect(startSession('', { readFiles: [] }).fake.spawned[0]?.args).not.toContain('--allowedTools')
+  })
+
   it('appends instructions to the system prompt when given', () => {
     const { fake } = startSession('Be brief.')
     expect(fake.spawned[0]?.args.slice(-2)).toEqual(['--append-system-prompt', 'Be brief.'])

@@ -7,6 +7,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -93,7 +94,7 @@ let dirs: string[] = []
 let cores: Core[] = []
 
 function tempDir() {
-  const dir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
   dirs.push(dir)
   return dir
 }
@@ -1087,6 +1088,21 @@ describe('attachments', () => {
     expect(t.calls[1]?.images).toEqual([{ mimeType: 'image/png', base64: PNG.toString('base64') }])
   })
 
+  it('pins a sent file to the context by its saved path, even in a garage reached through a symlink', async () => {
+    const garage = join(tempDir(), 'garage')
+    symlinkSync(tempDir(), garage)
+    const t = setup(textScript, garage)
+    const chat = createChat(t, { name: 'App' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments: [upload('notes.md', 'text/markdown', 'N')] })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    const path = sentAttachments(t.core, chat.id)[0]![0]!.path
+
+    t.handle({ type: 'context.add', chatId: chat.id, section: 'files', path })
+    expect(chatOf(t.core, chat.id)?.files).toEqual([path])
+    t.handle({ type: 'context.remove', chatId: chat.id, section: 'files', path })
+    expect(chatOf(t.core, chat.id)?.files).toEqual([])
+  })
+
   it('keeps no files from a refused message, and deletes them with the chat', async () => {
     const t = setup(textScript)
     const chat = createChat(t, { name: 'Old' })
@@ -1574,6 +1590,42 @@ describe('context', () => {
     expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
     expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: b })
     expect(await sessionOf(t, 'main')).toMatchObject({ cwd: home })
+  })
+
+  it('gives a file that is not text by path with read access, never pasted, down to the subagents', async () => {
+    const first = setup(textScript)
+    const chat = createChat(first, { name: 'App' })
+    const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+    const attachments = [
+      { name: 'shot.png', mimeType: 'image/png', base64: png.toString('base64') },
+      { name: 'notes.md', mimeType: 'text/markdown', base64: Buffer.from('NOTES').toString('base64') },
+    ]
+    first.handle({ type: 'chat.send', chatId: chat.id, text: '', attachments })
+    await until(() => statusOf(first.core, chat.id) === 'idle')
+    const sent = entriesOf(first.core, chat.id)[0]
+    if (sent?.type !== 'user.message') throw new Error('no message')
+    const [image, notes] = (sent.attachments ?? []).map((a) => a.path) as [string, string]
+    add(first, chat.id, 'files', image)
+    add(first, chat.id, 'files', notes)
+    const { t, subagentId } = reopenWithSubagent(first, chat.id)
+
+    expect(itemsOf(t, subagentId).filter((item) => item.section === 'files')).toEqual([
+      { section: 'files', path: image, from: chat.id, enabled: true, text: '', binary: true },
+      { section: 'files', path: notes, from: chat.id, enabled: true, text: 'NOTES' },
+    ])
+    const byPath = `The file ${image} is not text, so it isn't pasted here. Open it with your tools when you need it.`
+    const own = await sessionOf(t, chat.id)
+    const before = t.calls.length
+    await sessionOf(t, subagentId)
+    const subagent = t.calls[before]!.options
+    for (const options of [own, subagent]) {
+      expect(options.instructions).toBe([byPath, `<file path="${notes}">\nNOTES\n</file>`].join('\n\n'))
+      expect(options.readFiles).toEqual([image])
+    }
+    expect(subagent).not.toHaveProperty('extraDirs')
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'context.set', chatId: chat.id, path: image, enabled: false })
+    expect(await sessionOf(t, chat.id)).not.toHaveProperty('readFiles')
   })
 
   it('adds and removes folders and files, checking each path, and tells the chat and the chats below it', () => {

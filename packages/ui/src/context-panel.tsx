@@ -23,8 +23,8 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   },
   files: {
     label: 'Files',
-    about: 'Pasted in full into the instructions',
-    inherited: `The files of the ${CHAT_NOUN.many} above, pasted in full`,
+    about: 'Text is pasted in full into the instructions; other files go by path',
+    inherited: `The files of the ${CHAT_NOUN.many} above`,
   },
 }
 const EMPTY_SECTION: Record<ContextSection, string> = {
@@ -118,7 +118,12 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
       </span>
       <div className="flex items-start gap-6 text-xs text-faint">
         <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
-        {item.text.trim() ? (
+        {item.section === 'files' && (
+          <span className={PILL} title={item.binary ? 'Not text, so the engine gets its path and opens it' : undefined}>
+            {item.binary ? 'By path' : 'Pasted in full'}
+          </span>
+        )}
+        {item.binary ? null : item.text.trim() ? (
           <details className="min-w-0 flex-1">
             <summary className="py-2">{preview}</summary>
             <pre className={PREVIEW}>{item.text}</pre>
@@ -165,16 +170,12 @@ type ContextPanelProps = {
   chatId: string
   items?: ContextItem[]
   chats: ChatView[]
-  contextDefaults: Record<ContextSection, boolean>
   readOnly: boolean
   connected: boolean
   send: (m: ClientMessage) => void
 }
 
-export function ContextPanel({ chatId, items, chats, contextDefaults, readOnly, connected, send }: ContextPanelProps) {
-  useEffect(() => {
-    if (connected) send({ type: 'context.get', chatId })
-  }, [chatId, connected, contextDefaults, send])
+export function ContextPanel({ chatId, items, chats, readOnly, connected, send }: ContextPanelProps) {
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) => chats.find((c) => c.id === item.from)?.name ?? item.from

@@ -196,7 +196,7 @@ it('serves the UI folder when given one', async () => {
   expect(await escaped.text()).not.toContain('secret')
 })
 
-it("serves a chat's attachments with the token, images inline and anything else as a download", async () => {
+it("serves a chat's attachments with the token, images and PDFs inline and anything else as a download", async () => {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: localMachine })
   const server = await startServer({ core, port: 0, uiOrigin: origin, token })
@@ -216,7 +216,11 @@ it("serves a chat's attachments with the token, images inline and anything else 
     type: 'chat.send',
     chatId: 'main',
     text: 'files',
-    attachments: [upload('shot.png', 'image/png', 'png bytes'), upload('page é.html', 'text/html', '<script>')],
+    attachments: [
+      upload('shot.png', 'image/png', 'png bytes'),
+      upload('page é.html', 'text/html', '<script>'),
+      upload('doc.pdf', 'application/pdf', '%PDF-1.4'),
+    ],
   })
   handle({ type: 'chat.create', name: 'Other' })
   const other = core.chats().find((c) => c.name === 'Other')!
@@ -230,10 +234,17 @@ it("serves a chat's attachments with the token, images inline and anything else 
   expect(image.headers.get('content-disposition')).toBeNull()
   expect(image.headers.get('x-content-type-options')).toBe('nosniff')
   expect(image.headers.get('content-security-policy')).toBe('sandbox')
+  expect(image.headers.get('access-control-allow-origin')).toBe(origin)
   expect(await image.text()).toBe('png bytes')
+  const pdf = await get('/chats/main/attachments/doc.pdf')
+  expect(pdf.headers.get('content-type')).toBe('application/pdf')
+  expect(pdf.headers.get('content-disposition')).toBeNull()
+  expect(pdf.headers.get('content-security-policy')).toBe('sandbox')
+  expect(pdf.headers.get('x-content-type-options')).toBe('nosniff')
   const page = await get(`/chats/main/attachments/${encodeURIComponent('page é.html')}`)
   expect(page.headers.get('content-type')).toBe('application/octet-stream')
   expect(page.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''page%20%C3%A9.html`)
+  expect(page.headers.get('content-security-policy')).toBe('sandbox')
   expect(await page.text()).toBe('<script>')
 
   expect((await get('/chats/main/attachments/shot.png', 'wrong')).status).toBe(401)
@@ -265,7 +276,7 @@ const heldOffers = {
 }
 
 async function startHeld() {
-  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
   const sessions: { options: SessionOptions; prompt?: string; end: (reply?: string, error?: string) => void }[] = []
   const held: Adapter = {
     id: 'held',

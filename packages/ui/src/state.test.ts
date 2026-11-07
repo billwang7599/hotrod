@@ -14,9 +14,12 @@ import {
   formatBytes,
   initialState,
   MAIN_CHAT_ID,
+  MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
   modelMenu,
   PANEL_PX,
+  pinState,
+  previewText,
   reduce,
   storedColumn,
   storedFlag,
@@ -494,5 +497,29 @@ describe('formatBytes', () => {
       '2.5 MB',
       '20 MB',
     ])
+  })
+})
+
+describe('attachments', () => {
+  const view = (id: string, change: Partial<ChatState> = {}) =>
+    reduce(initialState, snapshot([chat(id, [], change)])).chats[0]!
+  const path = '/g/chats/a/attachments/shot.png'
+  const file = (from: string, filePath = path): ContextItem =>
+    ({ section: 'files', path: filePath, from, enabled: false, text: '', binary: true })
+
+  it('offers a pin outside Home and archived chats, pinned while the chat itself lists the file', () => {
+    expect(pinState(view('a'), [file('a')], path)).toBe('pinned')
+    expect(pinState(view('a'), [file('a', '/g/other.png'), file(MAIN_CHAT_ID)], path)).toBe('unpinned')
+    expect(pinState(view('a'), undefined, path)).toBeUndefined()
+    expect(pinState(view(MAIN_CHAT_ID), [], path)).toBeUndefined()
+    expect(pinState(view('a', { archived: true }), [file('a')], path)).toBeUndefined()
+  })
+
+  it('previews text up to the cap without a broken last character, and nothing for a file that is not text', () => {
+    const bytes = (text: string) => new TextEncoder().encode(text)
+    expect(previewText(bytes('hello <b>'))).toBe('hello <b>')
+    expect(previewText(new Uint8Array([104, 105, 0, 33]))).toBeUndefined()
+    const long = 'a'.repeat(MAX_PREVIEW_BYTES - 1)
+    expect(previewText(bytes(`${long}éz`))).toBe(long)
   })
 })

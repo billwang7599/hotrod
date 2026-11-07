@@ -56,12 +56,13 @@ export async function startServer(options: {
         found = core.attachment(decodeURIComponent(attachment[1]!), decodeURIComponent(attachment[2]!))
       } catch {}
       if (!found || !existsSync(found.path)) return response.writeHead(404).end()
-      // The UI shares this origin in the desktop app, so nothing but a plain image may render here.
-      const inline = IMAGE_TYPES.includes(found.mimeType)
+      // The UI shares this origin in the desktop app, so nothing but a plain image or a PDF may render here.
+      const inline = [...IMAGE_TYPES, 'application/pdf'].includes(found.mimeType)
       response.writeHead(200, {
         'content-type': inline ? found.mimeType : 'application/octet-stream',
         'x-content-type-options': 'nosniff',
         'content-security-policy': 'sandbox',
+        'access-control-allow-origin': uiOrigin,
         ...(!inline && { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.name)}` }),
       })
       return void createReadStream(found.path).pipe(response)

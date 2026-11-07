@@ -35,7 +35,10 @@ import {
   engineOptions,
   formatBytes,
   MAIN_CHAT_ID,
+  MAX_PREVIEW_BYTES,
   modelMenu,
+  pinState,
+  previewText,
   type ChatView,
   type Item,
 } from './state.ts'
@@ -68,6 +71,9 @@ const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
   'h-12 w-96 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
 const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
+const FILE_ACTION =
+  'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
+const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
 const SELECT_ARROW =
   'bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20fill=%27none%27%20stroke=%27%238b8e96%27%20stroke-width=%271.5%27/%3E%3C/svg%3E)]'
 
@@ -143,64 +149,195 @@ function PaperclipIcon() {
   )
 }
 
-function FileLabel({ name, size }: { name: string; size: number }) {
+function FileLabel({ name, size, actions }: { name: string; size: number; actions?: ReactNode }) {
   return (
     <span className="flex min-w-0 flex-col leading-[1.35]">
       <span className="truncate text-ui">{name}</span>
-      <span className="text-sm text-faint">{formatBytes(size)}</span>
+      <span className="grid text-sm text-faint *:col-start-1 *:row-start-1">
+        <span className="transition-opacity duration-150 group-focus-within/file:opacity-0 group-hover/file:opacity-0">
+          {formatBytes(size)}
+        </span>
+        {actions}
+      </span>
     </span>
   )
 }
 
-function SentAttachment({ chatId, attachment }: { chatId: string; attachment: Attachment }) {
-  const [open, setOpen] = useState(false)
-  const { name, size } = attachment
-  const url = attachmentUrl(coreUrl(import.meta.env, location, readToken('', sessionStorage)), chatId, attachment.path)
-  if (!IMAGE_TYPES.includes(attachment.mimeType)) {
-    return (
-      <a href={url} className={`${FILE_CHIP} h-40 bg-panel hover:bg-raised`} title={`Download ${name}`}>
-        <FileLabel name={name} size={size} />
-      </a>
-    )
-  }
+function PinIcon() {
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger asChild>
-        <button className="overflow-hidden rounded-lg border hover:border-muted" title={name} aria-label={`Open ${name}`}>
-          <img src={url} alt={name} className="block max-h-160 max-w-240 object-contain" />
-        </button>
-      </Dialog.Trigger>
-      <AnimatePresence>
-        {open && (
-          <Dialog.Portal forceMount>
-            <Dialog.Overlay forceMount asChild>
-              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
-            </Dialog.Overlay>
-            <Dialog.Content forceMount asChild aria-describedby={undefined}>
-              <m.div className="fixed inset-0 m-auto size-fit" {...MOTION.pop}>
-                <Dialog.Title className="sr-only">{name}</Dialog.Title>
-                <img
-                  src={url}
-                  alt={name}
-                  className="block max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] rounded-lg border object-contain shadow"
-                />
-                <Dialog.Close asChild>
-                  <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-8 right-8 bg-bg/70">
-                    ×
-                  </Button>
-                </Dialog.Close>
-              </m.div>
-            </Dialog.Content>
-          </Dialog.Portal>
-        )}
-      </AnimatePresence>
-    </Dialog.Root>
+    <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+      <path d="M5 1.5h6M6.5 1.5v4.5L3.5 9.5h9L9.5 6V1.5M8 9.5v5" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
   )
 }
 
-type ItemProps = { item: Item; chat: ChatView; connected: boolean; send: (m: ClientMessage) => void }
+type SentAttachmentProps = {
+  chat: ChatView
+  attachment: Attachment
+  contextItems?: ContextItem[]
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
 
-function ItemView({ item, chat, connected, send }: ItemProps) {
+function SentAttachment({ chat, attachment, contextItems, connected, send }: SentAttachmentProps) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState<string | null>()
+  const { name, size, mimeType, path } = attachment
+  const url = attachmentUrl(coreUrl(import.meta.env, location, readToken('', sessionStorage)), chat.id, path)
+  const kind = IMAGE_TYPES.includes(mimeType) ? 'image' : mimeType === 'application/pdf' ? 'pdf' : 'file'
+  const pin = pinState(chat, contextItems, path)
+
+  useEffect(() => {
+    if (!open || kind !== 'file') return
+    const abort = new AbortController()
+    setText(undefined)
+    void (async () => {
+      try {
+        const response = await fetch(url, { signal: abort.signal })
+        if (!response.ok || !response.body) throw new Error(String(response.status))
+        const reader = response.body.getReader()
+        const chunks: Uint8Array<ArrayBuffer>[] = []
+        for (let total = 0; total < MAX_PREVIEW_BYTES; ) {
+          const { done, value } = await reader.read()
+          if (done) break
+          chunks.push(value)
+          total += value.length
+        }
+        void reader.cancel()
+        setText(previewText(new Uint8Array(await new Blob(chunks).arrayBuffer())) ?? null)
+      } catch {
+        if (!abort.signal.aborted) setText(null)
+      }
+    })()
+    return () => abort.abort()
+  }, [open, kind, url])
+
+  const actions = (
+    <>
+      <Dialog.Root open={open} onOpenChange={setOpen}>
+        <Dialog.Trigger asChild>
+          <button className={FILE_ACTION} aria-label={`Open ${name}`} title="Preview">
+            Open
+          </button>
+        </Dialog.Trigger>
+        <AnimatePresence>
+          {open && (
+            <Dialog.Portal forceMount>
+              <Dialog.Overlay forceMount asChild>
+                <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+              </Dialog.Overlay>
+              <Dialog.Content forceMount asChild aria-describedby={undefined}>
+                <m.div
+                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-[10px] border bg-panel shadow"
+                  {...MOTION.pop}
+                >
+                  <header className="flex h-40 shrink-0 items-center gap-8 border-b pr-8 pl-12">
+                    <Dialog.Title className="min-w-0 flex-1 truncate font-semibold">{name}</Dialog.Title>
+                    <Dialog.Close asChild>
+                      <Button variant="ghost" size="icon" aria-label="Close">
+                        ×
+                      </Button>
+                    </Dialog.Close>
+                  </header>
+                  {kind === 'image' && (
+                    <img
+                      src={url}
+                      alt={name}
+                      className="mx-auto block max-h-[calc(100vh-74px)] max-w-[calc(100vw-34px)] object-contain"
+                    />
+                  )}
+                  {kind === 'pdf' && (
+                    <iframe src={url} title={name} className="h-[calc(100vh-74px)] w-[min(900px,calc(100vw-34px))]" />
+                  )}
+                  {kind === 'file' && (
+                    <>
+                      {typeof text === 'string' ? (
+                        <pre className="min-h-0 w-[min(880px,calc(100vw-34px))] flex-1 overflow-auto px-12 py-10 text-sm leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+                          {text}
+                        </pre>
+                      ) : (
+                        <p className="px-12 py-16 text-muted">
+                          {text === undefined ? 'Loading…' : 'No preview for this kind of file.'}
+                        </p>
+                      )}
+                      <div className="flex shrink-0 items-center gap-8 border-t py-8 pr-8 pl-12 text-sm text-muted">
+                        <span className="min-w-0 flex-1 truncate">
+                          {mimeType} · {formatBytes(size)}
+                          {typeof text === 'string' &&
+                            size > MAX_PREVIEW_BYTES &&
+                            ` · showing the first ${formatBytes(MAX_PREVIEW_BYTES)}`}
+                        </span>
+                        <a
+                          href={url}
+                          download={name}
+                          className="flex h-24 items-center rounded border bg-raised px-8 text-text hover:bg-hover"
+                        >
+                          Download
+                        </a>
+                      </div>
+                    </>
+                  )}
+                </m.div>
+              </Dialog.Content>
+            </Dialog.Portal>
+          )}
+        </AnimatePresence>
+      </Dialog.Root>
+      {pin && (
+        <button
+          className={FILE_ACTION}
+          disabled={!connected}
+          aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
+          title={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}
+          onClick={() =>
+            send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
+          }
+        >
+          {pin === 'pinned' ? 'Unpin' : 'Pin'}
+        </button>
+      )}
+    </>
+  )
+  return (
+    <div className="group/file relative">
+      {kind === 'image' ? (
+        <>
+          <img
+            src={url}
+            alt={name}
+            title={name}
+            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain"
+          />
+          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow ${REVEAL}`}>{actions}</span>
+        </>
+      ) : (
+        <div className={`${FILE_CHIP} h-40 bg-panel`} title={name}>
+          <FileLabel name={name} size={size} actions={<span className={`-ml-5 flex ${REVEAL}`}>{actions}</span>} />
+        </div>
+      )}
+      {pin === 'pinned' && (
+        <span
+          className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
+          role="img"
+          aria-label="Pinned to the context"
+          title="Pinned to this chat's context"
+        >
+          <PinIcon />
+        </span>
+      )}
+    </div>
+  )
+}
+
+type ItemProps = {
+  item: Item
+  chat: ChatView
+  contextItems?: ContextItem[]
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
+
+function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
   switch (item.kind) {
     case 'user':
       return (
@@ -208,7 +345,14 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
           {item.attachments && (
             <div className="flex flex-wrap justify-end gap-6">
               {item.attachments.map((a) => (
-                <SentAttachment key={a.path} chatId={chat.id} attachment={a} />
+                <SentAttachment
+                  key={a.path}
+                  chat={chat}
+                  attachment={a}
+                  contextItems={contextItems}
+                  connected={connected}
+                  send={send}
+                />
               ))}
             </div>
           )}
@@ -353,6 +497,10 @@ export function Chat(props: ChatProps) {
   }, [])
 
   useEffect(() => () => pendingRef.current.forEach((p) => p.preview && URL.revokeObjectURL(p.preview)), [])
+
+  useEffect(() => {
+    if (connected) send({ type: 'context.get', chatId: chat.id })
+  }, [chat.id, connected, props.contextDefaults, send])
 
   const archived = chat.archived
   const canChange = connected && chat.status === 'idle' && !archived
@@ -538,7 +686,7 @@ export function Chat(props: ChatProps) {
                 initial={item.kind !== 'text' && enter}
                 animate={MOTION.rise.animate}
               >
-                <ItemView item={item} chat={chat} connected={connected} send={send} />
+                <ItemView item={item} chat={chat} contextItems={props.contextItems} connected={connected} send={send} />
               </m.div>
             ))}
             {chat.draft && (
@@ -760,7 +908,6 @@ export function Chat(props: ChatProps) {
               chatId={chat.id}
               items={props.contextItems}
               chats={props.chats}
-              contextDefaults={props.contextDefaults}
               readOnly={archived}
               connected={connected}
               send={send}

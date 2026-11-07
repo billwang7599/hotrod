@@ -1,4 +1,4 @@
-import { DEFAULT_SUBAGENT_LIMIT, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
 import type {
   Account,
   Attachment,
@@ -337,6 +337,17 @@ export function formatBytes(bytes: number) {
   const [value, unit] = bytes < 1_000_000 ? [bytes / 1000, 'KB'] : [bytes / 1_000_000, 'MB']
   return `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)} ${unit}`
 }
+
+export const MAX_PREVIEW_BYTES = 1_000_000
+
+export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
+  if (chat.id === MAIN_CHAT_ID || chat.archived || !items) return undefined
+  const pinned = items.some((i) => i.section === 'files' && i.from === chat.id && i.path === path)
+  return pinned ? 'pinned' : 'unpinned'
+}
+
+export const previewText = (bytes: Uint8Array) =>
+  looksBinary(bytes) ? undefined : new TextDecoder().decode(bytes.subarray(0, MAX_PREVIEW_BYTES), { stream: true })
 
 export function accountLabel(account: Account) {
   const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'

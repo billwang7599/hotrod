@@ -58,6 +58,7 @@ export type SessionOptions = {
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
   extraDirs?: string[]
+  readFiles?: string[]
   model?: string
   thinking?: string
 }
@@ -151,7 +152,12 @@ export type ContextItem = {
   from: string
   enabled: boolean
   text: string
+  binary?: boolean
 }
+
+const BINARY_SNIFF_BYTES = 8192
+
+export const looksBinary = (bytes: Uint8Array) => bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)
 
 export type NewChat = { parentId?: string; name: string; engine?: string; folders?: string[]; files?: string[] }
 

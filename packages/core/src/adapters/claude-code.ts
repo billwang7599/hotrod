@@ -102,7 +102,8 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  start(machine, { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], model, thinking }, emit) {
+  start(machine, options, emit) {
+    const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking } = options
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -122,13 +123,17 @@ export const claudeCode: Adapter = {
     if (thinking) args.push('--effort', thinking)
     for (const dir of extraDirs) args.push('--add-dir', dir)
     const env = accountEnv(accountDir, apiKey).env ?? {}
+    // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
+    const allowed = readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`)
     if (hotrodMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
       const headers = { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }
       const config = { mcpServers: { hotrod: { type: 'http', url: hotrodMcp.url, headers } } }
-      args.push('--mcp-config', JSON.stringify(config), '--allowedTools', 'mcp__hotrod__*')
+      args.push('--mcp-config', JSON.stringify(config))
+      allowed.unshift('mcp__hotrod__*')
       env.HOTROD_MCP_TOKEN = hotrodMcp.token
     }
+    if (allowed.length) args.push('--allowedTools', ...allowed)
     if (instructions) args.push('--append-system-prompt', instructions)
     const proc = machine.spawn('claude', args, { cwd, ...(Object.keys(env).length && { env }) })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')

@@ -30,7 +30,8 @@ async function start() {
     useContentSize: true,
     title: 'Hotrod',
     icon,
-    webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true },
+    // Chromium's PDF viewer counts as a plugin, and attachment previews need it.
+    webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, plugins: true },
   })
 
   let closing: Promise<void> | undefined

@@ -18,6 +18,7 @@ import {
   CONTEXT_SECTIONS,
   DEFAULT_SUBAGENT_LIMIT,
   IMAGE_TYPES,
+  looksBinary,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
@@ -80,7 +81,10 @@ export function openCore(options: {
   machine: Machine
   stopGraceMs?: number
 }) {
-  const { garage, adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
+  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
+  mkdirSync(options.garage, { recursive: true })
+  // Context paths are saved resolved, so attachment paths must be too for a pin to match its file.
+  const garage = realpathSync(options.garage)
   const adapterFor = (engine: string) => adapters.find((adapter) => adapter.id === engine)
   const checkEngine = (engine: string) => {
     if (!adapterFor(engine)) {
@@ -439,8 +443,10 @@ export function openCore(options: {
         if (seen.has(path)) return []
         seen.add(path)
         const item = { section, path, from: owner.info.id }
-        const text = readText(section === 'folders' ? join(path, 'AGENTS.md') : path)
-        return [{ ...item, enabled: switchOf(chat, item), text }]
+        const bytes = readBytes(section === 'folders' ? join(path, 'AGENTS.md') : path)
+        const binary = section === 'files' && looksBinary(bytes)
+        const text = binary ? '' : bytes.toString('utf8')
+        return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
       })
     })
   }
@@ -513,11 +519,14 @@ export function openCore(options: {
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
-    const contextText = items
-      .filter((item) => item.text.trim())
-      .map(({ section, path, text }) =>
-        section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim(),
-      )
+    const contextText = items.flatMap(({ section, path, text, binary }) => {
+      if (binary) {
+        return [`The file ${path} is not text, so it isn't pasted here. Open it with your tools when you need it.`]
+      }
+      if (!text.trim()) return []
+      return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
+    })
+    const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
     const instructions = [...(isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []), ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
@@ -565,6 +574,7 @@ export function openCore(options: {
         cwd,
         instructions,
         ...(extraDirs.length && { extraDirs }),
+        ...(readFiles.length && { readFiles }),
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
@@ -803,11 +813,11 @@ const optionalText = (value: unknown) => (typeof value === 'string' && value ? v
 
 const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 
-const readText = (file: string) => {
+const readBytes = (file: string) => {
   try {
-    return readFileSync(file, 'utf8')
+    return readFileSync(file)
   } catch {
-    return ''
+    return Buffer.alloc(0)
   }
 }
 
