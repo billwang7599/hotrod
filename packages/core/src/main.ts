@@ -17,13 +17,12 @@ export async function startCore(
   const garage = env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
   const port = Number(env.HOTROD_PORT ?? 4317)
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
-  const machine = localMachine
 
-  const core = openCore({ garage, adapters, defaultEngine: env.HOTROD_ENGINE ?? 'claude-code', machine })
+  const core = openCore({ garage, adapters, defaultEngine: env.HOTROD_ENGINE ?? 'claude-code', machine: localMachine })
   const engines = await Promise.all(
     adapters.map(async (adapter): Promise<EngineInfo> => {
       try {
-        return { id: adapter.id, ...(await adapter.detect(machine)) }
+        return { id: adapter.id, ...(await adapter.detect(localMachine)) }
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error)
         return { id: adapter.id, installed: false, signedIn: false, detail }
