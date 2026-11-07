@@ -61,7 +61,12 @@ export function openCore(options: {
   const logPath = (id: string) => join(projectsDir, id, 'chats', 'main', 'log.jsonl')
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
-  const state = (chat: Chat): ProjectState => ({ ...chat.project, status: chat.status, entries: chat.entries })
+  const state = (chat: Chat): ProjectState => ({
+    ...chat.project,
+    status: chat.status,
+    entries: chat.entries,
+    draft: chat.unsavedText,
+  })
 
   const append = (chat: Chat, entry: ChatEntry) => {
     chat.entries.push(entry)

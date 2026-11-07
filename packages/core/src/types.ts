@@ -65,7 +65,7 @@ export type ChatEntry = { at: string } & (
   | Exclude<EngineEvent, { type: 'text.delta' }>
 )
 
-export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[] }
+export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[]; draft: string }
 
 export type ClientMessage =
   | { type: 'project.add'; path: string }

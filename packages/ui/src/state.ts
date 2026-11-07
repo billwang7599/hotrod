@@ -131,7 +131,7 @@ const toView = (p: ProjectState): ProjectView => ({
   engine: p.engine,
   status: p.status,
   items: p.entries.reduce(applyEntry, []),
-  draft: '',
+  draft: p.draft,
 })
 
 function updateProject(state: State, id: string, update: (p: ProjectView) => ProjectView): State {

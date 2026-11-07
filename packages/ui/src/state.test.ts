@@ -11,6 +11,7 @@ const project = (id: string, entries: ChatEntry[] = []): ProjectState => ({
   engine: 'fake',
   status: 'idle',
   entries,
+  draft: '',
 })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (projectId: string, e: NewEntry): CoreMessage =>
@@ -130,6 +131,14 @@ describe('reduce', () => {
     const done = reduce(streaming, entry('a', { type: 'text.completed', text: 'Hello' }))
     expect(done.projects[0]!.draft).toBe('')
     expect(items(done)).toEqual([{ kind: 'text', text: 'Hello' }])
+  })
+
+  it('continues the draft a snapshot carries from a turn in progress', () => {
+    const state = run(
+      { type: 'snapshot', engines, projects: [{ ...project('a'), status: 'running', draft: 'Hel' }] },
+      { type: 'chat.delta', projectId: 'a', text: 'lo' },
+    )
+    expect(state.projects[0]!.draft).toBe('Hello')
   })
 
   it('tracks chat status', () => {

@@ -288,6 +288,19 @@ describe('chat', () => {
     expect(types(entries).slice(-2)).toEqual(['text.completed', 'turn.completed'])
   })
 
+  it('shows the text streamed so far to clients that join mid-turn', async () => {
+    const t = setup([{ type: 'text.delta', text: 'Hel' }, { type: 'text.delta', text: 'lo' }, ...permissionScript])
+    const project = addProject(t)
+    expect(t.core.projects()[0]?.draft).toBe('')
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'go' })
+    await until(() => statusOf(t.core, project.id) === 'waiting')
+    expect(t.core.projects()[0]?.draft).toBe('Hello')
+
+    t.handle({ type: 'chat.interrupt', projectId: project.id })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+    expect(t.core.projects()[0]?.draft).toBe('')
+  })
+
   it('gives the engine the prior chat and the instructions', async () => {
     const t = setup(permissionScript)
     const dir = tempDir()
