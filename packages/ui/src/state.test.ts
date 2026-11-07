@@ -141,6 +141,25 @@ describe('reduce', () => {
     expect(state.projects[0]!.draft).toBe('Hello')
   })
 
+  it('streams thinking into the turn in order and drops it when the turn ends', () => {
+    const state = run(
+      { type: 'snapshot', engines, projects: [project('a')] },
+      { type: 'chat.thinking', projectId: 'a', text: 'Let me ' },
+      { type: 'chat.thinking', projectId: 'a', text: 'look.' },
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} }),
+      { type: 'chat.thinking', projectId: 'a', text: 'Found it.' },
+      entry('a', { type: 'text.completed', text: 'Done' }),
+    )
+    expect(items(state).map((i) => (i.kind === 'thinking' ? i.text : i.kind))).toEqual([
+      'Let me look.',
+      'tool',
+      'Found it.',
+      'text',
+    ])
+    const ended = reduce(state, entry('a', { type: 'turn.completed' }))
+    expect(items(ended).map((i) => i.kind)).toEqual(['tool', 'text'])
+  })
+
   it('tracks chat status', () => {
     const state = run(
       { type: 'snapshot', engines, projects: [project('a')] },

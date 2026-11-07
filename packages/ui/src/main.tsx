@@ -25,6 +25,13 @@ function ItemView({ item, project, connected, send }: ItemProps) {
       return <Markdown className="assistant" text={item.text} />
     case 'error':
       return <div className="turn-error">{item.text}</div>
+    case 'thinking':
+      return (
+        <details className="thinking">
+          <summary>Thinking…</summary>
+          <div className="thinking-text">{item.text}</div>
+        </details>
+      )
     case 'tool':
       return (
         <details className={`tool ${item.state}`}>

@@ -3,6 +3,7 @@ import type { ChatEntry, ChatStatus, CoreMessage, EngineInfo, ProjectState } fro
 export type Item =
   | { kind: 'user'; text: string }
   | { kind: 'text'; text: string }
+  | { kind: 'thinking'; text: string }
   | {
       kind: 'tool'
       toolId: string
@@ -110,7 +111,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
     }
     case 'turn.completed':
     case 'session.ended': {
-      const settled = items.map((i): Item =>
+      const settled = items.filter((i) => i.kind !== 'thinking').map((i): Item =>
         i.kind === 'tool' && (i.state === 'running' || i.state === 'waiting')
           ? { ...i, state: 'stopped' }
           : i.kind === 'permission' && i.outcome === 'pending'
@@ -163,6 +164,15 @@ export function reduce(state: State, action: Action): State {
       }))
     case 'chat.delta':
       return updateProject(state, action.projectId, (p) => ({ ...p, draft: p.draft + action.text }))
+    case 'chat.thinking':
+      return updateProject(state, action.projectId, (p) => {
+        const last = p.items.at(-1)
+        const items: Item[] =
+          last?.kind === 'thinking'
+            ? [...p.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
+            : [...p.items, { kind: 'thinking', text: action.text }]
+        return { ...p, items }
+      })
     case 'chat.status':
       return updateProject(state, action.projectId, (p) => ({ ...p, status: action.status }))
     case 'error':

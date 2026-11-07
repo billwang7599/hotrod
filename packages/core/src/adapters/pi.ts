@@ -69,9 +69,13 @@ export const pi: Adapter = {
 
     const handle = (msg: any) => {
       switch (msg.type) {
-        case 'message_update':
-          if (msg.assistantMessageEvent?.type === 'text_delta') emit({ type: 'text.delta', text: msg.assistantMessageEvent.delta })
+        case 'message_update': {
+          const { type, delta } = msg.assistantMessageEvent ?? {}
+          if (!delta) return
+          if (type === 'text_delta') emit({ type: 'text.delta', text: delta })
+          if (type === 'thinking_delta') emit({ type: 'thinking.delta', text: delta })
           return
+        }
         case 'message_end': {
           const message = msg.message ?? {}
           if (message.role !== 'assistant') return

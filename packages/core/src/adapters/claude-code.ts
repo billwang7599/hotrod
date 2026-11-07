@@ -72,9 +72,13 @@ export const claudeCode: Adapter = {
     const handle = (msg: any) => {
       const subagent = msg.parent_tool_use_id != null
       switch (msg.type) {
-        case 'stream_event':
-          if (!subagent && msg.event?.delta?.type === 'text_delta') emit({ type: 'text.delta', text: msg.event.delta.text })
+        case 'stream_event': {
+          const delta = msg.event?.delta
+          if (subagent) return
+          if (delta?.type === 'text_delta') emit({ type: 'text.delta', text: delta.text })
+          if (delta?.type === 'thinking_delta' && delta.thinking) emit({ type: 'thinking.delta', text: delta.thinking })
           return
+        }
         case 'assistant':
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && !subagent) emit({ type: 'text.completed', text: block.text })

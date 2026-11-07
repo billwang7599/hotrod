@@ -139,9 +139,25 @@ describe('pi adapter', () => {
     expect(events).toEqual([{ type: 'turn.completed' }])
   })
 
-  it('drops thinking, unknown records and other command responses', () => {
+  it('streams thinking before the reply', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Is 91 prime? Think briefly, then answer in one short sentence.')
+    fake.stdout(fixture('thinking'))
+    const thinking = events.flatMap((e) => (e.type === 'thinking.delta' ? [e.text] : []))
+    expect(thinking.join('')).toMatch(/^The user is asking if 91 is prime\..*don't need to use any tools\.$/s)
+    expect(thinking.every(Boolean)).toBe(true)
+    expect(events.map((e) => e.type).filter((type, i, all) => type !== all[i - 1])).toEqual([
+      'turn.started',
+      'thinking.delta',
+      'text.delta',
+      'text.completed',
+      'turn.completed',
+    ])
+  })
+
+  it('drops empty thinking, unknown records and other command responses', () => {
     const { fake, events } = startSession()
-    fake.stdout(line({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'hmm' } }))
+    fake.stdout(line({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: '' } }))
     fake.stdout(line({ type: 'queue_update', steering: [], followUp: [] }))
     fake.stdout(line({ type: 'response', command: 'abort', success: true }))
     fake.stdout('not json\n')

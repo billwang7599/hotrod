@@ -4,6 +4,7 @@ export type EngineEvent =
   | { type: 'turn.started' }
   | { type: 'text.delta'; text: string }
   | { type: 'text.completed'; text: string }
+  | { type: 'thinking.delta'; text: string }
   | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown }
   | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
   | {
@@ -62,7 +63,7 @@ export type ChatStatus = 'idle' | 'running' | 'waiting'
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean }
-  | Exclude<EngineEvent, { type: 'text.delta' }>
+  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
 export type ProjectState = Project & { status: ChatStatus; entries: ChatEntry[]; draft: string }
@@ -80,5 +81,6 @@ export type CoreMessage =
   | { type: 'project.updated'; project: Project }
   | { type: 'chat.entry'; projectId: string; entry: ChatEntry }
   | { type: 'chat.delta'; projectId: string; text: string }
+  | { type: 'chat.thinking'; projectId: string; text: string }
   | { type: 'chat.status'; projectId: string; status: ChatStatus }
   | { type: 'error'; message: string }

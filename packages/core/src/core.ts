@@ -178,6 +178,10 @@ export function openCore(options: {
         broadcast({ type: 'chat.delta', projectId: chat.project.id, text: event.text })
         return
       }
+      if (event.type === 'thinking.delta') {
+        broadcast({ type: 'chat.thinking', projectId: chat.project.id, text: event.text })
+        return
+      }
       if (event.type === 'text.completed') chat.unsavedText = ''
       append(chat, { at, ...event })
       if (event.type === 'permission.requested') {

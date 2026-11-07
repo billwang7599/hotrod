@@ -160,6 +160,22 @@ describe('chat', () => {
     expect(t.calls[0]?.closed).toBe(true)
   })
 
+  it('streams thinking live without saving or replaying it', async () => {
+    const t = setup([{ type: 'thinking.delta', text: 'Hmm, ' }, { type: 'thinking.delta', text: 'SECRET' }, ...textScript])
+    const project = addProject(t)
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'hi' })
+    await until(() => statusOf(t.core, project.id) === 'idle')
+
+    const thinking = t.messages.flatMap((m) => (m.type === 'chat.thinking' ? [m.text] : []))
+    expect(thinking.join('')).toBe('Hmm, SECRET')
+    expect(types(entriesOf(t.core, project.id))).toEqual(['user.message', 'turn.started', 'text.completed', 'turn.completed'])
+    const log = readFileSync(join(t.garage, 'projects', project.id, 'chats', 'main', 'log.jsonl'), 'utf8')
+    expect(log).not.toContain('SECRET')
+
+    t.handle({ type: 'chat.send', projectId: project.id, text: 'again' })
+    expect(t.calls[1]?.prompt).not.toContain('SECRET')
+  })
+
   it('rejects a send while a turn runs', async () => {
     const t = setup(permissionScript)
     const project = addProject(t)

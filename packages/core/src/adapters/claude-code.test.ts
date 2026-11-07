@@ -57,6 +57,29 @@ describe('claudeCode adapter', () => {
     ])
   })
 
+  it("streams thinking text but not a subagent's", () => {
+    const { fake, events } = startSession()
+    const thinking = (text: string, parent: string | null = null) =>
+      JSON.stringify({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: text } },
+        parent_tool_use_id: parent,
+      }) + '\n'
+    fake.stdout(thinking('Let me ') + thinking('check.') + thinking('inner', 'toolu_1'))
+    expect(events).toEqual([
+      { type: 'thinking.delta', text: 'Let me ' },
+      { type: 'thinking.delta', text: 'check.' },
+    ])
+  })
+
+  it('shows nothing for thinking that arrives as a signature only', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Think hard: is 91 prime? Answer in one short sentence.')
+    fake.stdout(fixture('thinking-redacted'))
+    expect(events.map((e) => e.type)).not.toContain('thinking.delta')
+    expect(events.at(-2)).toEqual({ type: 'text.completed', text: "No, 91 isn't prime, because 91 = 7 × 13." })
+  })
+
   it('asks permission for a tool call and passes the input back on allow', () => {
     const { fake, events, session } = startSession()
     session.prompt('Run the shell command: echo hi > a.txt. Then say done.')
