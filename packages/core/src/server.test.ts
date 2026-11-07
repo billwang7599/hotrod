@@ -7,9 +7,10 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
 import { startServer } from './server.ts'
-import type { CoreMessage } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, type CoreMessage } from './types.ts'
 
 const origin = 'http://localhost:4318'
+const token = 'test-token-0123456789'
 const engines = [{ id: 'fake', installed: true, signedIn: true }]
 const cleanups: (() => void | Promise<void>)[] = []
 
@@ -31,6 +32,7 @@ async function start() {
     engines,
     port: 0,
     uiOrigin: origin,
+    token,
   })
   cleanups.push(() => {
     core.close()
@@ -38,7 +40,8 @@ async function start() {
     rmSync(project, { recursive: true, force: true })
   })
   cleanups.push(() => server.close())
-  return { url: `ws://127.0.0.1:${server.port}`, project }
+  const base = `ws://127.0.0.1:${server.port}`
+  return { base, url: `${base}/?token=${token}`, project }
 }
 
 function connect(url: string, headers: { origin?: string }) {
@@ -63,6 +66,18 @@ it('rejects other origins', async () => {
       socket.on('unexpected-response', (_req, res) => resolve(res.statusCode ?? 0)),
     )
     expect(status).toBe(403)
+  }
+})
+
+it('closes connections without the right token before sending anything', async () => {
+  const { base } = await start()
+  for (const query of ['', '?token=', '?token=wrong', `?token=${token.slice(0, -1)}X`, `?token=${token}x`]) {
+    const { socket, messages } = connect(`${base}/${query}`, { origin })
+    const close = await new Promise<{ code: number; reason: string }>((resolve) =>
+      socket.on('close', (code, reason) => resolve({ code, reason: String(reason) })),
+    )
+    expect(close).toEqual({ code: BAD_TOKEN_CLOSE_CODE, reason: 'Missing or wrong token' })
+    expect(messages).toEqual([])
   }
 })
 
@@ -124,6 +139,7 @@ it('serves the UI folder when given one', async () => {
     engines,
     port: 0,
     uiOrigin: origin,
+    token,
     uiDir,
   })
   cleanups.push(() => {
@@ -146,7 +162,7 @@ it('serves the UI folder when given one', async () => {
 })
 
 it('serves no files without a UI folder', async () => {
-  const { url } = await start()
-  const response = await fetch(url.replace('ws:', 'http:'))
+  const { base } = await start()
+  const response = await fetch(base.replace('ws:', 'http:'))
   expect(response.ok).toBe(false)
 })

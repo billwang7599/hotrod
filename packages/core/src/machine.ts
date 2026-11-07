@@ -12,6 +12,7 @@ export const STRIPPED_ENV_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
   'OPENAI_API_KEY',
+  'HOTROD_TOKEN',
 ] as const
 
 const liveGroups = new Set<number>()

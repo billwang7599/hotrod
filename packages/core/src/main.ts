@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { claudeCode } from './adapters/claude-code.ts'
@@ -17,6 +18,7 @@ export async function startCore(
   const garage = env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
   const port = Number(env.HOTROD_PORT ?? 4317)
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
+  const token = env.HOTROD_TOKEN || randomBytes(32).toString('base64url')
 
   const core = openCore({ garage, adapters, defaultEngine: env.HOTROD_ENGINE ?? 'claude-code', machine: localMachine })
   const engines = await Promise.all(
@@ -29,13 +31,15 @@ export async function startCore(
       }
     }),
   )
-  const server = await startServer({ core, engines, port, uiOrigin: uiUrl, uiDir })
+  const server = await startServer({ core, engines, port, uiOrigin: uiUrl, token, uiDir })
   return {
     core,
     engines,
     garage,
     port: server.port,
     uiUrl,
+    token,
+    openUrl: `${uiUrl}/#token=${encodeURIComponent(token)}`,
     close: async () => {
       await Promise.all([core.close(), server.close()])
     },
@@ -58,6 +62,7 @@ if (import.meta.main) {
   try {
     const hotrod = await startCore()
     console.log(`Hotrod core on ws://127.0.0.1:${hotrod.port} (garage ${hotrod.garage})`)
+    console.log(`Open ${hotrod.openUrl}`)
     closeOnSignals(hotrod.close)
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
