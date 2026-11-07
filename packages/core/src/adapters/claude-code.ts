@@ -12,9 +12,22 @@ const KINDS: Record<string, ToolKind> = {
   WebSearch: 'fetch',
 }
 
+const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
+  shell: ['command'],
+  edit: ['file_path', 'notebook_path'],
+  read: ['file_path'],
+  search: ['pattern', 'query'],
+  fetch: ['url', 'query'],
+}
+
 const STDERR_TAIL_CHARS = 2000
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
+
+function summarize(kind: ToolKind, input: any): string {
+  const picked = SUMMARY_FIELDS[kind]?.map((key) => input?.[key]).find((value) => typeof value === 'string')
+  return (picked ?? JSON.stringify(input) ?? '').replace(/\s+/g, ' ').trim()
+}
 
 export const claudeCode: Adapter = {
   id: 'claude-code',
@@ -66,7 +79,9 @@ export const claudeCode: Adapter = {
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && !subagent) emit({ type: 'text.completed', text: block.text })
             if (block.type === 'tool_use') {
-              emit({ type: 'tool.started', toolId: block.id, name: block.name, kind: kindOf(block.name), input: block.input })
+              const kind = kindOf(block.name)
+              const summary = summarize(kind, block.input)
+              emit({ type: 'tool.started', toolId: block.id, name: block.name, kind, summary, input: block.input })
             }
           }
           return
@@ -89,12 +104,14 @@ export const claudeCode: Adapter = {
             return
           }
           pendingInputs.set(msg.request_id, request.input)
+          const kind = kindOf(request.tool_name)
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
             ...(request.tool_use_id ? { toolId: request.tool_use_id } : {}),
             name: request.tool_name,
-            kind: kindOf(request.tool_name),
+            kind,
+            summary: summarize(kind, request.input),
             input: request.input,
           })
           return

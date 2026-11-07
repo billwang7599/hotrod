@@ -100,8 +100,8 @@ describe('claudeCode adapter', () => {
     const requestId = 'de66ecb3-0e29-4144-ade3-d72a3112773f'
     expect(events).toEqual([
       { type: 'turn.started' },
-      { type: 'tool.started', toolId, name: 'Bash', kind: 'shell', input },
-      { type: 'permission.requested', requestId, toolId, name: 'Bash', kind: 'shell', input },
+      { type: 'tool.started', toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
+      { type: 'permission.requested', requestId, toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
       { type: 'tool.completed', toolId, output: '(Bash completed with no output)', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.delta', text: '.' },
@@ -203,6 +203,43 @@ describe('claudeCode adapter', () => {
     fake.stdout(JSON.stringify({ type: 'assistant', message: { content }, parent_tool_use_id: null }) + '\n')
     expect(events.map((e) => e.type === 'tool.started' && e.kind)).toEqual([
       'shell', 'edit', 'edit', 'edit', 'read', 'search', 'search', 'fetch', 'fetch', 'mcp', 'other',
+    ])
+  })
+
+  it('summarizes tool inputs in one line', () => {
+    const { fake, events } = startSession()
+    const tools: [string, unknown][] = [
+      ['Bash', { command: 'ls\n  -la', description: 'List' }],
+      ['Edit', { file_path: '/a.ts', old_string: 'x', new_string: 'y' }],
+      ['NotebookEdit', { notebook_path: '/n.ipynb' }],
+      ['Read', { file_path: '/b.ts' }],
+      ['Grep', { pattern: 'foo', path: '/src' }],
+      ['WebFetch', { url: 'https://x.dev', prompt: 'p' }],
+      ['WebSearch', { query: 'hotrod' }],
+      ['mcp__x__y', { a: 1, b: 'two  words\nmore' }],
+      ['Bash', {}],
+    ]
+    const content = tools.map(([name, input], i) => ({ type: 'tool_use', id: `t${i}`, name, input }))
+    fake.stdout(JSON.stringify({ type: 'assistant', message: { content }, parent_tool_use_id: null }) + '\n')
+    expect(events.map((e) => e.type === 'tool.started' && e.summary)).toEqual([
+      'ls -la',
+      '/a.ts',
+      '/n.ipynb',
+      '/b.ts',
+      'foo',
+      'https://x.dev',
+      'hotrod',
+      '{"a":1,"b":"two words\\nmore"}',
+      '{}',
+    ])
+  })
+
+  it('summarizes a permission request', () => {
+    const { fake, events } = startSession()
+    const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
+    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'r1', request }) + '\n')
+    expect(events).toEqual([
+      { type: 'permission.requested', requestId: 'r1', name: 'Write', kind: 'edit', summary: '/c.ts', input: request.input },
     ])
   })
 

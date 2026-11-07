@@ -14,8 +14,16 @@ const textScript: FakeStep[] = [
 ]
 
 const permissionScript: FakeStep[] = [
-  { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', input: { command: 'touch x' } },
-  { type: 'permission', toolId: 't1', name: 'Bash', kind: 'shell', input: { command: 'touch x' }, output: 'created' },
+  { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'touch x', input: { command: 'touch x' } },
+  {
+    type: 'permission',
+    toolId: 't1',
+    name: 'Bash',
+    kind: 'shell',
+    summary: 'touch x',
+    input: { command: 'touch x' },
+    output: 'created',
+  },
   { type: 'text.completed', text: 'Done' },
 ]
 
@@ -303,11 +311,11 @@ describe('chat', () => {
   it('replays tool inputs and outputs in full and marks errors and missing results', async () => {
     const longCommand = `echo ${'x'.repeat(300)}`
     const t = setup([
-      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', input: { command: longCommand } },
+      { type: 'tool.started', toolId: 'a', name: 'Bash', kind: 'shell', summary: 'echo', input: { command: longCommand } },
       { type: 'tool.completed', toolId: 'a', output: 'line one\nline two\nline three', isError: false },
-      { type: 'tool.started', toolId: 'b', name: 'Read', kind: 'read', input: { file_path: '/nope' } },
+      { type: 'tool.started', toolId: 'b', name: 'Read', kind: 'read', summary: '/nope', input: { file_path: '/nope' } },
       { type: 'tool.completed', toolId: 'b', output: 'File does not exist', isError: true },
-      { type: 'tool.started', toolId: 'c', name: 'Bash', kind: 'shell', input: { command: 'sleep 9' } },
+      { type: 'tool.started', toolId: 'c', name: 'Bash', kind: 'shell', summary: 'sleep 9', input: { command: 'sleep 9' } },
     ])
     const project = addProject(t)
     t.handle({ type: 'chat.send', projectId: project.id, text: 'first' })

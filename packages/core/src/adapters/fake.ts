@@ -3,7 +3,7 @@ import type { Adapter, EngineEvent, ToolKind } from '../types.ts'
 
 export type FakeStep =
   | EngineEvent
-  | { type: 'permission'; toolId: string; name: string; kind: ToolKind; input: unknown; output: string }
+  | { type: 'permission'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown; output: string }
 
 const demoReply = (text: string): FakeStep[] => [
   ...text.split(/(?<= )/).map((word): FakeStep => ({ type: 'text.delta', text: word })),
@@ -12,12 +12,13 @@ const demoReply = (text: string): FakeStep[] => [
 
 const demoScript: FakeStep[] = [
   ...demoReply("I'll look at what's in this folder first."),
-  { type: 'tool.started', toolId: 'demo-ls', name: 'Bash', kind: 'shell', input: { command: 'ls -la' } },
+  { type: 'tool.started', toolId: 'demo-ls', name: 'Bash', kind: 'shell', summary: 'ls -la', input: { command: 'ls -la' } },
   {
     type: 'permission',
     toolId: 'demo-ls',
     name: 'Bash',
     kind: 'shell',
+    summary: 'ls -la',
     input: { command: 'ls -la' },
     output: 'total 16\n-rw-r--r--  1 you  staff  120 README.md\ndrwxr-xr-x  4 you  staff  128 src',
   },
@@ -50,10 +51,10 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
             emit(step)
             return play(rest)
           }
-          const { toolId, name, kind, input, output } = step
+          const { toolId, name, kind, summary, input, output } = step
           const requestId = `perm-${toolId}`
           pending = { requestId, toolId, output, rest }
-          emit({ type: 'permission.requested', requestId, toolId, name, kind, input })
+          emit({ type: 'permission.requested', requestId, toolId, name, kind, summary, input })
         }, delayMs)
       }
 
