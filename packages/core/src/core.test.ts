@@ -679,7 +679,7 @@ describe('engines', () => {
     const t = setupEngines()
     await t.core.refreshEngines()
     const chat = addProject(t)
-    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING.at(-1)!]
+    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING.at(-1)!]
     t.handle({ type: 'chat.setModel', chatId: chat.id, model, thinking })
     expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, model, thinking } })
     expect(JSON.parse(readFileSync(chatFile(t, chat.projectId), 'utf8'))).toMatchObject({ model, thinking })
@@ -711,7 +711,7 @@ describe('engines', () => {
       /thinking level "nope"/,
     )
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0] })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: FAKE_MODELS[0]!.id })).toThrow(/turn/)
     expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
   })
 
@@ -722,14 +722,14 @@ describe('engines', () => {
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
     await t.core.refreshEngines()
-    const [model, thinking] = [FAKE_MODELS.at(-1)!, FAKE_THINKING[0]!]
+    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING[0]!]
     t.handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0], thinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0]!.id, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
-    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0], thinking })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0]!.id, thinking })
   })
 
   it('keeps a chat whose saved engine is gone and refuses to send', () => {
@@ -1481,6 +1481,79 @@ describe('context', () => {
       t.handle({ type: 'context.write', chatId: projectMain.id, kind: 'project', text: 'x' }),
     ).toThrow(/archived/)
     expect(layersOf(t, sub.id)).toHaveLength(2)
+  })
+})
+
+describe('model lists', () => {
+  const [newest, older] = FAKE_MODELS.map((m) => m.id) as [string, string]
+  const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
+  const lastTurn = (core: Core, id: string) => entriesOf(core, id).findLast((e) => e.type === 'turn.completed')
+  const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+    return t.calls.at(-1)!.options.model
+  }
+
+  it('saves a list per engine and role in settings.json, tells every client and keeps it after a restart', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    const empty = { chat: [], planning: [], searching: [], subagents: [] }
+    expect(t.core.modelLists()).toEqual({ fake: empty })
+
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'planning', models: [older, newest] })
+    const lists = { ...empty, planning: [older, newest] }
+    expect(t.messages.at(-1)).toEqual({ type: 'models.updated', engine: 'fake', lists })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
+      theme: 'dark',
+      models: { fake: { planning: [older, newest] } },
+    })
+
+    expect(() => t.handle({ type: 'models.setList', engine: 'nope', role: 'chat', models: [] })).toThrow(/engine/)
+    expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'nope', models: [] } as never)).toThrow(
+      /role/,
+    )
+    for (const models of ['x', [1], ['']]) {
+      expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models } as never)).toThrow(
+        /model ids/,
+      )
+    }
+    t.core.close()
+    expect(setup(textScript, garage).core.modelLists()).toEqual({ fake: lists })
+  })
+
+  it('starts an Auto chat on the first listed model the engine offers, and keeps the model that ran', async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone', older, newest] })
+    expect(await sendAndWait(t)).toBe(older)
+    expect(lastTurn(t.core, 'main')).toMatchObject({ model: older })
+    t.core.close()
+    expect(lastTurn(setup(textScript, t.garage).core, 'main')).toMatchObject({ model: older })
+  })
+
+  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as Auto", async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [older] })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: newest })
+    expect(await sendAndWait(t)).toBe(newest)
+
+    const chatFile = join(t.garage, 'chats', 'main', 'chat.json')
+    writeFileSync(chatFile, JSON.stringify({ ...JSON.parse(readFileSync(chatFile, 'utf8')), model: 'opus' }))
+    t.core.close()
+    const reopened = setup(textScript, t.garage)
+    await reopened.core.refreshEngines()
+    expect(await sendAndWait(reopened)).toBe(older)
+  })
+
+  it('runs on the engine default when nothing listed is offered, and shows the model the engine used', async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    expect(await sendAndWait(t)).toBeUndefined()
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone'] })
+    expect(await sendAndWait(t)).toBeUndefined()
+    expect(lastTurn(t.core, 'main')).toMatchObject({ model: FAKE_MODELS[0]!.id })
   })
 })
 

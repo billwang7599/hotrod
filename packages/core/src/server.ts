@@ -68,6 +68,7 @@ export async function startServer(options: {
       accounts: core.accounts(),
       contextDefaults: core.contextDefaults(),
       mods: core.mods(),
+      modelLists: core.modelLists(),
     })
     socket.on('message', (data) => {
       try {

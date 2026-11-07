@@ -64,7 +64,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', model: 'anthropic/claude-haiku-5-5' },
     ])
   })
 
@@ -80,7 +80,7 @@ describe('pi adapter', () => {
       { type: 'tool.completed', toolId, output: 'a.txt\nAGENTS.md\n', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.completed', text: 'Done' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', model: 'anthropic/claude-haiku-5-5' },
     ])
   })
 
@@ -95,6 +95,7 @@ describe('pi adapter', () => {
         error:
           '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},' +
           '"request_id":"req_011Cgnpak7k1PTbanzGJJQ4d"}',
+        model: 'anthropic/claude-haiku-5-5',
       },
     ])
   })
@@ -118,7 +119,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'bash', kind: 'shell', summary: 'sleep 30', input: { command: 'sleep 30', timeout: 60 } },
       { type: 'tool.completed', toolId, output: 'Command aborted', isError: true },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', model: 'anthropic/claude-haiku-5-5' },
     ])
   })
 
@@ -277,9 +278,12 @@ describe('pi.detect', () => {
       'pi --list-models --offline': {
         code: 0,
         stdout:
-          'provider   model             context  max-out  thinking  images\n' +
-          'anthropic  claude-haiku-5-5  1M       128K     yes       yes   \n' +
-          'openai     gpt-5             400K     128K     yes       yes   \n',
+          'provider   model                      context  max-out  thinking  images\n' +
+          'anthropic  claude-haiku-4-5           200K     64K      yes       yes   \n' +
+          'anthropic  claude-haiku-4-5-20251001  200K     64K      yes       yes   \n' +
+          'anthropic  claude-haiku-5-5           1M       128K     yes       yes   \n' +
+          'anthropic  claude-opus-4-8            1M       128K     yes       yes   \n' +
+          'openai     gpt-5                      400K     128K     yes       yes   \n',
         stderr: '',
       },
     })
@@ -287,7 +291,12 @@ describe('pi.detect', () => {
       installed: true,
       signedIn: true,
       detail: '1.5.0',
-      models: ['anthropic/claude-haiku-5-5', 'openai/gpt-5'],
+      models: [
+        { id: 'anthropic/claude-opus-4-8', label: 'Opus 4.8' },
+        { id: 'anthropic/claude-haiku-5-5', label: 'Haiku 5.5' },
+        { id: 'anthropic/claude-haiku-4-5', label: 'Haiku 4.5' },
+        { id: 'openai/gpt-5', label: 'openai/gpt-5' },
+      ],
       thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
     })
   })

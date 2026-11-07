@@ -1,60 +1,50 @@
-import { useEffect, useRef, useState } from 'react'
-import type { ClientMessage, Project } from '@hotrod/core/types'
+import { DropdownMenu } from 'radix-ui'
+import type { ChatStatus, ClientMessage, Project } from '@hotrod/core/types'
+import { Button, Chevron, confirm, NAV_LABEL } from './controls.tsx'
 import { MAIN_CHAT_ID, type ChatView } from './state.ts'
 
 const CHAT_BUSY = 'Stop this chat first'
 const PROJECT_BUSY = 'Stop the running chats in this project first'
+const DOTS: Record<ChatStatus, string> = {
+  idle: 'bg-faint',
+  running: 'bg-green animate-blink',
+  waiting: 'bg-amber',
+  stopping: 'bg-amber',
+}
+const ROW_ACTION = 'hidden group-hover/row:block group-focus-within/row:block'
 
 type MenuItem = { label: string; run: () => void; danger?: boolean; disabledReason?: string }
 
 function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
-  const [position, setPosition] = useState<{ top: number; right: number } | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!position) return
-    const onPointer = (e: MouseEvent) => ref.current?.contains(e.target as Node) || setPosition(null)
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setPosition(null)
-    document.addEventListener('mousedown', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [position])
   return (
-    <div className={`row-menu ${position ? 'open' : ''}`} ref={ref}>
-      <button
-        className="ghost icon"
-        aria-label={`More for ${label}`}
-        aria-haspopup="menu"
-        aria-expanded={!!position}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect()
-          setPosition(position ? null : { top: rect.bottom + 4, right: window.innerWidth - rect.right })
-        }}
-      >
-        ⋯
-      </button>
-      {position && (
-        <div className="menu" role="menu" style={position}>
+    <DropdownMenu.Root modal={false}>
+      <div className={`mr-2 has-data-[state=open]:block ${ROW_ACTION}`}>
+        <DropdownMenu.Trigger asChild>
+          <Button variant="ghost" size="icon" aria-label={`More for ${label}`}>
+            ⋯
+          </Button>
+        </DropdownMenu.Trigger>
+      </div>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={4}
+          className="z-20 flex min-w-140 flex-col rounded-lg border bg-panel p-4 shadow outline-none"
+        >
           {items.map((item) => (
-            <button
+            <DropdownMenu.Item
               key={item.label}
-              role="menuitem"
-              className={item.danger ? 'danger' : ''}
               disabled={!!item.disabledReason}
               title={item.disabledReason}
-              onClick={() => {
-                setPosition(null)
-                item.run()
-              }}
+              onSelect={item.run}
+              className={`flex h-26 cursor-pointer items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:cursor-default data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
             >
               {item.label}
-            </button>
+            </DropdownMenu.Item>
           ))}
-        </div>
-      )}
-    </div>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   )
 }
 
@@ -71,32 +61,36 @@ type RowProps = {
 }
 
 function ChatRow({ chat, label, title, selected, sub, nested, select, add, menu }: RowProps) {
-  const classes = [
-    'chat-row',
-    selected && 'selected',
-    sub && 'sub',
-    nested && 'nested',
-    add && 'project-row',
-    menu && 'has-menu',
-  ]
+  const highlight = selected
+    ? 'bg-raised text-text'
+    : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
+  const engineHidden = menu
+    ? 'group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden'
+    : ''
   return (
-    <div className={classes.filter(Boolean).join(' ')}>
-      <button className="chat-link" title={title ?? label} onClick={select}>
-        <span className={`dot ${chat.status}`} />
-        <span className="chat-label">{label}</span>
-        {chat.parentId && <span className="chat-tag">subagent</span>}
-        {!add && <span className="chat-engine">{chat.engine}</span>}
+    <div className={`group/row relative flex shrink-0 items-center rounded ${highlight}`}>
+      <button
+        className={`flex h-control min-w-0 flex-1 items-center gap-8 pr-8 text-left whitespace-nowrap ${nested ? 'pl-36' : sub ? 'pl-22' : 'pl-8'} ${add ? 'font-medium text-text' : ''}`}
+        title={title ?? label}
+        onClick={select}
+      >
+        <span className={`size-7 shrink-0 rounded-full ${DOTS[chat.status]}`} />
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        {chat.parentId && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
+        {!add && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
       {add && (
-        <button
-          className="ghost icon add-chat"
+        <Button
+          variant="ghost"
+          size="icon"
+          className={ROW_ACTION}
           aria-label={add.label}
           title={add.label}
           disabled={!!add.disabledReason}
           onClick={add.run}
         >
           +
-        </button>
+        </Button>
       )}
       {menu && <RowMenu label={label} items={menu} />}
     </div>
@@ -125,8 +119,8 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
 
   const chatMenu = (chat: ChatView): MenuItem[] => {
     const disabledReason = offline ?? (chat.status !== 'idle' ? CHAT_BUSY : undefined)
-    const remove = () => {
-      if (window.confirm(`Delete “${chat.title}”? Its messages are deleted from Hotrod.`)) {
+    const remove = async () => {
+      if (await confirm(`Delete “${chat.title}”? Its messages are deleted from Hotrod.`)) {
         send({ type: 'chat.delete', chatId: chat.id })
       }
     }
@@ -141,9 +135,9 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
   }
   const projectMenu = (project: Project): MenuItem[] => {
     const disabledReason = offline ?? (projectBusy(project.id) ? PROJECT_BUSY : undefined)
-    const remove = () => {
+    const remove = async () => {
       const folder = `The folder ${project.path} stays on disk.`
-      if (window.confirm(`Remove ${project.name} from Hotrod and delete its chats? ${folder}`)) send({ type: 'project.delete', projectId: project.id })
+      if (await confirm(`Remove ${project.name} from Hotrod and delete its chats? ${folder}`)) send({ type: 'project.delete', projectId: project.id })
     }
     return [
       {
@@ -182,7 +176,7 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
   const placeOf = (chat: ChatView) => projects.find((p) => p.id === chat.projectId)?.name ?? 'Workshop'
 
   return (
-    <nav className="chat-nav">
+    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pb-8">
       {main &&
         withSubagents(main, {
           label: 'Workshop',
@@ -191,12 +185,18 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
           sub: false,
         })}
       {subchats().map((c) => withSubagents(c))}
-      <button className="ghost small new-chat" disabled={!connected} onClick={() => send({ type: 'chat.create' })}>
+      <Button
+        variant="ghost"
+        size="small"
+        className="mt-2 ml-14 self-start"
+        disabled={!connected}
+        onClick={() => send({ type: 'chat.create' })}
+      >
         + New chat
-      </button>
+      </Button>
 
-      <div className="nav-label">Projects</div>
-      {activeProjects.length === 0 && <div className="nav-empty">No projects yet</div>}
+      <div className={NAV_LABEL}>Projects</div>
+      {activeProjects.length === 0 && <div className="px-8 py-2 text-sm text-faint">No projects yet</div>}
       {activeProjects.map((project) => {
         const projectMain = chats.find((c) => c.projectId === project.id && c.main)
         return (
@@ -220,9 +220,9 @@ export function ChatNav({ projects, chats, selectedId, connected, send, select }
       })}
 
       {(archivedProjects.length > 0 || archivedChats.length > 0) && (
-        <details className="archived-group">
-          <summary className="nav-label">
-            <span className="disclosure" />
+        <details className="group mt-auto">
+          <summary className={`list-none ${NAV_LABEL}`}>
+            <Chevron />
             Archived ({archivedProjects.length + archivedChats.length})
           </summary>
           {archivedProjects.map((project) => {

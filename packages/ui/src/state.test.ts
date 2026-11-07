@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatEntry, ChatState, ContextLayer, CoreMessage, Project } from '@hotrod/core/types'
 import type { Account, EngineAccounts } from '@hotrod/core/types'
-import { accountLabel, engineOptions, initialState, MAIN_CHAT_ID, reduce, type Action, type State } from './state.ts'
+import {
+  accountLabel,
+  engineOptions,
+  initialState,
+  MAIN_CHAT_ID,
+  modelMenu,
+  reduce,
+  type Action,
+  type State,
+} from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
 const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
@@ -21,8 +30,10 @@ const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatSt
 const project = (id: string): Project => ({ id, name: id, path: `/tmp/${id}`, archived: false })
 const contextDefaults = { workshop: true, repo: true, project: true, parent: true, own: true }
 const mods = { subagents: { enabled: false, limit: 4 } }
+const noLists = { chat: [], planning: [], searching: [], subagents: [] }
+const modelLists = { fake: noLists }
 const snapshot = (chats: ChatState[], projects: Project[] = []): Action =>
-  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults, mods })
+  ({ type: 'snapshot', engines, accounts: [], projects, chats, contextDefaults, mods, modelLists })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -127,7 +138,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults, mods },
+      { type: 'snapshot', engines, accounts: [], projects: [], chats: [], contextDefaults, mods, modelLists },
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -139,7 +150,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults, mods },
+      { type: 'snapshot', engines, accounts: [fake, other], projects: [], chats: [], contextDefaults, mods, modelLists },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -317,5 +328,53 @@ describe('reduce', () => {
     expect(loaded.mods).toEqual(mods)
     const on = { subagents: { enabled: true, limit: -1 } }
     expect(reduce(loaded, { type: 'mods.updated', mods: on }).mods).toEqual(on)
+  })
+
+  it('loads the model lists from the snapshot and replaces one engine on update', () => {
+    const lists = { ...noLists, chat: ['b'] }
+    const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', engine: 'pi', lists })
+    expect(state.modelLists).toEqual({ fake: noLists, pi: lists })
+  })
+
+  it('remembers the model that last ran, from the log and from live turns', () => {
+    const ran = (id: string) => ({ at, type: 'turn.completed' as const, model: id })
+    const loaded = run(snapshot([chat('a', [ran('x'), { at, type: 'turn.completed' }])]))
+    expect(loaded.chats[0]?.ranModel).toBe('x')
+    expect(reduce(loaded, entry('a', { type: 'turn.completed', model: 'y' })).chats[0]?.ranModel).toBe('y')
+  })
+})
+
+describe('modelMenu', () => {
+  const catalog = [
+    { id: 'opus-5-5', label: 'Opus 5.5' },
+    { id: 'opus-4-8', label: 'Opus 4.8' },
+    { id: 'haiku-5-5', label: 'Haiku 5.5' },
+  ]
+  const offers = { ...engines[0]!, models: catalog }
+  const view = (extra: object = {}) => ({ ...reduce(initialState, snapshot([chat('a')])).chats[0]!, ...extra })
+
+  it('lists Auto with the model it would run, then every offered model by its label', () => {
+    const lists = { ...noLists, chat: ['gone', 'opus-4-8'] }
+    expect(modelMenu(view(), offers, lists)).toEqual({
+      value: '',
+      options: [{ id: '', label: 'Auto · Opus 4.8' }, ...catalog],
+    })
+    expect(modelMenu(view({ model: 'haiku-5-5' }), offers, lists).value).toBe('haiku-5-5')
+  })
+
+  it("uses a subagent's role list, falling back to the Chat list when it is empty", () => {
+    const lists = { ...noLists, chat: ['opus-5-5'], planning: ['haiku-5-5'] }
+    expect(modelMenu(view({ role: 'planning' }), offers, lists).options[0]?.label).toBe('Auto · Haiku 5.5')
+    expect(modelMenu(view({ role: 'subagents' }), offers, lists).options[0]?.label).toBe('Auto · Opus 5.5')
+  })
+
+  it('shows a pick the engine no longer offers as Auto, and the model that last ran when nothing is listed', () => {
+    expect(modelMenu(view({ model: 'opus' }), offers, noLists)).toEqual({
+      value: '',
+      options: [{ id: '', label: 'Auto' }, ...catalog],
+    })
+    expect(modelMenu(view({ ranModel: 'opus-5-5' }), offers, noLists).options[0]?.label).toBe('Auto · Opus 5.5')
+    expect(modelMenu(view({ ranModel: 'other/x' }), offers, undefined).options[0]?.label).toBe('Auto · other/x')
+    expect(modelMenu(view(), undefined, undefined)).toEqual({ value: '', options: [{ id: '', label: 'Auto' }] })
   })
 })

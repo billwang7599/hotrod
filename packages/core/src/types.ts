@@ -16,7 +16,7 @@ export type EngineEvent =
       summary: string
       input: unknown
     }
-  | { type: 'turn.completed'; error?: string }
+  | { type: 'turn.completed'; error?: string; model?: string }
   | { type: 'session.ended'; error?: string }
 
 export interface EngineProcess {
@@ -37,11 +37,13 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
+export type ModelOption = { id: string; label: string }
+
 export type EngineStatus = {
   installed: boolean
   signedIn: boolean
   detail?: string
-  models?: string[]
+  models?: ModelOption[]
   thinking?: string[]
 }
 
@@ -106,8 +108,22 @@ export type ChatInfo = {
   archived: boolean
   createdAt: string
   parentId?: string
+  role?: ModelRole
   model?: string
   thinking?: string
+}
+
+export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
+
+export type ModelRole = (typeof MODEL_ROLES)[number]
+
+export type ModelLists = Record<ModelRole, string[]>
+
+export function pickModel(offered: ModelOption[], lists: ModelLists, chat: { model?: string; role?: ModelRole }) {
+  const offers = (id?: string) => offered.some((m) => m.id === id)
+  if (offers(chat.model)) return chat.model
+  const list = lists[chat.role ?? 'chat']
+  return (list?.length ? list : lists.chat).find(offers)
 }
 
 export type Mods = { subagents: { enabled: boolean; limit: number } }
@@ -162,6 +178,7 @@ export type ClientMessage =
   | { type: 'context.write'; chatId: string; kind: ContextKind; text: string }
   | { type: 'context.setDefault'; kind: ContextKind; enabled: boolean }
   | { type: 'subagents.set'; enabled: boolean; limit: number }
+  | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
   | { type: 'account.addApiKey'; engine: string; name: string; key: string }
@@ -180,6 +197,7 @@ export type CoreMessage =
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextKind, boolean>
       mods: Mods
+      modelLists: Record<string, ModelLists>
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -198,4 +216,5 @@ export type CoreMessage =
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextKind, boolean> }
   | { type: 'mods.updated'; mods: Mods }
+  | { type: 'models.updated'; engine: string; lists: ModelLists }
   | { type: 'error'; message: string }

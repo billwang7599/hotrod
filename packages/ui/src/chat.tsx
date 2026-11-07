@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react'
 import type {
   ChatStatus,
   ClientMessage,
@@ -6,11 +6,14 @@ import type {
   ContextLayer,
   EngineAccounts,
   EngineInfo,
+  ModelLists,
   Project,
 } from '@hotrod/core/types'
 import { ContextPanel } from './context-panel.tsx'
+import { Button, Chevron, confirm, ErrorText } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
-import { accountLabel, engineOptions, type ChatView, type Item } from './state.ts'
+import type { SettingsPage } from './settings.tsx'
+import { accountLabel, engineOptions, modelMenu, type ChatView, type Item } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -25,80 +28,125 @@ const PLACEHOLDERS: Record<ChatStatus, string> = {
   waiting: 'Waiting for your approval… Enter queues a message',
   stopping: 'Stopping… Enter queues a message',
 }
+const ASSISTANT = 'min-w-0 text-body leading-[1.6] wrap-break-word'
+const TOOL_NAME = 'shrink-0 font-mono text-sm leading-[normal] font-semibold'
+const TOOL_INPUT = 'min-w-0 flex-1 truncate font-mono text-sm leading-[normal] text-muted'
+const TOOL_STATES: Record<string, string> = {
+  running: 'text-green before:animate-blink',
+  waiting: 'text-amber',
+  error: 'text-red',
+}
+const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
+const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
+const SELECT_ARROW =
+  'bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20fill=%27none%27%20stroke=%27%238b8e96%27%20stroke-width=%271.5%27/%3E%3C/svg%3E)]'
+
+function ChipSelect(props: ComponentProps<'select'>) {
+  return (
+    <select
+      className={`h-26 max-w-220 cursor-pointer appearance-none truncate rounded border border-transparent bg-transparent bg-no-repeat bg-position-[right_8px_center] pr-24 pl-8 text-sm text-muted field-sizing-content enabled:hover:border-border enabled:hover:text-text disabled:cursor-default disabled:text-faint disabled:opacity-70 max-[900px]:max-w-150 [&_option]:bg-panel [&_option]:text-text ${SELECT_ARROW}`}
+      {...props}
+    />
+  )
+}
+
+function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
+  return (
+    <details className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel'}`}>
+      <summary
+        className={`flex h-28 list-none items-center gap-8 rounded pr-10 pl-8 hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+      >
+        <Chevron />
+        {summary}
+      </summary>
+      {children}
+    </details>
+  )
+}
 
 type ItemProps = { item: Item; chat: ChatView; connected: boolean; send: (m: ClientMessage) => void }
 
 function ItemView({ item, chat, connected, send }: ItemProps) {
   switch (item.kind) {
     case 'user':
-      return <div className="user">{item.text}</div>
+      return (
+        <div className="mt-14 max-w-[85%] self-end rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word] first:mt-0">
+          {item.text}
+        </div>
+      )
     case 'text':
-      return <Markdown className="assistant" text={item.text} />
+      return <Markdown className={ASSISTANT} text={item.text} />
     case 'error':
-      return <div className="turn-error">{item.text}</div>
+      return <ErrorText>{item.text}</ErrorText>
     case 'thinking':
       return (
-        <details className="row thinking">
-          <summary>
-            <span className="chevron" />
-            <span className="thinking-label">Thinking…</span>
-          </summary>
-          <div className="thinking-text">{item.text}</div>
-        </details>
+        <Row quiet summary={<span className="italic group-last:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
+          <div className="mt-2 mb-4 ml-13 max-h-320 overflow-y-auto border-l-2 pl-12 text-sm leading-[1.5] whitespace-pre-wrap">
+            {item.text}
+          </div>
+        </Row>
       )
     case 'tool':
       return (
-        <details className={`row tool ${item.state}`}>
-          <summary>
-            <span className="chevron" />
-            <span className="tool-name">{item.name}</span>
-            <span className="tool-input">{item.summary}</span>
-            <span className="tool-state">{item.state === 'waiting' ? 'waiting for approval' : item.state}</span>
-          </summary>
-          <pre className="row-body">
+        <Row
+          summary={
+            <>
+              <span className={TOOL_NAME}>{item.name}</span>
+              <span className={TOOL_INPUT}>{item.summary}</span>
+              <span
+                className={`flex shrink-0 items-center gap-6 text-sm before:size-6 before:rounded-full before:bg-current ${TOOL_STATES[item.state] ?? 'text-faint'}`}
+              >
+                {item.state === 'waiting' ? 'waiting for approval' : item.state}
+              </span>
+            </>
+          }
+        >
+          <pre className={`${BODY} border-t pl-26`}>
             {item.output ||
               (item.state === 'running' ? 'Running…' : item.state === 'waiting' ? 'Waiting for approval…' : 'No output')}
           </pre>
-        </details>
+        </Row>
       )
     case 'permission': {
-      const fullInput = <pre className="row-body">{JSON.stringify(item.input, null, 2)}</pre>
+      const input = JSON.stringify(item.input, null, 2)
       if (item.outcome !== 'pending') {
         return (
-          <details className={`row permission-line ${item.outcome}`}>
-            <summary>
-              <span className="chevron" />
-              <span className="permission-outcome">{OUTCOMES[item.outcome]}</span>
-              <span className="tool-name">{item.name}</span>
-              <span className="tool-input">{item.summary}</span>
-            </summary>
-            {fullInput}
-          </details>
+          <Row
+            summary={
+              <>
+                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>{OUTCOMES[item.outcome]}</span>
+                <span className={TOOL_NAME}>{item.name}</span>
+                <span className={TOOL_INPUT}>{item.summary}</span>
+              </>
+            }
+          >
+            <pre className={`${BODY} border-t pl-26`}>{input}</pre>
+          </Row>
         )
       }
       const respond = (allow: boolean) =>
         send({ type: 'permission.respond', chatId: chat.id, requestId: item.requestId, allow })
       return (
-        <div className="permission">
-          <div className="permission-title">
+        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12">
+          <div className="text-body">
             Allow <strong>{item.name}</strong>?
           </div>
-          <pre className="permission-summary">{item.summary}</pre>
-          <details className="permission-input">
-            <summary>Full input</summary>
-            {fullInput}
+          <pre className="rounded border bg-bg px-10 py-8">{item.summary}</pre>
+          <details>
+            <summary className="w-fit text-sm text-muted">Full input</summary>
+            <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{input}</pre>
           </details>
           {chat.status === 'waiting' ? (
-            <div className="permission-actions">
-              <button className="primary" disabled={!connected} onClick={() => respond(true)}>
+            <div className="flex gap-8">
+              <Button variant="primary" disabled={!connected} onClick={() => respond(true)}>
                 Approve
-              </button>
-              <button className="danger" disabled={!connected} onClick={() => respond(false)}>
+              </Button>
+              <Button variant="danger" disabled={!connected} onClick={() => respond(false)}>
                 Deny
-              </button>
+              </Button>
             </div>
           ) : (
-            <div className="permission-note">{chat.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
+            <div className="text-sm text-muted">{chat.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
           )}
         </div>
       )
@@ -113,11 +161,12 @@ type ChatProps = {
   accounts?: EngineAccounts
   connected: boolean
   send: (m: ClientMessage) => void
-  openSettings: () => void
+  openSettings: (page?: SettingsPage) => void
   contextOpen: boolean
   toggleContext: () => void
   contextLayers?: ContextLayer[]
   contextDefaults: Record<ContextKind, boolean>
+  modelLists?: ModelLists
 }
 
 export function Chat(props: ChatProps) {
@@ -155,20 +204,21 @@ export function Chat(props: ChatProps) {
     send({ type: 'chat.send', chatId: chat.id, text })
     setText('')
   }
-  const interruptAndSend = () => {
+  const interruptAndSend = async () => {
     if (!canQueue) return
     submit()
-    if (chat.status !== 'stopping' && window.confirm(INTERRUPT_SEND_TEXT)) {
+    if (chat.status !== 'stopping' && (await confirm(INTERRUPT_SEND_TEXT))) {
       send({ type: 'chat.interrupt', chatId: chat.id })
     }
   }
-  const stop = () => {
+  const stop = async () => {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
-    if (window.confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
+    if (await confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
-  const withSaved = (list: string[] = [], saved?: string) => (saved && !list.includes(saved) ? [...list, saved] : list)
-  const models = withSaved(offers?.models, chat.model)
-  const levels = withSaved(offers?.thinking, chat.thinking)
+  const models = modelMenu(chat, offers, props.modelLists)
+  const offeredLevels = offers?.thinking ?? []
+  const saved = chat.thinking && !offeredLevels.includes(chat.thinking)
+  const levels = saved ? [...offeredLevels, chat.thinking!] : offeredLevels
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model: model || undefined, thinking: thinking || undefined })
   const unarchive = () =>
@@ -178,15 +228,16 @@ export function Chat(props: ChatProps) {
   const place = project?.name ?? 'Workshop'
 
   return (
-    <div className="chat-area">
-      <main className="chat">
-        <header className="chat-header">
-          <div className="chat-title">
-            <span className="chat-name">{chat.main ? place : chat.title}</span>
-            <span className="chat-path">{project?.path ?? 'Not tied to a folder'}</span>
+    <div className="flex min-h-0 flex-1">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <header className="flex h-44 shrink-0 items-center gap-6 border-b pr-12 pl-20">
+          <div className="flex min-w-0 flex-1 items-baseline gap-10 whitespace-nowrap">
+            <span className="max-w-[50%] shrink-0 truncate font-semibold">{chat.main ? place : chat.title}</span>
+            <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
+              {project?.path ?? 'Not tied to a folder'}
+            </span>
           </div>
-          <select
-            className="chip"
+          <ChipSelect
             aria-label="Engine"
             value={chat.engine}
             disabled={!canChange}
@@ -197,16 +248,15 @@ export function Chat(props: ChatProps) {
                 {o.label}
               </option>
             ))}
-          </select>
+          </ChipSelect>
           {accounts && !engineOff && (
-            <select
-              className="chip"
+            <ChipSelect
               aria-label="Account"
               value={accounts.active}
               disabled={!canSend}
               onChange={(e) =>
                 e.target.value === MANAGE_ACCOUNTS
-                  ? openSettings()
+                  ? openSettings('accounts')
                   : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
               }
             >
@@ -216,33 +266,35 @@ export function Chat(props: ChatProps) {
                 </option>
               ))}
               <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
-            </select>
+            </ChipSelect>
           )}
-          <button
-            className={`ghost small context-toggle ${contextOpen ? 'active' : ''}`}
+          <Button
+            variant="ghost"
+            size="small"
+            className="aria-pressed:bg-raised aria-pressed:text-text"
             aria-pressed={contextOpen}
             title={contextOpen ? 'Hide context' : 'Show the AGENTS.md layers this chat gets'}
             onClick={toggleContext}
           >
             Context
-          </button>
+          </Button>
         </header>
         <div
-          className="messages"
+          className="flex flex-1 flex-col overflow-y-auto p-24"
           ref={listRef}
           onScroll={(e) => {
             const el = e.currentTarget
             stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
           }}
         >
-          <div className="column">
+          <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10">
             {chat.items.length === 0 && !chat.draft && (
-              <div className="empty">
-                <strong>
-                  Start a chat in <span className="mono">{place}</span>
+              <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+                <strong className="text-body font-semibold text-text">
+                  Start a chat in <span className="font-mono">{place}</span>
                 </strong>
                 <span>
-                  Each message starts <span className="mono">{chat.engine}</span> in{' '}
+                  Each message starts <span className="font-mono">{chat.engine}</span> in{' '}
                   {project?.path ?? 'a scratch folder'}
                 </span>
               </div>
@@ -250,61 +302,68 @@ export function Chat(props: ChatProps) {
             {chat.items.map((item, i) => (
               <ItemView key={i} item={item} chat={chat} connected={connected} send={send} />
             ))}
-            {chat.draft && <Markdown className="assistant streaming" text={chat.draft} />}
+            {chat.draft && <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />}
           </div>
         </div>
-        <div className="composer">
+        <div className="shrink-0 px-24 pb-16">
           {archivedBy && (
-            <div className="archived-note">
-              <span>
+            <div className="mx-auto mb-8 flex max-w-column items-center gap-8 text-sm text-muted">
+              <span className="flex-1">
                 This {archivedBy === project ? 'project' : 'chat'} is archived. Its history stays; unarchive it to
                 continue.
               </span>
-              <button className="small" disabled={!connected} onClick={unarchive}>
+              <Button size="small" disabled={!connected} onClick={unarchive}>
                 Unarchive
-              </button>
+              </Button>
             </div>
           )}
           {showEngineNote && (
-            <div className="engine-off-note">
-              <span>
+            <div className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-12 text-muted">
+              <span className="flex-1">
                 {noEngineOn ? (
                   'No engine is on. Turn one on in Settings to start chatting.'
                 ) : (
                   <>
-                    <span className="mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
+                    <span className="font-mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
                     Settings.
                   </>
                 )}
               </span>
-              <button className="small primary" onClick={openSettings}>
+              <Button variant="primary" size="small" onClick={() => openSettings('engines')}>
                 Open Settings
-              </button>
+              </Button>
             </div>
           )}
           {chat.queue.length > 0 && (
-            <ul className="queue" aria-label="Queued messages">
+            <ul className="mx-auto mb-8 flex max-w-column flex-col gap-4 text-sm" aria-label="Queued messages">
               {chat.queue.map((q) => (
-                <li key={q.id}>
-                  <span className="queue-text" title={q.text}>
+                <li
+                  key={q.id}
+                  className="flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted"
+                >
+                  <span className="flex-1 truncate" title={q.text}>
                     {q.text}
                   </span>
-                  <button
-                    className="ghost icon"
+                  <Button
+                    variant="ghost"
+                    size="icon"
                     aria-label="Remove from queue"
                     disabled={!connected}
                     onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
                   >
                     ×
-                  </button>
+                  </Button>
                 </li>
               ))}
-              <li className="hint">Sends when this turn ends</li>
+              <li className="text-sm text-faint">Sends when this turn ends</li>
             </ul>
           )}
           {!showEngineNote && (
-            <div className={`composer-box ${canSend || canQueue ? '' : 'disabled'}`}>
+            <div
+              className={`mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
+            >
               <textarea
+                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
                 value={text}
                 rows={2}
                 placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
@@ -318,31 +377,28 @@ export function Chat(props: ChatProps) {
                   else submit()
                 }}
               />
-              <div className="composer-footer">
-                <span className="hint">
+              <div className="flex items-center justify-between gap-8 pr-6 pb-6 pl-12">
+                <span className="text-sm text-faint">
                   {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
                 </span>
-                <span className="composer-actions">
-                  {models.length > 0 && (
-                    <select
-                      className="chip"
+                <span className="flex min-w-0 items-center gap-6">
+                  {models.options.length > 1 && (
+                    <ChipSelect
                       aria-label="Model"
-                      title="Model, from the next message"
-                      value={chat.model ?? ''}
+                      title="Model, from the next message. Auto follows the lists in Settings."
+                      value={models.value}
                       disabled={!canChange}
                       onChange={(e) => setModel(e.target.value, chat.thinking)}
                     >
-                      <option value="">Default model</option>
-                      {models.map((m) => (
-                        <option key={m} value={m}>
-                          {m}
+                      {models.options.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
                         </option>
                       ))}
-                    </select>
+                    </ChipSelect>
                   )}
                   {levels.length > 0 && (
-                    <select
-                      className="chip"
+                    <ChipSelect
                       aria-label="Thinking"
                       title="Thinking level, from the next message"
                       value={chat.thinking ?? ''}
@@ -355,28 +411,29 @@ export function Chat(props: ChatProps) {
                           {l}
                         </option>
                       ))}
-                    </select>
+                    </ChipSelect>
                   )}
                   {busy ? (
                     <>
                       {text.trim() && (
-                        <button className="small" disabled={!canQueue} onClick={submit}>
+                        <Button size="small" disabled={!canQueue} onClick={submit}>
                           Queue
-                        </button>
+                        </Button>
                       )}
-                      <button
-                        className={`danger stop ${chat.status}`}
+                      <Button
+                        variant="danger"
+                        className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
                         disabled={!connected}
                         title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
                         onClick={stop}
                       >
                         {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                      </button>
+                      </Button>
                     </>
                   ) : (
-                    <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                    <Button variant="primary" disabled={!canSend || !text.trim()} onClick={submit}>
                       Send
-                    </button>
+                    </Button>
                   )}
                 </span>
               </div>

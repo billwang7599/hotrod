@@ -1,4 +1,4 @@
-import { DEFAULT_SUBAGENT_LIMIT } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, pickModel } from '@hotrod/core/types'
 import type {
   Account,
   ChatEntry,
@@ -10,6 +10,7 @@ import type {
   CoreMessage,
   EngineAccounts,
   EngineInfo,
+  ModelLists,
   Mods,
   Project,
   QueuedMessage,
@@ -40,7 +41,13 @@ export type Item =
     }
   | { kind: 'error'; text: string }
 
-export type ChatView = ChatInfo & { status: ChatStatus; items: Item[]; draft: string; queue: QueuedMessage[] }
+export type ChatView = ChatInfo & {
+  status: ChatStatus
+  items: Item[]
+  draft: string
+  queue: QueuedMessage[]
+  ranModel?: string
+}
 
 export type State = {
   connected: boolean
@@ -52,6 +59,7 @@ export type State = {
   selectedId: string
   contextDefaults: Record<ContextKind, boolean>
   mods: Mods
+  modelLists: Record<string, ModelLists>
   context?: { chatId: string; layers: ContextLayer[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
@@ -73,6 +81,7 @@ export const initialState: State = {
   selectedId: MAIN_CHAT_ID,
   contextDefaults: { workshop: true, repo: true, project: true, parent: true, own: true },
   mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
+  modelLists: {},
   toasts: [],
   nextToastId: 1,
 }
@@ -145,7 +154,12 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   }
 }
 
-const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
+const ranModelOf = (entry: ChatEntry) => (entry.type === 'turn.completed' ? entry.model : undefined)
+
+const toView = ({ entries, ...chat }: ChatState): ChatView => {
+  const ranModel = entries.map(ranModelOf).findLast(Boolean)
+  return { ...chat, items: entries.reduce(applyEntry, []), ...(ranModel && { ranModel }) }
+}
 
 function updateChat(state: State, id: string, update: (c: ChatView) => ChatView): State {
   return { ...state, chats: state.chats.map((c) => (c.id === id ? update(c) : c)) }
@@ -168,6 +182,7 @@ export function reduce(state: State, action: Action): State {
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
         mods: action.mods,
+        modelLists: action.modelLists,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -217,6 +232,7 @@ export function reduce(state: State, action: Action): State {
         ...c,
         items: applyEntry(c.items, action.entry),
         draft: endsText(action.entry) ? '' : c.draft,
+        ranModel: ranModelOf(action.entry) ?? c.ranModel,
       }))
     case 'chat.delta':
       return updateChat(state, action.chatId, (c) => ({ ...c, draft: c.draft + action.text }))
@@ -246,6 +262,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, contextDefaults: action.defaults }
     case 'mods.updated':
       return { ...state, mods: action.mods }
+    case 'models.updated':
+      return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
     case 'error':
       return {
         ...state,
@@ -271,6 +289,16 @@ export function engineOptions(engines: EngineInfo[], current: string) {
   if (options.some((o) => o.id === current)) return options
   const known = engines.some((e) => e.id === current)
   return [...options, { id: current, label: `${current} (${known ? 'off' : 'unknown'})`, disabled: true as const }]
+}
+
+export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
+
+export function modelMenu(chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) {
+  const offered = engine?.models ?? []
+  const label = (id: string) => offered.find((m) => m.id === id)?.label ?? id
+  const value = offered.some((m) => m.id === chat.model) ? chat.model! : ''
+  const auto = pickModel(offered, lists, { role: chat.role }) ?? (value ? undefined : chat.ranModel)
+  return { value, options: [{ id: '', label: auto ? `Auto · ${label(auto)}` : 'Auto' }, ...offered] }
 }
 
 export function accountLabel(account: Account) {

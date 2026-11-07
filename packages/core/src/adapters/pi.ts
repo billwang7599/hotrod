@@ -1,4 +1,5 @@
 import type { Adapter, ToolKind } from '../types.ts'
+import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -37,14 +38,25 @@ export const pi: Adapter = {
     const options = { cwd: '/' }
     const version = await machine.run('pi', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
-    const models = await machine.run('pi', ['--list-models', '--offline'], options).catch(() => null)
-    const listed = models?.code === 0 && !models.stdout.includes('No models available') ? models.stdout : ''
-    const ids = listed
+    const listing = await machine.run('pi', ['--list-models', '--offline'], options).catch(() => null)
+    const listed = listing?.code === 0 && !listing.stdout.includes('No models available') ? listing.stdout : ''
+    const rows = listed
       .split('\n')
       .slice(1)
       .map((row) => row.trim().split(/\s+/))
-      .flatMap(([provider, model]) => (provider && model ? [`${provider}/${model}`] : []))
-    return { installed: true, signedIn: ids.length > 0, detail: version.stdout.trim(), models: ids, thinking: THINKING }
+      .flatMap(([provider, model]) => (provider && model && !/-\d{8}$/.test(model) ? [{ provider, model }] : []))
+    const providers = [...new Set(rows.map((row) => row.provider))]
+    const rank = (model: string) => {
+      const index = CLAUDE_MODELS.indexOf(model)
+      return index < 0 ? CLAUDE_MODELS.length : index
+    }
+    const models = rows
+      .sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider) || rank(a.model) - rank(b.model))
+      .map(({ provider, model }) => {
+        const id = `${provider}/${model}`
+        return { id, label: claudeLabel(model) ?? id }
+      })
+    return { installed: true, signedIn: models.length > 0, detail: version.stdout.trim(), models, thinking: THINKING }
   },
 
   start(machine, { cwd, instructions, model, thinking }, emit) {
@@ -65,15 +77,21 @@ export const pi: Adapter = {
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''
     let turnError: string | undefined
+    let ranModel: string | undefined
     let closed = false
 
     const endTurn = (error?: string) => {
       turnError = undefined
-      emit(error ? { type: 'turn.completed', error } : { type: 'turn.completed' })
+      emit({ type: 'turn.completed', ...(error && { error }), ...(ranModel && { model: ranModel }) })
     }
 
     const handle = (msg: any) => {
       switch (msg.type) {
+        case 'message_start': {
+          const { role, provider, model } = msg.message ?? {}
+          if (role === 'assistant' && provider && model) ranModel = `${provider}/${model}`
+          return
+        }
         case 'message_update': {
           const { type, delta } = msg.assistantMessageEvent ?? {}
           if (!delta) return
