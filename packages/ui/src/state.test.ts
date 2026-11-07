@@ -6,13 +6,16 @@ import {
   chatTree,
   COLUMN_PX,
   columnSlider,
+  dockedPanels,
   engineOptions,
   familyOf,
   folderName,
   folderOf,
   initialState,
   MAIN_CHAT_ID,
+  MIN_WINDOW_PX,
   modelMenu,
+  PANEL_PX,
   reduce,
   storedColumn,
   storedFlag,
@@ -341,13 +344,6 @@ describe('reduce', () => {
     const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', engine: 'pi', lists })
     expect(state.modelLists).toEqual({ fake: noLists, pi: lists })
   })
-
-  it('remembers the model that last ran, from the log and from live turns', () => {
-    const ran = (id: string) => ({ at, type: 'turn.completed' as const, model: id })
-    const loaded = run(snapshot([chat('a', [ran('x'), { at, type: 'turn.completed' }])]))
-    expect(loaded.chats[0]?.ranModel).toBe('x')
-    expect(reduce(loaded, entry('a', { type: 'turn.completed', model: 'y' })).chats[0]?.ranModel).toBe('y')
-  })
 })
 
 describe('chat tree', () => {
@@ -406,32 +402,31 @@ describe('modelMenu', () => {
     { id: 'opus-4-8', label: 'Opus 4.8' },
     { id: 'haiku-5-5', label: 'Haiku 5.5' },
   ]
-  const offers = { ...engines[0]!, models: catalog }
+  const levels = ['low', 'medium', 'high']
+  const [model, thinking] = ['opus-4-8', 'medium']
+  const offers = { ...engines[0]!, models: catalog, thinking: levels, defaultModel: model, defaultThinking: thinking }
   const view = (extra: object = {}) => ({ ...reduce(initialState, snapshot([chat('a')])).chats[0]!, ...extra })
 
-  it('lists Auto with the model it would run, then every offered model by its label', () => {
-    const lists = { ...noLists, chat: ['gone', 'opus-4-8'] }
-    expect(modelMenu(view(), offers, lists)).toEqual({
-      value: '',
-      options: [{ id: '', label: 'Auto · Opus 4.8' }, ...catalog],
-    })
-    expect(modelMenu(view({ model: 'haiku-5-5' }), offers, lists).value).toBe('haiku-5-5')
+  it("selects the engine's default model and thinking level, and offers only real ones", () => {
+    expect(modelMenu(view(), offers, noLists)).toEqual({ model, models: catalog, thinking, levels })
+  })
+
+  it("selects the chat's own picks, else the first listed model the engine offers", () => {
+    const lists = { ...noLists, chat: ['gone', 'haiku-5-5'] }
+    expect(modelMenu(view(), offers, lists).model).toBe('haiku-5-5')
+    const picked = modelMenu(view({ model: 'opus-5-5', thinking: 'high' }), offers, lists)
+    expect(picked).toMatchObject({ model: 'opus-5-5', thinking: 'high' })
   })
 
   it("uses a subagent's role list, falling back to the Chat list when it is empty", () => {
     const lists = { ...noLists, chat: ['opus-5-5'], planning: ['haiku-5-5'] }
-    expect(modelMenu(view({ role: 'planning' }), offers, lists).options[0]?.label).toBe('Auto · Haiku 5.5')
-    expect(modelMenu(view({ role: 'subagents' }), offers, lists).options[0]?.label).toBe('Auto · Opus 5.5')
+    expect(modelMenu(view({ role: 'planning' }), offers, lists).model).toBe('haiku-5-5')
+    expect(modelMenu(view({ role: 'subagents' }), offers, lists).model).toBe('opus-5-5')
   })
 
-  it('shows a pick the engine no longer offers as Auto, and the model that last ran when nothing is listed', () => {
-    expect(modelMenu(view({ model: 'opus' }), offers, noLists)).toEqual({
-      value: '',
-      options: [{ id: '', label: 'Auto' }, ...catalog],
-    })
-    expect(modelMenu(view({ ranModel: 'opus-5-5' }), offers, noLists).options[0]?.label).toBe('Auto · Opus 5.5')
-    expect(modelMenu(view({ ranModel: 'other/x' }), offers, undefined).options[0]?.label).toBe('Auto · other/x')
-    expect(modelMenu(view(), undefined, undefined)).toEqual({ value: '', options: [{ id: '', label: 'Auto' }] })
+  it('selects what will run instead of a pick the engine no longer offers', () => {
+    expect(modelMenu(view({ model: 'opus', thinking: 'ultra' }), offers, noLists)).toMatchObject({ model, thinking })
+    expect(modelMenu(view(), undefined, undefined)).toEqual({ models: [], levels: [] })
   })
 })
 
@@ -462,5 +457,17 @@ describe('chat width', () => {
       max: COLUMN_PX.min,
       value: COLUMN_PX.min,
     })
+  })
+})
+
+describe('dockedPanels', () => {
+  it('docks a panel only while the chat keeps at least the minimum window width', () => {
+    const sidebar = PANEL_PX.sidebar + MIN_WINDOW_PX.width
+    const both = sidebar + PANEL_PX.context
+    expect(dockedPanels(MIN_WINDOW_PX.width)).toBe('none')
+    expect(dockedPanels(sidebar - 1)).toBe('none')
+    expect(dockedPanels(sidebar)).toBe('sidebar')
+    expect(dockedPanels(both - 1)).toBe('sidebar')
+    expect(dockedPanels(both)).toBe('both')
   })
 })

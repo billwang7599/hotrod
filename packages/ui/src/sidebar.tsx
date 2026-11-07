@@ -218,7 +218,7 @@ export function NameDialog({ request, connected, send, pickFolder, close }: Name
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit w-[min(420px,calc(100vw-32px))] flex-col gap-12 rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
                 {...MOTION.pop}
                 onSubmit={submit}
               >

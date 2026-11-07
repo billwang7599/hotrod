@@ -21,6 +21,17 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
 
 const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
+const RPC_ARGS = [
+  '--mode', 'rpc',
+  '--no-session',
+  '--no-extensions',
+  '--no-skills',
+  '--no-prompt-templates',
+  '--no-mcp',
+  '--no-context-files',
+  '--no-approve',
+]
+
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
 function summarize(kind: ToolKind, input: any): string {
@@ -38,13 +49,18 @@ export const pi: Adapter = {
     const options = { cwd: '/' }
     const version = await machine.run('pi', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
-    const listing = await machine.run('pi', ['--list-models', '--offline'], options).catch(() => null)
-    const listed = listing?.code === 0 && !listing.stdout.includes('No models available') ? listing.stdout : ''
-    const rows = listed
-      .split('\n')
-      .slice(1)
-      .map((row) => row.trim().split(/\s+/))
-      .flatMap(([provider, model]) => (provider && model && !/-\d{8}$/.test(model) ? [{ provider, model }] : []))
+    const input = ['get_available_models', 'get_state'].map((type) => JSON.stringify({ type }) + '\n').join('')
+    const rpc = await machine.run('pi', [...RPC_ARGS, '--offline'], { ...options, input }).catch(() => null)
+    const answers: Record<string, any> = {}
+    for (const line of rpc?.stdout.split('\n') ?? []) {
+      try {
+        const msg = JSON.parse(line)
+        if (msg.type === 'response' && msg.success) answers[msg.command] = msg.data
+      } catch {}
+    }
+    const rows = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
+      provider && id && !/-\d{8}$/.test(id) ? [{ provider: String(provider), model: String(id) }] : [],
+    )
     const providers = [...new Set(rows.map((row) => row.provider))]
     const rank = (model: string) => {
       const index = CLAUDE_MODELS.indexOf(model)
@@ -56,20 +72,22 @@ export const pi: Adapter = {
         const id = `${provider}/${model}`
         return { id, label: claudeLabel(model) ?? id }
       })
-    return { installed: true, signedIn: models.length > 0, detail: version.stdout.trim(), models, thinking: THINKING }
+    const { model: started, thinkingLevel } = answers.get_state ?? {}
+    const startedId = `${started?.provider}/${started?.id}`
+    const defaultModel = models.some((m) => m.id === startedId) ? startedId : models[0]?.id
+    return {
+      installed: true,
+      signedIn: models.length > 0,
+      detail: version.stdout.trim(),
+      models,
+      thinking: THINKING,
+      ...(defaultModel && { defaultModel }),
+      ...(THINKING.includes(thinkingLevel) && { defaultThinking: thinkingLevel }),
+    }
   },
 
   start(machine, { cwd, instructions, extraDirs = [], model, thinking }, emit) {
-    const args = [
-      '--mode', 'rpc',
-      '--no-session',
-      '--no-extensions',
-      '--no-skills',
-      '--no-prompt-templates',
-      '--no-mcp',
-      '--no-context-files',
-      '--no-approve',
-    ]
+    const args = [...RPC_ARGS]
     if (model) args.push('--model', model)
     if (thinking) args.push('--thinking', thinking)
     const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
@@ -79,21 +97,15 @@ export const pi: Adapter = {
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''
     let turnError: string | undefined
-    let ranModel: string | undefined
     let closed = false
 
     const endTurn = (error?: string) => {
       turnError = undefined
-      emit({ type: 'turn.completed', ...(error && { error }), ...(ranModel && { model: ranModel }) })
+      emit({ type: 'turn.completed', ...(error && { error }) })
     }
 
     const handle = (msg: any) => {
       switch (msg.type) {
-        case 'message_start': {
-          const { role, provider, model } = msg.message ?? {}
-          if (role === 'assistant' && provider && model) ranModel = `${provider}/${model}`
-          return
-        }
         case 'message_update': {
           const { type, delta } = msg.assistantMessageEvent ?? {}
           if (!delta) return

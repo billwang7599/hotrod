@@ -23,6 +23,8 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
 
 const MODELS = CLAUDE_MODELS.map((id) => ({ id, label: claudeLabel(id) ?? id }))
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
+const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
 
 const OUTPUT_TAIL_CHARS = 2000
 // The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
@@ -59,7 +61,7 @@ export const claudeCode: Adapter = {
     const version = await machine.run('claude', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
-    return { installed: true, signedIn, detail: version.stdout.trim(), models: MODELS, thinking: EFFORTS }
+    return { installed: true, signedIn, detail: version.stdout.trim(), models: MODELS, thinking: EFFORTS, ...DEFAULTS }
   },
 
   accounts: {
@@ -132,14 +134,10 @@ export const claudeCode: Adapter = {
     let interrupted = false
     let closed = false
     let interruptCount = 0
-    let ranModel: string | undefined
 
     const handle = (msg: any) => {
       const subagent = msg.parent_tool_use_id != null
       switch (msg.type) {
-        case 'system':
-          if (msg.subtype === 'init' && typeof msg.model === 'string') ranModel = msg.model
-          return
         case 'stream_event': {
           const delta = msg.event?.delta
           if (subagent) return
@@ -195,7 +193,7 @@ export const claudeCode: Adapter = {
               ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
               : undefined
           interrupted = false
-          emit({ type: 'turn.completed', ...(error && { error }), ...(ranModel && { model: ranModel }) })
+          emit({ type: 'turn.completed', ...(error && { error }) })
         }
       }
     }

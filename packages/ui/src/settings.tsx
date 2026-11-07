@@ -4,6 +4,7 @@ import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
+  WORKSHOP_NAME,
   type Account,
   type ClientMessage,
   type ContextSection,
@@ -90,7 +91,9 @@ const PAGES = [
     id: 'models',
     group: 'Options',
     title: 'Models',
-    hint: 'A chat on Auto runs the first model in its list that the engine offers, else the engine default.',
+    hint:
+      `A ${CHAT_NOUN.one} runs its own pick, else the first model in its list that the engine offers, ` +
+      "else the engine's default.",
     body: ({ engines, modelLists, connected, send }: PageProps) => {
       const on = engines.filter((e) => e.enabled)
       if (!on.length) return <p className="text-muted">Turn on an engine to order its models.</p>
@@ -110,7 +113,7 @@ const PAGES = [
     group: 'Options',
     title: 'Context',
     hint:
-      `What a ${CHAT_NOUN.one} uses from the chats above it, unless you switch it in its Context panel. ` +
+      `What a ${CHAT_NOUN.one} uses from ${WORKSHOP_NAME} and the ${CHAT_NOUN.many} above it, unless you switch it in its Context panel. ` +
       'Its own AGENTS.md, folders and files always start on.',
     body: ({ contextDefaults, connected, send }: PageProps) =>
       CONTEXT_SECTIONS.map((section) => (
@@ -262,6 +265,23 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
             </SettingRow>
           )
         })}
+      {offered.length > 0 && engine.defaultThinking && (
+        <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
+          <select
+            className="h-control rounded border bg-bg px-8"
+            aria-label={`Default thinking for ${engine.id}`}
+            value={engine.defaultThinking}
+            disabled={!connected}
+            onChange={(e) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking: e.target.value })}
+          >
+            {engine.thinking?.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+      )}
     </section>
   )
 }
@@ -471,18 +491,18 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
               >
                 <Dialog.Title className="sr-only">Settings</Dialog.Title>
                 <Tabs.Root
-                  className="flex min-w-0 flex-1"
+                  className="flex min-w-0 flex-1 max-[600px]:flex-col"
                   orientation="vertical"
                   value={current.id}
                   onValueChange={(id) => openPage(id as SettingsPage)}
                 >
                   <Tabs.List
                     aria-label="Settings"
-                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160"
+                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
                   >
                     {NAV_GROUPS.map((group) => (
                       <Fragment key={group}>
-                        <div className={NAV_LABEL}>{group}</div>
+                        <div className={`${NAV_LABEL} max-[600px]:hidden`}>{group}</div>
                         {pages
                           .filter((p) => p.group === group)
                           .map((p) => (
@@ -500,7 +520,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                   {pages.map((p) => (
                     <Tabs.Content key={p.id} value={p.id} asChild>
                       <m.div
-                        className="min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2"
+                        className="min-h-0 min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2 max-[600px]:px-16"
                         initial={MOTION.fade.initial}
                         animate={MOTION.fade.animate}
                       >

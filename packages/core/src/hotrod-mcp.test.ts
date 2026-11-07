@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
-import type { ChatEntry, ChatState } from './types.ts'
+import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './types.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -17,7 +17,7 @@ const at = '2026-11-07T00:00:00.000Z'
 function chat(id: string, change: Partial<ChatState> = {}): ChatState {
   return {
     id,
-    name: id === 'main' ? 'Workshop' : `Chat ${id}`,
+    name: id === 'main' ? WORKSHOP_NAME : `Chat ${id}`,
     ...(id !== 'main' && { parentId: 'main' }),
     folders: [],
     files: [],

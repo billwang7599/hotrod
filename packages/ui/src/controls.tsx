@@ -20,6 +20,20 @@ export const MOTION = {
   },
 } as const
 
+export function SidePanel({ side, overlay, children }: { side: 'left' | 'right'; overlay: boolean; children: ReactNode }) {
+  const position = overlay ? `absolute inset-y-0 z-20 shadow ${side === 'left' ? 'left-0' : 'right-0'}` : 'shrink-0'
+  return (
+    <m.div
+      className={`flex overflow-hidden ${position}`}
+      initial={{ width: 0 }}
+      animate={{ width: 'auto' }}
+      exit={{ width: 0 }}
+    >
+      {children}
+    </m.div>
+  )
+}
+
 export function useSettled(ready = true) {
   const settled = useRef(false)
   useEffect(() => {
@@ -28,8 +42,7 @@ export function useSettled(ready = true) {
   return settled
 }
 
-// The word for a chat below the Workshop isn't picked yet, so every label for one reads it from here.
-export const CHAT_NOUN = { one: 'chat', many: 'chats' }
+export const CHAT_NOUN = { one: 'space', many: 'spaces' }
 
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
@@ -167,7 +180,7 @@ export function ConfirmDialog() {
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit w-[min(420px,calc(100vw-32px))] flex-col gap-16 rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
                 {...MOTION.pop}
               >
                 <AlertDialog.Title className="text-body leading-[1.5]">{text}</AlertDialog.Title>

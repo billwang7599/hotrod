@@ -1,18 +1,36 @@
-import { useCallback, useEffect, useReducer, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
-import { folderName, folderOf, initialState, MAIN_CHAT_ID, reduce, storedColumn, storedFlag } from './state.ts'
+import {
+  dockedPanels,
+  folderName,
+  folderOf,
+  initialState,
+  MAIN_CHAT_ID,
+  MIN_WINDOW_PX,
+  PANEL_PX,
+  reduce,
+  storedColumn,
+  storedFlag,
+} from './state.ts'
 import './styles.css'
 
 const SELECTED_KEY = 'hotrod.selectedChat'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
 const COLUMN_KEY = 'hotrod.columnWidth'
+
+type Overlay = 'sidebar' | 'context' | null
+
+const subscribeResize = (listener: () => void) => {
+  addEventListener('resize', listener)
+  return () => removeEventListener('resize', listener)
+}
 
 declare global {
   interface Window {
@@ -56,14 +74,44 @@ function App() {
   }, [])
   const [contextOpen, setContextOpen] = useState(() => storedFlag(localStorage.getItem(CONTEXT_OPEN_KEY), false))
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
-  const toggleContext = useCallback(() => setContextOpen((open) => !open), [])
   const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
   useEffect(() => localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen)), [sidebarOpen])
-  const toggleSidebar = useCallback(() => setSidebarOpen((open) => !open), [])
+  const docked = useSyncExternalStore(subscribeResize, () => dockedPanels(innerWidth))
+  const [overlay, setOverlay] = useState<Overlay>(null)
+  const [dockedBefore, setDockedBefore] = useState(docked)
+  if (docked !== dockedBefore) {
+    setDockedBefore(docked)
+    setOverlay(null)
+  }
+  const sidebarDocks = docked !== 'none'
+  const contextDocks = docked === 'both'
+  const flipOverlay = (panel: Overlay) => setOverlay((open) => (open === panel ? null : panel))
+  const toggleSidebar = useCallback(
+    () => (sidebarDocks ? setSidebarOpen((open) => !open) : flipOverlay('sidebar')),
+    [sidebarDocks],
+  )
+  const toggleContext = useCallback(
+    () => (contextDocks ? setContextOpen((open) => !open) : flipOverlay('context')),
+    [contextDocks],
+  )
+  useEffect(() => {
+    if (!overlay) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      // Blur first so a draft in the panel saves before it unmounts.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+      setOverlay(null)
+    }
+    addEventListener('keydown', onKeyDown)
+    return () => removeEventListener('keydown', onKeyDown)
+  }, [overlay])
   const [columnPx, setColumnPx] = useState(() => storedColumn(localStorage.getItem(COLUMN_KEY)))
   useEffect(() => localStorage.setItem(COLUMN_KEY, String(columnPx)), [columnPx])
   const selected = state.chats.find((c) => c.id === state.selectedId)
-  const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
+  const select = useCallback((chatId: string) => {
+    dispatch({ type: 'select', chatId })
+    setOverlay((open) => (open === 'sidebar' ? null : open))
+  }, [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
@@ -83,54 +131,61 @@ function App() {
   return (
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : TRANSITION}>
-        <div className="flex h-screen">
-          <AnimatePresence initial={false}>
-            {sidebarOpen && (
+        <div
+          className="relative isolate flex h-screen"
+          style={{ minWidth: MIN_WINDOW_PX.width, minHeight: MIN_WINDOW_PX.height }}
+        >
+          <AnimatePresence>
+            {overlay && (
               <m.div
-                key="sidebar"
-                className="flex shrink-0 overflow-hidden"
-                initial={{ width: 0 }}
-                animate={{ width: 'auto' }}
-                exit={{ width: 0 }}
-              >
-              <aside className="flex w-232 shrink-0 flex-col border-r bg-panel max-[900px]:w-200">
-                <div className="flex h-44 items-center justify-between pr-8 pl-16">
-                  <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`New ${CHAT_NOUN.one}`}
-                    title={`New ${CHAT_NOUN.one}`}
-                    disabled={!connected}
-                    onClick={() => setNameRequest({ kind: 'new' })}
-                  >
-                    +
-                  </Button>
-                </div>
-                <ChatNav
-                  chats={state.chats}
-                  selectedId={state.selectedId}
-                  connected={connected}
-                  send={send}
-                  select={select}
-                  askName={setNameRequest}
-                />
-                {window.hotrod && (
-                  <div className="flex items-center gap-6 border-t px-8 py-10">
-                    <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
-                      New {CHAT_NOUN.one} from folder…
+                key="backdrop"
+                className="absolute inset-0 z-10 bg-backdrop"
+                {...MOTION.fade}
+                onClick={() => setOverlay(null)}
+              />
+            )}
+          </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {(sidebarDocks ? sidebarOpen : overlay === 'sidebar') && (
+              <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
+                <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
+                  <div className="flex h-44 items-center justify-between pr-8 pl-16">
+                    <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`New ${CHAT_NOUN.one}`}
+                      title={`New ${CHAT_NOUN.one}`}
+                      disabled={!connected}
+                      onClick={() => setNameRequest({ kind: 'new' })}
+                    >
+                      +
                     </Button>
-                    <span className="text-sm text-faint">⌘O</span>
                   </div>
-                )}
-                <div className="px-8 pb-10">
-                  <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
-                    <span aria-hidden="true">⚙</span>
-                    Settings
-                  </Button>
-                </div>
-              </aside>
-              </m.div>
+                  <ChatNav
+                    chats={state.chats}
+                    selectedId={state.selectedId}
+                    connected={connected}
+                    send={send}
+                    select={select}
+                    askName={setNameRequest}
+                  />
+                  {window.hotrod && (
+                    <div className="flex items-center gap-6 border-t px-8 py-10">
+                      <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
+                        New {CHAT_NOUN.one} from folder…
+                      </Button>
+                      <span className="text-sm text-faint">⌘O</span>
+                    </div>
+                  )}
+                  <div className="px-8 pb-10">
+                    <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
+                      <span aria-hidden="true">⚙</span>
+                      Settings
+                    </Button>
+                  </div>
+                </aside>
+              </SidePanel>
             )}
           </AnimatePresence>
           <div className="flex min-w-0 flex-1 flex-col">
@@ -188,9 +243,10 @@ function App() {
                 connected={state.connected}
                 send={send}
                 openSettings={openSettings}
-                sidebarOpen={sidebarOpen}
+                sidebarOpen={sidebarDocks ? sidebarOpen : overlay === 'sidebar'}
                 toggleSidebar={toggleSidebar}
-                contextOpen={contextOpen}
+                contextOpen={contextDocks ? contextOpen : overlay === 'context'}
+                contextOverlay={!contextDocks}
                 toggleContext={toggleContext}
                 columnPx={columnPx}
                 setColumnPx={setColumnPx}
@@ -206,7 +262,7 @@ function App() {
               </div>
             )}
           </div>
-          <div className="fixed right-16 bottom-120 flex max-w-360 flex-col">
+          <div className="fixed right-16 bottom-120 z-30 flex max-w-360 flex-col">
             <AnimatePresence initial={false}>
               {state.toasts.map((t) => (
                 <Toast key={t.id} id={t.id} message={t.message} dismiss={dismissToast} />

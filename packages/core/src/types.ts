@@ -16,7 +16,7 @@ export type EngineEvent =
       summary: string
       input: unknown
     }
-  | { type: 'turn.completed'; error?: string; model?: string }
+  | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 
 export interface EngineProcess {
@@ -32,7 +32,7 @@ export interface Machine {
   run(
     command: string,
     args: string[],
-    options: { cwd: string; env?: Record<string, string> },
+    options: { cwd: string; env?: Record<string, string>; input?: string },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -45,6 +45,8 @@ export type EngineStatus = {
   detail?: string
   models?: ModelOption[]
   thinking?: string[]
+  defaultModel?: string
+  defaultThinking?: string
 }
 
 export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
@@ -99,6 +101,7 @@ export type EngineAccounts = {
 }
 
 export const WORKSHOP_ID = 'main'
+export const WORKSHOP_NAME = 'Home'
 
 export type ChatInfo = {
   id: string
@@ -121,12 +124,15 @@ export type ModelRole = (typeof MODEL_ROLES)[number]
 
 export type ModelLists = Record<ModelRole, string[]>
 
-export function pickModel(offered: ModelOption[], lists: ModelLists, chat: { model?: string; role?: ModelRole }) {
-  const offers = (id?: string) => offered.some((m) => m.id === id)
+export function pickModel(engine: EngineStatus | undefined, lists: ModelLists, chat: Pick<ChatInfo, 'model' | 'role'>) {
+  const offers = (id?: string) => engine?.models?.some((m) => m.id === id) ?? false
   if (offers(chat.model)) return chat.model
   const list = lists[chat.role ?? 'chat']
-  return (list?.length ? list : lists.chat).find(offers)
+  return (list?.length ? list : lists.chat).find(offers) ?? engine?.defaultModel
 }
+
+export const pickThinking = (engine: EngineStatus | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
+  chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
 
 export type Mods = { subagents: { enabled: boolean; limit: number } }
 
@@ -165,6 +171,7 @@ export type ChatState = ChatInfo & {
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
+  | { type: 'engine.setDefaultThinking'; engine: string; thinking: string }
   | ({ type: 'chat.create' } & NewChat)
   | { type: 'chat.rename'; chatId: string; name: string }
   | { type: 'chat.archive'; chatId: string; archived: boolean }

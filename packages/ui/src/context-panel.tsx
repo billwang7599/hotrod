@@ -1,24 +1,30 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import { CONTEXT_SECTIONS, type ClientMessage, type ContextItem, type ContextSection } from '@hotrod/core/types'
-import { Button, MOTION, Switch, useSettled } from './controls.tsx'
-import { folderName, type ChatView } from './state.ts'
+import {
+  CONTEXT_SECTIONS,
+  WORKSHOP_NAME,
+  type ClientMessage,
+  type ContextItem,
+  type ContextSection,
+} from '@hotrod/core/types'
+import { Button, CHAT_NOUN, MOTION, Switch, useSettled } from './controls.tsx'
+import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
     label: 'AGENTS.md',
-    about: 'Instructions, from the Workshop down',
-    inherited: 'The AGENTS.md of the Workshop and every chat above',
+    about: `Instructions, from ${WORKSHOP_NAME} down`,
+    inherited: `The AGENTS.md of ${WORKSHOP_NAME} and every ${CHAT_NOUN.one} above`,
   },
   folders: {
     label: 'Folders',
     about: 'Where it works; each folder’s AGENTS.md is read in',
-    inherited: 'The folders of the chats above, with their AGENTS.md',
+    inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
     label: 'Files',
     about: 'Pasted in full into the instructions',
-    inherited: 'The files of the chats above, pasted in full',
+    inherited: `The files of the ${CHAT_NOUN.many} above, pasted in full`,
   },
 }
 const EMPTY_SECTION: Record<ContextSection, string> = {
@@ -26,6 +32,9 @@ const EMPTY_SECTION: Record<ContextSection, string> = {
   folders: 'No folders. It runs in the nearest folder above, or a scratch folder.',
   files: 'No files.',
 }
+const HOME_INTRO = `${WORKSHOP_NAME} keeps no folders or files; name a folder in the chat to work there.`
+const CHAT_INTRO = `Each message gets the items that are on, from ${WORKSHOP_NAME} down.`
+const HOME_AGENTS_ABOUT = `Read by ${WORKSHOP_NAME} and every ${CHAT_NOUN.one}`
 const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text-muted'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
@@ -169,22 +178,24 @@ export function ContextPanel({ chatId, items, chats, contextDefaults, readOnly, 
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) => chats.find((c) => c.id === item.from)?.name ?? item.from
+  const home = chatId === MAIN_CHAT_ID
+  const sections: readonly ContextSection[] = home ? ['agents'] : CONTEXT_SECTIONS
   return (
-    <aside className="flex w-320 shrink-0 flex-col border-l bg-panel" aria-label="Context">
+    <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center border-b px-14">
         <span className="font-semibold">Context</span>
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
         <p className="text-sm text-faint">
-          Each message gets the items that are on, from the Workshop down. Edits apply from the next message.
+          {home ? HOME_INTRO : CHAT_INTRO} Edits apply from the next message.
         </p>
-        {CONTEXT_SECTIONS.map((section) => {
+        {sections.map((section) => {
           const listed = items?.filter((item) => item.section === section) ?? []
           return (
             <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
               <h3 className="mb-8 flex flex-col">
                 <span className="font-semibold">{SECTIONS[section].label}</span>
-                <span className="text-sm text-faint">{SECTIONS[section].about}</span>
+                <span className="text-sm text-faint">{home ? HOME_AGENTS_ABOUT : SECTIONS[section].about}</span>
               </h3>
               <AnimatePresence initial={false}>
                 {listed.map((item) => (

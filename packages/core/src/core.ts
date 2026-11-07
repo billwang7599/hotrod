@@ -19,7 +19,9 @@ import {
   DEFAULT_SUBAGENT_LIMIT,
   MODEL_ROLES,
   pickModel,
+  pickThinking,
   WORKSHOP_ID,
+  WORKSHOP_NAME,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
@@ -43,7 +45,12 @@ import {
 
 export const STOP_GRACE_MS = 60_000
 export const MAX_CHAT_DEPTH = 1
-const WORKSHOP_NAME = 'Workshop'
+export const HOME_INSTRUCTIONS =
+  `You are the user's personal assistant in Hotrod, running in its main chat, ${WORKSHOP_NAME}. Answer general ` +
+  'questions, help with personal tasks and use your MCP tools. You may work in any directory the user names in this ' +
+  `chat: read, edit and run commands there. No folder stays attached to ${WORKSHOP_NAME}; each message starts in a ` +
+  'scratch folder. For ongoing work in a folder, offer to make a space for it: a chat below you with that folder, ' +
+  'made with the hotrod create_chat tool. list_chats, read_chat and send_message reach the spaces that exist.'
 
 type Chat = {
   info: ChatInfo
@@ -82,6 +89,7 @@ export function openCore(options: {
     context?: Partial<Record<ContextSection, boolean>>
     mods?: Partial<Mods>
     models?: Record<string, Partial<ModelLists>>
+    defaultThinking?: Record<string, string>
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -101,11 +109,12 @@ export function openCore(options: {
   })
   const detected = new Map<string, EngineStatus>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
-  const engineInfo = (id: string): EngineInfo => ({
-    id,
-    enabled: isEnabled(id),
-    ...(detected.get(id) ?? { installed: false, signedIn: false }),
-  })
+  const engineInfo = (id: string): EngineInfo => {
+    const status = detected.get(id) ?? { installed: false, signedIn: false }
+    const chosen = settings.defaultThinking?.[id]
+    const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
+    return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
+  }
   const offered = (engine: string) => {
     const { models = [], thinking = [] } = detected.get(engine) ?? {}
     return { models, thinking }
@@ -149,6 +158,15 @@ export function openCore(options: {
     settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: models } }
     saveSettings()
     broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
+  }
+  const setDefaultThinking = (engine: string, thinking: string) => {
+    checkEngine(engine)
+    if (!offered(engine).thinking.includes(thinking)) {
+      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
+    }
+    settings.defaultThinking = { ...settings.defaultThinking, [engine]: thinking }
+    saveSettings()
+    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
@@ -206,7 +224,7 @@ export function openCore(options: {
   const canNest = (chat: Chat) => !chat.info.subagent && chainOf(chat).length - 1 < MAX_CHAT_DEPTH
 
   const checkRemovable = (chat: Chat) => {
-    if (isWorkshop(chat)) throw new Error('The Workshop cannot be archived or deleted')
+    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be archived or deleted`)
     if (chat.status !== 'idle') throw new Error('Stop the running chat first')
   }
 
@@ -260,7 +278,7 @@ export function openCore(options: {
     const file = join(dir, 'chat.json')
     const { context = {}, title, ...saved } = readJson(file)
     const info: ChatInfo = { ...fallback, ...(title !== undefined && { name: title }), ...saved, id: fallback.id }
-    if (info.id === WORKSHOP_ID) info.name = WORKSHOP_NAME
+    if (info.id === WORKSHOP_ID) Object.assign(info, { name: WORKSHOP_NAME, folders: [], files: [] })
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -274,7 +292,7 @@ export function openCore(options: {
       pendingRequests: new Set(),
       queue: [],
     }
-    if (!existsSync(file)) saveChat(chat)
+    if (!existsSync(file) || info.id === WORKSHOP_ID) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
@@ -309,7 +327,7 @@ export function openCore(options: {
     checkActive(parent)
     if (parent.info.subagent) throw new Error('A subagent cannot start chats')
     if (!spec.subagent && !canNest(parent)) {
-      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below the Workshop`)
+      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below ${WORKSHOP_NAME}`)
     }
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
@@ -340,7 +358,7 @@ export function openCore(options: {
   }
 
   const renameChat = (chat: Chat, name: unknown) => {
-    if (isWorkshop(chat)) throw new Error('The Workshop cannot be renamed')
+    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be renamed`)
     updateChat(chat, { name: checkName(name) })
   }
 
@@ -382,7 +400,12 @@ export function openCore(options: {
     if (thinking && !offers.thinking.includes(thinking)) {
       throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
     }
-    updateChat(chat, { model, thinking })
+    const info = engineInfo(engine)
+    const unpinned = pickModel(info, listsOf(engine), { role: chat.info.role })
+    updateChat(chat, {
+      model: model === unpinned ? undefined : model,
+      thinking: thinking === info.defaultThinking ? undefined : thinking,
+    })
   }
 
   const checkActive = (chat: Chat) => {
@@ -432,6 +455,9 @@ export function openCore(options: {
 
   const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
     checkActive(chat)
+    if (isWorkshop(chat)) {
+      throw new Error(`${WORKSHOP_NAME} keeps no folders or files. Name a folder in its chat, or make a space for it.`)
+    }
     const path = checkPath(rawPath, section)
     if (contextItems(chat).some((item) => item.path === path)) {
       throw new Error(`${path} is already in this chat's context`)
@@ -476,12 +502,12 @@ export function openCore(options: {
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
-    const instructions = items
+    const contextText = items
       .filter((item) => item.text.trim())
       .map(({ section, path, text }) =>
         section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim(),
       )
-      .join('\n\n')
+    const instructions = [...(isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []), ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
@@ -512,7 +538,9 @@ export function openCore(options: {
     try {
       chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
-      const model = pickModel(offered(adapter.id).models, listsOf(adapter.id), chat.info)
+      const engine = engineInfo(adapter.id)
+      const model = pickModel(engine, listsOf(adapter.id), chat.info)
+      const thinking = pickThinking(engine, chat.info)
       const options = {
         cwd,
         instructions,
@@ -520,7 +548,7 @@ export function openCore(options: {
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
-        ...(chat.info.thinking && { thinking: chat.info.thinking }),
+        ...(thinking && { thinking }),
       }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
@@ -615,6 +643,8 @@ export function openCore(options: {
       switch (message.type) {
         case 'engine.setEnabled':
           return setEngineEnabled(String(message.engine), message.enabled === true)
+        case 'engine.setDefaultThinking':
+          return setDefaultThinking(String(message.engine), String(message.thinking))
         case 'chat.create':
           return void createChat({
             parentId: optionalText(message.parentId),

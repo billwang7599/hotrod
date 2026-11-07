@@ -103,7 +103,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     }
   }
 
-  function run(command: string, args: string[], options: SpawnOptions) {
+  function run(command: string, args: string[], options: SpawnOptions & { input?: string }) {
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawnProcess(command, args, options)
       let stdout = ''
@@ -118,6 +118,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
         if (!timedOut) return resolve({ code, stdout, stderr })
         resolve({ code: null, stdout, stderr: `${stderr}${command} timed out after ${runTimeoutMs}ms` })
       })
+      if (options.input) child.write(options.input)
       child.closeStdin()
     })
   }

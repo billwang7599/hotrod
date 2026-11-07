@@ -2,7 +2,7 @@ import type { EngineProcess, Machine } from '../types.ts'
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
   const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string> }[] = []
-  const ran: { command: string; args: string[]; env?: Record<string, string> }[] = []
+  const ran: { command: string; args: string[]; env?: Record<string, string>; input?: string }[] = []
   const written: string[] = []
   const state = { stdinClosed: false, killed: false }
   let stdout = (_: string) => {}
@@ -20,7 +20,8 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
       return proc
     },
     async run(command, args, options) {
-      ran.push({ command, args, ...(options.env && { env: options.env }) })
+      const { env, input } = options
+      ran.push({ command, args, ...(env && { env }), ...(input && { input }) })
       return runResults[[command, ...args].join(' ')] ?? { code: 127, stdout: '', stderr: 'not found' }
     },
     stopAll: async () => {},

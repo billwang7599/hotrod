@@ -12,11 +12,12 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createFakeAdapter, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
+import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
+import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
   DEFAULT_SUBAGENT_LIMIT,
+  WORKSHOP_NAME,
   type Adapter,
   type ChatEntry,
   type ChatState,
@@ -27,6 +28,8 @@ import {
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
+const otherModel = FAKE_MODELS.find((m) => m.id !== FAKE_DEFAULTS.defaultModel)!.id
+const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
 
 const textScript: FakeStep[] = [
   { type: 'text.delta', text: 'Hel' },
@@ -157,7 +160,7 @@ describe('chats', () => {
   it('opens one permanent Workshop chat that runs in a scratch home folder', async () => {
     const t = setup(textScript)
     expect(t.core.chats()).toEqual([
-      expect.objectContaining({ id: 'main', name: 'Workshop', engine: 'fake', folders: [], files: [] }),
+      expect.objectContaining({ id: 'main', name: WORKSHOP_NAME, engine: 'fake', folders: [], files: [] }),
     ])
     expect(chatOf(t.core, 'main')?.parentId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
@@ -166,21 +169,45 @@ describe('chats', () => {
     expect(statSync(join(t.garage, 'home')).isDirectory()).toBe(true)
     const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n')).toHaveLength(4)
-    expect(chatOf(t.core, 'main')?.name).toBe('Workshop')
+    expect(chatOf(t.core, 'main')?.name).toBe(WORKSHOP_NAME)
 
-    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(/Workshop/)
-    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(/Workshop/)
-    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(/Workshop/)
+    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(WORKSHOP_NAME)
+    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(WORKSHOP_NAME)
+    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(WORKSHOP_NAME)
     t.core.close()
     expect(entriesOf(setup(textScript, t.garage).core, 'main')).toHaveLength(4)
   })
 
-  it('calls the root chat Workshop, even in a garage that saved it as Main', () => {
+  it(`keeps ${WORKSHOP_NAME} free of folders and files, dropping any a garage saved`, async () => {
     const garage = tempDir()
+    const dir = realpathSync(tempDir())
+    const file = join(dir, 'notes.md')
+    writeFileSync(file, 'NOTES')
     mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
-    const saved = { id: 'main', title: 'Main', name: 'Main', engine: 'fake', archived: false, createdAt: at }
+    const saved = { id: 'main', name: 'Main', folders: [dir], files: [file], engine: 'fake', createdAt: at }
     writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
-    expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe('Workshop')
+    const t = setup(textScript, garage)
+    expect(chatOf(t.core, 'main')).toMatchObject({ folders: [], files: [] })
+    const rewritten = JSON.parse(readFileSync(join(garage, 'chats', 'main', 'chat.json'), 'utf8'))
+    expect(rewritten).toMatchObject({ name: WORKSHOP_NAME, folders: [], files: [] })
+    for (const [section, path] of [['folders', dir], ['files', file]] as const) {
+      expect(() => t.handle({ type: 'context.add', chatId: 'main', section, path })).toThrow(WORKSHOP_NAME)
+    }
+    expect(chatOf(t.core, 'main')).toMatchObject({ folders: [], files: [] })
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[0]?.options.cwd).toBe(join(garage, 'home'))
+    expect(t.calls[0]?.options).not.toHaveProperty('extraDirs')
+  })
+
+  it(`calls the root chat ${WORKSHOP_NAME}, even in a garage that saved an older name`, () => {
+    for (const old of ['Main', 'Workshop']) {
+      const garage = tempDir()
+      mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
+      const saved = { id: 'main', title: old, name: old, engine: 'fake', archived: false, createdAt: at }
+      writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
+      expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe(WORKSHOP_NAME)
+    }
   })
 
   it('creates named chats under the Workshop, stored flat in the garage, and keeps their names', async () => {
@@ -617,7 +644,7 @@ describe('engines', () => {
     const t = setupEngines()
     await t.core.refreshEngines()
     const chat = folderChat(t)
-    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING.at(-1)!]
+    const [model, thinking] = [otherModel, otherThinking]
     t.handle({ type: 'chat.setModel', chatId: chat.id, model, thinking })
     expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, model, thinking } })
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8'))).toMatchObject({ model, thinking })
@@ -630,7 +657,7 @@ describe('engines', () => {
     expect(updated?.type === 'chat.updated' && 'model' in updated.chat).toBe(false)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
     await until(() => statusOf(t.core, chat.id) === 'idle')
-    expect(t.alpha[1]?.options.model).toBeUndefined()
+    expect(t.alpha[1]?.options.model).toBe(FAKE_DEFAULTS.defaultModel)
     expect(t.alpha[1]?.options.thinking).toBe(thinking)
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).model).toBeUndefined()
 
@@ -655,19 +682,20 @@ describe('engines', () => {
 
   it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
     const alpha = createFakeAdapter([], 0)
-    const betaOffers = { models: FAKE_MODELS.slice(0, 1), thinking: FAKE_THINKING }
+    const betaOffers = { models: FAKE_MODELS.filter((m) => m.id !== otherModel), thinking: FAKE_THINKING }
     const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
     await t.core.refreshEngines()
-    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING[0]!]
-    t.handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
+    const thinking = otherThinking
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0]!.id, thinking })
+    const betaModel = betaOffers.models[0]!.id
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: betaModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
-    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0]!.id, thinking })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: betaModel, thinking })
   })
 
   it('keeps a chat whose saved engine is gone and refuses to send', () => {
@@ -1279,6 +1307,14 @@ describe('context', () => {
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
     (await sessionOf(t, chatId)).instructions
+  const reopenWithSubagent = (t: ReturnType<typeof setup>, parentId: string) => {
+    t.core.close()
+    const id = 'subagent'
+    const saved = { id, name: 'Sub', parentId, subagent: true, engine: 'fake', archived: false, createdAt: at }
+    mkdirSync(join(t.garage, 'chats', id), { recursive: true })
+    writeFileSync(join(t.garage, 'chats', id, 'chat.json'), JSON.stringify(saved))
+    return { t: setup(textScript, t.garage), subagentId: id }
+  }
   const folderWith = (rules: string) => {
     const dir = tempDir()
     writeFileSync(join(dir, 'AGENTS.md'), rules)
@@ -1309,13 +1345,12 @@ describe('context', () => {
     ])
   })
 
-  it('injects enabled items root first, files in full with their path, and never a child item', async () => {
+  it(`injects enabled items root first, after the role instructions only ${WORKSHOP_NAME} gets`, async () => {
     const t = setup(textScript)
-    const shared = folderWith('SHARED RULES')
     const repo = folderWith('REPO RULES')
     const notes = fileWith('NOTES\n')
+    expect(await instructionsOf(t, 'main')).toBe(HOME_INSTRUCTIONS)
     t.handle({ type: 'context.write', chatId: 'main', text: 'WORKSHOP RULES' })
-    add(t, 'main', 'folders', shared)
     const chat = createChat(t, { name: 'App', folders: [repo], files: [notes] })
     const other = createChat(t, { name: 'Other' })
     t.handle({ type: 'context.write', chatId: chat.id, text: 'APP RULES' })
@@ -1323,39 +1358,46 @@ describe('context', () => {
 
     const file = `<file path="${notes}">\nNOTES\n</file>`
     expect(await instructionsOf(t, chat.id)).toBe(
-      ['SHARED RULES', 'WORKSHOP RULES', 'REPO RULES', 'APP RULES', file].join('\n\n'),
+      ['WORKSHOP RULES', 'REPO RULES', 'APP RULES', file].join('\n\n'),
     )
-    expect(await instructionsOf(t, 'main')).toBe('SHARED RULES\n\nWORKSHOP RULES')
-    expect(await instructionsOf(t, other.id)).toBe('SHARED RULES\n\nWORKSHOP RULES\n\nOTHER RULES')
+    expect(await instructionsOf(t, 'main')).toBe(`${HOME_INSTRUCTIONS}\n\nWORKSHOP RULES`)
+    expect(await instructionsOf(t, other.id)).toBe('WORKSHOP RULES\n\nOTHER RULES')
+    expect(itemsOf(t, 'main').map((item) => item.text)).toEqual(['WORKSHOP RULES'])
   })
 
   it("runs in its first enabled folder, else its nearest ancestor's, else home, with the rest as extras", async () => {
-    const t = setup(textScript)
-    const [shared, a, b] = [folderWith(''), folderWith(''), folderWith('')]
-    const plain = createChat(t, { name: 'Plain' })
-    expect(await sessionOf(t, plain.id)).toMatchObject({ cwd: join(t.garage, 'home') })
-    expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
+    const first = setup(textScript)
+    const [a, b] = [folderWith(''), folderWith('')]
+    const home = join(first.garage, 'home')
+    const plain = createChat(first, { name: 'Plain' })
+    expect(await sessionOf(first, plain.id)).toMatchObject({ cwd: home })
+    expect(first.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
+    const app = createChat(first, { name: 'App', folders: [a, b] })
+    expect(await sessionOf(first, app.id)).toMatchObject({ cwd: a, extraDirs: [b] })
 
-    add(t, 'main', 'folders', shared)
-    expect(await sessionOf(t, plain.id)).toMatchObject({ cwd: shared })
-    expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
-    const app = createChat(t, { name: 'App', folders: [a, b] })
-    expect(await sessionOf(t, app.id)).toMatchObject({ cwd: a, extraDirs: [shared, b] })
+    const { t, subagentId } = reopenWithSubagent(first, app.id)
+    expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: a, extraDirs: [b] })
     t.handle({ type: 'context.set', chatId: app.id, path: a, enabled: false })
-    expect(await sessionOf(t, app.id)).toMatchObject({ cwd: b, extraDirs: [shared] })
-    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: shared })
+    expect(await sessionOf(t, app.id)).toMatchObject({ cwd: b })
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
+    expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: b })
+    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: home })
   })
 
   it('adds and removes folders and files, checking each path, and tells the chat and the chats below it', () => {
-    const t = setup(textScript)
-    const chat = createChat(t, { name: 'App' })
+    const first = setup(textScript)
+    const chat = createChat(first, { name: 'App' })
+    const { t, subagentId } = reopenWithSubagent(first, chat.id)
     const dir = realpathSync(tempDir())
     const file = fileWith('NOTES')
     let before = t.messages.length
     add(t, chat.id, 'folders', dir)
     const updated = { type: 'chat.updated', chat: expect.objectContaining({ folders: [dir] }) }
     expect(t.messages.slice(before)).toContainEqual(updated)
-    expect(t.messages.slice(before).flatMap((m) => (m.type === 'chat.context' ? [m.chatId] : []))).toEqual([chat.id])
+    expect(t.messages.slice(before).flatMap((m) => (m.type === 'chat.context' ? [m.chatId] : []))).toEqual([
+      chat.id,
+      subagentId,
+    ])
     add(t, chat.id, 'files', file)
     expect(chatOf(t.core, chat.id)).toMatchObject({ folders: [dir], files: [file] })
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8'))).toMatchObject({ folders: [dir], files: [file] })
@@ -1367,14 +1409,7 @@ describe('context', () => {
     expect(() => add(t, chat.id, 'folders', `${dir}/`)).toThrow(/already/)
     expect(() => add(t, chat.id, 'agents' as never, dir)).toThrow(/Only folders and files/)
 
-    const inherited = realpathSync(tempDir())
-    before = t.messages.length
-    add(t, 'main', 'folders', inherited)
-    expect(t.messages.slice(before).flatMap((m) => (m.type === 'chat.context' ? [m.chatId] : []))).toEqual([
-      'main',
-      chat.id,
-    ])
-    expect(() => add(t, chat.id, 'folders', inherited)).toThrow(/already/)
+    expect(() => add(t, subagentId, 'folders', dir)).toThrow(/already/)
 
     t.handle({ type: 'context.remove', chatId: chat.id, section: 'folders', path: dir })
     expect(chatOf(t.core, chat.id)).toMatchObject({ folders: [], files: [file] })
@@ -1382,8 +1417,8 @@ describe('context', () => {
       /not one of this chat's folders/,
     )
     expect(() =>
-      t.handle({ type: 'context.remove', chatId: chat.id, section: 'folders', path: inherited }),
-    ).toThrow(/not one of this chat's folders/)
+      t.handle({ type: 'context.remove', chatId: subagentId, section: 'files', path: file }),
+    ).toThrow(/not one of this chat's files/)
     expect(existsSync(dir)).toBe(true)
   })
 
@@ -1402,7 +1437,7 @@ describe('context', () => {
     expect(await instructionsOf(t, chat.id)).toBe('WORKSHOP RULES')
 
     t.handle({ type: 'context.set', chatId: 'main', path: join(t.garage, 'AGENTS.md'), enabled: false })
-    expect(await instructionsOf(t, 'main')).toBe('')
+    expect(await instructionsOf(t, 'main')).toBe(HOME_INSTRUCTIONS)
     expect(await instructionsOf(t, chat.id)).toBe('WORKSHOP RULES')
 
     t.core.close()
@@ -1419,7 +1454,6 @@ describe('context', () => {
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark', context: { repo: false } }))
     const t = setup(textScript, garage)
     expect(t.core.contextDefaults()).toEqual({ agents: true, folders: true, files: true })
-    add(t, 'main', 'folders', folderWith(''))
     const chat = createChat(t, { name: 'App', folders: [folderWith('')] })
 
     t.handle({ type: 'context.setDefault', section: 'agents', enabled: false })
@@ -1433,14 +1467,13 @@ describe('context', () => {
     })
     const switches = (chatId: string) => itemsOf(t, chatId).map((i) => [i.from, i.section, i.enabled])
     expect(switches(chat.id)).toEqual([
-      ['main', 'folders', false],
       ['main', 'agents', false],
       [chat.id, 'folders', true],
       [chat.id, 'agents', true],
     ])
-    expect(switches('main').map(([, , enabled]) => enabled)).toEqual([true, true])
+    expect(switches('main').map(([, , enabled]) => enabled)).toEqual([true])
     t.handle({ type: 'context.set', chatId: chat.id, path: join(garage, 'AGENTS.md'), enabled: true })
-    expect(switches(chat.id)[1]).toEqual(['main', 'agents', true])
+    expect(switches(chat.id)[0]).toEqual(['main', 'agents', true])
     expect(() => t.handle({ type: 'context.setDefault', section: 'nope', enabled: false } as never)).toThrow(
       /Unknown context section/,
     )
@@ -1481,10 +1514,10 @@ describe('context', () => {
   })
 })
 
-describe('model lists', () => {
+describe('models', () => {
   const [newest, older] = FAKE_MODELS.map((m) => m.id) as [string, string]
+  const { defaultModel, defaultThinking } = FAKE_DEFAULTS
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
-  const lastTurn = (core: Core, id: string) => entriesOf(core, id).findLast((e) => e.type === 'turn.completed')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
     await until(() => statusOf(t.core, chatId) === 'idle')
@@ -1519,17 +1552,14 @@ describe('model lists', () => {
     expect(setup(textScript, garage).core.modelLists()).toEqual({ fake: lists })
   })
 
-  it('starts an Auto chat on the first listed model the engine offers, and keeps the model that ran', async () => {
+  it('starts an unpinned chat on the first listed model the engine offers', async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone', older, newest] })
     expect(await sendAndWait(t)).toBe(older)
-    expect(lastTurn(t.core, 'main')).toMatchObject({ model: older })
-    t.core.close()
-    expect(lastTurn(setup(textScript, t.garage).core, 'main')).toMatchObject({ model: older })
   })
 
-  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as Auto", async () => {
+  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as unpinned", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [older] })
@@ -1544,13 +1574,64 @@ describe('model lists', () => {
     expect(await sendAndWait(reopened)).toBe(older)
   })
 
-  it('runs on the engine default when nothing listed is offered, and shows the model the engine used', async () => {
+  it("passes the engine's default model and thinking level when the chat and its lists pick none", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
-    expect(await sendAndWait(t)).toBeUndefined()
+    expect(await sendAndWait(t)).toBe(defaultModel)
+    expect(t.calls.at(-1)!.options.thinking).toBe(defaultThinking)
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone'] })
-    expect(await sendAndWait(t)).toBeUndefined()
-    expect(lastTurn(t.core, 'main')).toMatchObject({ model: FAKE_MODELS[0]!.id })
+    expect(await sendAndWait(t)).toBe(defaultModel)
+  })
+
+  it('unpins a model or thinking level the chat would run anyway, so it keeps following Settings', async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    const saved = () => JSON.parse(readFileSync(join(t.garage, 'chats', 'main', 'chat.json'), 'utf8'))
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking: otherThinking })
+    expect(saved()).toMatchObject({ model: otherModel, thinking: otherThinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel, thinking: defaultThinking })
+    expect(saved()).not.toHaveProperty('model')
+    expect(saved()).not.toHaveProperty('thinking')
+
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [otherModel] })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel })
+    expect(chatOf(t.core, 'main')?.model).toBe(defaultModel)
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel })
+    expect(chatOf(t.core, 'main')?.model).toBeUndefined()
+  })
+
+  it("starts each engine's default thinking at the engine's own, and saves a change in settings.json", async () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    const fakeInfo = (core: Core) => core.engines().find((e) => e.id === 'fake')
+    await t.core.refreshEngines()
+    expect(fakeInfo(t.core)).toMatchObject({ defaultModel, defaultThinking })
+
+    t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: otherThinking })
+    expect(t.messages.at(-1)).toMatchObject({
+      type: 'engine.updated',
+      engine: { id: 'fake', defaultThinking: otherThinking },
+    })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
+      theme: 'dark',
+      defaultThinking: { fake: otherThinking },
+    })
+    await sendAndWait(t)
+    expect(t.calls.at(-1)!.options.thinking).toBe(otherThinking)
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: otherThinking })
+    expect(chatOf(t.core, 'main')?.thinking).toBeUndefined()
+
+    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'nope', thinking: otherThinking })).toThrow(
+      /Unknown engine/,
+    )
+    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: 'nope' })).toThrow(
+      /thinking level "nope"/,
+    )
+    t.core.close()
+    const reopened = setup(textScript, garage)
+    await reopened.core.refreshEngines()
+    expect(fakeInfo(reopened.core)?.defaultThinking).toBe(otherThinking)
   })
 })
 

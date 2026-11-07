@@ -25,6 +25,9 @@ async function start() {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 375,
+    minHeight: 600,
+    useContentSize: true,
     title: 'Hotrod',
     icon,
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true },
@@ -82,7 +85,7 @@ async function start() {
 
   const pickFolder = async () => {
     const result = await dialog.showOpenDialog(window, {
-      title: 'New chat from folder',
+      title: 'New space from folder',
       properties: ['openDirectory', 'createDirectory'],
     })
     return result.canceled ? null : (result.filePaths[0] ?? null)
@@ -96,7 +99,7 @@ async function start() {
         label: 'File',
         submenu: [
           {
-            label: 'New chat from folder…',
+            label: 'New space from folder…',
             accelerator: 'CmdOrCtrl+O',
             click: () => window.webContents.send('new-chat-from-folder'),
           },
