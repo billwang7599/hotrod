@@ -1,48 +1,18 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ClientMessage } from '@hotrod/core/types'
+import { useCore } from './connection.ts'
 import { Markdown } from './markdown.tsx'
-import { initialState, reduce, type Action, type Item, type ProjectView } from './state.ts'
+import { initialState, reduce, type Item, type ProjectView } from './state.ts'
 import './styles.css'
 
-const CORE_URL = import.meta.env.VITE_HOTROD_CORE_URL ?? 'ws://127.0.0.1:4317'
-const MIN_RETRY_MS = 500
-const MAX_RETRY_MS = 10_000
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedProject'
 
-function useCore(dispatch: (action: Action) => void) {
-  const socketRef = useRef<WebSocket | null>(null)
-  useEffect(() => {
-    let retryMs = MIN_RETRY_MS
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let stopped = false
-    const connect = () => {
-      const socket = new WebSocket(CORE_URL)
-      socketRef.current = socket
-      socket.onopen = () => {
-        retryMs = MIN_RETRY_MS
-        dispatch({ type: 'connection', connected: true })
-      }
-      socket.onmessage = (e) => dispatch(JSON.parse(e.data))
-      socket.onclose = () => {
-        dispatch({ type: 'connection', connected: false })
-        if (stopped) return
-        timer = setTimeout(connect, retryMs)
-        retryMs = Math.min(retryMs * 2, MAX_RETRY_MS)
-      }
-    }
-    connect()
-    return () => {
-      stopped = true
-      clearTimeout(timer)
-      socketRef.current?.close()
-    }
-  }, [dispatch])
-  return useCallback((message: ClientMessage) => {
-    const socket = socketRef.current
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
-  }, [])
+declare global {
+  interface Window {
+    hotrod?: { pickFolder(): Promise<string | null>; onAddProject(listener: () => void): () => void }
+  }
 }
 
 type ItemProps = { item: Item; project: ProjectView; connected: boolean; send: (m: ClientMessage) => void }
@@ -213,6 +183,14 @@ function App() {
     setPath('')
   }
 
+  const connected = state.connected
+  const pickProject = useCallback(async () => {
+    if (!connected || !window.hotrod) return
+    const picked = await window.hotrod.pickFolder()
+    if (picked) send({ type: 'project.add', path: picked })
+  }, [connected, send])
+  useEffect(() => window.hotrod?.onAddProject(() => void pickProject()), [pickProject])
+
   return (
     <div className="app">
       <aside className="sidebar">
@@ -230,15 +208,23 @@ function App() {
             </button>
           ))}
         </nav>
-        <form className="add-project" onSubmit={addProject}>
-          <input
-            value={path}
-            placeholder="/absolute/path/to/project"
-            spellCheck={false}
-            onChange={(e) => setPath(e.target.value)}
-          />
-          <button disabled={!state.connected || !path.trim()}>Add project</button>
-        </form>
+        {window.hotrod ? (
+          <div className="add-project">
+            <button disabled={!connected} onClick={() => void pickProject()}>
+              Add project…
+            </button>
+          </div>
+        ) : (
+          <form className="add-project" onSubmit={addProject}>
+            <input
+              value={path}
+              placeholder="/absolute/path/to/project"
+              spellCheck={false}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <button disabled={!connected || !path.trim()}>Add project</button>
+          </form>
+        )}
       </aside>
       <div className="main">
         {!state.connected && <div className="banner">Disconnected from the core. Reconnecting…</div>}

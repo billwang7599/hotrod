@@ -47,23 +47,13 @@ async function start() {
   }
   ipcMain.handle('pick-folder', pickFolder)
 
-  const addProject = async () => {
-    const path = await pickFolder()
-    if (!path) return
-    try {
-      hotrod.core.handle({ type: 'project.add', path }, () => {})
-    } catch (error) {
-      dialog.showErrorBox('Could not add project', errorText(error))
-    }
-  }
-
   Menu.setApplicationMenu(
     Menu.buildFromTemplate([
       ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
       {
         label: 'File',
         submenu: [
-          { label: 'Add Project…', accelerator: 'CmdOrCtrl+O', click: () => void addProject() },
+          { label: 'Add Project…', accelerator: 'CmdOrCtrl+O', click: () => window.webContents.send('add-project') },
           { type: 'separator' },
           { role: process.platform === 'darwin' ? 'close' : 'quit' },
         ],
