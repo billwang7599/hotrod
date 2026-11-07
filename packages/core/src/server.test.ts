@@ -11,7 +11,6 @@ import { BAD_TOKEN_CLOSE_CODE, type CoreMessage } from './types.ts'
 
 const origin = 'http://localhost:4318'
 const token = 'test-token-0123456789'
-const engines = [{ id: 'fake', installed: true, signedIn: true }]
 const cleanups: (() => void | Promise<void>)[] = []
 
 afterEach(async () => {
@@ -29,7 +28,6 @@ async function start() {
   })
   const server = await startServer({
     core,
-    engines,
     port: 0,
     uiOrigin: origin,
     token,
@@ -88,7 +86,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   await until(() => a.messages.length > 0 && b.messages.length > 0)
   expect(a.messages[0]).toMatchObject({
     type: 'snapshot',
-    engines,
+    engines: [{ id: 'fake', enabled: false }],
     projects: [],
     chats: [expect.objectContaining({ id: 'main', title: 'Main' })],
     accounts: [{ engine: 'fake', active: 'default' }],
@@ -101,6 +99,8 @@ it('sends a snapshot, then broadcasts to every client', async () => {
 
   a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'nope' }))
   await until(() => a.messages.some((m) => m.type === 'error'))
+  a.socket.send(JSON.stringify({ type: 'engine.setEnabled', engine: 'fake', enabled: true }))
+  await until(() => b.messages.some((m) => m.type === 'engine.updated' && m.engine.enabled))
   a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'fake' }))
   await until(() => b.messages.some((m) => m.type === 'chat.updated'))
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
@@ -138,7 +138,6 @@ it('serves the UI folder when given one', async () => {
   })
   const server = await startServer({
     core,
-    engines,
     port: 0,
     uiOrigin: origin,
     token,

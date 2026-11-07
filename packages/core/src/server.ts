@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
-import { BAD_TOKEN_CLOSE_CODE, type CoreMessage, type EngineInfo } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, type CoreMessage } from './types.ts'
 
 // Hashing first gives equal lengths, which timingSafeEqual needs, without leaking the token's length.
 const digest = (text: string) => createHash('sha256').update(text).digest()
@@ -24,13 +24,12 @@ const CONTENT_TYPES: Record<string, string> = {
 
 export async function startServer(options: {
   core: Core
-  engines: EngineInfo[]
   port: number
   uiOrigin: string
   token: string
   uiDir?: string
 }) {
-  const { core, engines, port, uiOrigin, token } = options
+  const { core, port, uiOrigin, token } = options
   const uiDir = options.uiDir && resolve(options.uiDir)
   const serveUi: RequestListener = (request, response) => {
     if (!uiDir) return response.writeHead(426).end()
@@ -55,8 +54,8 @@ export async function startServer(options: {
   wss.on('connection', (socket, request) => {
     const given = new URL(request.url ?? '/', 'ws://core').searchParams.get('token') ?? ''
     if (!sameToken(given, token)) return socket.close(BAD_TOKEN_CLOSE_CODE, 'Missing or wrong token')
-    const { projects, chats, accounts } = core
-    send(socket, { type: 'snapshot', engines, projects: projects(), chats: chats(), accounts: accounts() })
+    const { engines, projects, chats, accounts } = core
+    send(socket, { type: 'snapshot', engines: engines(), projects: projects(), chats: chats(), accounts: accounts() })
     socket.on('message', (data) => {
       try {
         core.handle(JSON.parse(String(data)), (message) => send(socket, message))

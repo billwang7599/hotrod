@@ -7,6 +7,7 @@ import { Markdown } from './markdown.tsx'
 import {
   accountLabel,
   engineOptions,
+  engineProblem,
   initialState,
   MAIN_CHAT_ID,
   reduce,
@@ -123,37 +124,36 @@ function ItemView({ item, chat, connected, send }: ItemProps) {
   }
 }
 
-type AccountsProps = {
-  accounts: EngineAccounts
+type EngineProps = {
+  engine: EngineInfo
+  accounts?: EngineAccounts
   connected: boolean
   send: (m: ClientMessage) => void
-  close: () => void
 }
 
-function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
-  const { engine, login } = accounts
-  const dialogRef = useRef<HTMLDialogElement>(null)
+function EngineSettings({ engine, accounts, connected, send }: EngineProps) {
+  const id = engine.id
+  const login = accounts?.login
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [keyName, setKeyName] = useState('')
   const [key, setKey] = useState('')
-  useEffect(() => dialogRef.current?.showModal(), [])
   const startLogin = (e: FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
-    send({ type: 'account.login', engine, name: name.trim() })
+    send({ type: 'account.login', engine: id, name: name.trim() })
     setName('')
   }
   const submitCode = (e: FormEvent) => {
     e.preventDefault()
     if (!code.trim()) return
-    send({ type: 'account.code', engine, code: code.trim() })
+    send({ type: 'account.code', engine: id, code: code.trim() })
     setCode('')
   }
   const addKey = (e: FormEvent) => {
     e.preventDefault()
     if (!keyName.trim() || !key.trim()) return
-    send({ type: 'account.addApiKey', engine, name: keyName.trim(), key })
+    send({ type: 'account.addApiKey', engine: id, name: keyName.trim(), key })
     setKeyName('')
     setKey('')
   }
@@ -163,53 +163,63 @@ function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
         ? `Remove ${account.name} and delete its saved API key?`
         : `Sign out of ${account.name} and remove it from Hotrod?`
     if (!confirm(question)) return
-    send({ type: 'account.remove', engine, accountId: account.id })
+    send({ type: 'account.remove', engine: id, accountId: account.id })
   }
+  const problem = engineProblem(engine)
 
   return (
-    <dialog
-      ref={dialogRef}
-      className="accounts"
-      aria-label={`${engine} accounts`}
-      onClose={close}
-      onClick={(e) => e.target === dialogRef.current && dialogRef.current.close()}
-    >
-      <div className="dialog-body">
-        <header className="dialog-header">
-          <h2>
-            <span className="mono">{engine}</span> accounts
-          </h2>
-          <button className="ghost" aria-label="Close" onClick={() => dialogRef.current?.close()}>
-            ×
-          </button>
-        </header>
-        <ul className="account-list">
-          {accounts.accounts.map((a) => (
-            <li key={a.id}>
-              <span className="account-name">
-                {accountLabel(a)}
-                {a.id === 'default' && <span className="account-note">{engine}'s own sign-in</span>}
-              </span>
-              {a.id === accounts.active ? (
-                <span className="pill">In use</span>
-              ) : (
-                <button className="small" disabled={!connected} onClick={() => send({ type: 'account.use', engine, accountId: a.id })}>
-                  Use
-                </button>
-              )}
-              {a.id !== 'default' && (
-                <button className="small danger" disabled={!connected} onClick={() => remove(a)}>
-                  Remove
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
-        <section>
-          <h3>Add an account</h3>
+    <section className={`engine-card ${engine.enabled ? 'on' : ''}`} aria-label={`${id} settings`}>
+      <div className="engine-row">
+        <span className="engine-name">
+          <span className="mono">{id}</span>
+          <span className={`engine-status ${problem ? 'problem' : 'ready'}`}>
+            {problem ?? 'Ready'}
+            {engine.detail && ` · ${engine.detail}`}
+          </span>
+        </span>
+        <label className="switch" title={engine.enabled ? `Turn ${id} off` : `Turn ${id} on`}>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={`${id} on`}
+            checked={engine.enabled}
+            disabled={!connected}
+            onChange={(e) => send({ type: 'engine.setEnabled', engine: id, enabled: e.target.checked })}
+          />
+          <span className="track" />
+        </label>
+      </div>
+      {engine.enabled && accounts && (
+        <div className="engine-accounts">
+          <ul className="account-list">
+            {accounts.accounts.map((a) => (
+              <li key={a.id}>
+                <span className="account-name">
+                  {accountLabel(a)}
+                  {a.id === 'default' && <span className="account-note">{id}'s own sign-in</span>}
+                </span>
+                {a.id === accounts.active ? (
+                  <span className="pill">In use</span>
+                ) : (
+                  <button
+                    className="small"
+                    disabled={!connected}
+                    onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
+                  >
+                    Use
+                  </button>
+                )}
+                {a.id !== 'default' && (
+                  <button className="small danger" disabled={!connected} onClick={() => remove(a)}>
+                    Remove
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
           {!login ? (
             <form className="inline-form" onSubmit={startLogin}>
-              <input value={name} placeholder="Name, e.g. Work" onChange={(e) => setName(e.target.value)} />
+              <input value={name} placeholder="New account name, e.g. Work" onChange={(e) => setName(e.target.value)} />
               <button className="primary" disabled={!connected || !name.trim()}>
                 Sign in…
               </button>
@@ -217,7 +227,7 @@ function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
           ) : login.error ? (
             <div className="account-login">
               <div className="turn-error">{login.error}</div>
-              <button onClick={() => send({ type: 'account.cancelLogin', engine })}>Dismiss</button>
+              <button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</button>
             </div>
           ) : (
             <div className="account-login">
@@ -239,17 +249,14 @@ function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
                   </form>
                 </>
               )}
-              <button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine })}>
+              <button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine: id })}>
                 Cancel
               </button>
             </div>
           )}
-        </section>
-        {accounts.apiKeys && (
-          <section>
-            <h3>Add an API key</h3>
+          {accounts.apiKeys && (
             <form className="inline-form" onSubmit={addKey}>
-              <input value={keyName} placeholder="Name" onChange={(e) => setKeyName(e.target.value)} />
+              <input value={keyName} placeholder="API key name" onChange={(e) => setKeyName(e.target.value)} />
               <input
                 type="password"
                 value={key}
@@ -260,8 +267,52 @@ function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
               />
               <button disabled={!connected || !keyName.trim() || !key.trim()}>Add API key</button>
             </form>
-          </section>
-        )}
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
+type SettingsProps = {
+  engines: EngineInfo[]
+  accounts: EngineAccounts[]
+  connected: boolean
+  send: (m: ClientMessage) => void
+  close: () => void
+}
+
+function SettingsDialog({ engines, accounts, connected, send, close }: SettingsProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null)
+  useEffect(() => dialogRef.current?.showModal(), [])
+  return (
+    <dialog
+      ref={dialogRef}
+      className="settings"
+      aria-label="Settings"
+      onClose={close}
+      onClick={(e) => e.target === dialogRef.current && dialogRef.current.close()}
+    >
+      <div className="dialog-body">
+        <header className="dialog-header">
+          <h2>Settings</h2>
+          <button className="ghost" aria-label="Close" onClick={() => dialogRef.current?.close()}>
+            ×
+          </button>
+        </header>
+        <section>
+          <h3>Engines</h3>
+          <p className="muted settings-hint">Hotrod only starts the engines you turn on here.</p>
+          {engines.map((engine) => (
+            <EngineSettings
+              key={engine.id}
+              engine={engine}
+              accounts={accounts.find((a) => a.engine === engine.id)}
+              connected={connected}
+              send={send}
+            />
+          ))}
+        </section>
       </div>
     </dialog>
   )
@@ -274,10 +325,10 @@ type ChatProps = {
   accounts?: EngineAccounts
   connected: boolean
   send: (m: ClientMessage) => void
-  manageAccounts: () => void
+  openSettings: () => void
 }
 
-function Chat({ chat, project, engines, accounts, connected, send, manageAccounts }: ChatProps) {
+function Chat({ chat, project, engines, accounts, connected, send, openSettings }: ChatProps) {
   const [text, setText] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
@@ -298,7 +349,11 @@ function Chat({ chat, project, engines, accounts, connected, send, manageAccount
   }, [])
 
   const archivedBy = project?.archived ? project : chat.archived ? chat : undefined
-  const canSend = connected && chat.status === 'idle' && !archivedBy
+  const canChange = connected && chat.status === 'idle' && !archivedBy
+  const engineOff = !engines.find((e) => e.id === chat.engine)?.enabled
+  const noEngineOn = !engines.some((e) => e.enabled)
+  const canSend = canChange && !engineOff
+  const showEngineNote = engineOff && !archivedBy && chat.status === 'idle'
   const submit = () => {
     if (!canSend || !text.trim()) return
     send({ type: 'chat.send', chatId: chat.id, text })
@@ -325,16 +380,16 @@ function Chat({ chat, project, engines, accounts, connected, send, manageAccount
           className="chip"
           aria-label="Engine"
           value={chat.engine}
-          disabled={!canSend}
+          disabled={!canChange}
           onChange={(e) => send({ type: 'chat.setEngine', chatId: chat.id, engine: e.target.value })}
         >
           {engineOptions(engines, chat.engine).map((o) => (
-            <option key={o.id} value={o.id}>
+            <option key={o.id} value={o.id} disabled={o.disabled}>
               {o.label}
             </option>
           ))}
         </select>
-        {accounts && (
+        {accounts && !engineOff && (
           <select
             className="chip"
             aria-label="Account"
@@ -342,7 +397,7 @@ function Chat({ chat, project, engines, accounts, connected, send, manageAccount
             disabled={!canSend}
             onChange={(e) =>
               e.target.value === MANAGE_ACCOUNTS
-                ? manageAccounts()
+                ? openSettings()
                 : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
             }
           >
@@ -392,38 +447,57 @@ function Chat({ chat, project, engines, accounts, connected, send, manageAccount
             </button>
           </div>
         )}
-        <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
-          <textarea
-            value={text}
-            rows={2}
-            placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
-            disabled={!canSend}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                e.preventDefault()
-                submit()
-              }
-            }}
-          />
-          <div className="composer-footer">
-            <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
-            {chat.status !== 'idle' ? (
-              <button
-                className={`danger stop ${chat.status}`}
-                disabled={!connected}
-                title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                onClick={stop}
-              >
-                {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-              </button>
-            ) : (
-              <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
-                Send
-              </button>
-            )}
+        {showEngineNote && (
+          <div className="engine-off-note">
+            <span>
+              {noEngineOn ? (
+                'No engine is on. Turn one on in Settings to start chatting.'
+              ) : (
+                <>
+                  <span className="mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
+                  Settings.
+                </>
+              )}
+            </span>
+            <button className="small primary" onClick={openSettings}>
+              Open Settings
+            </button>
           </div>
-        </div>
+        )}
+        {!showEngineNote && (
+          <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
+            <textarea
+              value={text}
+              rows={2}
+              placeholder={archivedBy ? 'Archived' : PLACEHOLDERS[chat.status]}
+              disabled={!canSend}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                  e.preventDefault()
+                  submit()
+                }
+              }}
+            />
+            <div className="composer-footer">
+              <span className="hint">{chat.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
+              {chat.status !== 'idle' ? (
+                <button
+                  className={`danger stop ${chat.status}`}
+                  disabled={!connected}
+                  title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                  onClick={stop}
+                >
+                  {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                </button>
+              ) : (
+                <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                  Send
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </main>
   )
@@ -683,7 +757,7 @@ function App() {
   useEffect(() => localStorage.setItem(SELECTED_KEY, state.selectedId), [state.selectedId])
   const [path, setPath] = useState('')
   const pathRef = useRef<HTMLInputElement>(null)
-  const [managing, setManaging] = useState<string | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const selected = state.chats.find((c) => c.id === state.selectedId)
   const selectedProject = state.projects.find((p) => p.id === selected?.projectId)
   const select = useCallback((chatId: string) => dispatch({ type: 'select', chatId }), [])
@@ -691,7 +765,6 @@ function App() {
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
-  const managed = state.accounts.find((a) => a.engine === managing)
 
   const addProject = (e: FormEvent) => {
     e.preventDefault()
@@ -755,6 +828,12 @@ function App() {
             <button disabled={!connected || !path.trim()}>Add</button>
           </form>
         )}
+        <div className="sidebar-footer">
+          <button className="ghost settings-button" onClick={() => setSettingsOpen(true)}>
+            <span aria-hidden="true">⚙</span>
+            Settings
+          </button>
+        </div>
       </aside>
       <div className="main">
         {quitting && (
@@ -777,7 +856,7 @@ function App() {
             </div>
           )
         )}
-        {engine && (!engine.installed || !signedIn) && (
+        {engine?.enabled && (!engine.installed || !signedIn) && (
           <div className="banner warning">
             <span>
               {engine.id} is{' '}
@@ -790,8 +869,14 @@ function App() {
             </span>
           </div>
         )}
-        {managed && (
-          <AccountsDialog accounts={managed} connected={connected} send={send} close={() => setManaging(null)} />
+        {settingsOpen && (
+          <SettingsDialog
+            engines={state.engines}
+            accounts={state.accounts}
+            connected={connected}
+            send={send}
+            close={() => setSettingsOpen(false)}
+          />
         )}
         {selected ? (
           <Chat
@@ -802,7 +887,7 @@ function App() {
             accounts={accounts}
             connected={state.connected}
             send={send}
-            manageAccounts={() => setManaging(selected.engine)}
+            openSettings={() => setSettingsOpen(true)}
           />
         ) : (
           <div className="empty">

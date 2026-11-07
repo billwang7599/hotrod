@@ -4,7 +4,7 @@ import type { Account, EngineAccounts } from '@hotrod/core/types'
 import { accountLabel, engineOptions, initialState, MAIN_CHAT_ID, reduce, type Action, type State } from './state.ts'
 
 const at = '2026-11-06T00:00:00.000Z'
-const engines = [{ id: 'fake', installed: true, signedIn: true }]
+const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
 const chat = (id: string, entries: ChatEntry[] = [], projectId?: string): ChatState => ({
   id,
   ...(projectId ? { projectId } : {}),
@@ -94,18 +94,28 @@ describe('reduce', () => {
     expect(archived.projects[0]?.archived).toBe(true)
   })
 
-  it('lists engine options with their problems, keeping an unknown saved engine', () => {
+  it('lists only engines that are on, keeping the chat engine when it is off or unknown', () => {
     const listed = [
-      { id: 'claude-code', installed: true, signedIn: true },
-      { id: 'pi', installed: true, signedIn: false },
-      { id: 'codex', installed: false, signedIn: false },
+      { id: 'claude-code', enabled: true, installed: true, signedIn: true },
+      { id: 'pi', enabled: true, installed: true, signedIn: false },
+      { id: 'codex', enabled: true, installed: false, signedIn: false },
+      { id: 'fake', enabled: false, installed: true, signedIn: true },
     ]
     expect(engineOptions(listed, 'pi')).toEqual([
       { id: 'claude-code', label: 'claude-code' },
       { id: 'pi', label: 'pi (not signed in)' },
       { id: 'codex', label: 'codex (not installed)' },
     ])
-    expect(engineOptions(listed, 'gone').at(-1)).toEqual({ id: 'gone', label: 'gone (unknown)' })
+    expect(engineOptions(listed, 'fake').at(-1)).toEqual({ id: 'fake', label: 'fake (off)', disabled: true })
+    expect(engineOptions(listed, 'gone').at(-1)).toEqual({ id: 'gone', label: 'gone (unknown)', disabled: true })
+  })
+
+  it('replaces an engine when it is turned on or off', () => {
+    const state = run(
+      { type: 'snapshot', engines, accounts: [], projects: [], chats: [] },
+      { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
+    )
+    expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
   })
 
   it('loads accounts from the snapshot and replaces one engine on update', () => {

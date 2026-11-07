@@ -157,6 +157,8 @@ export function reduce(state: State, action: Action): State {
         projects: action.projects,
         chats: action.chats.map(toView),
       })
+    case 'engine.updated':
+      return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
     case 'accounts.updated': {
       const { engine } = action.accounts
       const known = state.accounts.some((a) => a.engine === engine)
@@ -227,12 +229,16 @@ export function reduce(state: State, action: Action): State {
   }
 }
 
-export function engineOptions(engines: EngineInfo[], current: string): { id: string; label: string }[] {
-  const options = engines.map((e) => ({
-    id: e.id,
-    label: !e.installed ? `${e.id} (not installed)` : !e.signedIn ? `${e.id} (not signed in)` : e.id,
-  }))
-  return options.some((o) => o.id === current) ? options : [...options, { id: current, label: `${current} (unknown)` }]
+export const engineProblem = (engine: EngineInfo) =>
+  !engine.installed ? 'not installed' : !engine.signedIn ? 'not signed in' : undefined
+
+export function engineOptions(engines: EngineInfo[], current: string) {
+  const options: { id: string; label: string; disabled?: true }[] = engines
+    .filter((e) => e.enabled)
+    .map((e) => ({ id: e.id, label: engineProblem(e) ? `${e.id} (${engineProblem(e)})` : e.id }))
+  if (options.some((o) => o.id === current)) return options
+  const known = engines.some((e) => e.id === current)
+  return [...options, { id: current, label: `${current} (${known ? 'off' : 'unknown'})`, disabled: true as const }]
 }
 
 export function accountLabel(account: Account) {

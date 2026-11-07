@@ -22,6 +22,8 @@ import type {
   ClientMessage,
   CoreMessage,
   EngineEvent,
+  EngineInfo,
+  EngineStatus,
   Machine,
   Project,
   Session,
@@ -59,6 +61,20 @@ export function openCore(options: {
     }
   }
   checkEngine(defaultEngine)
+  const settingsFile = join(garage, 'settings.json')
+  const settings = { engines: {} as Record<string, boolean>, ...readJson(settingsFile) }
+  const detected = new Map<string, EngineStatus>()
+  const isEnabled = (engine: string) => settings.engines[engine] === true
+  const engineInfo = (id: string): EngineInfo => ({
+    id,
+    enabled: isEnabled(id),
+    ...(detected.get(id) ?? { installed: false, signedIn: false }),
+  })
+  const checkEnabled = (engine: string) => {
+    if (!isEnabled(engine)) throw new Error(`Engine "${engine}" is off. Turn it on in Settings.`)
+  }
+  const newChatEngine = () =>
+    isEnabled(defaultEngine) ? defaultEngine : (adapters.find((a) => isEnabled(a.id))?.id ?? defaultEngine)
   const projectsDir = join(garage, 'projects')
   const homeChatsDir = join(garage, 'chats')
   const homeDir = join(garage, 'home')
@@ -70,6 +86,12 @@ export function openCore(options: {
   const listeners: ((message: CoreMessage) => void)[] = []
 
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
+  const setEngineEnabled = (engine: string, enabled: boolean) => {
+    checkEngine(engine)
+    settings.engines = { ...settings.engines, [engine]: enabled }
+    writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
+    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
+  }
   const saveProject = (project: Project) =>
     writeFileSync(join(projectsDir, project.id, 'project.json'), JSON.stringify(project, null, 2) + '\n')
   const saveChat = ({ info, dir }: Chat) => {
@@ -153,7 +175,7 @@ export function openCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const saved = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+    const saved = readJson(file)
     const info: ChatInfo = { ...fallback, ...saved, id: fallback.id, main: fallback.main }
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
@@ -182,17 +204,17 @@ export function openCore(options: {
     for (const id of readdirSync(chatsDir)) {
       if (id === 'main' || !existsSync(join(chatsDir, id, 'chat.json'))) continue
       const createdAt = new Date().toISOString()
-      const fallback = { id, main: false, title: NEW_CHAT_TITLE, engine: defaultEngine, archived: false, createdAt }
+      const fallback = { id, main: false, title: NEW_CHAT_TITLE, engine: newChatEngine(), archived: false, createdAt }
       loadChat(join(chatsDir, id), projectId ? { ...fallback, projectId } : fallback)
     }
   }
 
-  loadChat(join(homeChatsDir, 'main'), mainChatInfo('main', defaultEngine))
+  loadChat(join(homeChatsDir, 'main'), mainChatInfo('main', newChatEngine()))
   loadSubchats(homeChatsDir)
   for (const id of readdirSync(projectsDir)) {
     const projectFile = join(projectsDir, id, 'project.json')
     if (!existsSync(projectFile)) continue
-    const { engine = defaultEngine, ...saved } = JSON.parse(readFileSync(projectFile, 'utf8'))
+    const { engine = newChatEngine(), ...saved } = JSON.parse(readFileSync(projectFile, 'utf8'))
     const project: Project = { archived: false, ...saved, id }
     projects.set(id, project)
     loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, engine, id))
@@ -221,7 +243,7 @@ export function openCore(options: {
     mkdirSync(join(projectsDir, id), { recursive: true })
     saveProject(project)
     projects.set(id, project)
-    const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, defaultEngine, id))
+    const chat = loadChat(join(projectsDir, id, 'chats', 'main'), mainChatInfo(`${id}/main`, newChatEngine(), id))
     broadcast({ type: 'project.added', project, chat: state(chat) })
   }
 
@@ -248,7 +270,7 @@ export function openCore(options: {
     while (chats.has(id)) id = randomBytes(4).toString('hex')
     const dir = projectId ? join(projectsDir, projectId, 'chats', id) : join(homeChatsDir, id)
     const createdAt = new Date().toISOString()
-    const info = { id, main: false, title: NEW_CHAT_TITLE, engine: defaultEngine, archived: false, createdAt }
+    const info = { id, main: false, title: NEW_CHAT_TITLE, engine: newChatEngine(), archived: false, createdAt }
     const chat = loadChat(dir, projectId ? { ...info, projectId } : info)
     broadcast({ type: 'chat.added', chat: state(chat) })
   }
@@ -268,6 +290,7 @@ export function openCore(options: {
 
   const setEngine = (chat: Chat, engine: string) => {
     checkEngine(engine)
+    checkEnabled(engine)
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
     updateChat(chat, { engine })
   }
@@ -281,6 +304,7 @@ export function openCore(options: {
     if (!adapter) {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
+    checkEnabled(adapter.id)
     const prompt = chat.entries.length ? `${transcript(chat.entries)}\n\nNew message from the user:\n\n${text}` : text
     if (!chat.info.main && !chat.entries.some((e) => e.type === 'user.message')) {
       const line = text.trim().replace(/\s+/g, ' ')
@@ -352,6 +376,21 @@ export function openCore(options: {
   }
 
   return {
+    engines: () => adapters.map((adapter) => engineInfo(adapter.id)),
+    async refreshEngines() {
+      await Promise.all(
+        adapters.map(async (adapter) => {
+          try {
+            detected.set(adapter.id, await adapter.detect(machine))
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            detected.set(adapter.id, { installed: false, signedIn: false, detail })
+          }
+          broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
+        }),
+      )
+    },
+    setEngineEnabled,
     projects: () => [...projects.values()],
     chats: () => [...chats.values()].map(state),
     accounts: accounts.list,
@@ -359,6 +398,8 @@ export function openCore(options: {
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
     handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
       switch (message.type) {
+        case 'engine.setEnabled':
+          return setEngineEnabled(String(message.engine), message.enabled === true)
         case 'project.add':
           return addProject(String(message.path), reply)
         case 'project.archive':
@@ -410,6 +451,8 @@ export function openCore(options: {
     },
   }
 }
+
+const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 
 function transcript(entries: ChatEntry[]) {
   const results = new Map<string, { output: string; isError: boolean }>()

@@ -81,10 +81,17 @@ function setup(source: FakeStep[] | Adapter, garage = tempDir(), stopGraceMs = T
   return { ...open(garage, [adapter], adapter.id, stopGraceMs), calls }
 }
 
-function open(garage: string, adapters: Adapter[], defaultEngine: string, stopGraceMs = TEST_STOP_GRACE_MS) {
+function open(
+  garage: string,
+  adapters: Adapter[],
+  defaultEngine: string,
+  stopGraceMs = TEST_STOP_GRACE_MS,
+  enabled = adapters.map((a) => a.id),
+) {
   const machine = localMachine
   const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs })
   cores.push(core)
+  for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const replies: CoreMessage[] = []
@@ -678,6 +685,86 @@ describe('engines', () => {
     reopened.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
     reopened.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
     expect(reopened.beta).toHaveLength(1)
+  })
+})
+
+describe('settings', () => {
+  const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
+  const engineInfo = (core: Core, id: string) => core.engines().find((e) => e.id === id)
+
+  it('starts with every engine off, refuses to send, and points at Settings', () => {
+    const fake = recording(createFakeAdapter(textScript, 0))
+    const t = open(tempDir(), [fake.adapter], 'fake', TEST_STOP_GRACE_MS, [])
+    expect(t.core.engines()).toEqual([{ id: 'fake', enabled: false, installed: false, signedIn: false }])
+    expect(existsSync(settingsFile(t))).toBe(false)
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow(/"fake" is off.*Settings/)
+    expect(fake.calls).toHaveLength(0)
+    expect(entriesOf(t.core, 'main')).toEqual([])
+  })
+
+  it('turns an engine on, saves it in settings.json and tells every client', async () => {
+    const garage = tempDir()
+    const t = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, [])
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    expect(t.messages.at(-1)).toEqual({
+      type: 'engine.updated',
+      engine: { id: 'fake', enabled: true, installed: false, signedIn: false },
+    })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: true } })
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(types(entriesOf(t.core, 'main'))).toContain('text.completed')
+
+    t.core.close()
+    const reopened = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, [])
+    expect(engineInfo(reopened.core, 'fake')?.enabled).toBe(true)
+    reopened.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: false })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: false } })
+  })
+
+  it('keeps other settings when saving and rejects an unknown engine', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ engines: { gone: true }, theme: 'dark' }))
+    const t = open(garage, [createFakeAdapter([], 0)], 'fake', TEST_STOP_GRACE_MS, [])
+    expect(() => t.handle({ type: 'engine.setEnabled', engine: 'nope', enabled: true })).toThrow(/Unknown engine/)
+    t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({
+      engines: { gone: true, fake: true },
+      theme: 'dark',
+    })
+  })
+
+  it('lets a chat switch only to an engine that is on', () => {
+    const alpha = createFakeAdapter([], 0)
+    const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, { ...alpha, id: 'beta' }], 'alpha', TEST_STOP_GRACE_MS, [
+      'alpha',
+    ])
+    expect(() => t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })).toThrow(/"beta" is off/)
+    t.handle({ type: 'engine.setEnabled', engine: 'beta', enabled: true })
+    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
+    expect(chatOf(t.core, 'main')?.engine).toBe('beta')
+  })
+
+  it('gives new chats the default engine when it is on, else the first engine that is on', () => {
+    const base = createFakeAdapter([], 0)
+    const t = open(tempDir(), [{ ...base, id: 'alpha' }, { ...base, id: 'beta' }], 'alpha', TEST_STOP_GRACE_MS, [
+      'beta',
+    ])
+    expect(createChat(t).engine).toBe('beta')
+    t.handle({ type: 'engine.setEnabled', engine: 'alpha', enabled: true })
+    expect(createChat(t).engine).toBe('alpha')
+  })
+
+  it('reports what each engine detected, and a detect that throws as not installed', async () => {
+    const ok = stubAdapter(() => ({ prompt() {}, interrupt() {}, respond() {}, close() {} }))
+    const broken: Adapter = { ...ok, id: 'broken', detect: () => Promise.reject(new Error('no binary')) }
+    const t = open(tempDir(), [ok, broken], 'stub', TEST_STOP_GRACE_MS, [])
+    await t.core.refreshEngines()
+    expect(t.core.engines()).toEqual([
+      { id: 'stub', enabled: false, installed: true, signedIn: true },
+      { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
+    ])
+    expect(t.messages.filter((m) => m.type === 'engine.updated')).toHaveLength(2)
   })
 })
 

@@ -39,7 +39,7 @@ export interface Machine {
 
 export type EngineStatus = { installed: boolean; signedIn: boolean; detail?: string }
 
-export type EngineInfo = { id: string } & EngineStatus
+export type EngineInfo = { id: string; enabled: boolean } & EngineStatus
 
 export type SessionOptions = { cwd: string; instructions: string; accountDir?: string; apiKey?: string }
 
@@ -104,6 +104,7 @@ export type ChatEntry = { at: string } & (
 export type ChatState = ChatInfo & { status: ChatStatus; entries: ChatEntry[]; draft: string }
 
 export type ClientMessage =
+  | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
   | { type: 'project.add'; path: string }
   | { type: 'project.archive'; projectId: string; archived: boolean }
   | { type: 'project.delete'; projectId: string }
@@ -125,6 +126,7 @@ export const BAD_TOKEN_CLOSE_CODE = 4401
 
 export type CoreMessage =
   | { type: 'snapshot'; engines: EngineInfo[]; projects: Project[]; chats: ChatState[]; accounts: EngineAccounts[] }
+  | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
   | { type: 'project.added'; project: Project; chat: ChatState }
   | { type: 'project.updated'; project: Project }
