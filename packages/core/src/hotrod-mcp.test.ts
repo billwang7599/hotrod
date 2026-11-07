@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
 import { messagesOf, openSummaries, zoom } from './memory.ts'
-import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './types.ts'
+import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {

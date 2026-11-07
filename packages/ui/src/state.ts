@@ -1,4 +1,4 @@
-import { DEFAULT_SUBAGENT_LIMIT, looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/shared'
 import type {
   Account,
   Attachment,
@@ -14,7 +14,7 @@ import type {
   ModelLists,
   Mods,
   QueuedMessage,
-} from '@hotrod/core/types'
+} from '@hotrod/core/shared'
 
 export const MAIN_CHAT_ID = WORKSHOP_ID
 

@@ -6,7 +6,7 @@ import {
   type ClientMessage,
   type ContextItem,
   type ContextSection,
-} from '@hotrod/core/types'
+} from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, MOTION, Switch, useSettled } from './controls.tsx'
 import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
 

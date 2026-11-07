@@ -1,4 +1,4 @@
-import type { EngineProcess, Machine } from '../types.ts'
+import type { EngineProcess, Machine } from '../shared.ts'
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
   const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string> }[] = []

@@ -28,7 +28,7 @@ import {
   type MessageKind,
   type Summaries,
 } from './memory.ts'
-import type { ChatEntry, CompletionRequest } from './types.ts'
+import type { ChatEntry, CompletionRequest } from './shared.ts'
 
 let dir: string
 beforeEach(() => {

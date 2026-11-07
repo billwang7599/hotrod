@@ -2,7 +2,7 @@
   "name": "@hotrod/core",
   "private": true,
   "type": "module",
-  "exports": { "./types": "./src/types.ts", "./main": "./src/main.ts" },
+  "exports": { "./shared": "./src/shared.ts", "./main": "./src/main.ts" },
   "scripts": {
     "dev": "node --watch src/main.ts"
   },

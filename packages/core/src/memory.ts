@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import type { Attachment, ChatEntry, CompletionRequest } from './types.ts'
+import type { Attachment, ChatEntry, CompletionRequest } from './shared.ts'
 
 export const LINE_MAX_CHARS = 280
 export const LINE_CHARS_PER_LEVEL = 40

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import type { EngineProcess, Machine } from './types.ts'
+import type { EngineProcess, Machine } from './shared.ts'
 
 type SpawnOptions = { cwd: string; env?: Record<string, string> }
 

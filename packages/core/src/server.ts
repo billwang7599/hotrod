@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net'
 import { extname, join, resolve, sep } from 'node:path'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { Core } from './core.ts'
-import { BAD_TOKEN_CLOSE_CODE, IMAGE_TYPES, type CoreMessage } from './types.ts'
+import { BAD_TOKEN_CLOSE_CODE, IMAGE_TYPES, type CoreMessage } from './shared.ts'
 
 // Hashing first gives equal lengths, which timingSafeEqual needs, without leaking the token's length.
 const digest = (text: string) => createHash('sha256').update(text).digest()

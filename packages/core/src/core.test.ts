@@ -38,7 +38,7 @@ import {
   type CoreMessage,
   type EngineEvent,
   type SessionOptions,
-} from './types.ts'
+} from './shared.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'

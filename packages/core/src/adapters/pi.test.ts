@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { type EngineEvent, type SessionOptions } from '../types.ts'
+import { type EngineEvent, type SessionOptions } from '../shared.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 

@@ -6,7 +6,7 @@ import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
 import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
-import type { ChatInfo, ChatState, ModelRole, NewChat } from './types.ts'
+import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
 export const SUBAGENT_NAME_MAX_CHARS = 40

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { Adapter, EngineEvent, ToolKind } from '../types.ts'
+import type { Adapter, EngineEvent, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent

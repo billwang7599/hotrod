@@ -25,7 +25,7 @@ import {
   type CoreMessage,
   type EngineEvent,
   type SessionOptions,
-} from './types.ts'
+} from './shared.ts'
 
 const origin = 'http://localhost:4318'
 const token = 'test-token-0123456789'

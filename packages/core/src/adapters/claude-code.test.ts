@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { type EngineEvent, type LoginEvent, type SessionOptions } from '../types.ts'
+import { type EngineEvent, type LoginEvent, type SessionOptions } from '../shared.ts'
 import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 

@@ -7,7 +7,7 @@ import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
 import { startServer } from './server.ts'
-import type { Adapter } from './types.ts'
+import type { Adapter } from './shared.ts'
 
 const registered: Adapter[] = [claudeCode, pi, createFakeAdapter()]
 

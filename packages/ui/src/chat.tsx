@@ -23,7 +23,7 @@ import {
   type EngineInfo,
   type ModelLists,
   type Upload,
-} from '@hotrod/core/types'
+} from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, SidePanel, useSettled } from './controls.tsx'

@@ -1,4 +1,4 @@
-import { type Adapter, type ToolKind } from '../types.ts'
+import { type Adapter, type ToolKind } from '../shared.ts'
 import { CLAUDE_MODELS, claudeLabel } from './claude-models.ts'
 
 const KINDS: Record<string, ToolKind> = {

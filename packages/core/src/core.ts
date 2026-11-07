@@ -59,7 +59,7 @@ import {
   type QueuedMessage,
   type Session,
   type Upload,
-} from './types.ts'
+} from './shared.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
