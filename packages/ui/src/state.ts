@@ -1,4 +1,4 @@
-import { DEFAULT_SUBAGENT_LIMIT, pickModel, WORKSHOP_ID } from '@hotrod/core/types'
+import { DEFAULT_SUBAGENT_LIMIT, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/types'
 import type {
   Account,
   ChatEntry,
@@ -45,7 +45,6 @@ export type ChatView = ChatInfo & {
   items: Item[]
   draft: string
   queue: QueuedMessage[]
-  ranModel?: string
 }
 
 export type State = {
@@ -151,12 +150,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   }
 }
 
-const ranModelOf = (entry: ChatEntry) => (entry.type === 'turn.completed' ? entry.model : undefined)
-
-const toView = ({ entries, ...chat }: ChatState): ChatView => {
-  const ranModel = entries.map(ranModelOf).findLast(Boolean)
-  return { ...chat, items: entries.reduce(applyEntry, []), ...(ranModel && { ranModel }) }
-}
+const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
 
 function updateChat(state: State, id: string, update: (c: ChatView) => ChatView): State {
   return { ...state, chats: state.chats.map((c) => (c.id === id ? update(c) : c)) }
@@ -210,7 +204,6 @@ export function reduce(state: State, action: Action): State {
         ...c,
         items: applyEntry(c.items, action.entry),
         draft: endsText(action.entry) ? '' : c.draft,
-        ranModel: ranModelOf(action.entry) ?? c.ranModel,
       }))
     case 'chat.delta':
       return updateChat(state, action.chatId, (c) => ({ ...c, draft: c.draft + action.text }))
@@ -329,13 +322,12 @@ export function engineOptions(engines: EngineInfo[], current: string) {
 
 export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
 
-export function modelMenu(chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) {
-  const offered = engine?.models ?? []
-  const label = (id: string) => offered.find((m) => m.id === id)?.label ?? id
-  const value = offered.some((m) => m.id === chat.model) ? chat.model! : ''
-  const auto = pickModel(offered, lists, { role: chat.role }) ?? (value ? undefined : chat.ranModel)
-  return { value, options: [{ id: '', label: auto ? `Auto · ${label(auto)}` : 'Auto' }, ...offered] }
-}
+export const modelMenu = (chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) => ({
+  model: pickModel(engine, lists, chat),
+  models: engine?.models ?? [],
+  thinking: pickThinking(engine, chat),
+  levels: engine?.thinking ?? [],
+})
 
 export function accountLabel(account: Account) {
   const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'

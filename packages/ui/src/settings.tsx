@@ -91,7 +91,9 @@ const PAGES = [
     id: 'models',
     group: 'Options',
     title: 'Models',
-    hint: 'A chat on Auto runs the first model in its list that the engine offers, else the engine default.',
+    hint:
+      `A ${CHAT_NOUN.one} runs its own pick, else the first model in its list that the engine offers, ` +
+      "else the engine's default.",
     body: ({ engines, modelLists, connected, send }: PageProps) => {
       const on = engines.filter((e) => e.enabled)
       if (!on.length) return <p className="text-muted">Turn on an engine to order its models.</p>
@@ -263,6 +265,23 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
             </SettingRow>
           )
         })}
+      {offered.length > 0 && engine.defaultThinking && (
+        <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
+          <select
+            className="h-control rounded border bg-bg px-8"
+            aria-label={`Default thinking for ${engine.id}`}
+            value={engine.defaultThinking}
+            disabled={!connected}
+            onChange={(e) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking: e.target.value })}
+          >
+            {engine.thinking?.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
+        </SettingRow>
+      )}
     </section>
   )
 }

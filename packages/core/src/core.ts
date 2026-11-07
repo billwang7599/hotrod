@@ -19,6 +19,7 @@ import {
   DEFAULT_SUBAGENT_LIMIT,
   MODEL_ROLES,
   pickModel,
+  pickThinking,
   WORKSHOP_ID,
   WORKSHOP_NAME,
   type Adapter,
@@ -88,6 +89,7 @@ export function openCore(options: {
     context?: Partial<Record<ContextSection, boolean>>
     mods?: Partial<Mods>
     models?: Record<string, Partial<ModelLists>>
+    defaultThinking?: Record<string, string>
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -107,11 +109,12 @@ export function openCore(options: {
   })
   const detected = new Map<string, EngineStatus>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
-  const engineInfo = (id: string): EngineInfo => ({
-    id,
-    enabled: isEnabled(id),
-    ...(detected.get(id) ?? { installed: false, signedIn: false }),
-  })
+  const engineInfo = (id: string): EngineInfo => {
+    const status = detected.get(id) ?? { installed: false, signedIn: false }
+    const chosen = settings.defaultThinking?.[id]
+    const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
+    return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
+  }
   const offered = (engine: string) => {
     const { models = [], thinking = [] } = detected.get(engine) ?? {}
     return { models, thinking }
@@ -155,6 +158,15 @@ export function openCore(options: {
     settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: models } }
     saveSettings()
     broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
+  }
+  const setDefaultThinking = (engine: string, thinking: string) => {
+    checkEngine(engine)
+    if (!offered(engine).thinking.includes(thinking)) {
+      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
+    }
+    settings.defaultThinking = { ...settings.defaultThinking, [engine]: thinking }
+    saveSettings()
+    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
@@ -388,7 +400,12 @@ export function openCore(options: {
     if (thinking && !offers.thinking.includes(thinking)) {
       throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
     }
-    updateChat(chat, { model, thinking })
+    const info = engineInfo(engine)
+    const unpinned = pickModel(info, listsOf(engine), { role: chat.info.role })
+    updateChat(chat, {
+      model: model === unpinned ? undefined : model,
+      thinking: thinking === info.defaultThinking ? undefined : thinking,
+    })
   }
 
   const checkActive = (chat: Chat) => {
@@ -521,7 +538,9 @@ export function openCore(options: {
     try {
       chat.mcpToken = mcpUrl === undefined ? undefined : mcp.grant(chat.info.id)
       const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
-      const model = pickModel(offered(adapter.id).models, listsOf(adapter.id), chat.info)
+      const engine = engineInfo(adapter.id)
+      const model = pickModel(engine, listsOf(adapter.id), chat.info)
+      const thinking = pickThinking(engine, chat.info)
       const options = {
         cwd,
         instructions,
@@ -529,7 +548,7 @@ export function openCore(options: {
         ...accounts.sessionFor(adapter.id),
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
-        ...(chat.info.thinking && { thinking: chat.info.thinking }),
+        ...(thinking && { thinking }),
       }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
@@ -624,6 +643,8 @@ export function openCore(options: {
       switch (message.type) {
         case 'engine.setEnabled':
           return setEngineEnabled(String(message.engine), message.enabled === true)
+        case 'engine.setDefaultThinking':
+          return setDefaultThinking(String(message.engine), String(message.thinking))
         case 'chat.create':
           return void createChat({
             parentId: optionalText(message.parentId),

@@ -148,6 +148,12 @@ describe('localMachine', () => {
     await waitFor(() => !alive(pid))
   })
 
+  it('writes the input to a run, then closes its stdin', async () => {
+    const echo = `process.stdin.pipe(process.stdout)`
+    expect((await fast.run(node, ['-e', echo], { cwd, input: 'one\ntwo\n' })).stdout).toBe('one\ntwo\n')
+    expect((await fast.run(node, ['-e', echo], { cwd })).stdout).toBe('')
+  })
+
   it('reports a missing command without rejecting', async () => {
     const result = await fast.run('hotrod-no-such-command', [], { cwd })
     expect(result.code).toBeNull()

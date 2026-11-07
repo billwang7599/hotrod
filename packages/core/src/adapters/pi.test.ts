@@ -72,7 +72,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
-      { type: 'turn.completed', model: 'anthropic/claude-haiku-5-5' },
+      { type: 'turn.completed' },
     ])
   })
 
@@ -88,7 +88,7 @@ describe('pi adapter', () => {
       { type: 'tool.completed', toolId, output: 'a.txt\nAGENTS.md\n', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.completed', text: 'Done' },
-      { type: 'turn.completed', model: 'anthropic/claude-haiku-5-5' },
+      { type: 'turn.completed' },
     ])
   })
 
@@ -103,7 +103,6 @@ describe('pi adapter', () => {
         error:
           '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},' +
           '"request_id":"req_011Cgnpak7k1PTbanzGJJQ4d"}',
-        model: 'anthropic/claude-haiku-5-5',
       },
     ])
   })
@@ -127,7 +126,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'bash', kind: 'shell', summary: 'sleep 30', input: { command: 'sleep 30', timeout: 60 } },
       { type: 'tool.completed', toolId, output: 'Command aborted', isError: true },
-      { type: 'turn.completed', error: 'Interrupted', model: 'anthropic/claude-haiku-5-5' },
+      { type: 'turn.completed', error: 'Interrupted' },
     ])
   })
 
@@ -280,22 +279,35 @@ describe('pi adapter', () => {
 describe('pi.detect', () => {
   const version = { code: 0, stdout: '1.5.0\n', stderr: '' }
 
-  it('reports installed and signed in when pi lists a model, with the models and thinking levels', async () => {
-    const { machine } = fakeMachine({
+  const rpc =
+    'pi --mode rpc --no-session --no-extensions --no-skills --no-prompt-templates --no-mcp --no-context-files ' +
+    '--no-approve --offline'
+  const listed = [
+    ['anthropic', 'claude-haiku-4-5'],
+    ['anthropic', 'claude-haiku-4-5-20251001'],
+    ['anthropic', 'claude-haiku-5-5'],
+    ['anthropic', 'claude-opus-4-8'],
+    ['openai', 'gpt-5'],
+  ]
+  const answers = (models: string[][], [provider, id]: string[], thinkingLevel: string) => ({
+    code: 0,
+    stdout:
+      line({
+        type: 'response',
+        command: 'get_available_models',
+        success: true,
+        data: { models: models.map(([provider, id]) => ({ id, name: id, provider })) },
+      }) +
+      line({ type: 'response', command: 'get_state', success: true, data: { model: { id, provider }, thinkingLevel } }),
+    stderr: '',
+  })
+
+  it('asks pi over RPC for its models and the model and thinking level it starts on with no flags', async () => {
+    const fake = fakeMachine({
       'pi --version': version,
-      'pi --list-models --offline': {
-        code: 0,
-        stdout:
-          'provider   model                      context  max-out  thinking  images\n' +
-          'anthropic  claude-haiku-4-5           200K     64K      yes       yes   \n' +
-          'anthropic  claude-haiku-4-5-20251001  200K     64K      yes       yes   \n' +
-          'anthropic  claude-haiku-5-5           1M       128K     yes       yes   \n' +
-          'anthropic  claude-opus-4-8            1M       128K     yes       yes   \n' +
-          'openai     gpt-5                      400K     128K     yes       yes   \n',
-        stderr: '',
-      },
+      [rpc]: answers(listed, ['anthropic', 'claude-haiku-5-5'], 'xhigh'),
     })
-    expect(await pi.detect(machine)).toEqual({
+    expect(await pi.detect(fake.machine)).toEqual({
       installed: true,
       signedIn: true,
       detail: '1.5.0',
@@ -306,19 +318,32 @@ describe('pi.detect', () => {
         { id: 'openai/gpt-5', label: 'openai/gpt-5' },
       ],
       thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultModel: 'anthropic/claude-haiku-5-5',
+      defaultThinking: 'xhigh',
+    })
+    const input = fake.ran.find((r) => r.args.includes('rpc'))?.input ?? ''
+    expect(input.split('\n').filter(Boolean).map((l) => JSON.parse(l).type)).toEqual([
+      'get_available_models',
+      'get_state',
+    ])
+  })
+
+  it('falls back to the first model when pi would start on one it hides', async () => {
+    const fake = fakeMachine({
+      'pi --version': version,
+      [rpc]: answers(listed, ['anthropic', 'claude-haiku-4-5-20251001'], 'medium'),
+    })
+    expect(await pi.detect(fake.machine)).toMatchObject({
+      defaultModel: 'anthropic/claude-opus-4-8',
+      defaultThinking: 'medium',
     })
   })
 
   it('reports signed out when pi has no models', async () => {
-    const { machine } = fakeMachine({
-      'pi --version': version,
-      'pi --list-models --offline': {
-        code: 0,
-        stdout: 'No models available. Use /login to log into a provider via OAuth or API key. See:\n',
-        stderr: '',
-      },
-    })
-    expect(await pi.detect(machine)).toMatchObject({ installed: true, signedIn: false, detail: '1.5.0', models: [] })
+    const { machine } = fakeMachine({ 'pi --version': version, [rpc]: answers([], ['unknown', 'unknown'], 'off') })
+    const detected = await pi.detect(machine)
+    expect(detected).toMatchObject({ installed: true, signedIn: false, detail: '1.5.0', models: [] })
+    expect(detected.defaultModel).toBeUndefined()
   })
 
   it('reports not installed', async () => {

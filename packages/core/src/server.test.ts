@@ -359,7 +359,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   expect((await json(workshop, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([subchat.id])
 })
 
-it("starts a subagent on Auto with its role's list, keeping only its parent's thinking level", async () => {
+it("starts a subagent on its role's list, keeping only its parent's thinking level", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()

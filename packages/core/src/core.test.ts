@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { createFakeAdapter, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
+import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, type Core } from './core.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -28,6 +28,8 @@ import {
 
 const TEST_STOP_GRACE_MS = 30
 const at = '2026-11-06T00:00:00.000Z'
+const otherModel = FAKE_MODELS.find((m) => m.id !== FAKE_DEFAULTS.defaultModel)!.id
+const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
 
 const textScript: FakeStep[] = [
   { type: 'text.delta', text: 'Hel' },
@@ -642,7 +644,7 @@ describe('engines', () => {
     const t = setupEngines()
     await t.core.refreshEngines()
     const chat = folderChat(t)
-    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING.at(-1)!]
+    const [model, thinking] = [otherModel, otherThinking]
     t.handle({ type: 'chat.setModel', chatId: chat.id, model, thinking })
     expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, model, thinking } })
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8'))).toMatchObject({ model, thinking })
@@ -655,7 +657,7 @@ describe('engines', () => {
     expect(updated?.type === 'chat.updated' && 'model' in updated.chat).toBe(false)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'again' })
     await until(() => statusOf(t.core, chat.id) === 'idle')
-    expect(t.alpha[1]?.options.model).toBeUndefined()
+    expect(t.alpha[1]?.options.model).toBe(FAKE_DEFAULTS.defaultModel)
     expect(t.alpha[1]?.options.thinking).toBe(thinking)
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).model).toBeUndefined()
 
@@ -680,19 +682,20 @@ describe('engines', () => {
 
   it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
     const alpha = createFakeAdapter([], 0)
-    const betaOffers = { models: FAKE_MODELS.slice(0, 1), thinking: FAKE_THINKING }
+    const betaOffers = { models: FAKE_MODELS.filter((m) => m.id !== otherModel), thinking: FAKE_THINKING }
     const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
     await t.core.refreshEngines()
-    const [model, thinking] = [FAKE_MODELS.at(-1)!.id, FAKE_THINKING[0]!]
-    t.handle({ type: 'chat.setModel', chatId: 'main', model, thinking })
+    const thinking = otherThinking
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
     expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: FAKE_MODELS[0]!.id, thinking })
+    const betaModel = betaOffers.models[0]!.id
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: betaModel, thinking })
     t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
-    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: FAKE_MODELS[0]!.id, thinking })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: betaModel, thinking })
   })
 
   it('keeps a chat whose saved engine is gone and refuses to send', () => {
@@ -1511,10 +1514,10 @@ describe('context', () => {
   })
 })
 
-describe('model lists', () => {
+describe('models', () => {
   const [newest, older] = FAKE_MODELS.map((m) => m.id) as [string, string]
+  const { defaultModel, defaultThinking } = FAKE_DEFAULTS
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
-  const lastTurn = (core: Core, id: string) => entriesOf(core, id).findLast((e) => e.type === 'turn.completed')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
     await until(() => statusOf(t.core, chatId) === 'idle')
@@ -1549,17 +1552,14 @@ describe('model lists', () => {
     expect(setup(textScript, garage).core.modelLists()).toEqual({ fake: lists })
   })
 
-  it('starts an Auto chat on the first listed model the engine offers, and keeps the model that ran', async () => {
+  it('starts an unpinned chat on the first listed model the engine offers', async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone', older, newest] })
     expect(await sendAndWait(t)).toBe(older)
-    expect(lastTurn(t.core, 'main')).toMatchObject({ model: older })
-    t.core.close()
-    expect(lastTurn(setup(textScript, t.garage).core, 'main')).toMatchObject({ model: older })
   })
 
-  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as Auto", async () => {
+  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as unpinned", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [older] })
@@ -1574,13 +1574,64 @@ describe('model lists', () => {
     expect(await sendAndWait(reopened)).toBe(older)
   })
 
-  it('runs on the engine default when nothing listed is offered, and shows the model the engine used', async () => {
+  it("passes the engine's default model and thinking level when the chat and its lists pick none", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
-    expect(await sendAndWait(t)).toBeUndefined()
+    expect(await sendAndWait(t)).toBe(defaultModel)
+    expect(t.calls.at(-1)!.options.thinking).toBe(defaultThinking)
     t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone'] })
-    expect(await sendAndWait(t)).toBeUndefined()
-    expect(lastTurn(t.core, 'main')).toMatchObject({ model: FAKE_MODELS[0]!.id })
+    expect(await sendAndWait(t)).toBe(defaultModel)
+  })
+
+  it('unpins a model or thinking level the chat would run anyway, so it keeps following Settings', async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    const saved = () => JSON.parse(readFileSync(join(t.garage, 'chats', 'main', 'chat.json'), 'utf8'))
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking: otherThinking })
+    expect(saved()).toMatchObject({ model: otherModel, thinking: otherThinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel, thinking: defaultThinking })
+    expect(saved()).not.toHaveProperty('model')
+    expect(saved()).not.toHaveProperty('thinking')
+
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [otherModel] })
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel })
+    expect(chatOf(t.core, 'main')?.model).toBe(defaultModel)
+    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel })
+    expect(chatOf(t.core, 'main')?.model).toBeUndefined()
+  })
+
+  it("starts each engine's default thinking at the engine's own, and saves a change in settings.json", async () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
+    const t = setup(textScript, garage)
+    const fakeInfo = (core: Core) => core.engines().find((e) => e.id === 'fake')
+    await t.core.refreshEngines()
+    expect(fakeInfo(t.core)).toMatchObject({ defaultModel, defaultThinking })
+
+    t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: otherThinking })
+    expect(t.messages.at(-1)).toMatchObject({
+      type: 'engine.updated',
+      engine: { id: 'fake', defaultThinking: otherThinking },
+    })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
+      theme: 'dark',
+      defaultThinking: { fake: otherThinking },
+    })
+    await sendAndWait(t)
+    expect(t.calls.at(-1)!.options.thinking).toBe(otherThinking)
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: otherThinking })
+    expect(chatOf(t.core, 'main')?.thinking).toBeUndefined()
+
+    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'nope', thinking: otherThinking })).toThrow(
+      /Unknown engine/,
+    )
+    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: 'nope' })).toThrow(
+      /thinking level "nope"/,
+    )
+    t.core.close()
+    const reopened = setup(textScript, garage)
+    await reopened.core.refreshEngines()
+    expect(fakeInfo(reopened.core)?.defaultThinking).toBe(otherThinking)
   })
 })
 

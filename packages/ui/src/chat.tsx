@@ -28,6 +28,8 @@ const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
+const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
+const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -271,12 +273,9 @@ export function Chat(props: ChatProps) {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
     if (await confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
-  const models = modelMenu(chat, offers, props.modelLists)
-  const offeredLevels = offers?.thinking ?? []
-  const saved = chat.thinking && !offeredLevels.includes(chat.thinking)
-  const levels = saved ? [...offeredLevels, chat.thinking!] : offeredLevels
+  const menu = modelMenu(chat, offers, props.modelLists)
   const setModel = (model?: string, thinking?: string) =>
-    send({ type: 'chat.setModel', chatId: chat.id, model: model || undefined, thinking: thinking || undefined })
+    send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
 
   return (
@@ -454,31 +453,30 @@ export function Chat(props: ChatProps) {
                   {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
-                  {models.options.length > 1 && (
+                  {menu.model && (
                     <ChipSelect
                       aria-label="Model"
-                      title="Model, from the next message. Auto follows the lists in Settings."
-                      value={models.value}
+                      title={MODEL_HINT}
+                      value={menu.model}
                       disabled={!canChange}
-                      onChange={(e) => setModel(e.target.value, chat.thinking)}
+                      onChange={(e) => setModel(e.target.value, menu.thinking)}
                     >
-                      {models.options.map((m) => (
+                      {menu.models.map((m) => (
                         <option key={m.id} value={m.id}>
                           {m.label}
                         </option>
                       ))}
                     </ChipSelect>
                   )}
-                  {levels.length > 0 && (
+                  {menu.thinking && (
                     <ChipSelect
                       aria-label="Thinking"
-                      title="Thinking level, from the next message"
-                      value={chat.thinking ?? ''}
+                      title={THINKING_HINT}
+                      value={menu.thinking}
                       disabled={!canChange}
-                      onChange={(e) => setModel(chat.model, e.target.value)}
+                      onChange={(e) => setModel(menu.model, e.target.value)}
                     >
-                      <option value="">Default thinking</option>
-                      {levels.map((l) => (
+                      {menu.levels.map((l) => (
                         <option key={l} value={l}>
                           {l}
                         </option>

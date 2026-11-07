@@ -93,7 +93,7 @@ describe('claudeCode adapter', () => {
       { type: 'turn.started' },
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
-      { type: 'turn.completed', model: 'claude-haiku-5-5' },
+      { type: 'turn.completed' },
     ])
   })
 
@@ -144,7 +144,7 @@ describe('claudeCode adapter', () => {
       { type: 'text.delta', text: 'Done' },
       { type: 'text.delta', text: '.' },
       { type: 'text.completed', text: 'Done.' },
-      { type: 'turn.completed', model: 'claude-haiku-5-5' },
+      { type: 'turn.completed' },
     ])
     session.respond(requestId, true)
     expect(fake.sent().at(-1)).toEqual({
@@ -170,7 +170,7 @@ describe('claudeCode adapter', () => {
       output: 'The user denied this tool call.',
       isError: true,
     })
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', model: 'claude-haiku-5-5' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed' })
   })
 
   it('reports an error result and a nonzero exit with the stderr tail', () => {
@@ -183,7 +183,7 @@ describe('claudeCode adapter', () => {
       'to it. Run --model to pick a different model.'
     expect(events.slice(-3)).toEqual([
       { type: 'text.completed', text: message },
-      { type: 'turn.completed', error: message, model: 'claude-nonexistent-9' },
+      { type: 'turn.completed', error: message },
       {
         type: 'session.ended',
         error: 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}',
@@ -209,7 +209,7 @@ describe('claudeCode adapter', () => {
     session.interrupt()
     expect(fake.sent()[1]).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } })
     fake.stdout(fixture('interrupted'))
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', model: 'claude-haiku-5-5' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
   })
 
   it('joins a line split across chunks', () => {
@@ -314,6 +314,14 @@ describe('claudeCode.detect', () => {
     expect(ids.indexOf('claude-opus-5-5')).toBeLessThan(ids.indexOf('claude-opus-5'))
     expect(ids.indexOf('claude-opus-5')).toBeLessThan(ids.indexOf('claude-opus-4-8'))
     expect(ids.every((id) => id.startsWith('claude-') && !/\d{8}$/.test(id))).toBe(true)
+  })
+
+  it('names the model and effort Claude Code starts on with no flags, both of them offered', async () => {
+    const { models = [], thinking = [], defaultModel, defaultThinking } = await claudeCode.detect(
+      fakeMachine(detected).machine,
+    )
+    expect(models.map((m) => m.id)).toContain(defaultModel)
+    expect(thinking).toContain(defaultThinking)
   })
 
   it('reports signed out', async () => {
