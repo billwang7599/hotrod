@@ -57,6 +57,8 @@ export const claudeCode: Adapter = {
       '--strict-mcp-config',
       '--disable-slash-commands',
       '--settings', '{"autoMemoryEnabled":false}',
+      // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
+      '--thinking-display', 'summarized',
     ]
     if (instructions) args.push('--append-system-prompt', instructions)
     const proc = machine.spawn('claude', args, { cwd })

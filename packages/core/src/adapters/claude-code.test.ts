@@ -32,6 +32,7 @@ describe('claudeCode adapter', () => {
           '--strict-mcp-config',
           '--disable-slash-commands',
           '--settings', '{"autoMemoryEnabled":false}',
+          '--thinking-display', 'summarized',
         ],
       },
     ])
@@ -70,6 +71,15 @@ describe('claudeCode adapter', () => {
       { type: 'thinking.delta', text: 'Let me ' },
       { type: 'thinking.delta', text: 'check.' },
     ])
+  })
+
+  it('streams the thinking summary Claude Code sends with summarized display', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Think briefly, then answer: is 391 prime? One word.')
+    fake.stdout(fixture('thinking-summarized'))
+    const thinking = events.flatMap((e) => (e.type === 'thinking.delta' ? [e.text] : [])).join('')
+    expect(thinking).toBe("I'm checking the factorization: 17 times 23 does come to 391, so that holds.\n\n")
+    expect(events.at(-2)).toEqual({ type: 'text.completed', text: 'No.' })
   })
 
   it('shows nothing for thinking that arrives as a signature only', () => {
