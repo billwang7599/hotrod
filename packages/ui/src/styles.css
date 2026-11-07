@@ -24,7 +24,6 @@
   --radius: 6px;
   --radius-lg: 8px;
   --control: 28px;
-  --column: 760px;
 
   color-scheme: dark;
   font: var(--text-ui) / 1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;

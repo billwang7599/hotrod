@@ -289,6 +289,20 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
 }
 
+const MIN_WINDOW_WIDTH_PX = 375
+const PANE_PADDING_PX = 24
+export const COLUMN_PX = { min: MIN_WINDOW_WIDTH_PX - 2 * PANE_PADDING_PX, default: 760 }
+
+export function storedColumn(value: string | null) {
+  const px = Number(value ?? NaN)
+  return Number.isFinite(px) ? Math.max(Math.round(px), COLUMN_PX.min) : COLUMN_PX.default
+}
+
+export function columnSlider(savedPx: number, paneColumnPx: number) {
+  const max = Math.max(Math.floor(paneColumnPx), COLUMN_PX.min)
+  return { min: COLUMN_PX.min, max, value: Math.min(Math.max(savedPx, COLUMN_PX.min), max) }
+}
+
 export const storedFlag = (value: string | null, fallback: boolean) =>
   value === 'true' || value === 'false' ? value === 'true' : fallback
 
