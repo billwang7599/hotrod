@@ -7,7 +7,7 @@ import {
   type ContextItem,
   type ContextSection,
 } from '@hotrod/core/shared'
-import { Button, CHAT_NOUN, MOTION, Switch, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, MOTION, Switch, useSettled } from './controls.tsx'
 import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -124,8 +124,11 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
           </span>
         )}
         {item.binary ? null : item.text.trim() ? (
-          <details className="min-w-0 flex-1">
-            <summary className="py-2">{preview}</summary>
+          <details className="group min-w-0 flex-1">
+            <summary className="flex w-fit list-none items-center gap-4 py-2 hover:text-text">
+              <Chevron />
+              {preview}
+            </summary>
             <pre className={PREVIEW}>{item.text}</pre>
           </details>
         ) : (

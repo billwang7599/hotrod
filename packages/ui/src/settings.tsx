@@ -177,7 +177,7 @@ function SettingRow({ name, description, children, below }: RowProps) {
         {name}
         {description && <div className="text-sm text-muted">{description}</div>}
       </div>
-      <div className="flex shrink-0 items-center gap-6">{children}</div>
+      <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
       {below && <div className="basis-full">{below}</div>}
     </div>
   )
@@ -370,7 +370,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
       ))}
       {!login ? (
         <SettingRow name="Add account" description="Sign in to another account in your browser.">
-          <form className="flex gap-6" onSubmit={startLogin}>
+          <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
             <input
               className="w-160"
               value={name}
@@ -404,7 +404,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
                 </>
               }
             >
-              <form className="flex gap-6" onSubmit={submitCode}>
+              <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
                 <input
                   className="w-120"
                   value={code}
@@ -423,7 +423,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
       )}
       {accounts.apiKeys && (
         <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
-          <form className="flex gap-6" onSubmit={addKey}>
+          <form className="flex min-w-0 gap-6" onSubmit={addKey}>
             <input
               className="w-120"
               value={keyName}

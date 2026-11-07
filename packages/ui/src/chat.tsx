@@ -51,6 +51,7 @@ const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
 const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
+const INTERRUPTED = 'Interrupted'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -367,7 +368,11 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
     case 'text':
       return <Markdown className={ASSISTANT} text={item.text} />
     case 'error':
-      return <ErrorText>{item.text}</ErrorText>
+      return item.text === INTERRUPTED ? (
+        <div className="text-sm text-muted">{item.text}</div>
+      ) : (
+        <ErrorText>{item.text}</ErrorText>
+      )
     case 'thinking':
       return (
         <Row quiet summary={<span className="italic group-last/item:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
@@ -422,8 +427,11 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             Allow <strong>{item.name}</strong>?
           </div>
           <pre className="rounded border bg-bg px-10 py-8">{item.summary}</pre>
-          <details>
-            <summary className="w-fit text-sm text-muted">Full input</summary>
+          <details className="group">
+            <summary className="flex w-fit list-none items-center gap-6 text-sm text-muted hover:text-text">
+              <Chevron />
+              Full input
+            </summary>
             <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{input}</pre>
           </details>
           {chat.status === 'waiting' ? (
