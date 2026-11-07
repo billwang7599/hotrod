@@ -9,6 +9,9 @@ import './styles.css'
 const TOAST_MS = 6_000
 const SELECTED_KEY = 'hotrod.selectedProject'
 const MANAGE_ACCOUNTS = '__manage'
+const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
+const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
+const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -40,49 +43,67 @@ function ItemView({ item, project, connected, send }: ItemProps) {
       return <div className="turn-error">{item.text}</div>
     case 'thinking':
       return (
-        <details className="thinking">
-          <summary>Thinking…</summary>
+        <details className="row thinking">
+          <summary>
+            <span className="chevron" />
+            <span className="thinking-label">Thinking…</span>
+          </summary>
           <div className="thinking-text">{item.text}</div>
         </details>
       )
     case 'tool':
       return (
-        <details className={`tool ${item.state}`}>
+        <details className={`row tool ${item.state}`}>
           <summary>
+            <span className="chevron" />
             <span className="tool-name">{item.name}</span>
             <span className="tool-input">{item.summary}</span>
             <span className="tool-state">{item.state === 'waiting' ? 'waiting for approval' : item.state}</span>
           </summary>
-          <pre>
+          <pre className="row-body">
             {item.output ||
               (item.state === 'running' ? 'Running…' : item.state === 'waiting' ? 'Waiting for approval…' : 'No output')}
           </pre>
         </details>
       )
     case 'permission': {
+      const fullInput = <pre className="row-body">{JSON.stringify(item.input, null, 2)}</pre>
+      if (item.outcome !== 'pending') {
+        return (
+          <details className={`row permission-line ${item.outcome}`}>
+            <summary>
+              <span className="chevron" />
+              <span className="permission-outcome">{OUTCOMES[item.outcome]}</span>
+              <span className="tool-name">{item.name}</span>
+              <span className="tool-input">{item.summary}</span>
+            </summary>
+            {fullInput}
+          </details>
+        )
+      }
       const respond = (allow: boolean) =>
         send({ type: 'permission.respond', projectId: project.id, requestId: item.requestId, allow })
       return (
-        <div className={`permission ${item.outcome}`}>
+        <div className="permission">
           <div className="permission-title">
             Allow <strong>{item.name}</strong>?
           </div>
-          <pre>{item.summary}</pre>
+          <pre className="permission-summary">{item.summary}</pre>
           <details className="permission-input">
             <summary>Full input</summary>
-            <pre>{JSON.stringify(item.input, null, 2)}</pre>
+            {fullInput}
           </details>
-          {item.outcome === 'pending' && project.status === 'waiting' ? (
+          {project.status === 'waiting' ? (
             <div className="permission-actions">
-              <button className="approve" disabled={!connected} onClick={() => respond(true)}>
+              <button className="primary" disabled={!connected} onClick={() => respond(true)}>
                 Approve
               </button>
-              <button className="deny" disabled={!connected} onClick={() => respond(false)}>
+              <button className="danger" disabled={!connected} onClick={() => respond(false)}>
                 Deny
               </button>
             </div>
           ) : (
-            <div className="permission-outcome">{item.outcome}</div>
+            <div className="permission-note">{project.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
           )}
         </div>
       )
@@ -97,12 +118,14 @@ type AccountsProps = {
   close: () => void
 }
 
-function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
+function AccountsDialog({ accounts, connected, send, close }: AccountsProps) {
   const { engine, login } = accounts
+  const dialogRef = useRef<HTMLDialogElement>(null)
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [keyName, setKeyName] = useState('')
   const [key, setKey] = useState('')
+  useEffect(() => dialogRef.current?.showModal(), [])
   const startLogin = (e: FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
@@ -132,83 +155,103 @@ function AccountsPanel({ accounts, connected, send, close }: AccountsProps) {
   }
 
   return (
-    <section className="accounts">
-      <header className="accounts-header">
-        <strong>{engine} accounts</strong>
-        <button onClick={close}>Close</button>
-      </header>
-      <ul className="account-list">
-        {accounts.accounts.map((a) => (
-          <li key={a.id}>
-            <span className="account-name">{accountLabel(a)}</span>
-            {a.id === 'default' && <span className="account-note">{engine}'s own sign-in</span>}
-            {a.id === accounts.active ? (
-              <span className="account-active">In use</span>
-            ) : (
-              <button disabled={!connected} onClick={() => send({ type: 'account.use', engine, accountId: a.id })}>
-                Use
-              </button>
-            )}
-            {a.id !== 'default' && (
-              <button disabled={!connected} onClick={() => remove(a)}>
-                Remove
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-      {!login ? (
-        <form className="account-form" onSubmit={startLogin}>
-          <input
-            value={name}
-            placeholder="Name for another account, e.g. Work"
-            onChange={(e) => setName(e.target.value)}
-          />
-          <button disabled={!connected || !name.trim()}>Sign in…</button>
-        </form>
-      ) : login.error ? (
-        <div className="account-login">
-          <div className="turn-error">{login.error}</div>
-          <button onClick={() => send({ type: 'account.cancelLogin', engine })}>Dismiss</button>
-        </div>
-      ) : (
-        <div className="account-login">
-          <p>Signing in “{login.name}”. Finish in the browser window that opened.</p>
-          {login.url && (
-            <>
-              <p>
-                No window, or it is signed in to another account? Open{' '}
-                <a href={login.url} target="_blank" rel="noreferrer">
-                  this sign-in link
-                </a>{' '}
-                (a private window lets you pick the account), then paste the code it shows:
-              </p>
-              <form className="account-form" onSubmit={submitCode}>
-                <input value={code} placeholder="Code" spellCheck={false} onChange={(e) => setCode(e.target.value)} />
-                <button disabled={!connected || !code.trim()}>Submit code</button>
-              </form>
-            </>
-          )}
-          <button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine })}>
-            Cancel
+    <dialog
+      ref={dialogRef}
+      className="accounts"
+      aria-label={`${engine} accounts`}
+      onClose={close}
+      onClick={(e) => e.target === dialogRef.current && dialogRef.current.close()}
+    >
+      <div className="dialog-body">
+        <header className="dialog-header">
+          <h2>
+            <span className="mono">{engine}</span> accounts
+          </h2>
+          <button className="ghost" aria-label="Close" onClick={() => dialogRef.current?.close()}>
+            ×
           </button>
-        </div>
-      )}
-      {accounts.apiKeys && (
-        <form className="account-form" onSubmit={addKey}>
-          <input value={keyName} placeholder="Name for an API key" onChange={(e) => setKeyName(e.target.value)} />
-          <input
-            type="password"
-            value={key}
-            placeholder="API key"
-            autoComplete="off"
-            spellCheck={false}
-            onChange={(e) => setKey(e.target.value)}
-          />
-          <button disabled={!connected || !keyName.trim() || !key.trim()}>Add API key</button>
-        </form>
-      )}
-    </section>
+        </header>
+        <ul className="account-list">
+          {accounts.accounts.map((a) => (
+            <li key={a.id}>
+              <span className="account-name">
+                {accountLabel(a)}
+                {a.id === 'default' && <span className="account-note">{engine}'s own sign-in</span>}
+              </span>
+              {a.id === accounts.active ? (
+                <span className="pill">In use</span>
+              ) : (
+                <button className="small" disabled={!connected} onClick={() => send({ type: 'account.use', engine, accountId: a.id })}>
+                  Use
+                </button>
+              )}
+              {a.id !== 'default' && (
+                <button className="small danger" disabled={!connected} onClick={() => remove(a)}>
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        <section>
+          <h3>Add an account</h3>
+          {!login ? (
+            <form className="inline-form" onSubmit={startLogin}>
+              <input value={name} placeholder="Name, e.g. Work" onChange={(e) => setName(e.target.value)} />
+              <button className="primary" disabled={!connected || !name.trim()}>
+                Sign in…
+              </button>
+            </form>
+          ) : login.error ? (
+            <div className="account-login">
+              <div className="turn-error">{login.error}</div>
+              <button onClick={() => send({ type: 'account.cancelLogin', engine })}>Dismiss</button>
+            </div>
+          ) : (
+            <div className="account-login">
+              <p>Signing in “{login.name}”. Finish in the browser window that opened.</p>
+              {login.url && (
+                <>
+                  <p className="muted">
+                    No window, or it is signed in to another account? Open{' '}
+                    <a href={login.url} target="_blank" rel="noreferrer">
+                      this sign-in link
+                    </a>{' '}
+                    (a private window lets you pick the account), then paste the code it shows:
+                  </p>
+                  <form className="inline-form" onSubmit={submitCode}>
+                    <input value={code} placeholder="Code" spellCheck={false} onChange={(e) => setCode(e.target.value)} />
+                    <button className="primary" disabled={!connected || !code.trim()}>
+                      Submit code
+                    </button>
+                  </form>
+                </>
+              )}
+              <button disabled={!connected} onClick={() => send({ type: 'account.cancelLogin', engine })}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </section>
+        {accounts.apiKeys && (
+          <section>
+            <h3>Add an API key</h3>
+            <form className="inline-form" onSubmit={addKey}>
+              <input value={keyName} placeholder="Name" onChange={(e) => setKeyName(e.target.value)} />
+              <input
+                type="password"
+                value={key}
+                placeholder="API key"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setKey(e.target.value)}
+              />
+              <button disabled={!connected || !keyName.trim() || !key.trim()}>Add API key</button>
+            </form>
+          </section>
+        )}
+      </div>
+    </dialog>
   )
 }
 
@@ -255,10 +298,12 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
   return (
     <main className="chat">
       <header className="chat-header">
-        <span className="chat-name">{project.name}</span>
-        <span className="chat-path">{project.path}</span>
+        <div className="chat-title">
+          <span className="chat-name">{project.name}</span>
+          <span className="chat-path">{project.path}</span>
+        </div>
         <select
-          className="engine-select"
+          className="chip"
           aria-label="Engine"
           value={project.engine}
           disabled={!canSend}
@@ -272,7 +317,7 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
         </select>
         {accounts && (
           <select
-            className="engine-select"
+            className="chip"
             aria-label="Account"
             value={accounts.active}
             disabled={!canSend}
@@ -299,37 +344,56 @@ function Chat({ project, engines, accounts, connected, send, manageAccounts }: C
           stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
         }}
       >
-        {project.items.length === 0 && !project.draft && (
-          <div className="empty">Send a message to start an agent in {project.path}</div>
-        )}
-        {project.items.map((item, i) => (
-          <ItemView key={i} item={item} project={project} connected={connected} send={send} />
-        ))}
-        {project.draft && <Markdown className="assistant streaming" text={project.draft} />}
+        <div className="column">
+          {project.items.length === 0 && !project.draft && (
+            <div className="empty">
+              <strong>
+                Start a chat in <span className="mono">{project.name}</span>
+              </strong>
+              <span>
+                Each message starts <span className="mono">{project.engine}</span> in {project.path}
+              </span>
+            </div>
+          )}
+          {project.items.map((item, i) => (
+            <ItemView key={i} item={item} project={project} connected={connected} send={send} />
+          ))}
+          {project.draft && <Markdown className="assistant streaming" text={project.draft} />}
+        </div>
       </div>
       <div className="composer">
-        <textarea
-          value={text}
-          rows={3}
-          placeholder={PLACEHOLDERS[project.status]}
-          disabled={!canSend}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              submit()
-            }
-          }}
-        />
-        {project.status !== 'idle' ? (
-          <button className="stop" disabled={!connected} onClick={stop}>
-            {project.status === 'stopping' ? 'Stopping…' : 'Stop'}
-          </button>
-        ) : (
-          <button disabled={!canSend || !text.trim()} onClick={submit}>
-            Send
-          </button>
-        )}
+        <div className={`composer-box ${canSend ? '' : 'disabled'}`}>
+          <textarea
+            value={text}
+            rows={2}
+            placeholder={PLACEHOLDERS[project.status]}
+            disabled={!canSend}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+          />
+          <div className="composer-footer">
+            <span className="hint">{project.status === 'stopping' ? FORCE_STOP_HINT : SEND_HINT}</span>
+            {project.status !== 'idle' ? (
+              <button
+                className={`danger stop ${project.status}`}
+                disabled={!connected}
+                title={project.status === 'stopping' ? FORCE_STOP_HINT : undefined}
+                onClick={stop}
+              >
+                {project.status === 'stopping' ? 'Stopping…' : 'Stop'}
+              </button>
+            ) : (
+              <button className="primary" disabled={!canSend || !text.trim()} onClick={submit}>
+                Send
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     </main>
   )
@@ -341,9 +405,9 @@ function Toast({ id, message, dismiss }: { id: number; message: string; dismiss:
     return () => clearTimeout(timer)
   }, [id, dismiss])
   return (
-    <div className="toast">
+    <div className="toast" role="status">
       <span>{message}</span>
-      <button aria-label="Dismiss" onClick={() => dismiss(id)}>
+      <button className="ghost" aria-label="Dismiss" onClick={() => dismiss(id)}>
         ×
       </button>
     </div>
@@ -359,6 +423,7 @@ function App() {
     if (state.selectedId) localStorage.setItem(SELECTED_KEY, state.selectedId)
   }, [state.selectedId])
   const [path, setPath] = useState('')
+  const pathRef = useRef<HTMLInputElement>(null)
   const [managing, setManaging] = useState<string | null>(null)
   const selected = state.projects.find((p) => p.id === state.selectedId)
   const engine = state.engines.find((e) => e.id === selected?.engine)
@@ -387,7 +452,18 @@ function App() {
   return (
     <div className="app">
       <aside className="sidebar">
-        <div className="brand">Hotrod</div>
+        <div className="sidebar-header">
+          <span className="brand">Hotrod</span>
+          <button
+            className="ghost icon"
+            aria-label="Add project"
+            title={window.hotrod ? 'Add project… (⌘O)' : 'Add project'}
+            disabled={!connected}
+            onClick={() => (window.hotrod ? void pickProject() : pathRef.current?.focus())}
+          >
+            +
+          </button>
+        </div>
         <nav className="projects">
           {state.projects.map((p) => (
             <button
@@ -407,46 +483,57 @@ function App() {
             <button disabled={!connected} onClick={() => void pickProject()}>
               Add project…
             </button>
+            <span className="hint">⌘O</span>
           </div>
         ) : (
           <form className="add-project" onSubmit={addProject}>
             <input
+              ref={pathRef}
               value={path}
-              placeholder="/absolute/path/to/project"
+              placeholder="/path/to/project"
               spellCheck={false}
               onChange={(e) => setPath(e.target.value)}
             />
-            <button disabled={!connected || !path.trim()}>Add project</button>
+            <button disabled={!connected || !path.trim()}>Add</button>
           </form>
         )}
       </aside>
       <div className="main">
         {quitting && (
-          <div className="banner quitting">
-            Stopping engines…
-            <button className="stop" onClick={() => void window.hotrod?.forceQuit()}>
+          <div className="banner warning">
+            <span>Stopping engines…</span>
+            <button className="small danger" onClick={() => void window.hotrod?.forceQuit()}>
               Force quit
             </button>
           </div>
         )}
         {state.rejected ? (
-          <div className="banner">The core rejected this window. Open the link the core printed; it carries the token.</div>
+          <div className="banner error">
+            <span>The core rejected this window. Open the link the core printed; it carries the token.</span>
+          </div>
         ) : (
-          !state.connected && !quitting && <div className="banner">Disconnected from the core. Reconnecting…</div>
+          !state.connected &&
+          !quitting && (
+            <div className="banner warning">
+              <span>Disconnected from the core. Reconnecting…</span>
+            </div>
+          )
         )}
         {engine && (!engine.installed || !signedIn) && (
-          <div className="banner">
-            {engine.id} is{' '}
-            {!engine.installed
-              ? 'not installed'
-              : activeAccount && activeAccount.id !== 'default'
-                ? `not signed in as ${activeAccount.name}`
-                : 'not signed in'}
-            .{engine.detail && ` ${engine.detail}`}
+          <div className="banner warning">
+            <span>
+              {engine.id} is{' '}
+              {!engine.installed
+                ? 'not installed'
+                : activeAccount && activeAccount.id !== 'default'
+                  ? `not signed in as ${activeAccount.name}`
+                  : 'not signed in'}
+              .{engine.detail && ` ${engine.detail}`}
+            </span>
           </div>
         )}
         {managed && (
-          <AccountsPanel accounts={managed} connected={connected} send={send} close={() => setManaging(null)} />
+          <AccountsDialog accounts={managed} connected={connected} send={send} close={() => setManaging(null)} />
         )}
         {selected ? (
           <Chat
@@ -459,7 +546,12 @@ function App() {
             manageAccounts={() => setManaging(selected.engine)}
           />
         ) : (
-          <div className="empty">Add a project folder to start.</div>
+          <div className="empty">
+            <strong>No projects yet</strong>
+            <span>
+              {window.hotrod ? 'Add a project folder with + or ⌘O.' : 'Paste a project folder’s path in the sidebar.'}
+            </span>
+          </div>
         )}
       </div>
       <div className="toasts">
