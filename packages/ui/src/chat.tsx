@@ -113,6 +113,8 @@ const FILE_ACTION =
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
 const DOT_STAGGER_MS = 200
 export const JUMP_BELOW_PX = 240
+/** Within this of the bottom, the view follows new output down. */
+export const FOLLOW_PX = 16
 
 function Dots({ label, className = '' }: { label: string; className?: string }) {
   return (
@@ -541,34 +543,49 @@ export function Chat(props: ChatProps) {
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const bottomUntilReply = useRef(true)
+  // True while the user is at the bottom: new output then scrolls into view. Scrolling up turns it off.
+  const following = useRef(true)
+  // True during a jump to the bottom, so the smooth scroll's own steps don't count as scrolling up.
+  const jumping = useRef(false)
   const [jumpShown, setJumpShown] = useState(false)
   const reduceMotion = useReducedMotion()
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
-  const replyStarted = chat.draft !== '' || chat.items.at(-1)?.kind !== 'user'
 
   const toBottom = () => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }
+  const gapBelow = (list: HTMLElement) => list.scrollHeight - list.scrollTop - list.clientHeight
   const measure = () => {
     const list = listRef.current
-    if (list) setJumpShown(list.scrollHeight - list.scrollTop - list.clientHeight > JUMP_BELOW_PX)
+    if (list) setJumpShown(gapBelow(list) > JUMP_BELOW_PX)
+  }
+  const follow = () => {
+    if (following.current) toBottom()
+    measure()
+  }
+  const scrolled = () => {
+    const list = listRef.current
+    if (!list) return
+    const atBottom = gapBelow(list) <= FOLLOW_PX
+    if (atBottom) jumping.current = false
+    if (!jumping.current) following.current = atBottom
+    measure()
+  }
+  const userScrolls = () => {
+    jumping.current = false
   }
 
-  useLayoutEffect(() => {
-    if (bottomUntilReply.current) toBottom()
-    if (replyStarted) bottomUntilReply.current = false
-  }, [chat.items, chat.status, replyStarted])
+  useLayoutEffect(follow, [chat.items, chat.status, chat.draft])
 
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list || !contentRef.current) return
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) if (entry.target === list) setPaneColumnPx(entry.contentRect.width)
-      measure()
+      follow()
     })
     observer.observe(list)
     observer.observe(contentRef.current)
@@ -637,8 +654,8 @@ export function Chat(props: ChatProps) {
     if (!canAttach || !hasContent) return
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
     send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
-    if (busy) toBottom()
-    else bottomUntilReply.current = true
+    following.current = true
+    toBottom()
     setText('')
     unattach(pending)
   }
@@ -760,7 +777,10 @@ export function Chat(props: ChatProps) {
           // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
           className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
           ref={listRef}
-          onScroll={measure}
+          onScroll={scrolled}
+          onWheel={userScrolls}
+          onTouchStart={userScrolls}
+          onKeyDown={userScrolls}
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
             {chat.items.length === 0 && !chat.draft && (
@@ -823,6 +843,8 @@ export function Chat(props: ChatProps) {
                     data-asking={asking || undefined}
                     onClick={() => {
                       const list = listRef.current
+                      following.current = true
+                      jumping.current = true
                       list?.scrollTo({ top: list.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
                     }}
                     {...MOTION.pop}
