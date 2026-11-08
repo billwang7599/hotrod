@@ -6,7 +6,7 @@ import { createFakeAdapter, type FakeStep } from '@hotrod/core/fake'
 import { startCore } from '@hotrod/core/main'
 import type { SessionOptions } from '@hotrod/core/shared'
 import { sandboxingMachine } from '@hotrod/core/test-machine'
-import rotation, { createAccountRotation, resetText, UNKNOWN_RESET_MS } from './index.ts'
+import rotation, { CONTINUE_PROMPT, createAccountRotation, resetText, UNKNOWN_RESET_MS } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -22,8 +22,8 @@ async function until(check: () => boolean) {
 }
 
 // Accounts in `limited` run out of usage, resetting `resetsIn` ms from the mod's clock (undefined: the engine
-// doesn't say); the rest reply.
-async function start(names: string[]) {
+// doesn't say); the rest reply. `before` plays ahead of the limit on a limited account.
+async function start(names: string[], before: FakeStep[] = []) {
   const clock = { now: Date.parse('2026-11-08T09:00:00Z') }
   const limited = new Map<string, number | undefined>()
   const accountOf = (options: SessionOptions) => (options.accountDir ? basename(options.accountDir) : 'default')
@@ -34,12 +34,21 @@ async function start(names: string[]) {
     if (!limited.has(account)) return replied
     const resetsIn = limited.get(account)
     const resetsAt = resetsIn === undefined ? undefined : new Date(clock.now + resetsIn).toISOString()
-    return [{ type: 'limit.reached', message: 'Out of usage', ...(resetsAt && { resetsAt }) }, ...replied]
+    return [...before, { type: 'limit.reached', message: 'Out of usage', ...(resetsAt && { resetsAt }) }, ...replied]
   }
   const mod = createAccountRotation(() => clock.now)
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-rotation-')))
   const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
-  const fake = createFakeAdapter(script, 0)
+  const base = createFakeAdapter(script, 0)
+  // What each session was prompted with.
+  const prompts: string[] = []
+  const fake: typeof base = {
+    ...base,
+    start(machine, options, emit) {
+      const session = base.start(machine, options, emit)
+      return { ...session, prompt: (text, images) => (prompts.push(text), session.prompt(text, images)) }
+    },
+  }
   const hotrod = await startCore({ env, adapters: [fake], mods: [mod], machine: sandboxingMachine })
   cleanups.push(async () => {
     await hotrod.close(true)
@@ -66,7 +75,7 @@ async function start(names: string[]) {
       if (e.type === 'user.message') return [`> ${e.text}`]
       return e.type === 'mod.note' || e.type === 'text.completed' ? [e.text] : []
     })
-  return { clock, limited, used, handle, send, shown, active }
+  return { clock, limited, used, handle, send, shown, active, prompts, chat, chatId }
 }
 
 it('is off by default, with a setting for which accounts take part', () => {
@@ -143,4 +152,63 @@ it('does nothing while off', async () => {
   t.limited.set('default', HOUR)
   expect(t.shown(await t.send('Go'))).toEqual(['> Go', 'Done'])
   expect(t.active()).toBe('default')
+})
+
+it('continues instead of starting over when the turn had done some work, then runs the queued message', async () => {
+  const t = await start(
+    ['A'],
+    [
+      { type: 'text.completed', text: 'Half done' },
+      { type: 'tool.started', toolId: 'ask', name: 'Ask', kind: 'other', summary: 'Which file?', input: {} },
+      {
+        type: 'question',
+        toolId: 'ask',
+        questions: [{ header: 'File', question: 'Which file?', options: [], multiSelect: false }],
+      },
+    ],
+  )
+  t.limited.set('default', HOUR)
+  const before = t.chat().entries.length
+  t.handle({ type: 'chat.send', chatId: t.chatId, text: 'Build it' })
+  await until(() => t.chat().status === 'waiting')
+  // The user queues a message while the first turn waits, then answers; the limit comes next.
+  t.handle({ type: 'chat.send', chatId: t.chatId, text: 'Then test it' })
+  const asked = t.chat().entries.findLast((e) => e.type === 'question.asked')!
+  const answers = { 'Which file?': ['a.ts'] }
+  t.handle({ type: 'question.respond', chatId: t.chatId, requestId: (asked as { requestId: string }).requestId, answers })
+  await until(() => t.chat().status === 'idle' && !t.chat().queue.length && t.used.length === 3)
+
+  const entries = t.chat().entries.slice(before)
+  // The partial turn stays in the log, the continuation isn't a message, and the queued message runs after.
+  expect(t.shown(entries)).toEqual([
+    '> Build it',
+    'Half done',
+    'Default hit its usage limit, switched to A and continued',
+    'Done',
+    '> Then test it',
+    'Done',
+  ])
+  expect(entries.some((e) => e.type === 'tool.completed' && e.output === 'Which file? a.ts')).toBe(true)
+  expect(t.used).toEqual(['default', 'a', 'a'])
+  const continued = t.prompts[1]!
+  expect(continued).toContain(CONTINUE_PROMPT)
+  expect(continued).toContain('Half done')
+  expect(continued).not.toContain('New message from the user')
+  expect(t.prompts[2]).toContain('New message from the user:\n\nThen test it')
+})
+
+it('continues again when a continued turn hits the next account’s limit', async () => {
+  const t = await start(['A', 'B'], [{ type: 'text.completed', text: 'Half done' }])
+  t.limited.set('default', HOUR)
+  t.limited.set('a', HOUR)
+  const shown = t.shown(await t.send('Build it'))
+  expect(shown).toEqual([
+    '> Build it',
+    'Half done',
+    'Default hit its usage limit, switched to A and continued',
+    'Half done',
+    'A hit its usage limit, switched to B and continued',
+    'Done',
+  ])
+  expect(t.prompts.slice(1).every((p) => p.includes(CONTINUE_PROMPT))).toBe(true)
 })

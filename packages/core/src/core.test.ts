@@ -3332,6 +3332,7 @@ describe('usage limits', () => {
           account: 'default',
           message: 'Out of usage',
           resetsAt: at,
+          output: true,
         },
         status: 'idle',
         host: expect.anything(),
@@ -3386,5 +3387,58 @@ describe('usage limits', () => {
     expect(basename(t.calls.at(-1)!.options.accountDir!)).toBe('spare')
     expect(statusOf(t.core, busy.id)).toBe('waiting')
     expect(t.calls[0]!.options.accountDir).toBeUndefined()
+  })
+
+  it('says whether the engine had done anything since the last message, counting continued turns', async () => {
+    const outputs: boolean[] = []
+    // The first session runs out at once, the second after a tool call, the third (a continuation) at once.
+    const scripts: FakeStep[][] = [
+      [],
+      [{ type: 'tool.started', toolId: 't', name: 'Bash', kind: 'shell', summary: 'ls', input: {} }],
+      [],
+    ]
+    let sessions = 0
+    const limited = (): FakeStep[] => [...(scripts[sessions++] ?? []), { type: 'limit.reached', message: 'Out' }]
+    const watcher: Mod = {
+      id: 'w',
+      name: 'W',
+      description: '',
+      enabledByDefault: true,
+      onLimitReached({ chat, output }, { host }) {
+        outputs.push(output)
+        if (outputs.length === 2) host.continue(chat.id, 'Carry on')
+      },
+    }
+    const t = setup(createFakeAdapter(limited, 0), tempDir(), TEST_STOP_GRACE_MS, [watcher])
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => outputs.length === 1 && statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go again' })
+    await until(() => outputs.length === 3 && statusOf(t.core, chat.id) === 'idle')
+    expect(outputs).toEqual([false, true, true])
+  })
+
+  it('lets a mod continue a stopped turn as a turn of its own, ahead of queued messages', async () => {
+    let continued = false
+    const t = setupLimits(({ limit, host }) => {
+      host.useAccount('fake', 'spare')
+      expect(() => host.continue(limit.chat.id, ' ')).toThrow('A continuation needs a prompt')
+      continued = true
+      host.continue(limit.chat.id, 'Carry on')
+    })
+    t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Spare', key: 'sk-spare' })
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'And then this' })
+    await until(() => continued && t.calls.length === 3 && statusOf(t.core, chat.id) === 'idle')
+
+    const entries = entriesOf(t.core, chat.id)
+    expect(entries.flatMap((e) => (e.type === 'user.message' ? [e.text] : []))).toEqual(['Go', 'And then this'])
+    // The partial reply is kept, then the continued turn's, then the queued message's.
+    expect(entries.flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))).toEqual(['Work', 'Hello', 'Hello'])
+    expect(t.calls[1]!.prompt).toMatch(/Work[\s\S]*From Hotrod:\n\nCarry on$/)
+    expect(t.calls[1]!.prompt).not.toContain('New message from the user')
+    expect(t.calls[2]!.prompt).toContain('New message from the user:\n\nAnd then this')
   })
 })

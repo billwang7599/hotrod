@@ -26,13 +26,25 @@ export type ModHost = {
   useAccount(engine: string, accountId: string): void
   // Sends the chat's last message again, ahead of anything queued.
   retry(chatId: string): void
+  // Carries on the chat's last turn with a prompt from Hotrod, as a turn of its own: the agent sees the turn so far
+  // in its memory, the prompt isn't shown or logged as a message, and queued messages run after. The chat must be
+  // idle, as it is in onLimitReached.
+  continue(chatId: string, text: string): void
   // A short line in the chat's transcript, for the user. Agents don't see it.
   note(chatId: string, text: string): void
 }
 
 // account is the one the turn ran on, absent if the engine keeps no accounts; the active account may have changed
-// since. resetsAt is ISO, if the engine said.
-export type LimitReached = { chat: ChatSummary; engine: string; account?: string; message: string; resetsAt?: string }
+// since. resetsAt is ISO, if the engine said. output: the engine had written, thought or called a tool since the
+// chat's last message (across continuations), so sending that message again would redo work.
+export type LimitReached = {
+  chat: ChatSummary
+  engine: string
+  account?: string
+  message: string
+  resetsAt?: string
+  output: boolean
+}
 
 export type ModTool = {
   name: string

@@ -231,6 +231,12 @@ export function memoryPrompt(
   return `This is the conversation so far:\n\n${memoryView(messages, summaries, options)}\n\n${incoming}`
 }
 
+// A prompt from Hotrod that carries on the chat's last turn; the view shows how far that turn got.
+export function continuationPrompt(messages: MemoryMessage[], summaries: Summaries, text: string, options: { zoom: boolean }) {
+  if (!messages.length) return text
+  return `This is the conversation so far:\n\n${memoryView(messages, summaries, options)}\n\nFrom Hotrod:\n\n${text}`
+}
+
 export function memoryView(messages: MemoryMessage[], summaries: Summaries, { zoom: zoomable }: { zoom: boolean }) {
   if (!messages.length) return ''
   const asked = messages.findLastIndex((m) => m.kind === 'user' || m.kind === 'work')

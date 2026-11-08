@@ -1,5 +1,11 @@
 import type { Mod, ModAccount } from '@hotrod/mod-api'
 
+// Sent when the turn had already done some of the work, so the new account picks up instead of starting over.
+export const CONTINUE_PROMPT =
+  'Your previous turn stopped because the account hit its usage limit, and Hotrod switched accounts. Check what ' +
+  'you already finished (files, commands, replies above) and continue the task from where you left off. Don’t redo ' +
+  'finished work.'
+
 // How long an account counts as limited when its engine doesn't say when the limit resets.
 export const UNKNOWN_RESET_MS = 60 * 60_000
 
@@ -27,8 +33,8 @@ export function createAccountRotation(now = () => Date.now()): Mod {
     id: 'account-rotation',
     name: 'Account rotation',
     description:
-      'When a turn hits its account’s usage limit, switch the engine to the next saved account and send the ' +
-      'message again. Accounts that hit their limit are skipped until it resets. The switch is for every chat.',
+      'When a turn hits its account’s usage limit, switch the engine to the next saved account and carry on: the ' +
+      'agent continues from where it stopped, or gets the message again if it hadn’t started. Accounts that hit their limit are skipped until it resets. The switch is for every chat.',
     enabledByDefault: false,
     settings: [
       {
@@ -74,8 +80,13 @@ export function createAccountRotation(now = () => Date.now()): Mod {
         )
       }
       if (next.id !== saved.active) host.useAccount(limit.engine, next.id)
-      host.note(chatId, `${nameOf(account)} hit its usage limit, switched to ${next.name}`)
-      host.retry(chatId)
+      const switched = `${nameOf(account)} hit its usage limit, switched to ${next.name}`
+      if (!limit.output) {
+        host.note(chatId, switched)
+        return host.retry(chatId)
+      }
+      host.note(chatId, `${switched} and continued`)
+      host.continue(chatId, CONTINUE_PROMPT)
     },
   }
 }

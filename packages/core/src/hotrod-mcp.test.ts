@@ -60,6 +60,7 @@ async function start(subagents = { enabled: false, limit: 4 }) {
       accounts: () => undefined,
       useAccount() {},
       retry() {},
+      continue() {},
       note() {},
     },
     chats: () => chats,

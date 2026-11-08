@@ -17,6 +17,7 @@ import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
+  continuationPrompt,
   memoryPrompt,
   memoryView,
   messagesOf,
@@ -112,6 +113,8 @@ type Chat = {
   // The account the running turn started on, and the limit it ran into, if any.
   account?: string
   limit?: { message: string; resetsAt?: string }
+  // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
+  produced?: boolean
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -520,6 +523,7 @@ export function openCore(options: {
       engine,
       ...(account !== undefined && { account }),
       message,
+      output: chat.produced === true,
       ...(resetsAt && { resetsAt }),
     }
     for (const mod of limitWatchers()) {
@@ -548,6 +552,13 @@ export function openCore(options: {
     if (chat.status === 'idle') sendQueue(chat)
   }
 
+  // Carries on a turn that stopped part way, as a turn of its own; queued messages wait for it.
+  const continueTurn = (chat: Chat, text: string) => {
+    if (!text.trim()) throw new Error('A continuation needs a prompt')
+    if (chat.status !== 'idle') throw new Error(`${chat.info.name} is still running`)
+    send(chat, '', [], [], text)
+  }
+
   const modHost: ModHost = {
     createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
     send: (chatId, text) => send(chatFor(chatId), text),
@@ -563,6 +574,7 @@ export function openCore(options: {
     },
     useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
     retry: (chatId) => retry(chatFor(chatId)),
+    continue: (chatId, text) => continueTurn(chatFor(chatId), text),
     note: (chatId, text) => append(chatFor(chatId), { at: new Date().toISOString(), type: 'mod.note', text }),
   }
 
@@ -929,7 +941,14 @@ export function openCore(options: {
     rmSync(info.workDir, { recursive: true, force: true })
   }
 
-  const send = (chat: Chat, text: string, attachments: Attachment[] = [], reports: Report[] = []) => {
+  // A continuation is a prompt from Hotrod, not the user: it isn't logged, and the turn it starts carries on the last.
+  const send = (
+    chat: Chat,
+    text: string,
+    attachments: Attachment[] = [],
+    reports: Report[] = [],
+    continuation?: string,
+  ) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
@@ -946,11 +965,16 @@ export function openCore(options: {
     mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text, attachments)
     const zoomable = takesMcp(adapter.id)
-    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable }, reports)
+    const prompt = continuation
+      ? continuationPrompt(messagesOf(chat.entries), chat.summaries, continuation, { zoom: zoomable })
+      : memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable }, reports)
     const at = new Date().toISOString()
-    for (const { text, report } of reports) append(chat, { at, type: 'subagent.report', text, ...report })
-    if (text || attachments.length || !reports.length) {
-      append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
+    if (!continuation) {
+      chat.produced = false
+      for (const { text, report } of reports) append(chat, { at, type: 'subagent.report', text, ...report })
+      if (text || attachments.length || !reports.length) {
+        append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
+      }
     }
     setStatus(chat, 'running')
 
@@ -1022,6 +1046,7 @@ export function openCore(options: {
         if (chat.session !== session) return
         const at = new Date().toISOString()
         if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
+        if (['text.delta', 'text.completed', 'thinking.delta', 'tool.started'].includes(event.type)) chat.produced = true
         if (event.type === 'text.delta') {
           chat.unsavedText += event.text
           broadcast({ type: 'chat.delta', chatId: chat.info.id, text: event.text })
