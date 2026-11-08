@@ -2803,9 +2803,9 @@ describe('mods', () => {
   }
   const savedMods = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).mods
 
-  it('lists every mod with its switch and declared defaults, the subagents mod off', () => {
+  it('lists every mod with its switch and declared defaults, the subagents mod on', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
-    expect(t.core.mods()).toEqual([infoOf(tester, true), infoOf(SUBAGENTS_MOD, false)])
+    expect(t.core.mods()).toEqual([infoOf(tester, true), infoOf(SUBAGENTS_MOD, true)])
   })
 
   it('saves switches and values flat in settings.json, broadcasts each and keeps them across a restart', () => {
