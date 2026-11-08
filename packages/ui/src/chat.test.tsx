@@ -434,3 +434,35 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   expect(select().disabled).toBe(false)
   expect(amber()).not.toContain('text-amber')
 })
+
+test('each context card collapses to its header, its switch still working, and stays so after a remount', async () => {
+  localStorage.clear()
+  const global: ContextItem = { section: 'agents', path: '/g/AGENTS.md', from: GLOBAL_CONTEXT, enabled: true, text: '' }
+  const folder: ContextItem = { section: 'folders', path: '/repo/app', from: 'c1', enabled: true, text: 'F' }
+  const sent: ClientMessage[] = []
+  const show = () => render({}, (m) => sent.push(m), { contextOpen: true, contextItems: [global, folder] })
+  const toggle = (name: string) =>
+    container.querySelector<HTMLButtonElement>(`aside button[aria-expanded][aria-label$=" ${name}"]`)!
+  const globalBox = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]')
+  const folderPath = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === folder.path)
+  show()
+  expect(toggle('Global').getAttribute('aria-expanded')).toBe('true')
+  act(() => toggle('Global').click())
+  await vi.waitFor(() => expect(globalBox()).toBeNull())
+  expect(toggle('Global').getAttribute('aria-expanded')).toBe('false')
+  expect(folderPath()).toBeDefined()
+  act(() => container.querySelector<HTMLButtonElement>('[aria-label="Use the AGENTS.md of Global"]')!.click())
+  expect(sent.at(-1)).toEqual({ type: 'context.set', chatId: 'c1', path: global.path, enabled: false })
+
+  const names = [...container.querySelectorAll<HTMLElement>('aside button span')]
+  act(() => names.find((s) => s.textContent === 'app')!.click())
+  await vi.waitFor(() => expect(folderPath()).toBeUndefined())
+
+  act(() => root.render(<></>))
+  show()
+  expect(globalBox()).toBeNull()
+  expect(folderPath()).toBeUndefined()
+  act(() => toggle('Global').click())
+  await vi.waitFor(() => expect(globalBox()).not.toBeNull())
+  localStorage.clear()
+})

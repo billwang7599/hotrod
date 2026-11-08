@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
@@ -70,6 +70,7 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
+const COLLAPSED_KEY = 'hotrod.contextCollapsed'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -80,18 +81,65 @@ type ItemProps = {
   send: (m: ClientMessage) => void
 }
 
+function useCollapsed(item: ContextItem) {
+  const key = item.from === GLOBAL_CONTEXT ? GLOBAL_CONTEXT : item.path
+  const saved = (): string[] => {
+    try {
+      const keys = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]')
+      return Array.isArray(keys) ? keys : []
+    } catch {
+      return []
+    }
+  }
+  const [collapsed, setCollapsed] = useState(() => saved().includes(key))
+  const toggle = () => {
+    const others = saved().filter((k) => k !== key)
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed ? others : [...others, key]))
+    setCollapsed(!collapsed)
+  }
+  return { collapsed, toggle }
+}
+
+function CardToggle({ name, collapsed, toggle }: { name: string; collapsed: boolean; toggle: () => void }) {
+  return (
+    <button
+      className="group flex min-w-0 items-center gap-6 text-left font-semibold"
+      aria-expanded={!collapsed}
+      aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${name}`}
+      data-open={!collapsed || undefined}
+      onClick={toggle}
+    >
+      <Chevron />
+      <span className="truncate">{name}</span>
+    </button>
+  )
+}
+
+function CardBody({ collapsed, className, children }: { collapsed: boolean; className: string; children: ReactNode }) {
+  return (
+    <AnimatePresence initial={false}>
+      {!collapsed && (
+        <m.div {...MOTION.collapse}>
+          <div className={`flex flex-col ${className}`}>{children}</div>
+        </m.div>
+      )}
+    </AnimatePresence>
+  )
+}
+
 function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const [text, setText] = useState(item.text)
   useEffect(() => setText(item.text), [item.text])
+  const { collapsed, toggle } = useCollapsed(item)
   const own = item.from === chatId
   const global = item.from === GLOBAL_CONTEXT
   const writable = own || global
   const dim = item.enabled ? '' : 'opacity-55'
   return (
-    <div className={`mb-8 flex flex-col gap-6 rounded-lg border p-10 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
+    <div className={`mb-8 flex flex-col rounded-lg border p-10 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center justify-between gap-8">
-        <span className={`flex min-w-0 items-center gap-6 font-semibold ${dim}`}>
-          <span className="truncate">{source}</span>
+        <span className={`flex min-w-0 items-center gap-6 ${dim}`}>
+          <CardToggle name={source} collapsed={collapsed} toggle={toggle} />
           <Hint text={global && GLOBAL_HINT}>
             <span className={PILL}>{own ? 'Own' : global ? 'Every chat' : 'Read-only here'}</span>
           </Hint>
@@ -103,29 +151,31 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
           onChange={(enabled) => send({ type: 'context.set', chatId, path: item.path, enabled })}
         />
       </div>
-      <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
-        {item.path}
-      </span>
-      <textarea
-        className={`resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent read-only:bg-transparent read-only:text-muted ${writable ? 'min-h-96' : 'min-h-36'} ${dim}`}
-        value={text}
-        rows={writable ? 6 : 2}
-        spellCheck={false}
-        readOnly={!writable || readOnly}
-        aria-label={`AGENTS.md of ${source}`}
-        placeholder={
-          global
-            ? 'Empty. Instructions written here go to every chat.'
-            : own
-              ? 'Empty. Instructions written here go to the engine.'
-              : 'Empty'
-        }
-        onChange={(e) => setText(e.target.value)}
-        onBlur={() => {
-          if (text === item.text) return
-          send(global ? { type: 'instructions.write', text } : { type: 'context.write', chatId: item.from, text })
-        }}
-      />
+      <CardBody collapsed={collapsed} className="gap-6 pt-6">
+        <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
+          {item.path}
+        </span>
+        <textarea
+          className={`resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent read-only:bg-transparent read-only:text-muted ${writable ? 'min-h-96' : 'min-h-36'} ${dim}`}
+          value={text}
+          rows={writable ? 6 : 2}
+          spellCheck={false}
+          readOnly={!writable || readOnly}
+          aria-label={`AGENTS.md of ${source}`}
+          placeholder={
+            global
+              ? 'Empty. Instructions written here go to every chat.'
+              : own
+                ? 'Empty. Instructions written here go to the engine.'
+                : 'Empty'
+          }
+          onChange={(e) => setText(e.target.value)}
+          onBlur={() => {
+            if (text === item.text) return
+            send(global ? { type: 'instructions.write', text } : { type: 'context.write', chatId: item.from, text })
+          }}
+        />
+      </CardBody>
     </div>
   )
 }
@@ -134,11 +184,12 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
   const own = item.from === chatId
   const section = item.section === 'folders' ? 'folders' : 'files'
   const preview = item.section === 'folders' ? 'AGENTS.md' : 'Contents'
+  const { collapsed, toggle } = useCollapsed(item)
   return (
-    <div className={`mb-8 flex flex-col gap-4 rounded-lg border px-10 py-8 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
+    <div className={`mb-8 flex flex-col rounded-lg border px-10 py-8 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center gap-8">
-        <span className={`min-w-0 flex-1 truncate font-semibold ${item.enabled ? '' : 'opacity-55'}`}>
-          {folderName(item.path)}
+        <span className={`flex min-w-0 flex-1 ${item.enabled ? '' : 'opacity-55'}`}>
+          <CardToggle name={folderName(item.path)} collapsed={collapsed} toggle={toggle} />
         </span>
         {own && (
           <Hint text="Remove from this chat's context">
@@ -160,36 +211,38 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
           onChange={(enabled) => send({ type: 'context.set', chatId, path: item.path, enabled })}
         />
       </div>
-      <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
-        {item.path}
-      </span>
-      {worktree && (
-        <Hint text={CHECKOUT_HINT} align="start">
-          <span className="w-fit text-xs leading-[normal] wrap-anywhere text-muted">
-            Checked out at <span className="font-mono">{worktree.path}</span> on{' '}
-            <span className="font-mono">{worktree.branch}</span>
-          </span>
-        </Hint>
-      )}
-      <div className="flex items-start gap-6 text-xs text-faint">
-        <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
-        {item.section === 'files' && (
-          <Hint text={item.binary && 'Not text, so the engine gets its path and opens it'}>
-            <span className={PILL}>{item.binary ? 'By path' : 'Pasted in full'}</span>
+      <CardBody collapsed={collapsed} className="gap-4 pt-4">
+        <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
+          {item.path}
+        </span>
+        {worktree && (
+          <Hint text={CHECKOUT_HINT} align="start">
+            <span className="w-fit text-xs leading-[normal] wrap-anywhere text-muted">
+              Checked out at <span className="font-mono">{worktree.path}</span> on{' '}
+              <span className="font-mono">{worktree.branch}</span>
+            </span>
           </Hint>
         )}
-        {item.binary ? null : item.text.trim() ? (
-          <details className="group min-w-0 flex-1">
-            <summary className="flex w-fit list-none items-center gap-4 py-2 hover:text-text">
-              <Chevron />
-              {preview}
-            </summary>
-            <pre className={PREVIEW}>{item.text}</pre>
-          </details>
-        ) : (
-          <span className="py-2">{item.section === 'folders' ? 'No AGENTS.md' : 'Empty'}</span>
-        )}
-      </div>
+        <div className="flex items-start gap-6 text-xs text-faint">
+          <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
+          {item.section === 'files' && (
+            <Hint text={item.binary && 'Not text, so the engine gets its path and opens it'}>
+              <span className={PILL}>{item.binary ? 'By path' : 'Pasted in full'}</span>
+            </Hint>
+          )}
+          {item.binary ? null : item.text.trim() ? (
+            <details className="group min-w-0 flex-1">
+              <summary className="flex w-fit list-none items-center gap-4 py-2 hover:text-text">
+                <Chevron />
+                {preview}
+              </summary>
+              <pre className={PREVIEW}>{item.text}</pre>
+            </details>
+          ) : (
+            <span className="py-2">{item.section === 'folders' ? 'No AGENTS.md' : 'Empty'}</span>
+          )}
+        </div>
+      </CardBody>
     </div>
   )
 }
