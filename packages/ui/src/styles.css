@@ -28,17 +28,19 @@
   background-color: var(--glass-base);
 }
 
-/* A dialog has the window to itself: the app fades out, so the dialog can be glass. One over another stays solid. */
-:root[data-glass='vibrancy'] #root {
-  transition: opacity 0.18s ease-out;
+/* A lone dialog keeps the app behind it, blurred by filter: backdrop-filter misrenders here. Nested ones stay solid. */
+@media (prefers-reduced-motion: no-preference) {
+  :root[data-glass='vibrancy'] #root {
+    transition: filter 0.18s ease-out;
+  }
 }
 
 :root[data-glass='vibrancy'] body:has(> [role$='dialog'][data-state='open']) > #root {
-  opacity: 0;
+  filter: blur(16px) opacity(0.7);
 }
 
 :root[data-glass='vibrancy'] body > [role$='dialog']:not([role$='dialog'][data-state='open'] ~ *) {
-  background-color: var(--bg);
+  background-color: var(--glass-dialog);
 }
 
 :root[data-glass='vibrancy'] body > .bg-backdrop:not([role$='dialog'][data-state='open'] ~ *) {

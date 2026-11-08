@@ -26,6 +26,19 @@ function over(top: string, under: string) {
   return `#${mix.join('')}`
 }
 
+const fade = (color: string, by: number) => {
+  const alpha = color.length === 9 ? parseInt(color.slice(7), 16) / 255 : 1
+  return color.slice(0, 7) + Math.round(alpha * by * 255).toString(16).padStart(2, '0')
+}
+
+const declarations = (selector: string) => css.split(`${selector} {`)[1]?.split('}')[0] ?? ''
+
+function appUnderDialog() {
+  const app = declarations(`:root[data-glass='vibrancy'] body:has(> [role$='dialog'][data-state='open']) > #root`)
+  const [, blurPx, opacity] = app.match(/filter: blur\((\d+)px\) opacity\(([\d.]+)\);/) ?? []
+  return { blurPx: Number(blurPx), opacity: Number(opacity) }
+}
+
 const contrast = (a: string, b: string) => {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
   return (hi! + 0.05) / (lo! + 0.05)
@@ -115,25 +128,38 @@ describe('theme table', () => {
     }
   })
 
-  it('fades the app out under a dialog on the see-through window, and tints the dialog like the window', () => {
-    const declarations = (selector: string) => css.split(`${selector} {`)[1]?.split('}')[0] ?? ''
+  it('blurs and dims the app under a lone dialog on the see-through window, and tints the dialog', () => {
     const vibrancy = `:root[data-glass='vibrancy']`
     const open = `[role$='dialog'][data-state='open']`
     const alone = `:not(${open} ~ *)`
-    expect(declarations(`${vibrancy} body:has(> ${open}) > #root`)).toMatch(/\bopacity: 0;/)
-    expect(declarations(`${vibrancy} body > [role$='dialog']${alone}`)).toMatch(/background-color: var\(--bg\);/)
+    expect(declarations(`${vibrancy} body:has(> ${open}) > #root`)).not.toMatch(/\bopacity:/)
+    const { blurPx, opacity } = appUnderDialog()
+    expect(blurPx).toBeGreaterThan(0)
+    expect(opacity).toBeGreaterThan(0)
+    expect(opacity).toBeLessThan(1)
+    const dialog = declarations(`${vibrancy} body > [role$='dialog']${alone}`)
+    expect(dialog).toMatch(/background-color: var\(--glass-dialog\);/)
     expect(declarations(`${vibrancy} body > .bg-backdrop${alone}`)).toMatch(/background-color: transparent;/)
+    const motion = css.split('@media (prefers-reduced-motion: no-preference) {')[1]?.split('}')[0] ?? ''
+    expect(motion).toMatch(/#root \{[^]*transition: filter /)
+    expect(css.replace(motion, '')).not.toMatch(/#root \{[^}]*transition/)
   })
 
-  it('keeps text readable on the see-through window and on a dialog tinted over it', () => {
+  it('keeps text readable on the see-through window and on a dialog over the blurred app', () => {
+    const { blurPx, opacity } = appUnderDialog()
+    const controlPx = Number(css.match(/--control: (\d+)px;/)?.[1])
+    // A blur of σ px leaves a bar w px across at most w / (σ√2π) of its color; nothing solid outsizes a control.
+    const coverage = Math.min(1, controlPx / (blurPx * Math.sqrt(2 * Math.PI))) * opacity
     for (const scheme of SCHEMES) {
       const { text, muted, faint } = THEMES.glass[scheme]
-      const { bg, panel } = THEMES.glass.vibrancy[scheme]
+      const palette = { ...THEMES.glass[scheme], ...THEMES.glass.vibrancy[scheme] }
+      const { bg, panel } = palette
       const read = scheme === 'light' ? { text, muted, faint } : { text }
       for (const material of THEMES.glass.backdrop[scheme]) {
         const window = over(bg, material)
-        const dialog = over(bg, window)
-        for (const surface of [window, over(panel, window), dialog, over(panel, dialog)])
+        const behind = [window, ...Object.values(palette).map((color) => over(fade(color, coverage), window))]
+        const dialogs = behind.map((under) => over(THEMES.glass.dialog[scheme], under))
+        for (const surface of [window, over(panel, window), ...dialogs, ...dialogs.map((d) => over(panel, d))])
           for (const [name, color] of Object.entries(read))
             expect(contrast(color, surface), `${scheme} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5)
       }
@@ -243,10 +269,12 @@ describe('appearance', () => {
     const tinted = { ...THEMES.glass.dark, ...THEMES.glass.vibrancy.dark }
     for (const token of TOKENS) expect(mac.props.get(`--${token}`)).toBe(tinted[token])
     expect(mac.props.get('--glass-base')).toBe(THEMES.glass.backdrop.dark.at(-1))
+    expect(mac.props.get('--glass-dialog')).toBe(THEMES.glass.dialog.dark)
 
     chooseAppearance({ theme: 'gruvbox' })
     expect(mac.attrs.has('data-glass')).toBe(false)
     expect(mac.props.has('--glass-base')).toBe(false)
+    expect(mac.props.has('--glass-dialog')).toBe(false)
     expect(mac.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'dark',
       vibrancy: false,

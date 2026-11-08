@@ -25,6 +25,7 @@ type Theme = {
   light: Palette
   backdrop?: { dark: readonly string[]; light: readonly string[] }
   vibrancy?: { dark: Partial<Palette>; light: Partial<Palette> }
+  dialog?: { dark: string; light: string }
 }
 
 // One light from above for every theme. Dark surfaces swallow shadows, so dark ones are stronger and add a top highlight.
@@ -119,6 +120,8 @@ export const THEMES = {
       dark: { bg: '#0c0d1266', panel: '#ffffff0a' },
       light: { bg: '#ffffff66', panel: '#0000000a' },
     },
+    // A lone dialog over the blurred app; light text has the thinner contrast margin, so its tint is thicker.
+    dialog: { dark: '#0c0d1266', light: '#ffffffcc' },
   },
   tokyoNight: {
     name: 'Tokyo Night',
@@ -430,8 +433,9 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   else root.removeAttribute('data-glass')
   if (stops && !vibrancy) root.style.setProperty('background', backdropOf(stops))
   else root.style.removeProperty('background')
-  if (vibrancy) root.style.setProperty('--glass-base', base)
-  else root.style.removeProperty('--glass-base')
+  for (const [name, value] of Object.entries({ '--glass-base': base, '--glass-dialog': theme.dialog?.[scheme] }))
+    if (vibrancy && value) root.style.setProperty(name, value)
+    else root.style.removeProperty(name)
   window.hotrod?.setAppearance({
     scheme: current.scheme,
     vibrancy,
