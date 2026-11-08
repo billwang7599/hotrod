@@ -16,8 +16,6 @@ import type {
   QueuedMessage,
 } from '@hotrod/core/shared'
 
-export const MAIN_CHAT_ID = 'main'
-
 export type Item =
   | { kind: 'user'; text: string; attachments?: Attachment[] }
   | { kind: 'text'; text: string }

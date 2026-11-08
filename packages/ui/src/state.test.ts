@@ -14,7 +14,6 @@ import {
   formatBytes,
   initialState,
   listedAccounts,
-  MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
   modelMenu,
@@ -29,6 +28,7 @@ import {
   type State,
 } from './state.ts'
 
+const MAIN_CHAT_ID = 'main'
 const at = '2026-11-06T00:00:00.000Z'
 const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
 const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> = {}): ChatState => ({

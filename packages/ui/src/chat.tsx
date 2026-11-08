@@ -46,7 +46,6 @@ import {
   engineOptions,
   formatBytes,
   listedAccounts,
-  MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   modelMenu,
   pinState,
@@ -640,7 +639,7 @@ export function Chat(props: ChatProps) {
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
             <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
-            {chat.id !== MAIN_CHAT_ID && (
+            {!chat.mod && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>
