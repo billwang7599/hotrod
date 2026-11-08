@@ -377,14 +377,13 @@ const modPages = (mods: ModInfo[]): Page[] =>
         <div className={GROUP}>
           {mod.setup && <ModSetupRow mod={mod} connected={connected} send={send} />}
           {mod.settings.map((setting) => (
-            <SettingRow key={setting.key} name={setting.label} description={setting.description}>
-              <ModSettingControl
-                setting={setting}
-                value={mod.values[setting.key]}
-                disabled={!connected}
-                save={(value) => send({ type: 'mod.setValue', modId: mod.id, key: setting.key, value })}
-              />
-            </SettingRow>
+            <ModSettingRow
+              key={setting.key}
+              setting={setting}
+              value={mod.values[setting.key]}
+              disabled={!connected}
+              save={(value) => send({ type: 'mod.setValue', modId: mod.id, key: setting.key, value })}
+            />
           ))}
         </div>
       ),
@@ -702,14 +701,46 @@ type ModSettingProps = {
   save: (value: string | number | boolean) => void
 }
 
-function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) {
+function ModSettingRow({ setting, value, disabled, save }: ModSettingProps) {
   const [draft, setDraft] = useState(String(value))
   useEffect(() => setDraft(String(value)), [value])
+  const row = (control: ReactNode, below?: ReactNode) => (
+    <SettingRow name={setting.label} description={setting.description} below={below}>
+      {control}
+    </SettingRow>
+  )
   if (setting.type === 'boolean') {
-    return <Switch label={setting.label} checked={value === true} disabled={disabled} onChange={save} />
+    return row(<Switch label={setting.label} checked={value === true} disabled={disabled} onChange={save} />)
+  }
+  if (setting.type === 'text') {
+    const reset = () => {
+      setDraft(setting.default)
+      save('')
+    }
+    const commit = () => {
+      if (!draft.trim()) reset()
+      else if (draft !== value) save(draft)
+    }
+    return row(
+      draft !== setting.default && (
+        <Button size="small" disabled={disabled} onClick={reset}>
+          Reset to default
+        </Button>
+      ),
+      <textarea
+        className="block w-full resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent disabled:text-muted"
+        aria-label={setting.label}
+        rows={setting.rows ?? 4}
+        spellCheck={false}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+      />,
+    )
   }
   if (setting.type === 'select') {
-    return (
+    return row(
       <Select
         label={setting.label}
         value={String(value)}
@@ -719,7 +750,7 @@ function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) 
           const option = setting.options.find((o) => String(o.value) === picked)
           if (option) save(option.value)
         }}
-      />
+      />,
     )
   }
   const commit = () => {
@@ -727,7 +758,7 @@ function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) 
     if (draft.trim() && !settingProblem(setting, next) && next !== value) save(next)
     else setDraft(String(value))
   }
-  return (
+  return row(
     <input
       className="w-72"
       aria-label={setting.label}
@@ -740,7 +771,7 @@ function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) 
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
-    />
+    />,
   )
 }
 

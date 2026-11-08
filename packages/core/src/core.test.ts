@@ -2794,6 +2794,7 @@ describe('mods', () => {
       },
       { key: 'count', label: 'Count', type: 'number', default: 2, min: -1, max: 10, integer: true },
       { key: 'loud', label: 'Loud', type: 'boolean', default: false },
+      { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 },
     ],
   }
   const defaultsOf = (mod: Mod) => Object.fromEntries((mod.settings ?? []).map((s) => [s.key, s.default]))
@@ -2817,7 +2818,8 @@ describe('mods', () => {
     t.handle({ type: 'mod.setValue', modId: 'tester', key: 'size', value: 'full' })
     t.handle({ type: 'mod.setValue', modId: 'tester', key: 'count', value: -1 })
     t.handle({ type: 'mod.setValue', modId: 'tester', key: 'loud', value: true })
-    const values = { size: 'full', count: -1, loud: true }
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' })
+    const values = { size: 'full', count: -1, loud: true, notes: 'Be thorough.\nCite files.' }
     expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, false, values) })
     expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({
       theme: 'dark',
@@ -2839,6 +2841,7 @@ describe('mods', () => {
     expect(set('count', 11)).toThrow('Count must be at most 10')
     expect(set('count', '3')).toThrow('Count must be a number')
     expect(set('loud', 'yes')).toThrow('Loud must be on or off')
+    expect(set('notes', 3)).toThrow('Notes must be text')
     expect(set('nope', 1)).toThrow('Tester has no setting "nope"')
     expect(set('enabled', false)).toThrow('Tester has no setting "enabled"')
     expect(() => t.handle({ type: 'mod.setEnabled', modId: 'nope', enabled: true })).toThrow('Unknown mod "nope"')
@@ -2849,17 +2852,25 @@ describe('mods', () => {
 
   it('falls back to the declared default for a saved value its declaration rules out', () => {
     const garage = tempDir()
-    const saved = { tester: { enabled: 'yes', size: 1024, count: 4, loud: 'no' } }
+    const saved = { tester: { enabled: 'yes', size: 1024, count: 4, loud: 'no', notes: 7 } }
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: saved }))
     const t = setup(textScript, garage, TEST_STOP_GRACE_MS, [tester])
     expect(t.core.mods()[0]).toEqual(infoOf(tester, true, { ...defaultsOf(tester), count: 4 }))
+  })
+
+  it('takes a blank text value as its default, so saving one resets it', () => {
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Custom' })
+    expect(t.core.mods()[0]?.values.notes).toBe('Custom')
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: ' \n' })
+    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, true) })
   })
 
   it('reads the subagents switch and limit saved before mods had declarations', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { subagents: { enabled: true, limit: -1 } } }))
     expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.mods()).toEqual([
-      infoOf(SUBAGENTS_MOD, true, { limit: -1 }),
+      infoOf(SUBAGENTS_MOD, true, { ...defaultsOf(SUBAGENTS_MOD), limit: -1 }),
     ])
   })
 
