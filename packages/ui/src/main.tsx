@@ -282,11 +282,9 @@ function App() {
                         : 'Connecting to the core…'}
                   </strong>
                   {state.loaded && (
-                    <Hint text={`A ${CHAT_NOUN.one} is a chat with its own folders, files and AGENTS.md`}>
-                      <Button variant="primary" disabled={!connected} onClick={() => setNameRequest({ kind: 'new' })}>
-                        New {CHAT_NOUN.one}…
-                      </Button>
-                    </Hint>
+                    <Button variant="primary" disabled={!connected} onClick={() => setNameRequest({ kind: 'new' })}>
+                      New {CHAT_NOUN.one}…
+                    </Button>
                   )}
                 </div>
               </>
@@ -303,7 +301,6 @@ function App() {
             request={nameRequest}
             connected={connected}
             send={send}
-            pickFolder={window.hotrod?.pickFolder}
             close={() => setNameRequest(null)}
           />
           <WorkFolderDialog

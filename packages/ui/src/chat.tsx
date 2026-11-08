@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -28,7 +29,9 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { usePathsShown } from './paths.ts'
 import { useSmoothText } from './smooth.ts'
+import { StepsOpen, useStepsShown } from './steps.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -65,8 +68,8 @@ const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
-const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
-const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
+const MODEL_HINT = 'Model'
+const THINKING_HINT = 'Thinking level'
 const INTERRUPTED = 'Interrupted'
 const VERDICTS = { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled' }
 const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
@@ -110,6 +113,8 @@ const FILE_ACTION =
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
 const DOT_STAGGER_MS = 200
 export const JUMP_BELOW_PX = 240
+/** Within this of the bottom, the view follows new output down. */
+export const FOLLOW_PX = 16
 
 function Dots({ label, className = '' }: { label: string; className?: string }) {
   return (
@@ -126,7 +131,10 @@ function Dots({ label, className = '' }: { label: string; className?: string }) 
 }
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
+  // Follows the chat's steps setting until the user opens or closes this row.
+  const opens = useContext(StepsOpen)
+  const [chosen, setOpen] = useState<boolean>()
+  const open = chosen ?? opens
   return (
     <div className={`rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}>
       <button
@@ -527,6 +535,7 @@ type ChatProps = {
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
+  const paths = usePathsShown()
   const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
@@ -537,34 +546,50 @@ export function Chat(props: ChatProps) {
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const bottomUntilReply = useRef(true)
+  // True while the user is at the bottom: new output then scrolls into view. Scrolling up turns it off.
+  const following = useRef(true)
+  // True during a jump to the bottom, so the smooth scroll's own steps don't count as scrolling up.
+  const jumping = useRef(false)
   const [jumpShown, setJumpShown] = useState(false)
   const reduceMotion = useReducedMotion()
+  const stepsShown = useStepsShown(chat.id)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
-  const replyStarted = chat.draft !== '' || chat.items.at(-1)?.kind !== 'user'
 
   const toBottom = () => {
     const list = listRef.current
     if (list) list.scrollTop = list.scrollHeight
   }
+  const gapBelow = (list: HTMLElement) => list.scrollHeight - list.scrollTop - list.clientHeight
   const measure = () => {
     const list = listRef.current
-    if (list) setJumpShown(list.scrollHeight - list.scrollTop - list.clientHeight > JUMP_BELOW_PX)
+    if (list) setJumpShown(gapBelow(list) > JUMP_BELOW_PX)
+  }
+  const follow = () => {
+    if (following.current) toBottom()
+    measure()
+  }
+  const scrolled = () => {
+    const list = listRef.current
+    if (!list) return
+    const atBottom = gapBelow(list) <= FOLLOW_PX
+    if (atBottom) jumping.current = false
+    if (!jumping.current) following.current = atBottom
+    measure()
+  }
+  const userScrolls = () => {
+    jumping.current = false
   }
 
-  useLayoutEffect(() => {
-    if (bottomUntilReply.current) toBottom()
-    if (replyStarted) bottomUntilReply.current = false
-  }, [chat.items, chat.status, replyStarted])
+  useLayoutEffect(follow, [chat.items, chat.status, chat.draft])
 
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list || !contentRef.current) return
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) if (entry.target === list) setPaneColumnPx(entry.contentRect.width)
-      measure()
+      follow()
     })
     observer.observe(list)
     observer.observe(contentRef.current)
@@ -584,8 +609,11 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
+  const working = busy && !archived && !text
+  const asking = chat.status === 'waiting'
   const canQueue = connected && busy && !archived
-  const showEngineNote = engineOff && !archived && chat.status === 'idle'
+  const viewOnly = !!chat.subagent
+  const showEngineNote = engineOff && !archived && chat.status === 'idle' && !viewOnly
   const last = chat.items.at(-1)
   const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
@@ -630,8 +658,8 @@ export function Chat(props: ChatProps) {
     if (!canAttach || !hasContent) return
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
     send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
-    if (busy) toBottom()
-    else bottomUntilReply.current = true
+    following.current = true
+    toBottom()
     setText('')
     unattach(pending)
   }
@@ -694,8 +722,10 @@ export function Chat(props: ChatProps) {
             toggle={props.toggleSidebar}
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
-            <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
-            {!chat.mod && (
+            <Hint text={!chat.mod && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
+              <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
+            </Hint>
+            {!chat.mod && paths.header && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>
@@ -751,64 +781,76 @@ export function Chat(props: ChatProps) {
           // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
           className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
           ref={listRef}
-          onScroll={measure}
+          onScroll={scrolled}
+          onWheel={userScrolls}
+          onTouchStart={userScrolls}
+          onKeyDown={userScrolls}
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
-            {chat.items.length === 0 && !chat.draft && (
-              <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                <strong className="text-body font-semibold text-text">
-                  Start a chat in <span className="font-mono">{chat.name}</span>
-                </strong>
-                <span>
-                  Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
-                </span>
-              </div>
-            )}
-            {foldSteps(chat.items, busy).map((row) => {
-              const kind = 'item' in row ? row.item.kind : 'steps'
-              return (
-                <m.div
-                  key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                  className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
-                  initial={kind !== 'text' && enter}
-                  animate={MOTION.rise.animate}
-                >
-                  {'steps' in row ? (
-                    <Row quiet summary={`${row.steps.length} steps`}>
-                      <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
-                        {row.steps.map((item, i) => (
-                          <ItemView key={i} item={item} {...itemProps} />
-                        ))}
-                      </div>
-                    </Row>
-                  ) : (
-                    <ItemView item={row.item} {...itemProps} />
-                  )}
+            <StepsOpen.Provider value={stepsShown}>
+              {chat.items.length === 0 && !chat.draft && (
+                <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+                  <strong className="text-body font-semibold text-text">
+                    Start a chat in <span className="font-mono">{chat.name}</span>
+                  </strong>
+                  <span>
+                    Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
+                  </span>
+                </div>
+              )}
+              {foldSteps(chat.items, busy || stepsShown).map((row) => {
+                const kind = 'item' in row ? row.item.kind : 'steps'
+                return (
+                  <m.div
+                    key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                    className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
+                    initial={kind !== 'text' && enter}
+                    animate={MOTION.rise.animate}
+                  >
+                    {'steps' in row ? (
+                      <Row quiet summary={`${row.steps.length} steps`}>
+                        <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
+                          {row.steps.map((item, i) => (
+                            <ItemView key={i} item={item} {...itemProps} />
+                          ))}
+                        </div>
+                      </Row>
+                    ) : (
+                      <ItemView item={row.item} {...itemProps} />
+                    )}
+                  </m.div>
+                )
+              })}
+              {chat.draft && (
+                <m.div initial={enter} animate={MOTION.rise.animate}>
+                  <StreamingText text={chat.draft} smooth={!reduceMotion} />
                 </m.div>
-              )
-            })}
-            {chat.draft && (
-              <m.div initial={enter} animate={MOTION.rise.animate}>
-                <StreamingText text={chat.draft} smooth={!reduceMotion} />
-              </m.div>
-            )}
-            {awaitingOutput && (
-              <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
-                <Dots label="Working" />
-              </m.div>
-            )}
+              )}
+              {awaitingOutput && (
+                <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                  <Dots label="Working" />
+                </m.div>
+              )}
+            </StepsOpen.Provider>
           </div>
         </div>
         <div className="relative shrink-0 px-24 pb-16">
           <div className="pointer-events-none absolute inset-x-24 bottom-full mx-auto flex max-w-column justify-end pb-12">
             <AnimatePresence>
               {jumpShown && (
-                <Hint key="jump" text="Jump to the latest output">
+                <Hint key="jump" text={asking ? 'A permission request is waiting below' : 'Jump to the latest output'}>
                   <m.button
-                    className="pointer-events-auto grid size-32 place-items-center rounded-full border bg-panel text-muted shadow-floating transition-colors hover:bg-raised hover:text-text"
-                    aria-label="Scroll to bottom"
+                    className={`pointer-events-auto grid size-32 place-items-center rounded-full border shadow-floating transition-colors ${
+                      asking
+                        ? 'border-amber bg-warning-bg text-amber hover:bg-raised'
+                        : 'bg-panel text-muted hover:bg-raised hover:text-text'
+                    }`}
+                    aria-label={asking ? 'Scroll to the permission request' : 'Scroll to bottom'}
+                    data-asking={asking || undefined}
                     onClick={() => {
                       const list = listRef.current
+                      following.current = true
+                      jumping.current = true
                       list?.scrollTo({ top: list.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
                     }}
                     {...MOTION.pop}
@@ -883,7 +925,30 @@ export function Chat(props: ChatProps) {
               </m.div>
             )}
           </AnimatePresence>
-          {!showEngineNote && (
+          {viewOnly && !archived && (
+            <div
+              className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-10 text-muted"
+              aria-label="Subagent"
+            >
+              <span className="min-w-0 flex-1 truncate">
+                Subagent of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
+              </span>
+              {busy && (
+                <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                  <Button
+                    variant="danger"
+                    size="small"
+                    className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                    disabled={!connected}
+                    onClick={stop}
+                  >
+                    {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                  </Button>
+                </Hint>
+              )}
+            </div>
+          )}
+          {!showEngineNote && !viewOnly && (
             <div
               className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
             >
@@ -916,30 +981,42 @@ export function Chat(props: ChatProps) {
                   ))}
                 </ul>
               )}
-              <textarea
-                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
-                value={text}
-                rows={2}
-                placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}
-                disabled={!(canSend || canQueue)}
-                onChange={(e) => setText(e.target.value)}
-                onPaste={(e) => {
-                  const { types, files } = e.clipboardData
-                  if (types.includes('text/plain') || !files.length) return
-                  e.preventDefault()
-                  void attach([...files])
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
-                  e.preventDefault()
-                  const emptyWithQueue = !hasContent && chat.queue.length > 0
-                  if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
-                  else submit()
-                }}
-              />
+              <div className="relative">
+                {working && (
+                  <span
+                    className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
+                    data-status={chat.status}
+                    aria-hidden="true"
+                  >
+                    {PLACEHOLDERS[chat.status]}
+                  </span>
+                )}
+                <textarea
+                  className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
+                  value={text}
+                  rows={2}
+                  placeholder={working ? undefined : archived ? 'Archived' : PLACEHOLDERS[chat.status]}
+                  aria-placeholder={working ? PLACEHOLDERS[chat.status] : undefined}
+                  disabled={!(canSend || canQueue)}
+                  onChange={(e) => setText(e.target.value)}
+                  onPaste={(e) => {
+                    const { types, files } = e.clipboardData
+                    if (types.includes('text/plain') || !files.length) return
+                    e.preventDefault()
+                    void attach([...files])
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+                    e.preventDefault()
+                    const emptyWithQueue = !hasContent && chat.queue.length > 0
+                    if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
+                    else submit()
+                  }}
+                />
+              </div>
               <div className="flex items-center gap-8 px-6 pb-6">
                 <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Hint text="Attach files, or paste or drop them here">
+                  <Hint text="Attach files">
                     <Button
                       variant="ghost"
                       size="icon"

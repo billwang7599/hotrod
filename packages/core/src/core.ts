@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { Mod, ModRun } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
-import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
+import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENT_INSTRUCTIONS, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   memoryPrompt,
@@ -855,7 +855,9 @@ export function openCore(options: {
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
     const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
     const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
+    const spawns = zoomable && !chat.info.subagent && isOn(SUBAGENTS_MOD)
     const memory = [
+      ...(spawns ? [SUBAGENT_INSTRUCTIONS] : []),
       MEMORY_INSTRUCTIONS,
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),

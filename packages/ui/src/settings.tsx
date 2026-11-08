@@ -33,6 +33,8 @@ import {
   useReturnFocus,
 } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
+import { showPaths, usePathsShown } from './paths.ts'
+import { showStepsByDefault, useStepsDefault } from './steps.ts'
 import { Appearance } from './themes.tsx'
 
 type PageProps = {
@@ -51,7 +53,7 @@ type Page = {
   id: string
   group: (typeof NAV_GROUPS)[number]
   title: string
-  hint?: string
+  intro?: string
   body: (props: PageProps) => ReactNode
 }
 
@@ -62,8 +64,7 @@ const WORK_FOLDER_HINT =
   'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
 
-const PERMISSION_DEFAULT_HINT =
-  `The default for every chat: Home, ${CHAT_NOUN.many} and subagents. Each can choose otherwise in its Context panel.`
+const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every chat; each can choose otherwise in its Context panel.'
 
 const ROLES: Record<ModelRole, { name: string; about: string }> = {
   chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
@@ -77,7 +78,7 @@ const PAGES = [
     id: 'engines',
     group: 'Options',
     title: 'Engines',
-    hint: 'Hotrod only starts the engines you turn on here.',
+    intro: 'Hotrod only starts the engines you turn on here.',
     body: ({ engines, connected, send }: PageProps) => (
       <div className={GROUP}>
         {engines.map((engine) => {
@@ -109,13 +110,12 @@ const PAGES = [
     id: 'work',
     group: 'Options',
     title: 'Work folder',
-    hint: WORK_FOLDER_HINT,
+    intro: `${WORK_FOLDER_HINT} ${PERMISSION_DEFAULT_HINT}`,
     body: ({ workFolder, chooseWorkFolder, connected, send }: PageProps) => (
       <div className={GROUP}>
         <SettingRow
           name="Work folder"
           description={<span className="font-mono">{workFolder.path ?? 'Not chosen'}</span>}
-          hint={`Changing it moves only new ${CHAT_NOUN.many}; existing ones keep their folder.`}
         >
           <Button disabled={!connected} onClick={chooseWorkFolder}>
             Change…
@@ -128,7 +128,7 @@ const PAGES = [
             <SettingRow
               key={name}
               name={<span className={amberWhileOn && on ? 'text-amber' : ''}>{label}</span>}
-              hint={`${about} ${PERMISSION_DEFAULT_HINT}`}
+              description={about}
             >
               <Switch
                 label={label}
@@ -146,13 +146,19 @@ const PAGES = [
     id: 'appearance',
     group: 'Options',
     title: 'Appearance',
-    body: () => <Appearance />,
+    body: () => (
+      <>
+        <Appearance />
+        <ShownPaths />
+        <ShownSteps />
+      </>
+    ),
   },
   {
     id: 'accounts',
     group: 'Options',
     title: 'Accounts',
-    hint:
+    intro:
       'Each engine runs as its Active account: one saved here, or whoever the engine itself is signed in as. ' +
       'Accounts show while their engine is on.',
     body: ({ engines, accounts, connected, send }: PageProps) => {
@@ -165,7 +171,7 @@ const PAGES = [
     id: 'models',
     group: 'Options',
     title: 'Models',
-    hint:
+    intro:
       `A ${CHAT_NOUN.one} runs its own pick, else the first model in its list that the engine offers, ` +
       "else the engine's default.",
     body: ({ engines, modelLists, connected, send }: PageProps) => {
@@ -186,13 +192,13 @@ const PAGES = [
     id: 'context',
     group: 'Options',
     title: 'Context',
-    hint:
+    intro:
       `What a ${CHAT_NOUN.one} uses from the global AGENTS.md and the chats above it, unless you switch it in its ` +
       'Context panel. Its own AGENTS.md, folders and files always start on.',
     body: ({ contextDefaults, connected, send }: PageProps) => (
       <div className={GROUP}>
         {CONTEXT_SECTIONS.map((section) => (
-          <SettingRow key={section} name={SECTIONS[section].label} hint={SECTIONS[section].inherited}>
+          <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
             <Switch
               label={`${SECTIONS[section].label} from above on by default`}
               checked={contextDefaults[section]}
@@ -208,7 +214,7 @@ const PAGES = [
     id: 'mods',
     group: 'Mods',
     title: 'Built-in mods',
-    hint: 'Mods that ship with Hotrod. One with settings or a setup gets its own page while it is on.',
+    intro: 'Mods that ship with Hotrod. One with settings or a setup gets its own page while it is on.',
     body: (props: PageProps) => <ModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
@@ -235,9 +241,11 @@ function ModsPage({ mods, connected, send }: PageProps) {
           key={m.id}
           name={m.name}
           description={
-            m.enabled && m.setup?.status === 'missing' && <span className="text-amber">{setupTitle(m)}</span>
+            <>
+              {m.description}
+              {m.enabled && m.setup?.status === 'missing' && <span className="block text-amber">{setupTitle(m)}</span>}
+            </>
           }
-          hint={m.description}
         >
           <Switch
             label={m.name}
@@ -311,11 +319,10 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
                 className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
-                <Hint text={mod.setup?.description} side="bottom" align="start">
-                  <AlertDialog.Title className="w-fit cursor-help text-[16px] font-semibold">
-                    {setupTitle(mod)}
-                  </AlertDialog.Title>
-                </Hint>
+                <div className="flex flex-col gap-4">
+                  <AlertDialog.Title className="text-[16px] font-semibold">{setupTitle(mod)}</AlertDialog.Title>
+                  {mod.setup?.description && <p className="text-sm text-muted">{mod.setup.description}</p>}
+                </div>
                 <SetupStatus mod={mod} />
                 <div className="flex justify-end gap-8">
                   <Button onClick={cancel}>Cancel</Button>
@@ -341,7 +348,7 @@ function ModSetupRow({ mod, connected, send }: SetupProps) {
   return (
     <SettingRow
       name={<span className={status === 'ready' ? '' : 'text-amber'}>{setupTitle(mod)}</span>}
-      hint={mod.setup!.description}
+      description={mod.setup!.description}
       below={(status === 'installing' || status === 'checking' || mod.setup!.error) && <SetupStatus mod={mod} />}
     >
       {status === 'ready' && <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Ready</span>}
@@ -370,7 +377,7 @@ const modPages = (mods: ModInfo[]): Page[] =>
         <div className={GROUP}>
           {mod.setup && <ModSetupRow mod={mod} connected={connected} send={send} />}
           {mod.settings.map((setting) => (
-            <SettingRow key={setting.key} name={setting.label} hint={setting.description}>
+            <SettingRow key={setting.key} name={setting.label} description={setting.description}>
               <ModSettingControl
                 setting={setting}
                 value={mod.values[setting.key]}
@@ -383,20 +390,52 @@ const modPages = (mods: ModInfo[]): Page[] =>
       ),
     }))
 
-type RowProps = { name: ReactNode; description?: ReactNode; hint?: string; children?: ReactNode; below?: ReactNode }
+type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode; below?: ReactNode }
 
-function SettingRow({ name, description, hint, children, below }: RowProps) {
+function ShownPaths() {
+  const paths = usePathsShown()
   return (
-    <Hint text={hint} align="start">
-      <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
-        <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
-          {name}
-          {description && <div className="text-sm text-muted">{description}</div>}
-        </div>
-        <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
-        {below && <div className="basis-full">{below}</div>}
+    <>
+      <div className="pt-24 pb-8 font-semibold">File paths</div>
+      <div className={GROUP}>
+        <SettingRow name="At the top of a space">
+          <Switch label="Show paths at the top of a space" checked={paths.header} onChange={(on) => showPaths('header', on)} />
+        </SettingRow>
+        <SettingRow name="In the Context panel">
+          <Switch label="Show paths in the Context panel" checked={paths.context} onChange={(on) => showPaths('context', on)} />
+        </SettingRow>
       </div>
-    </Hint>
+    </>
+  )
+}
+
+function ShownSteps() {
+  const shown = useStepsDefault()
+  return (
+    <>
+      <div className="pt-24 pb-8 font-semibold">Thinking and tool calls</div>
+      <div className={GROUP}>
+        <SettingRow
+          name="Show unfolded"
+          description={`Instead of folding them into "N steps". Each ${CHAT_NOUN.one} can override this in its Context panel.`}
+        >
+          <Switch label="Show thinking and tool calls unfolded" checked={shown} onChange={showStepsByDefault} />
+        </SettingRow>
+      </div>
+    </>
+  )
+}
+
+function SettingRow({ name, description, children, below }: RowProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
+      <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
+        {name}
+        {description && <div className="text-sm text-muted">{description}</div>}
+      </div>
+      <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
+      {below && <div className="basis-full">{below}</div>}
+    </div>
   )
 }
 
@@ -472,7 +511,7 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
               <SettingRow
                 key={role}
                 name={name}
-                hint={about}
+                description={about}
                 below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
               >
                 <Select
@@ -487,7 +526,7 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
             )
           })}
           {engine.defaultThinking && (
-            <SettingRow name="Default thinking" hint={`For ${CHAT_NOUN.many} that don't pick a level.`}>
+            <SettingRow name="Default thinking">
               <Select
                 label={`Default thinking for ${engine.id}`}
                 value={engine.defaultThinking}
@@ -554,8 +593,9 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           <SettingRow
             key={a.id}
             name={accountLabel(a)}
-            description={a.id === 'default' && !a.signedIn && `No one is signed in to ${id} itself`}
-            hint={a.id === 'default' && a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : undefined}
+            description={
+              a.id === 'default' && (a.signedIn ? `Signed in through ${id} itself` : `No one is signed in to ${id} itself`)
+            }
           >
             {a.id === listed.active ? (
               <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
@@ -576,7 +616,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           </SettingRow>
         ))}
         {!login ? (
-          <SettingRow name="Add account" hint="Sign in to another account in your browser.">
+          <SettingRow name="Add account">
             <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
               <input
                 className="w-160"
@@ -629,7 +669,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           </>
         )}
         {accounts.apiKeys && (
-          <SettingRow name="Add API key" hint="Use an API key instead of a sign-in.">
+          <SettingRow name="Add API key">
             <form className="flex min-w-0 gap-6" onSubmit={addKey}>
               <input
                 className="w-120"
@@ -760,9 +800,10 @@ export function WorkFolderDialog({ open, workFolder, connected, send, toasts, pi
                 {...MOTION.pop}
                 onSubmit={submit}
               >
-                <Hint text={WORK_FOLDER_HINT} side="bottom" align="start">
-                  <Dialog.Title className="w-fit cursor-help text-[16px] font-semibold">{WORK_FOLDER_TITLE}</Dialog.Title>
-                </Hint>
+                <div className="flex flex-col gap-4">
+                  <Dialog.Title className="text-[16px] font-semibold">{WORK_FOLDER_TITLE}</Dialog.Title>
+                  <p className="text-sm text-muted">{WORK_FOLDER_HINT}</p>
+                </div>
                 <label className="flex flex-col gap-4">
                   <span className="text-muted">Folder</span>
                   <span className="flex gap-6">
@@ -859,11 +900,9 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                           .filter((p) => p.group === group)
                           .map((p) => (
                             <Tabs.Trigger key={p.id} value={p.id} asChild>
-                              <Hint text={p.hint} side="right">
-                                <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted transition-colors hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
-                                  {p.title}
-                                </button>
-                              </Hint>
+                              <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted transition-colors hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
+                                {p.title}
+                              </button>
                             </Tabs.Trigger>
                           ))}
                       </Fragment>
@@ -877,6 +916,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                         animate={MOTION.fade.animate}
                       >
                         <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
+                        {p.intro && <p className="mt-4 max-w-[60ch] pr-24 text-sm text-muted">{p.intro}</p>}
                         <div className="mt-16 flex flex-col">{p.body(props)}</div>
                       </m.div>
                     </Tabs.Content>

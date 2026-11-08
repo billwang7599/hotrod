@@ -4,8 +4,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { Chat, JUMP_BELOW_PX } from './chat.tsx'
+import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
+import { showPaths } from './paths.ts'
+import { reloadSteps, showStepsByDefault } from './steps.ts'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
@@ -81,7 +83,12 @@ afterEach(() => {
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-type RenderOptions = { workFolder?: Partial<WorkFolder>; contextOpen?: boolean; contextItems?: ContextItem[] }
+type RenderOptions = {
+  workFolder?: Partial<WorkFolder>
+  contextOpen?: boolean
+  contextItems?: ContextItem[]
+  folder?: string
+}
 
 function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
   const view: ChatView = {
@@ -105,6 +112,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
           <Tooltip.Provider delayDuration={0}>
             <Chat
               chat={view}
+              folder={options.folder}
               chats={[view]}
               engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
               connected
@@ -192,18 +200,37 @@ test('a chat opens scrolled to the bottom', () => {
   expect(list().scrollTop).toBe(bottom())
 })
 
-test('streamed output never drags the view down', () => {
+test('streamed output keeps the view at the bottom while the user is there', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  page.scrollHeight += 800
+  render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
+  expect(list().scrollTop).toBe(bottom())
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
+  scrollTo(bottom() - FOLLOW_PX)
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
+})
+
+test('streamed output never drags the view once the user scrolls up', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(bottom() - FOLLOW_PX - 1)
   const top = list().scrollTop
   page.scrollHeight += 800
   render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
   render({ status: 'running', items: [USER, REPLY, { kind: 'text', text: 'More and more' }, tool('running')] })
+  grow(300)
   expect(list().scrollTop).toBe(top)
+  expect(jumpButton()).not.toBeNull()
+  scrollTo(bottom())
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
 })
 
 test('a down button shows once more than the threshold of output is below the view', async () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
-  grow(JUMP_BELOW_PX)
+  scrollTo(bottom() - FOLLOW_PX - 1)
+  grow(JUMP_BELOW_PX - FOLLOW_PX - 1)
   expect(jumpButton()).toBeNull()
   grow(1)
   expect(jumpButton()).not.toBeNull()
@@ -211,19 +238,31 @@ test('a down button shows once more than the threshold of output is below the vi
   await vi.waitFor(() => expect(jumpButton()).toBeNull())
 })
 
-test('the down button smooth-scrolls to the bottom once and hides there', async () => {
+test('the down button turns amber while a permission request waits below', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
+  grow(JUMP_BELOW_PX * 3)
+  expect(jumpButton()!.className).not.toContain('text-amber')
+  render({ status: 'waiting', items: [USER, REPLY] })
+  const asking = container.querySelector<HTMLButtonElement>('[aria-label="Scroll to the permission request"]')!
+  expect(asking.className).toContain('text-amber')
+})
+
+test('the down button smooth-scrolls to the bottom, hides there and follows output again', async () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
   grow(JUMP_BELOW_PX * 3)
   act(() => jumpButton()!.click())
   expect(list().scrollTo).toHaveBeenCalledWith({ top: page.scrollHeight, behavior: 'smooth' })
+  scrollTo(400)
   scrollTo(bottom())
   await vi.waitFor(() => expect(jumpButton()).toBeNull())
   page.scrollHeight += 800
   render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
-  expect(list().scrollTop).toBe(bottom() - 800)
+  expect(list().scrollTop).toBe(bottom())
 })
 
-test('sending scrolls to the bottom and keeps it there until the reply starts', () => {
+test('sending scrolls to the bottom and follows the reply until the user scrolls up', () => {
   const send = vi.fn()
   render({ items: [USER, REPLY] }, send)
   scrollTo(0)
@@ -241,17 +280,21 @@ test('sending scrolls to the bottom and keeps it there until the reply starts', 
   expect(list().scrollTop).toBe(bottom())
   page.scrollHeight += 600
   render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }], draft: 'A long reply' })
-  expect(list().scrollTop).toBe(bottom() - 600)
+  expect(list().scrollTop).toBe(bottom())
+  scrollTo(0)
+  page.scrollHeight += 600
+  render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }], draft: 'A longer reply' })
+  expect(list().scrollTop).toBe(0)
 })
 
-test('queueing a message during a turn scrolls to the bottom once', () => {
+test('queueing a message during a turn scrolls to the bottom and follows from there', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
   scrollTo(0)
   type('Later')
   expect(list().scrollTop).toBe(bottom())
   page.scrollHeight += 300
   render({ status: 'running', items: [USER, REPLY, tool('running')] })
-  expect(list().scrollTop).toBe(bottom() - 300)
+  expect(list().scrollTop).toBe(bottom())
 })
 
 test('the header warns while a chat may edit anywhere, and where nothing is sandboxed', () => {
@@ -311,6 +354,38 @@ test('a turn that ended without a reply keeps its last line below the fold, and 
   render({ items: [USER, tool('done'), { kind: 'text', text: 'Done' }] })
   expect(foldButton()).toBeUndefined()
   expect(rowButtons().map((b) => b.textContent)).toEqual([expect.stringContaining('Bash')])
+})
+
+test('thinking and tool calls show unfolded by default from Settings, and each chat overrides that in its panel', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.clear()
+  reloadSteps()
+  const steps: Item[] = [{ kind: 'thinking', text: 'Pondering' }, tool('done', 'a.txt'), { kind: 'text', text: 'Hm.' }]
+  const items: Item[] = [USER, ...steps, { kind: 'text', text: 'All set' }]
+  const open = () => rowButtons().map((b) => b.getAttribute('aria-expanded'))
+  render({ items }, () => {}, { contextOpen: true })
+  expect(foldButton()?.textContent).toBe('3 steps')
+
+  act(() => showStepsByDefault(true))
+  expect(foldButton()).toBeUndefined()
+  expect(open()).toEqual(['true', 'true'])
+  expect(container.textContent).toContain('Pondering')
+  act(() => rowButtons()[1]!.click())
+  expect(open()).toEqual(['true', 'false'])
+
+  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Thinking and tool calls"]')!
+  expect(select().textContent).toBe('Default (Unfolded)')
+  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const folded = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Folded')!
+  act(() => folded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(select().textContent).toBe('Folded')
+  expect(foldButton()?.textContent).toBe('3 steps')
+  render({ id: 'c2', items }, () => {}, { contextOpen: true })
+  expect(foldButton()).toBeUndefined()
+
+  act(() => showStepsByDefault(false))
+  localStorage.clear()
+  reloadSteps()
 })
 
 test("a permission shows on its tool's row: the prompt under it while pending, then a verdict badge", async () => {
@@ -392,8 +467,84 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   expect(await hintOf(pill)).toContain('changes it everywhere')
 })
 
+test("each panel tab folds its explanations under How this works, not in tooltips", () => {
+  localStorage.clear()
+  render({}, () => {}, { contextOpen: true })
+  const about = () => container.querySelector<HTMLDetailsElement>('aside details')!
+  expect(about().open).toBe(false)
+  expect(about().querySelector('summary')!.textContent).toBe('How this works')
+  expect(about().textContent).toContain('Folders:')
+  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'Permissions')!
+  act(() => tab.click())
+  expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
+  expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
+  localStorage.clear()
+})
+
+test('a subagent is view only: no composer, just a Stop button while it runs', () => {
+  const sent: ClientMessage[] = []
+  render({ subagent: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))
+  expect(container.querySelector('textarea')).toBeNull()
+  const bar = container.querySelector('[aria-label="Subagent"]')!
+  expect(bar.textContent).toContain('view only')
+  const stop = [...bar.querySelectorAll('button')].find((b) => b.textContent === 'Stop')!
+  act(() => stop.click())
+  expect(sent.at(-1)).toEqual({ type: 'chat.interrupt', chatId: 'c1' })
+  render({ subagent: true, parentId: 'p1', status: 'idle' })
+  expect(container.querySelector('[aria-label="Subagent"] button')).toBeNull()
+})
+
+test('while busy, the empty composer shows its status as a sweeping highlight instead of a plain placeholder', () => {
+  const box = () => container.querySelector('textarea')!
+  const shimmer = () => container.querySelector('.shimmer')
+  render({ status: 'idle' })
+  expect(shimmer()).toBeNull()
+  expect(box().placeholder).toBe('Message')
+  render({ status: 'running' })
+  expect(shimmer()!.textContent).toBe('Working… Enter queues a message')
+  expect(box().getAttribute('placeholder')).toBeNull()
+  expect(box().getAttribute('aria-placeholder')).toBe('Working… Enter queues a message')
+  render({ status: 'waiting' })
+  expect(shimmer()!.getAttribute('data-status')).toBe('waiting')
+})
+
+test('the right panel shows context and permissions as two tabs, remembering the last one', () => {
+  localStorage.clear()
+  const tab = (name: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')].find((t) => t.textContent === name)!
+  const permission = () => container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)
+  render({}, () => {}, { contextOpen: true })
+  expect(tab('Context').getAttribute('aria-selected')).toBe('true')
+  expect(permission()).toBeNull()
+  expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).not.toBeNull()
+  act(() => tab('Permissions').click())
+  expect(permission()).not.toBeNull()
+  expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).toBeNull()
+  act(() => root.render(<></>))
+  render({}, () => {}, { contextOpen: true })
+  expect(tab('Permissions').getAttribute('aria-selected')).toBe('true')
+  localStorage.clear()
+})
+
+test('file paths stay hidden at the top of a space and in the Context panel until Settings shows them', () => {
+  const item: ContextItem = { section: 'folders', path: '/repo/app', from: 'c1', enabled: true, text: '' }
+  const shows = (path: string) => [...container.querySelectorAll('span')].some((s) => s.textContent === path)
+  render({}, () => {}, { contextOpen: true, contextItems: [item], folder: '/repo/app' })
+  expect(shows('/repo/app')).toBe(false)
+  act(() => showPaths('header', true))
+  expect(container.querySelector('header')!.textContent).toContain('/repo/app')
+  expect(container.querySelector('aside')!.textContent).not.toContain('/repo/app')
+  act(() => showPaths('context', true))
+  expect(container.querySelector('aside')!.textContent).toContain('/repo/app')
+  act(() => {
+    showPaths('header', false)
+    showPaths('context', false)
+  })
+})
+
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
+  localStorage.setItem('hotrod.panelTab', 'permissions')
   const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
     act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
@@ -420,12 +571,14 @@ test('every chat, Home too, overrides each permission default in its Context pan
     choose(select(), (text) => text.includes('Default'))
     expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
   }
+  localStorage.clear()
 })
 
 test('a chat turns edits anywhere off while Settings turns it on by default, its label amber only while on', () => {
   const { label } = PERMISSIONS.editAnywhere
   const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
+  localStorage.setItem('hotrod.panelTab', 'permissions')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('Default (On)')
   expect(amber()).toContain('text-amber')
@@ -433,6 +586,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   expect(select().textContent).toBe('Off')
   expect(select().disabled).toBe(false)
   expect(amber()).not.toContain('text-amber')
+  localStorage.clear()
 })
 
 test('each context card collapses to its header, its switch still working, and stays so after a remount', async () => {
@@ -445,6 +599,7 @@ test('each context card collapses to its header, its switch still working, and s
     container.querySelector<HTMLButtonElement>(`aside button[aria-expanded][aria-label$=" ${name}"]`)!
   const globalBox = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]')
   const folderPath = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === folder.path)
+  showPaths('context', true)
   show()
   expect(toggle('Global').getAttribute('aria-expanded')).toBe('true')
   act(() => toggle('Global').click())
@@ -464,5 +619,6 @@ test('each context card collapses to its header, its switch still working, and s
   expect(folderPath()).toBeUndefined()
   act(() => toggle('Global').click())
   await vi.waitFor(() => expect(globalBox()).not.toBeNull())
+  showPaths('context', false)
   localStorage.clear()
 })
