@@ -7,7 +7,7 @@ import {
   type DragEvent,
   type ReactNode,
 } from 'react'
-import { AnimatePresence, m } from 'motion/react'
+import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import {
   IMAGE_TYPES,
@@ -87,6 +87,7 @@ const FILE_ACTION =
   'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
 const DOT_STAGGER_MS = 200
+export const JUMP_BELOW_PX = 240
 
 function Dots({ label, className = '' }: { label: string; className?: string }) {
   return (
@@ -481,24 +482,38 @@ export function Chat(props: ChatProps) {
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
-  const stickToBottom = useRef(true)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const bottomUntilReply = useRef(true)
+  const [jumpShown, setJumpShown] = useState(false)
+  const reduceMotion = useReducedMotion()
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
+  const replyStarted = chat.draft !== '' || chat.items.at(-1)?.kind !== 'user'
+
+  const toBottom = () => {
+    const list = listRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }
+  const measure = () => {
+    const list = listRef.current
+    if (list) setJumpShown(list.scrollHeight - list.scrollTop - list.clientHeight > JUMP_BELOW_PX)
+  }
+
+  useLayoutEffect(() => {
+    if (bottomUntilReply.current) toBottom()
+    if (replyStarted) bottomUntilReply.current = false
+  }, [chat.items, chat.status, replyStarted])
 
   useLayoutEffect(() => {
     const list = listRef.current
-    if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
-  }, [chat.items, chat.draft, chat.status])
-
-  useLayoutEffect(() => {
-    const list = listRef.current
-    if (!list) return
-    const observer = new ResizeObserver(([entry]) => {
-      if (stickToBottom.current) list.scrollTop = list.scrollHeight
-      setPaneColumnPx(entry!.contentRect.width)
+    if (!list || !contentRef.current) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) if (entry.target === list) setPaneColumnPx(entry.contentRect.width)
+      measure()
     })
     observer.observe(list)
+    observer.observe(contentRef.current)
     return () => observer.disconnect()
   }, [])
 
@@ -561,6 +576,8 @@ export function Chat(props: ChatProps) {
     if (!canAttach || !hasContent) return
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
     send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
+    if (busy) toBottom()
+    else bottomUntilReply.current = true
     setText('')
     unattach(pending)
   }
@@ -663,14 +680,12 @@ export function Chat(props: ChatProps) {
           />
         </header>
         <div
-          className="flex flex-1 flex-col overflow-y-auto p-24"
+          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
+          className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
           ref={listRef}
-          onScroll={(e) => {
-            const el = e.currentTarget
-            stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-          }}
+          onScroll={measure}
         >
-          <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10">
+          <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
             {chat.items.length === 0 && !chat.draft && (
               <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
                 <strong className="text-body font-semibold text-text">
@@ -704,6 +719,27 @@ export function Chat(props: ChatProps) {
           </div>
         </div>
         <div className="relative shrink-0 px-24 pb-16">
+          <div className="pointer-events-none absolute inset-x-24 bottom-full mx-auto flex max-w-column justify-end pb-12">
+            <AnimatePresence>
+              {jumpShown && (
+                <Hint key="jump" text="Jump to the latest output">
+                  <m.button
+                    className="pointer-events-auto grid size-32 place-items-center rounded-full border bg-panel text-muted shadow-floating transition-colors hover:bg-raised hover:text-text"
+                    aria-label="Scroll to bottom"
+                    onClick={() => {
+                      const list = listRef.current
+                      list?.scrollTo({ top: list.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
+                    }}
+                    {...MOTION.pop}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+                      <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </m.button>
+                </Hint>
+              )}
+            </AnimatePresence>
+          </div>
           {archived && (
             <div className="mx-auto mb-8 flex max-w-column items-center gap-8 text-sm text-muted">
               <span className="flex-1">

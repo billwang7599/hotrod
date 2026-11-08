@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { Chat } from './chat.tsx'
+import { Chat, JUMP_BELOW_PX } from './chat.tsx'
+import type { ClientMessage } from '@hotrod/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -19,14 +20,42 @@ const tool = (state: 'running' | 'done', output = ''): Item => ({
   output,
 })
 
+const VIEW_PX = 500
+const page = { scrollHeight: 2000 }
+const tops = new WeakMap<Element, number>()
+const sizes = {
+  scrollHeight: { configurable: true, get: () => page.scrollHeight },
+  clientHeight: { configurable: true, get: () => VIEW_PX },
+  scrollTop: {
+    configurable: true,
+    get(this: Element) {
+      return tops.get(this) ?? 0
+    },
+    set(this: Element, top: number) {
+      tops.set(this, Math.max(0, Math.min(top, page.scrollHeight - VIEW_PX)))
+    },
+  },
+}
+let resizeCallbacks: (() => void)[]
 let root: Root
 let container: HTMLElement
 
 beforeEach(() => {
+  page.scrollHeight = 2000
+  resizeCallbacks = []
+  Object.defineProperties(HTMLElement.prototype, sizes)
+  HTMLElement.prototype.scrollTo = vi.fn()
   vi.stubGlobal(
     'ResizeObserver',
     class {
-      observe() {}
+      targets: Element[] = []
+      constructor(callback: (entries: ResizeObserverEntry[]) => void) {
+        const entries = () => this.targets.map((target) => ({ target, contentRect: { width: 700 } }))
+        resizeCallbacks.push(() => callback(entries() as unknown as ResizeObserverEntry[]))
+      }
+      observe(target: Element) {
+        this.targets.push(target)
+      }
       disconnect() {}
     },
   )
@@ -38,9 +67,10 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-function render(chat: Partial<ChatView>) {
+function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}) {
   const view: ChatView = {
     id: 'c1',
     name: 'demo',
@@ -65,7 +95,7 @@ function render(chat: Partial<ChatView>) {
               chats={[view]}
               engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
               connected
-              send={() => {}}
+              send={send}
               openSettings={() => {}}
               sidebarOpen
               toggleSidebar={() => {}}
@@ -114,4 +144,97 @@ test('a running tool shows the dots in its row instead of the transcript', () =>
   act(() => row.click())
   expect(container.textContent).not.toContain('Running…')
   expect(container.querySelectorAll('[aria-label="running"]')).toHaveLength(2)
+})
+
+const list = () => container.querySelector<HTMLElement>('main .overflow-y-auto')!
+const bottom = () => page.scrollHeight - VIEW_PX
+const jumpButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Scroll to bottom"]')
+const grow = (px: number) => {
+  page.scrollHeight += px
+  act(() => resizeCallbacks.forEach((callback) => callback()))
+}
+const scrollTo = (top: number) =>
+  act(() => {
+    list().scrollTop = top
+    list().dispatchEvent(new Event('scroll'))
+  })
+
+function type(text: string) {
+  const area = container.querySelector('textarea')!
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, text)
+    area.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  act(() => {
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  })
+}
+
+const REPLY: Item = { kind: 'text', text: 'Hello' }
+
+test('a chat opens scrolled to the bottom', () => {
+  render({ items: [USER, REPLY] })
+  expect(list().scrollTop).toBe(bottom())
+})
+
+test('streamed output never drags the view down', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  const top = list().scrollTop
+  page.scrollHeight += 800
+  render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
+  render({ status: 'running', items: [USER, REPLY, { kind: 'text', text: 'More and more' }, tool('running')] })
+  expect(list().scrollTop).toBe(top)
+})
+
+test('a down button shows once more than the threshold of output is below the view', async () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  grow(JUMP_BELOW_PX)
+  expect(jumpButton()).toBeNull()
+  grow(1)
+  expect(jumpButton()).not.toBeNull()
+  scrollTo(bottom() - JUMP_BELOW_PX)
+  await vi.waitFor(() => expect(jumpButton()).toBeNull())
+})
+
+test('the down button smooth-scrolls to the bottom once and hides there', async () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  grow(JUMP_BELOW_PX * 3)
+  act(() => jumpButton()!.click())
+  expect(list().scrollTo).toHaveBeenCalledWith({ top: page.scrollHeight, behavior: 'smooth' })
+  scrollTo(bottom())
+  await vi.waitFor(() => expect(jumpButton()).toBeNull())
+  page.scrollHeight += 800
+  render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
+  expect(list().scrollTop).toBe(bottom() - 800)
+})
+
+test('sending scrolls to the bottom and keeps it there until the reply starts', () => {
+  const send = vi.fn()
+  render({ items: [USER, REPLY] }, send)
+  scrollTo(0)
+  type('Next')
+  expect(send).toHaveBeenCalledWith({ type: 'chat.send', chatId: 'c1', text: 'Next' })
+  const asked: Item[] = [USER, REPLY, { kind: 'user', text: 'Next' }]
+  page.scrollHeight += 100
+  render({ items: asked })
+  expect(list().scrollTop).toBe(bottom())
+  page.scrollHeight += 30
+  render({ status: 'running', items: asked })
+  expect(list().scrollTop).toBe(bottom())
+  page.scrollHeight += 40
+  render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }] })
+  expect(list().scrollTop).toBe(bottom())
+  page.scrollHeight += 600
+  render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }], draft: 'A long reply' })
+  expect(list().scrollTop).toBe(bottom() - 600)
+})
+
+test('queueing a message during a turn scrolls to the bottom once', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
+  type('Later')
+  expect(list().scrollTop).toBe(bottom())
+  page.scrollHeight += 300
+  render({ status: 'running', items: [USER, REPLY, tool('running')] })
+  expect(list().scrollTop).toBe(bottom() - 300)
 })
