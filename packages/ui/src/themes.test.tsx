@@ -115,6 +115,31 @@ describe('theme table', () => {
     }
   })
 
+  it('fades the app out under a dialog on the see-through window, and tints the dialog like the window', () => {
+    const declarations = (selector: string) => css.split(`${selector} {`)[1]?.split('}')[0] ?? ''
+    const vibrancy = `:root[data-glass='vibrancy']`
+    const open = `[role$='dialog'][data-state='open']`
+    const alone = `:not(${open} ~ *)`
+    expect(declarations(`${vibrancy} body:has(> ${open}) > #root`)).toMatch(/\bopacity: 0;/)
+    expect(declarations(`${vibrancy} body > [role$='dialog']${alone}`)).toMatch(/background-color: var\(--bg\);/)
+    expect(declarations(`${vibrancy} body > .bg-backdrop${alone}`)).toMatch(/background-color: transparent;/)
+  })
+
+  it('keeps text readable on the see-through window and on a dialog tinted over it', () => {
+    for (const scheme of SCHEMES) {
+      const { text, muted, faint } = THEMES.glass[scheme]
+      const { bg, panel } = THEMES.glass.vibrancy[scheme]
+      const read = scheme === 'light' ? { text, muted, faint } : { text }
+      for (const material of THEMES.glass.backdrop[scheme]) {
+        const window = over(bg, material)
+        const dialog = over(bg, window)
+        for (const surface of [window, over(panel, window), dialog, over(panel, dialog)])
+          for (const [name, color] of Object.entries(read))
+            expect(contrast(color, surface), `${scheme} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
   it('keeps secondary text readable on light pages and panels', () => {
     for (const [id, theme] of Object.entries(THEMES)) {
       const { bg, panel, muted, faint } = theme.light

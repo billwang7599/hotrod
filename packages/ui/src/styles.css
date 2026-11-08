@@ -28,6 +28,23 @@
   background-color: var(--glass-base);
 }
 
+/* A dialog has the window to itself: the app fades out, so the dialog can be glass. One over another stays solid. */
+:root[data-glass='vibrancy'] #root {
+  transition: opacity 0.18s ease-out;
+}
+
+:root[data-glass='vibrancy'] body:has(> [role$='dialog'][data-state='open']) > #root {
+  opacity: 0;
+}
+
+:root[data-glass='vibrancy'] body > [role$='dialog']:not([role$='dialog'][data-state='open'] ~ *) {
+  background-color: var(--bg);
+}
+
+:root[data-glass='vibrancy'] body > .bg-backdrop:not([role$='dialog'][data-state='open'] ~ *) {
+  background-color: transparent;
+}
+
 @theme inline reference {
   --color-*: initial;
   --color-bg: var(--bg);
