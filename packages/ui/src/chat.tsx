@@ -22,6 +22,7 @@ import {
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
+  type ToolKind,
   type Upload,
   type WorkFolder,
 } from '@hotrod/core/shared'
@@ -68,9 +69,12 @@ const THINKING_HINT = 'Thinking level, from the next message. Choosing the Setti
 const INTERRUPTED = 'Interrupted'
 const VERDICTS = { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled' }
 const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
-const AUTO_VERDICT_HINTS = {
-  allowed: 'An edit inside the work folder, so Hotrod allowed it without asking',
-  denied: 'An edit outside the work folder, so Hotrod denied it without asking',
+const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, string>>> = {
+  allowed: {
+    edit: 'An edit inside the work folder, so Hotrod allowed it without asking',
+    shell: 'A command in a sandboxed chat, so Hotrod ran it without asking',
+  },
+  denied: { edit: 'An edit outside the work folder, so Hotrod denied it without asking' },
 }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -333,9 +337,9 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
   )
 }
 
-function Verdict({ permission: { outcome, auto } }: { permission: Permission }) {
+function Verdict({ permission: { outcome, auto, toolKind } }: { permission: Permission }) {
   if (outcome === 'pending') return null
-  const hint = auto && outcome !== 'cancelled' ? AUTO_VERDICT_HINTS[outcome] : undefined
+  const hint = auto && outcome !== 'cancelled' ? AUTO_VERDICT_HINTS[outcome][toolKind] : undefined
   return (
     <Hint text={hint}>
       <span

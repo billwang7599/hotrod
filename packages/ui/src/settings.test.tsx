@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage, WorkFolder } from '@hotrod/core/shared'
+import { PERMISSION_DEFAULTS, PERMISSION_SWITCHES, type ClientMessage, type WorkFolder } from '@hotrod/core/shared'
+import { PERMISSIONS } from './context-panel.tsx'
 import { SettingsDialog, WorkFolderDialog } from './settings.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -126,6 +127,19 @@ test('Settings → Work folder turns edits outside the work folder on for every 
   expect(editSwitch().getAttribute('aria-checked')).toBe('true')
   act(() => editSwitch().click())
   expect(sent.at(-1)).toEqual({ type: 'workFolder.setEditAnywhere', enabled: false })
+})
+
+test('Settings → Work folder sets the default of each permission every chat follows', () => {
+  for (const name of PERMISSION_SWITCHES) {
+    const toggle = () =>
+      dialog().querySelector(`[aria-label="${PERMISSIONS[name].label}"]`) as HTMLButtonElement
+    const sent = renderSettings({ ...workFolder, path: '/garage/work' })
+    expect(toggle().getAttribute('aria-checked')).toBe(String(PERMISSION_DEFAULTS[name]))
+    act(() => toggle().click())
+    expect(sent).toEqual([{ type: 'permission.setDefault', name, enabled: !PERMISSION_DEFAULTS[name] }])
+    renderSettings({ ...workFolder, path: '/garage/work', [name]: !PERMISSION_DEFAULTS[name] }, sent)
+    expect(toggle().getAttribute('aria-checked')).toBe(String(!PERMISSION_DEFAULTS[name]))
+  }
 })
 
 test('Settings has no Instructions page: the global AGENTS.md is edited in the Context panel', () => {

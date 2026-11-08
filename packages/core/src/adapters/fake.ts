@@ -11,6 +11,7 @@ export type FakeStep =
       kind: ToolKind
       summary: string
       path?: string
+      command?: string
       input: unknown
       output: string
     }

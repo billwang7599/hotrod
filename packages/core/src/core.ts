@@ -29,6 +29,7 @@ import {
 import { realPath } from './machine.ts'
 import { valuesOf } from './mods.ts'
 import {
+  ASK_FIRST_COMMANDS,
   CONTEXT_SECTIONS,
   editsAnywhere,
   GLOBAL_CONTEXT,
@@ -37,9 +38,11 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
+  PERMISSION_SWITCHES,
   pickModel,
   pickThinking,
   settingProblem,
+  switchedOn,
   type Adapter,
   type Attachment,
   type ChatEntry,
@@ -59,6 +62,8 @@ import {
   type ModelRole,
   type ModInfo,
   type NewChat,
+  type PermissionSwitch,
+  type PermissionSwitches,
   type QueuedMessage,
   type Session,
   type Upload,
@@ -82,6 +87,7 @@ const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'F
 const PROTECT_CHECKED_OUT_BRANCHES = true
 // Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
 const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
+const ASKS_FIRST = new RegExp(`\\b(?:${ASK_FIRST_COMMANDS.map((c) => c.replaceAll(' ', '\\s+')).join('|')})\\b`)
 
 type Checkout = { folder: string; worktree: Worktree; writable: string[]; readOnly: string[] }
 
@@ -135,7 +141,7 @@ export function openCore(options: {
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
   const settingsFile = join(garage, 'settings.json')
-  const settings: {
+  const settings: PermissionSwitches & {
     engines: Record<string, boolean>
     context?: Partial<Record<ContextSection, boolean>>
     mods?: Record<string, Record<string, unknown>>
@@ -199,6 +205,9 @@ export function openCore(options: {
     defaultPath: defaultWorkFolder,
     canSandbox: machine.canSandbox,
     ...(settings.editAnywhere && { editAnywhere: true }),
+    ...Object.fromEntries(
+      PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
+    ),
   })
   const sandboxIn = (dir: string) => (machine.canSandbox ? { writable: [dir], tmpDir: join(dir, '.tmp') } : undefined)
   const chats = new Map<string, Chat>()
@@ -825,12 +834,18 @@ export function openCore(options: {
         writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
         ...(readOnly.length && { readOnly }),
       }
-      // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
-      const editVerdict = (path: string) => {
-        if (within(realPath(resolve(cwd, path)), workDir)) return { allow: true }
-        if (!jail) return undefined
-        const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
-        return { allow: false, message }
+      const verdictOf = (request: Extract<EngineEvent, { type: 'permission.requested' }>) => {
+        if (request.kind === 'edit' && request.path !== undefined) {
+          // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
+          if (within(realPath(resolve(cwd, request.path)), workDir)) return { allow: true }
+          if (!jail) return undefined
+          const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
+          return { allow: false, message }
+        }
+        const on = (name: PermissionSwitch) => switchedOn(name, chat.info, settings)
+        if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
+        if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
+        return { allow: true }
       }
 
       let session: Session | undefined
@@ -850,7 +865,7 @@ export function openCore(options: {
         if (event.type === 'text.completed') chat.unsavedText = ''
         append(chat, { at, ...event })
         if (event.type !== 'permission.requested') return
-        const verdict = event.kind === 'edit' && event.path !== undefined ? editVerdict(event.path) : undefined
+        const verdict = verdictOf(event)
         if (!verdict) {
           chat.pendingRequests.add(event.requestId)
           return setStatus(chat, 'waiting')
@@ -1077,6 +1092,12 @@ export function openCore(options: {
           return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
         case 'chat.setEditAnywhere':
           return setEditAnywhere(chatFor(message.chatId), message.enabled === true)
+        case 'chat.setPermission': {
+          const chat = chatFor(message.chatId)
+          const name = checkSwitch(message.name)
+          checkActive(chat)
+          return updateChat(chat, { [name]: typeof message.enabled === 'boolean' ? message.enabled : undefined })
+        }
         case 'chat.send':
           return sendMessage(chatFor(message.chatId), message.text, message.attachments)
         case 'chat.unqueue': {
@@ -1108,6 +1129,10 @@ export function openCore(options: {
           return setWorkFolder(message.path)
         case 'workFolder.setEditAnywhere':
           settings.editAnywhere = message.enabled === true || undefined
+          saveSettings()
+          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
+        case 'permission.setDefault':
+          settings[checkSwitch(message.name)] = message.enabled === true
           saveSettings()
           return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
         case 'context.setDefault':
@@ -1217,6 +1242,11 @@ const checkName = (name: unknown) => {
   const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''
   if (!trimmed) throw new Error('A chat needs a name')
   return trimmed
+}
+
+const checkSwitch = (name: unknown) => {
+  if (!PERMISSION_SWITCHES.includes(name as PermissionSwitch)) throw new Error(`Unknown permission switch "${name}"`)
+  return name as PermissionSwitch
 }
 
 const addable = (section: unknown) => {

@@ -17,6 +17,7 @@ export type EngineEvent =
       kind: ToolKind
       summary: string
       path?: string
+      command?: string
       input: unknown
     }
   | { type: 'turn.completed'; error?: string }
@@ -126,7 +127,20 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export type ChatInfo = {
+export const PERMISSION_DEFAULTS = { autoRunCommands: true, askNetworkCommands: true }
+
+export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
+
+export const PERMISSION_SWITCHES = Object.keys(PERMISSION_DEFAULTS) as PermissionSwitch[]
+
+export type PermissionSwitches = Partial<Record<PermissionSwitch, boolean>>
+
+export const switchedOn = (name: PermissionSwitch, ...layers: PermissionSwitches[]) =>
+  layers.find((layer) => layer[name] !== undefined)?.[name] ?? PERMISSION_DEFAULTS[name]
+
+export const ASK_FIRST_COMMANDS = ['git push', 'npm publish', 'gh', 'curl', 'wget', 'ssh', 'scp', 'rsync']
+
+export type ChatInfo = PermissionSwitches & {
   id: string
   name: string
   mod?: string
@@ -148,7 +162,12 @@ export type ChatInfo = {
 
 export type Worktree = { path: string; branch: string }
 
-export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean; editAnywhere?: true }
+export type WorkFolder = PermissionSwitches & {
+  path?: string
+  defaultPath: string
+  canSandbox: boolean
+  editAnywhere?: true
+}
 
 export const editsAnywhere = (chat: Pick<ChatInfo, 'editAnywhere'>, workFolder: Pick<WorkFolder, 'editAnywhere'>) =>
   chat.editAnywhere === true || workFolder.editAnywhere === true
@@ -249,6 +268,7 @@ export type ClientMessage =
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
   | { type: 'chat.setEditAnywhere'; chatId: string; enabled: boolean }
+  | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
@@ -262,6 +282,7 @@ export type ClientMessage =
   | { type: 'instructions.write'; text: string }
   | { type: 'workFolder.set'; path: string }
   | { type: 'workFolder.setEditAnywhere'; enabled: boolean }
+  | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }

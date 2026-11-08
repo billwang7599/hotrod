@@ -248,6 +248,7 @@ export const claudeCode: Adapter = {
           pendingInputs.set(msg.request_id, request.input)
           const kind = kindOf(request.tool_name)
           const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
+          const command = kind === 'shell' ? request.input?.command : undefined
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
@@ -256,6 +257,7 @@ export const claudeCode: Adapter = {
             kind,
             summary: summarize(kind, request.input),
             ...(typeof path === 'string' && { path }),
+            ...(typeof command === 'string' && { command }),
             input: request.input,
           })
           return

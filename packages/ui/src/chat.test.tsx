@@ -5,7 +5,15 @@ import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, JUMP_BELOW_PX } from './chat.tsx'
-import { GLOBAL_CONTEXT, type ClientMessage, type ContextItem, type WorkFolder } from '@hotrod/core/shared'
+import { PERMISSIONS } from './context-panel.tsx'
+import {
+  GLOBAL_CONTEXT,
+  PERMISSION_DEFAULTS,
+  type ClientMessage,
+  type ContextItem,
+  type ToolKind,
+  type WorkFolder,
+} from '@hotrod/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -322,10 +330,11 @@ test('a turn that ended without a reply keeps its last line below the fold, and 
 
 test("a permission shows on its tool's row: the prompt under it while pending, then a verdict badge", async () => {
   const asked = { requestId: 'r1', name: 'Bash', summary: 'ls', input: { command: 'ls' } }
-  const withVerdict = (toolId: string, outcome: 'pending' | 'allowed' | 'denied', auto?: true): Item =>
+  type Outcome = 'pending' | 'allowed' | 'denied'
+  const withVerdict = (toolId: string, outcome: Outcome, auto?: true, toolKind: ToolKind = 'shell'): Item =>
     tool(outcome === 'pending' ? 'waiting' : 'done', '', {
       toolId,
-      permission: { ...asked, requestId: `r-${toolId}`, outcome, ...(auto && { auto }) },
+      permission: { ...asked, toolKind, requestId: `r-${toolId}`, outcome, ...(auto && { auto }) },
     })
   const sent: ClientMessage[] = []
   render({ status: 'waiting', items: [USER, withVerdict('t1', 'pending')] }, (m) => sent.push(m))
@@ -337,7 +346,11 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   act(() => approve.click())
   expect(sent.at(-1)).toEqual({ type: 'permission.respond', chatId: 'c1', requestId: 'r-t1', allow: true })
 
-  const verdicts = [withVerdict('t1', 'allowed'), withVerdict('t2', 'allowed', true), withVerdict('t3', 'denied', true)]
+  const verdicts = [
+    withVerdict('t1', 'allowed'),
+    withVerdict('t2', 'allowed', true),
+    withVerdict('t3', 'denied', true, 'edit'),
+  ]
   render({ status: 'running', items: [USER, ...verdicts, withVerdict('t4', 'denied')] })
   const rows = rowButtons()
   expect(rows).toHaveLength(4)
@@ -347,8 +360,29 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the work folder')
 })
 
+test('says why Hotrod allowed a command or an edit without asking', async () => {
+  const allowed = (toolKind: 'shell' | 'edit'): Item =>
+    tool('done', '', {
+      permission: { requestId: 'r1', name: 'X', toolKind, summary: 'x', input: {}, outcome: 'allowed', auto: true },
+    })
+  const badge = () => container.querySelector('[data-verdict]')!
+  render({ items: [USER, allowed('shell')] })
+  expect(await hintOf(badge())).toMatch(/command.*sandbox/)
+  act(() => root.render(<></>))
+  render({ items: [USER, allowed('edit')] })
+  expect(await hintOf(badge())).toContain('edit inside the work folder')
+})
+
 test('a permission without a tool row keeps a row of its own, with the same badge', () => {
-  const permission: Item = { kind: 'permission', requestId: 'r1', name: 'Write', summary: '/x.ts', input: {}, outcome: 'denied' }
+  const permission: Item = {
+    kind: 'permission',
+    requestId: 'r1',
+    name: 'Write',
+    toolKind: 'edit',
+    summary: '/x.ts',
+    input: {},
+    outcome: 'denied',
+  }
   render({ status: 'running', items: [USER, permission] })
   const [row] = rowButtons()
   expect(row!.textContent).toContain('Write')
@@ -371,4 +405,32 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   }
   const pill = [...container.querySelectorAll('aside[aria-label="Context"] span')].find((s) => s.textContent === 'Every chat')!
   expect(await hintOf(pill)).toContain('changes it everywhere')
+})
+
+test('every chat, Home too, overrides each permission default in its Context panel', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const [name, { label }] = Object.entries(PERMISSIONS)[0]! as [keyof typeof PERMISSIONS, { label: string }]
+  const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
+  const fallback = PERMISSION_DEFAULTS[name] ? 'On' : 'Off'
+  const flipped = PERMISSION_DEFAULTS[name] ? 'Off' : 'On'
+  for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
+    const sent: ClientMessage[] = []
+    render(chat, (m) => sent.push(m), { contextOpen: true })
+    expect(select().textContent).toBe(`Default (${fallback})`)
+    act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith(flipped))!
+    act(() => option.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    const chatId = 'id' in chat ? chat.id : 'c1'
+    expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId, name, enabled: !PERMISSION_DEFAULTS[name] })
+  }
+
+  render({}, () => {}, { contextOpen: true, workFolder: { [name]: !PERMISSION_DEFAULTS[name] } })
+  expect(select().textContent).toBe(`Default (${flipped})`)
+  const sent: ClientMessage[] = []
+  render({ [name]: true }, (m) => sent.push(m), { contextOpen: true })
+  expect(select().textContent).toBe('On')
+  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.includes('Default'))!
+  act(() => option.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
 })

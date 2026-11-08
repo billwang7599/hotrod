@@ -30,6 +30,7 @@ import {
   pendingOf,
 } from './memory.ts'
 import {
+  ASK_FIRST_COMMANDS,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -811,6 +812,125 @@ describe('edits', () => {
     core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
     await until(() => statusOf(core, 'main') === 'idle')
     expect(calls[0]?.options).not.toHaveProperty('sandbox')
+  })
+})
+
+describe('commands', () => {
+  const commandScript = (...commands: string[]): FakeStep[] => [
+    ...commands.flatMap((command, i): FakeStep[] => {
+      const call = { toolId: `c${i}`, name: 'Bash', kind: 'shell' as const, summary: command, input: { command } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, command, output: 'ran' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+  const resolved = (t: { core: Core }, chatId = 'main') =>
+    entriesOf(t.core, chatId).flatMap((e) => (e.type === 'permission.resolved' ? [e] : []))
+  const turn = async (t: ReturnType<typeof setup>, chatId = 'main') => {
+    t.handle({ type: 'chat.send', chatId, text: 'run' })
+    await until(() => statusOf(t.core, chatId) !== 'running')
+    const status = statusOf(t.core, chatId)
+    if (status === 'waiting') {
+      t.handle({ type: 'chat.interrupt', chatId, force: true })
+      await until(() => statusOf(t.core, chatId) === 'idle')
+    }
+    return status
+  }
+
+  it('by default runs a command in a sandboxed chat without asking, logged as automatic', async () => {
+    const t = setup(commandScript('npm test', 'ls -la'))
+    const space = createChat(t, { name: 'Space' })
+    for (const chatId of ['main', space.id]) {
+      expect(await turn(t, chatId)).toBe('idle')
+      expect(resolved(t, chatId).map((e) => [e.allow, e.auto])).toEqual([[true, true], [true, true]])
+      const outputs = entriesOf(t.core, chatId).flatMap((e) => (e.type === 'tool.completed' ? [e.output] : []))
+      expect(outputs).toEqual(['ran', 'ran'])
+    }
+    expect(t.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting')).toBe(false)
+  })
+
+  it('still asks before a command that publishes or reaches the network, anywhere in the command', async () => {
+    for (const command of ASK_FIRST_COMMANDS) {
+      const t = setup(commandScript(`cd app && ${command} origin`))
+      expect(await turn(t), command).toBe('waiting')
+      expect(resolved(t)).toEqual([])
+    }
+    const t = setup(commandScript('git status', 'ghost --help'))
+    expect(await turn(t)).toBe('idle')
+  })
+
+  it('runs network commands without asking too once that default is off', async () => {
+    const t = setup(commandScript(`${ASK_FIRST_COMMANDS[0]} origin`))
+    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
+    expect(await turn(t)).toBe('idle')
+    expect(resolved(t).map((e) => e.auto)).toEqual([true])
+  })
+
+  it('asks before every command once the default is off, and saves the default in settings.json', async () => {
+    const t = setup(commandScript('ls'))
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: false })
+    expect(t.core.workFolder()).toMatchObject({ autoRunCommands: false })
+    expect(t.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: t.core.workFolder() })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).autoRunCommands).toBe(false)
+    expect(await turn(t)).toBe('waiting')
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: true })
+    expect(await turn(t)).toBe('idle')
+  })
+
+  it("lets a space, Home too, turn a default off or on for itself, saved in its chat.json", async () => {
+    const t = setup(commandScript('ls'))
+    const space = createChat(t, { name: 'Space' })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: false })
+    expect(t.messages.at(-1)).toEqual({
+      type: 'chat.updated',
+      chat: expect.objectContaining({ id: 'main', autoRunCommands: false }),
+    })
+    expect(JSON.parse(readFileSync(chatFile(t, 'main'), 'utf8')).autoRunCommands).toBe(false)
+    expect(await turn(t, 'main')).toBe('waiting')
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoRunCommands', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoRunCommands' })
+    expect(chatOf(t.core, space.id)).not.toHaveProperty('autoRunCommands')
+    expect(JSON.parse(readFileSync(chatFile(t, space.id), 'utf8'))).not.toHaveProperty('autoRunCommands')
+    expect(await turn(t, space.id)).toBe('waiting')
+  })
+
+  it('lets a space ask before network commands while the default runs them', async () => {
+    const t = setup(commandScript(`${ASK_FIRST_COMMANDS.at(-1)} x`))
+    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: true })
+    expect(await turn(t)).toBe('waiting')
+  })
+
+  it('asks before every command while a chat runs without the sandbox', async () => {
+    const t = setup(commandScript('ls'))
+    t.handle({ type: 'chat.setEditAnywhere', chatId: 'main', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: false })
+    expect(await turn(t)).toBe('waiting')
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+
+    t.core.close()
+    const { adapter, calls } = recording(createFakeAdapter(commandScript('ls'), 0))
+    const machine = { ...localMachine, canSandbox: false }
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    const unsandboxed = { ...t, core, calls, handle: (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {}) }
+    expect(await turn(unsandboxed)).toBe('waiting')
+  })
+
+  it('asks when the engine gives no command, and refuses an unknown switch', async () => {
+    const t = setup(permissionScript)
+    expect(await turn(t)).toBe('waiting')
+    const unknown = { name: 'everything', enabled: true } as unknown as { name: 'autoRunCommands'; enabled: boolean }
+    const messages = [{ type: 'permission.setDefault' as const }, { type: 'chat.setPermission' as const, chatId: 'main' }]
+    for (const message of messages) {
+      expect(() => t.handle({ ...message, ...unknown })).toThrow('Unknown permission switch')
+    }
   })
 })
 

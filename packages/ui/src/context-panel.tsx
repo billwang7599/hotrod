@@ -1,16 +1,20 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
+  ASK_FIRST_COMMANDS,
   CONTEXT_SECTIONS,
   editsAnywhere,
   GLOBAL_CONTEXT,
+  PERMISSION_SWITCHES,
+  switchedOn,
   type ClientMessage,
   type ContextItem,
   type ContextSection,
+  type PermissionSwitch,
   type WorkFolder,
   type Worktree,
 } from '@hotrod/core/shared'
-import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Switch, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -32,6 +36,22 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
     inherited: `The files of the ${CHAT_NOUN.many} above`,
   },
 }
+export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: string }> = {
+  autoRunCommands: {
+    label: 'Run commands without asking',
+    about:
+      'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
+      'anywhere on, or on a system Hotrod can’t sandbox, every command asks.',
+  },
+  askNetworkCommands: {
+    label: 'Still ask before commands that publish or reach the network',
+    about:
+      `Commands that mention ${ASK_FIRST_COMMANDS.join(', ')} ask you first, even while commands run without ` +
+      'asking.',
+  },
+}
+const PERMISSIONS_HINT =
+  'Default follows Settings → Work folder. Each choice is for this chat only; its subagents follow their own.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -235,17 +255,51 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
         {chat && (
-          <Hint text={workFolder.editAnywhere ? EDIT_ANYWHERE_ALL_HINT : EDIT_ANYWHERE_HINT} align="start">
-            <label className="flex items-center justify-between gap-8 rounded-lg border px-10 py-8">
-              <span className={editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
-              <Switch
-                label="Allow edits outside the work folder"
-                checked={editAnywhere}
-                disabled={locked || workFolder.editAnywhere === true}
-                onChange={(enabled) => send({ type: 'chat.setEditAnywhere', chatId, enabled })}
-              />
-            </label>
-          </Hint>
+          <section className="flex flex-col gap-8" aria-label="Permissions">
+            <Hint text={PERMISSIONS_HINT} align="start">
+              <h3 className="w-fit font-semibold">Permissions</h3>
+            </Hint>
+            <Hint text={workFolder.editAnywhere ? EDIT_ANYWHERE_ALL_HINT : EDIT_ANYWHERE_HINT} align="start">
+              <label className="flex items-center justify-between gap-8 rounded-lg border px-10 py-8">
+                <span className={editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
+                <Switch
+                  label="Allow edits outside the work folder"
+                  checked={editAnywhere}
+                  disabled={locked || workFolder.editAnywhere === true}
+                  onChange={(enabled) => send({ type: 'chat.setEditAnywhere', chatId, enabled })}
+                />
+              </label>
+            </Hint>
+            {PERMISSION_SWITCHES.map((name) => {
+              const { label, about } = PERMISSIONS[name]
+              const chosen = chat[name]
+              return (
+                <Hint key={name} text={about} align="start">
+                  <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+                    <span className="min-w-0 flex-1">{label}</span>
+                    <Select
+                      label={label}
+                      value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+                      disabled={locked}
+                      options={[
+                        { value: 'default', label: `Default (${switchedOn(name, workFolder) ? 'On' : 'Off'})` },
+                        { value: 'on', label: 'On' },
+                        { value: 'off', label: 'Off' },
+                      ]}
+                      onChange={(value) =>
+                        send({
+                          type: 'chat.setPermission',
+                          chatId,
+                          name,
+                          ...(value !== 'default' && { enabled: value === 'on' }),
+                        })
+                      }
+                    />
+                  </div>
+                </Hint>
+              )
+            })}
+          </section>
         )}
         {sections.map((section) => {
           const listed = items?.filter((item) => item.section === section) ?? []

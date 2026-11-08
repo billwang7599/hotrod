@@ -193,7 +193,16 @@ describe('claudeCode adapter', () => {
     expect(events).toEqual([
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
-      { type: 'permission.requested', requestId, toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
+      {
+        type: 'permission.requested',
+        requestId,
+        toolId,
+        name: 'Bash',
+        kind: 'shell',
+        summary: 'echo hi > a.txt',
+        command: input.command,
+        input,
+      },
       { type: 'tool.completed', toolId, output: '(Bash completed with no output)', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.delta', text: '.' },
@@ -324,7 +333,7 @@ describe('claudeCode adapter', () => {
     ])
   })
 
-  it('summarizes a permission request, with the path an edit writes', () => {
+  it('summarizes a permission request, with the path an edit writes and the command a shell runs', () => {
     const { fake, events } = startSession()
     const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
     const notebook = { subtype: 'can_use_tool', tool_name: 'NotebookEdit', input: { notebook_path: '/n.ipynb' } }
@@ -343,7 +352,15 @@ describe('claudeCode adapter', () => {
         path: '/n.ipynb',
         input: notebook.input,
       },
-      { type: 'permission.requested', requestId: 'r3', name: 'Bash', kind: 'shell', summary: 'ls /c.ts', input: shell.input },
+      {
+        type: 'permission.requested',
+        requestId: 'r3',
+        name: 'Bash',
+        kind: 'shell',
+        summary: 'ls /c.ts',
+        command: 'ls /c.ts',
+        input: shell.input,
+      },
     ])
   })
 

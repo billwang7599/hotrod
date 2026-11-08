@@ -4,7 +4,9 @@ import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
+  PERMISSION_SWITCHES,
   settingProblem,
+  switchedOn,
   type Account,
   type ClientMessage,
   type ContextSection,
@@ -16,7 +18,7 @@ import {
   type WorkFolder,
 } from '@hotrod/core/shared'
 import type { ModSetting } from '@hotrod/mod-api'
-import { SECTIONS } from './context-panel.tsx'
+import { PERMISSIONS, SECTIONS } from './context-panel.tsx'
 import {
   Button,
   CHAT_NOUN,
@@ -63,6 +65,9 @@ const WORK_FOLDER_HINT =
 const EDIT_ANYWHERE_ALL_HINT =
   `Every chat: Home, ${CHAT_NOUN.many} and subagents. On: no sandbox, and edits outside the work folder ask you ` +
   'first, from each chat’s next message. Off: each chat’s own switch in its Context panel decides.'
+
+const PERMISSION_DEFAULT_HINT =
+  `The default for every chat: Home, ${CHAT_NOUN.many} and subagents. Each can choose otherwise in its Context panel.`
 
 const ROLES: Record<ModelRole, { name: string; about: string }> = {
   chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
@@ -131,6 +136,20 @@ const PAGES = [
             onChange={(enabled) => send({ type: 'workFolder.setEditAnywhere', enabled })}
           />
         </SettingRow>
+        {PERMISSION_SWITCHES.map((name) => (
+          <SettingRow
+            key={name}
+            name={PERMISSIONS[name].label}
+            hint={`${PERMISSIONS[name].about} ${PERMISSION_DEFAULT_HINT}`}
+          >
+            <Switch
+              label={PERMISSIONS[name].label}
+              checked={switchedOn(name, workFolder)}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'permission.setDefault', name, enabled })}
+            />
+          </SettingRow>
+        ))}
       </div>
     ),
   },
