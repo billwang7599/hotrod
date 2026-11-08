@@ -53,7 +53,7 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const editable = own && !readOnly
   const dim = item.enabled ? '' : 'opacity-55'
   return (
-    <div className={`mb-8 flex flex-col gap-6 rounded-lg border p-10 ${item.enabled ? 'bg-bg' : ''}`}>
+    <div className={`mb-8 flex flex-col gap-6 rounded-lg border p-10 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center justify-between gap-8">
         <span className={`flex min-w-0 items-center gap-6 font-semibold ${dim}`}>
           <span className="truncate">{source}</span>
@@ -89,7 +89,7 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const section = item.section === 'folders' ? 'folders' : 'files'
   const preview = item.section === 'folders' ? 'AGENTS.md' : 'Contents'
   return (
-    <div className={`mb-8 flex flex-col gap-4 rounded-lg border px-10 py-8 ${item.enabled ? 'bg-bg' : ''}`}>
+    <div className={`mb-8 flex flex-col gap-4 rounded-lg border px-10 py-8 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center gap-8">
         <span className={`min-w-0 flex-1 truncate font-semibold ${item.enabled ? '' : 'opacity-55'}`}>
           {folderName(item.path)}

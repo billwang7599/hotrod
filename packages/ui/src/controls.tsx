@@ -21,7 +21,7 @@ export const MOTION = {
 } as const
 
 export function SidePanel({ side, overlay, children }: { side: 'left' | 'right'; overlay: boolean; children: ReactNode }) {
-  const position = overlay ? `absolute inset-y-0 z-20 shadow ${side === 'left' ? 'left-0' : 'right-0'}` : 'shrink-0'
+  const position = overlay ? `absolute inset-y-0 z-20 shadow-overlay ${side === 'left' ? 'left-0' : 'right-0'}` : 'shrink-0'
   return (
     <m.div
       className={`flex overflow-hidden ${position}`}
@@ -47,11 +47,12 @@ export const CHAT_NOUN = { one: 'space', many: 'spaces' }
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
 
+const PRESSABLE = 'enabled:shadow-raised enabled:active:shadow-sunken disabled:text-faint'
 const BUTTON_VARIANTS = {
-  default: 'enabled:bg-raised enabled:hover:bg-hover disabled:text-faint',
-  primary: 'enabled:border-accent enabled:bg-accent enabled:text-on-accent enabled:hover:bg-accent-hover disabled:text-faint',
-  danger: 'enabled:text-red enabled:hover:border-red enabled:hover:bg-red/10 disabled:text-faint',
-  ghost: 'border-transparent text-muted enabled:hover:bg-raised enabled:hover:text-text',
+  default: `enabled:bg-raised enabled:hover:bg-hover ${PRESSABLE}`,
+  primary: `enabled:border-accent enabled:bg-accent enabled:text-on-accent enabled:hover:bg-accent-hover ${PRESSABLE}`,
+  danger: `enabled:text-red enabled:hover:border-red enabled:hover:bg-red/10 ${PRESSABLE}`,
+  ghost: 'border-transparent text-muted enabled:hover:bg-raised enabled:hover:text-text enabled:active:bg-hover',
 }
 const BUTTON_SIZES = {
   normal: 'h-control px-12',
@@ -66,13 +67,13 @@ type ButtonProps = ComponentProps<'button'> & {
 }
 
 export function Button({ variant = 'default', size = 'normal', className = '', ...props }: ButtonProps) {
-  const classes = `rounded border whitespace-nowrap ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`
+  const classes = `rounded border whitespace-nowrap transition-[background-color,border-color,color,box-shadow] ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`
   return <button className={classes} {...props} />
 }
 
 const SELECT_TRIGGERS = {
-  field: 'h-control gap-8 rounded border bg-bg px-8 enabled:hover:bg-raised disabled:text-faint',
-  chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text disabled:text-faint max-[900px]:max-w-150',
+  field: `h-control gap-8 rounded border bg-bg px-8 enabled:hover:bg-raised ${PRESSABLE}`,
+  chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text enabled:hover:shadow-raised disabled:text-faint data-[state=open]:border-border data-[state=open]:text-text max-[900px]:max-w-150',
 }
 
 export type SelectOption = { value: string; label: string; disabled?: boolean }
@@ -94,7 +95,7 @@ export function Select({ label, value, options, onChange, placeholder, title, di
       <SelectPrimitive.Trigger
         aria-label={label}
         title={title}
-        className={`flex min-w-0 items-center whitespace-nowrap data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
+        className={`flex min-w-0 items-center whitespace-nowrap transition-[background-color,border-color,color,box-shadow] data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
       >
         <span className="min-w-0 truncate">
           <SelectPrimitive.Value placeholder={placeholder} />
@@ -110,7 +111,7 @@ export function Select({ label, value, options, onChange, placeholder, title, di
           position="popper"
           sideOffset={4}
           collisionPadding={8}
-          className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow"
+          className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow-floating"
         >
           <SelectPrimitive.Viewport className="p-4">
             {options.map((o) => (
@@ -118,7 +119,7 @@ export function Select({ label, value, options, onChange, placeholder, title, di
                 key={o.value}
                 value={o.value}
                 disabled={o.disabled}
-                className="flex h-26 items-center gap-8 rounded pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
+                className="flex h-26 items-center gap-8 rounded-sm pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
               >
                 <span className="w-12 shrink-0 text-accent">
                   <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
@@ -143,9 +144,9 @@ export function Switch({ label, checked, disabled, onChange }: SwitchProps) {
       checked={checked}
       disabled={disabled}
       onCheckedChange={onChange}
-      className="relative h-20 w-34 shrink-0 rounded-full border bg-hover transition-[background-color] duration-150 focus-visible:outline-offset-2 disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+      className="relative h-20 w-34 shrink-0 rounded-full border bg-hover shadow-sunken transition-[background-color] duration-150 focus-visible:outline-offset-2 disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent"
     >
-      <SwitchPrimitive.Thumb className="absolute top-2 left-2 size-14 rounded-full bg-muted transition-transform duration-150 data-[state=checked]:translate-x-14 data-[state=checked]:bg-on-accent" />
+      <SwitchPrimitive.Thumb className="absolute top-2 left-2 size-14 rounded-full bg-muted shadow-raised transition-transform duration-150 data-[state=checked]:translate-x-14 data-[state=checked]:bg-on-accent" />
     </SwitchPrimitive.Root>
   )
 }
@@ -172,7 +173,7 @@ export function Toast({ id, message, dismiss }: { id: number; message: string; d
   return (
     <m.div {...MOTION.collapse}>
       <div
-        className="mb-8 flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow"
+        className="mb-8 flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow-floating"
         role="status"
       >
         <span className="flex-1 pt-3 [word-break:break-word]">{message}</span>
@@ -243,7 +244,7 @@ export function ConfirmDialog() {
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <AlertDialog.Title className="text-body leading-[1.5]">{text}</AlertDialog.Title>

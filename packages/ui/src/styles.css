@@ -6,8 +6,10 @@
   --text-ui: 13px;
   --text-body: 14px;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --radius-sm: 4px;
   --radius: 6px;
   --radius-lg: 8px;
+  --radius-xl: 12px;
   --control: 28px;
 
   color-scheme: light dark;
@@ -21,8 +23,8 @@
   backdrop-filter: blur(24px) saturate(1.6);
 }
 
-/* Floating layers all cast a shadow; over a see-through window nothing blurs what's under them, so they go solid. */
-:root[data-glass='vibrancy'] .shadow {
+/* Over a see-through window nothing blurs what's under a floating layer, so it goes solid. */
+:root[data-glass='vibrancy'] :is(.shadow-floating, .shadow-overlay) {
   background-color: var(--glass-base);
 }
 
@@ -55,10 +57,15 @@
   --text-body: var(--text-body);
   --font-mono: var(--mono);
   --radius-*: initial;
+  --radius-sm: var(--radius-sm);
   --radius: var(--radius);
   --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
   --shadow-*: initial;
-  --shadow: var(--shadow);
+  --shadow-sunken: var(--shadow-sunken);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-floating: var(--shadow-floating);
+  --shadow-overlay: var(--shadow-overlay);
   /* :root sets the font to 13px, so rem-based spacing would be off. */
   --spacing: 1px;
   --spacing-control: var(--control);
@@ -104,6 +111,11 @@
     border-radius: var(--radius);
     padding: 0 8px;
     outline: none;
+    box-shadow: var(--shadow-sunken);
+  }
+
+  :is(input, textarea):read-only {
+    box-shadow: none;
   }
 
   input {
@@ -197,7 +209,7 @@
   .markdown code {
     font: 0.89em var(--mono);
     background: var(--raised);
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 1px 4px;
   }
 

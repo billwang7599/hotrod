@@ -80,7 +80,7 @@ function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean
   const [open, setOpen] = useState(false)
   return (
     <div
-      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel'}`}
+      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}
       data-open={open || undefined}
     >
       <button
@@ -218,7 +218,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
               </Dialog.Overlay>
               <Dialog.Content forceMount asChild aria-describedby={undefined}>
                 <m.div
-                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-[10px] border bg-panel shadow"
+                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border bg-panel shadow-overlay"
                   {...MOTION.pop}
                 >
                   <header className="flex h-40 shrink-0 items-center gap-8 border-b pr-8 pl-12">
@@ -260,7 +260,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
                         <a
                           href={url}
                           download={name}
-                          className="flex h-24 items-center rounded border bg-raised px-8 text-text hover:bg-hover"
+                          className="flex h-24 items-center rounded border bg-raised px-8 text-text shadow-raised hover:bg-hover active:shadow-sunken"
                         >
                           Download
                         </a>
@@ -296,12 +296,12 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
             src={url}
             alt={name}
             title={name}
-            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain"
+            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain shadow-raised"
           />
-          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow ${REVEAL}`}>{actions}</span>
+          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow-floating ${REVEAL}`}>{actions}</span>
         </>
       ) : (
-        <div className={`${FILE_CHIP} h-40 bg-panel`} title={name}>
+        <div className={`${FILE_CHIP} h-40 bg-panel shadow-raised`} title={name}>
           <FileLabel name={name} size={size} actions={<span className={`-ml-5 flex ${REVEAL}`}>{actions}</span>} />
         </div>
       )}
@@ -347,7 +347,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             </div>
           )}
           {item.text && (
-            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
               {item.text}
             </div>
           )}
@@ -410,7 +410,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
       const respond = (allow: boolean) =>
         send({ type: 'permission.respond', chatId: chat.id, requestId: item.requestId, allow })
       return (
-        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12">
+        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised">
           <div className="text-body">
             Allow <strong>{item.name}</strong>?
           </div>
@@ -754,21 +754,26 @@ export function Chat(props: ChatProps) {
           </AnimatePresence>
           {!showEngineNote && (
             <div
-              className={`@container mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
+              className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
             >
               {pending.length > 0 && (
                 <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
                   {pending.map((p) => (
                     <li key={p.id} className="relative min-w-0">
                       {p.preview ? (
-                        <img src={p.preview} alt={p.name} title={p.name} className="block size-48 rounded-lg border object-cover" />
+                        <img
+                          src={p.preview}
+                          alt={p.name}
+                          title={p.name}
+                          className="block size-48 rounded-lg border object-cover shadow-raised"
+                        />
                       ) : (
-                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20`} title={p.name}>
+                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
                           <FileLabel name={p.name} size={p.size} />
                         </div>
                       )}
                       <button
-                        className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted hover:text-text"
+                        className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
                         aria-label={`Remove ${p.name}`}
                         title="Remove"
                         onClick={() => unattach([p])}
@@ -780,7 +785,7 @@ export function Chat(props: ChatProps) {
                 </ul>
               )}
               <textarea
-                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
+                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
                 value={text}
                 rows={2}
                 placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}

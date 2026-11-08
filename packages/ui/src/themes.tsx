@@ -15,7 +15,6 @@ export const TOKENS = [
   'green',
   'amber',
   'red',
-  'shadow',
 ] as const
 
 type Palette = Record<(typeof TOKENS)[number], string>
@@ -28,7 +27,21 @@ type Theme = {
   vibrancy?: { dark: Partial<Palette>; light: Partial<Palette> }
 }
 
-const SHADOW = { dark: '0 8px 28px rgb(0 0 0 / 0.45)', light: '0 8px 28px rgb(0 0 0 / 0.14)' }
+// One light from above for every theme. Dark surfaces swallow shadows, so dark ones are stronger and add a top highlight.
+export const ELEVATION = {
+  dark: {
+    sunken: 'inset 0 1px 2px rgb(0 0 0 / 0.35)',
+    raised: 'inset 0 1px 0 rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(0 0 0 / 0.2)',
+    floating: 'inset 0 1px 0 rgb(255 255 255 / 0.06), 0 2px 4px rgb(0 0 0 / 0.3), 0 10px 28px -4px rgb(0 0 0 / 0.55)',
+    overlay: 'inset 0 1px 0 rgb(255 255 255 / 0.06), 0 4px 10px rgb(0 0 0 / 0.3), 0 28px 64px -12px rgb(0 0 0 / 0.7)',
+  },
+  light: {
+    sunken: 'inset 0 1px 2px rgb(0 0 0 / 0.06)',
+    raised: '0 1px 2px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06)',
+    floating: '0 2px 4px -1px rgb(0 0 0 / 0.06), 0 10px 28px -6px rgb(0 0 0 / 0.16)',
+    overlay: '0 4px 8px -2px rgb(0 0 0 / 0.06), 0 28px 60px -12px rgb(0 0 0 / 0.28)',
+  },
+}
 
 export const THEMES = {
   default: {
@@ -47,7 +60,6 @@ export const THEMES = {
       green: '#3fb67c',
       amber: '#e3a33b',
       red: '#e5534b',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#ffffff',
@@ -63,7 +75,6 @@ export const THEMES = {
       green: '#1f8a55',
       amber: '#a76a0c',
       red: '#c9302c',
-      shadow: SHADOW.light,
     },
   },
   glass: {
@@ -82,7 +93,6 @@ export const THEMES = {
       green: '#3fb67c',
       amber: '#e3a33b',
       red: '#e5534b',
-      shadow: '0 12px 40px rgb(0 0 0 / 0.4)',
     },
     light: {
       bg: '#ffffffb8',
@@ -98,7 +108,6 @@ export const THEMES = {
       green: '#1f8a55',
       amber: '#a76a0c',
       red: '#c9302c',
-      shadow: '0 12px 40px rgb(0 0 0 / 0.12)',
     },
     backdrop: {
       dark: ['#2b1f4a', '#4a1f33', '#123a47', '#0c0d12'],
@@ -127,7 +136,6 @@ export const THEMES = {
       green: '#9ece6a',
       amber: '#e0af68',
       red: '#f7768e',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#e1e2e7',
@@ -143,7 +151,6 @@ export const THEMES = {
       green: '#587539',
       amber: '#8c6c3e',
       red: '#f52a65',
-      shadow: SHADOW.light,
     },
   },
   catppuccin: {
@@ -163,7 +170,6 @@ export const THEMES = {
       green: '#a6e3a1',
       amber: '#f9e2af',
       red: '#f38ba8',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#eff1f5',
@@ -179,7 +185,6 @@ export const THEMES = {
       green: '#40a02b',
       amber: '#df8e1d',
       red: '#d20f39',
-      shadow: SHADOW.light,
     },
   },
   gruvbox: {
@@ -199,7 +204,6 @@ export const THEMES = {
       green: '#b8bb26',
       amber: '#fabd2f',
       red: '#fb4934',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fbf1c7',
@@ -215,7 +219,6 @@ export const THEMES = {
       green: '#79740e',
       amber: '#b57614',
       red: '#9d0006',
-      shadow: SHADOW.light,
     },
   },
   rosePine: {
@@ -235,7 +238,6 @@ export const THEMES = {
       green: '#9ccfd8',
       amber: '#f6c177',
       red: '#eb6f92',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#faf4ed',
@@ -251,7 +253,6 @@ export const THEMES = {
       green: '#286983',
       amber: '#ea9d34',
       red: '#b4637a',
-      shadow: SHADOW.light,
     },
   },
   kanagawa: {
@@ -271,7 +272,6 @@ export const THEMES = {
       green: '#98bb6c',
       amber: '#e6c384',
       red: '#e46876',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#f2ecbc',
@@ -287,7 +287,6 @@ export const THEMES = {
       green: '#6f894e',
       amber: '#cc6d00',
       red: '#c84053',
-      shadow: SHADOW.light,
     },
   },
   everforest: {
@@ -307,7 +306,6 @@ export const THEMES = {
       green: '#a7c080',
       amber: '#dbbc7f',
       red: '#e67e80',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fdf6e3',
@@ -323,7 +321,6 @@ export const THEMES = {
       green: '#8da101',
       amber: '#dfa000',
       red: '#f85552',
-      shadow: SHADOW.light,
     },
   },
   nord: {
@@ -343,7 +340,6 @@ export const THEMES = {
       green: '#a3be8c',
       amber: '#ebcb8b',
       red: '#bf616a',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#eceff4',
@@ -360,7 +356,6 @@ export const THEMES = {
       green: 'color-mix(in srgb, #a3be8c 60%, #2e3440)',
       amber: 'color-mix(in srgb, #ebcb8b 55%, #2e3440)',
       red: '#bf616a',
-      shadow: SHADOW.light,
     },
   },
   solarized: {
@@ -380,7 +375,6 @@ export const THEMES = {
       green: '#859900',
       amber: '#b58900',
       red: '#dc322f',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fdf6e3',
@@ -397,7 +391,6 @@ export const THEMES = {
       green: '#859900',
       amber: '#b58900',
       red: '#dc322f',
-      shadow: SHADOW.light,
     },
   },
 } as const satisfies Record<string, Theme>
@@ -429,6 +422,7 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   const palette = { ...theme[scheme], ...(vibrancy && theme.vibrancy?.[scheme]) }
   const root = document.documentElement
   for (const token of TOKENS) root.style.setProperty(`--${token}`, palette[token])
+  for (const [level, shadow] of Object.entries(ELEVATION[scheme])) root.style.setProperty(`--shadow-${level}`, shadow)
   root.style.setProperty('color-scheme', scheme)
   if (stops) root.setAttribute('data-glass', vibrancy ? 'vibrancy' : 'blur')
   else root.removeAttribute('data-glass')
@@ -514,7 +508,7 @@ export function Appearance() {
             key={id}
             type="button"
             aria-pressed={id === picked}
-            className="flex flex-col gap-6 rounded-lg border p-6 text-left hover:bg-raised aria-pressed:border-accent aria-pressed:ring-1 aria-pressed:ring-accent"
+            className="flex flex-col gap-6 rounded-lg border bg-panel p-6 text-left shadow-raised transition-[background-color,border-color,box-shadow] hover:bg-raised active:shadow-sunken aria-pressed:border-accent aria-pressed:ring-1 aria-pressed:ring-accent"
             onClick={() => chooseAppearance({ theme: id as ThemeId })}
           >
             <Preview theme={theme} scheme={shown} />

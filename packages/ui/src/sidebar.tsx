@@ -30,7 +30,7 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
       <DropdownMenu.Portal>
         <DropdownMenu.Content asChild align="end" sideOffset={4}>
           <m.div
-            className="z-20 flex min-w-140 flex-col rounded-lg border bg-panel p-4 shadow outline-none"
+            className="z-20 flex min-w-140 flex-col rounded-lg border bg-panel p-4 shadow-floating outline-none"
             initial={MOTION.menu.initial}
             animate={MOTION.menu.animate}
             transition={MOTION.menu.transition}
@@ -41,7 +41,7 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
                 disabled={!!item.disabledReason}
                 title={item.disabledReason}
                 onSelect={item.run}
-                className={`flex h-26 items-center rounded px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
+                className={`flex h-26 items-center rounded-sm px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
               >
                 {item.label}
               </DropdownMenu.Item>
@@ -218,7 +218,7 @@ export function NameDialog({ request, connected, send, pickFolder, close }: Name
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
                 {...MOTION.pop}
                 onSubmit={submit}
               >

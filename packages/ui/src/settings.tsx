@@ -491,7 +491,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-[10px] border bg-bg text-text shadow"
+                className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-xl border bg-bg text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <Dialog.Title className="sr-only">Settings</Dialog.Title>

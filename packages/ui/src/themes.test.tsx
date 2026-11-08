@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Appearance, chooseAppearance, startAppearance, THEMES, TOKENS } from './themes.tsx'
+import { Appearance, chooseAppearance, ELEVATION, startAppearance, THEMES, TOKENS } from './themes.tsx'
 
 // Vitest loads CSS imports as empty strings, so the stylesheet is read from disk.
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
@@ -63,10 +63,23 @@ function fakePage({ dark = true, desktop = false, vibrancy = false } = {}) {
 }
 
 describe('theme table', () => {
-  it('has a token for every color and shadow the stylesheet maps', () => {
+  it('has a token for every color the stylesheet maps', () => {
     const theme = css.slice(css.indexOf('@theme'))
-    const mapped = [...theme.matchAll(/--(?:color-[\w-]+|shadow): var\(--([\w-]+)\)/g)].map((m) => m[1])
+    const mapped = [...theme.matchAll(/--color-[\w-]+: var\(--([\w-]+)\)/g)].map((m) => m[1])
     expect(new Set(mapped)).toEqual(new Set(TOKENS))
+  })
+
+  it('maps every elevation level, and each scheme defines them all', () => {
+    const theme = css.slice(css.indexOf('@theme'))
+    const mapped = [...theme.matchAll(/--shadow-([\w-]+): var\(--shadow-\1\)/g)].map((m) => m[1])
+    expect(mapped.length).toBeGreaterThan(0)
+    for (const scheme of SCHEMES) expect(Object.keys(ELEVATION[scheme]).sort(), scheme).toEqual(mapped.sort())
+  })
+
+  it('lights dark surfaces from above with a top highlight, since dark shadows barely show', () => {
+    const { sunken, ...lifted } = ELEVATION.dark
+    expect(sunken).toMatch(/^inset /)
+    for (const shadow of Object.values(lifted)) expect(shadow).toMatch(/^inset 0 1px 0 rgb\(255 255 255 \//)
   })
 
   it('leaves the palette out of the stylesheet, so the table is its only source', () => {
@@ -90,7 +103,9 @@ describe('theme table', () => {
 
   it('tints every surface of the see-through window, and paints floating layers solid', () => {
     expect(css).toMatch(/:root \{[^}]*\bbackground: var\(--bg\)/)
-    expect(css).toMatch(/:root\[data-glass='vibrancy'\] \.shadow \{[^}]*background-color: var\(--glass-base\)/)
+    expect(css).toMatch(
+      /:root\[data-glass='vibrancy'\] :is\(\.shadow-floating, \.shadow-overlay\) \{[^}]*background-color: var\(--glass-base\)/,
+    )
     for (const scheme of SCHEMES) {
       const alpha = parseInt(THEMES.glass.vibrancy[scheme].bg.slice(7), 16)
       expect(alpha, scheme).toBeGreaterThan(0)
@@ -119,6 +134,14 @@ describe('appearance', () => {
     startAppearance()
     expect(page.props.get('--bg')).toBe(THEMES.default.dark.bg)
     expect(page.props.get('color-scheme')).toBe('dark')
+  })
+
+  it("sets the scheme's elevation shadows with its palette", () => {
+    const page = fakePage({ dark: true })
+    startAppearance()
+    for (const [level, shadow] of Object.entries(ELEVATION.dark)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
+    chooseAppearance({ theme: 'gruvbox', scheme: 'light' })
+    for (const [level, shadow] of Object.entries(ELEVATION.light)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
   })
 
   it('applies a picked theme at once and keeps it for the next start', () => {
