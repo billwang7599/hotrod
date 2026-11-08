@@ -26,7 +26,8 @@ const home: Mod = {
       name: 'create_chat',
       description:
         'Make a space: a named chat whose folders (absolute paths of existing folders) and files go into its ' +
-        'context. It runs in its first folder. Give a prompt to start it. Returns its id.',
+        'context. It works in its own folder in the work folder, where each git folder is checked out on a new ' +
+        'branch, hotrod/<name>. Give a prompt to start it. Returns its id.',
       inputSchema: {
         type: 'object',
         properties: {
