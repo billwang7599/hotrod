@@ -14,6 +14,7 @@ import {
   type Worktree,
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
+import { usePathsShown } from './paths.ts'
 import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -131,6 +132,7 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const [text, setText] = useState(item.text)
   useEffect(() => setText(item.text), [item.text])
   const { collapsed, toggle } = useCollapsed(item)
+  const paths = usePathsShown()
   const own = item.from === chatId
   const global = item.from === GLOBAL_CONTEXT
   const writable = own || global
@@ -152,9 +154,11 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
         />
       </div>
       <CardBody collapsed={collapsed} className="gap-6 pt-6">
-        <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
-          {item.path}
-        </span>
+        {paths.context && (
+          <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
+            {item.path}
+          </span>
+        )}
         <textarea
           className={`resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent read-only:bg-transparent read-only:text-muted ${writable ? 'min-h-96' : 'min-h-36'} ${dim}`}
           value={text}
@@ -185,11 +189,16 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
   const section = item.section === 'folders' ? 'folders' : 'files'
   const preview = item.section === 'folders' ? 'AGENTS.md' : 'Contents'
   const { collapsed, toggle } = useCollapsed(item)
+  const paths = usePathsShown()
   return (
     <div className={`mb-8 flex flex-col rounded-lg border px-10 py-8 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center gap-8">
         <span className={`flex min-w-0 flex-1 ${item.enabled ? '' : 'opacity-55'}`}>
-          <CardToggle name={folderName(item.path)} collapsed={collapsed} toggle={toggle} />
+          <Hint text={!paths.context && item.path} align="start">
+            <span className="flex min-w-0">
+              <CardToggle name={folderName(item.path)} collapsed={collapsed} toggle={toggle} />
+            </span>
+          </Hint>
         </span>
         {own && (
           <Hint text="Remove from this chat's context">
@@ -212,9 +221,11 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
         />
       </div>
       <CardBody collapsed={collapsed} className="gap-4 pt-4">
-        <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
-          {item.path}
-        </span>
+        {paths.context && (
+          <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
+            {item.path}
+          </span>
+        )}
         {worktree && (
           <Hint text={CHECKOUT_HINT} align="start">
             <span className="w-fit text-xs leading-[normal] wrap-anywhere text-muted">
@@ -277,6 +288,35 @@ function AddPath({ section, chatId, disabled, send }: {
   )
 }
 
+type PanelTabId = 'context' | 'permissions'
+const TAB_KEY = 'hotrod.panelTab'
+const TAB_LABEL: Record<PanelTabId, string> = { context: 'Context', permissions: 'Permissions' }
+
+type PanelTabProps = {
+  id: PanelTabId
+  tab: PanelTabId
+  choose: (id: PanelTabId) => void
+  hint: string
+  children: ReactNode
+}
+
+function PanelTab(props: PanelTabProps) {
+  const selected = props.id === props.tab
+  return (
+    <Hint text={props.hint} side="bottom" align="start">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={selected}
+        className="rounded px-8 py-4 font-semibold text-muted transition-[background-color,color] hover:bg-hover hover:text-text aria-selected:bg-hover aria-selected:text-text"
+        onClick={() => props.choose(props.id)}
+      >
+        {props.children}
+      </button>
+    </Hint>
+  )
+}
+
 type ContextPanelProps = {
   chatId: string
   items?: ContextItem[]
@@ -296,20 +336,32 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const chat = chats.find((c) => c.id === chatId)
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
+  const [tab, setTab] = useState<PanelTabId>(() =>
+    localStorage.getItem(TAB_KEY) === 'permissions' ? 'permissions' : 'context',
+  )
+  const chooseTab = (id: PanelTabId) => {
+    localStorage.setItem(TAB_KEY, id)
+    setTab(id)
+  }
+  const shown: PanelTabId = chat ? tab : 'context'
   return (
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
-      <header className="flex h-44 shrink-0 items-center justify-between border-b px-12">
-        <Hint text={`${intro} Edits apply from the next message.`} side="bottom" align="start">
-          <span className="font-semibold">Context</span>
-        </Hint>
+      <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
+        <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
+          <PanelTab id="context" tab={tab} choose={chooseTab} hint={`${intro} Edits apply from the next message.`}>
+            Context
+          </PanelTab>
+          {chat && (
+            <PanelTab id="permissions" tab={tab} choose={chooseTab} hint={PERMISSIONS_HINT}>
+              Permissions
+            </PanelTab>
+          )}
+        </div>
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
-      <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
-        {chat && (
+      <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12" role="tabpanel" aria-label={TAB_LABEL[shown]}>
+        {shown === 'permissions' && chat && (
           <section className="flex flex-col gap-8" aria-label="Permissions">
-            <Hint text={PERMISSIONS_HINT} align="start">
-              <h3 className="w-fit font-semibold">Permissions</h3>
-            </Hint>
             {PERMISSION_SWITCHES.map((name) => {
               const { label, about, amberWhileOn } = PERMISSIONS[name]
               const chosen = chat[name]
@@ -342,36 +394,37 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             })}
           </section>
         )}
-        {sections.map((section) => {
-          const listed = items?.filter((item) => item.section === section) ?? []
-          return (
-            <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
-              <Hint text={SECTIONS[section].about} align="start">
-                <h3 className="mb-8 w-fit font-semibold">{SECTIONS[section].label}</h3>
-              </Hint>
-              <AnimatePresence initial={false}>
-                {listed.map((item) => (
-                  <m.div key={item.path} {...MOTION.collapse} initial={settled.current && MOTION.collapse.initial}>
-                    {section === 'agents' ? (
-                      <AgentsCard item={item} chatId={chatId} source={sourceOf(item)} readOnly={locked} send={send} />
-                    ) : (
-                      <PathCard
-                        item={item}
-                        chatId={chatId}
-                        source={sourceOf(item)}
-                        readOnly={locked}
-                        send={send}
-                        worktree={chats.find((c) => c.id === item.from)?.worktrees?.[item.path]}
-                      />
-                    )}
-                  </m.div>
-                ))}
-              </AnimatePresence>
-              {items && !listed.length && <p className="mb-8 text-sm text-faint">{EMPTY_SECTION[section]}</p>}
-              {section !== 'agents' && <AddPath section={section} chatId={chatId} disabled={locked} send={send} />}
-            </section>
-          )
-        })}
+        {shown === 'context' &&
+          sections.map((section) => {
+            const listed = items?.filter((item) => item.section === section) ?? []
+            return (
+              <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
+                <Hint text={SECTIONS[section].about} align="start">
+                  <h3 className="mb-8 w-fit font-semibold">{SECTIONS[section].label}</h3>
+                </Hint>
+                <AnimatePresence initial={false}>
+                  {listed.map((item) => (
+                    <m.div key={item.path} {...MOTION.collapse} initial={settled.current && MOTION.collapse.initial}>
+                      {section === 'agents' ? (
+                        <AgentsCard item={item} chatId={chatId} source={sourceOf(item)} readOnly={locked} send={send} />
+                      ) : (
+                        <PathCard
+                          item={item}
+                          chatId={chatId}
+                          source={sourceOf(item)}
+                          readOnly={locked}
+                          send={send}
+                          worktree={chats.find((c) => c.id === item.from)?.worktrees?.[item.path]}
+                        />
+                      )}
+                    </m.div>
+                  ))}
+                </AnimatePresence>
+                {items && !listed.length && <p className="mb-8 text-sm text-faint">{EMPTY_SECTION[section]}</p>}
+                {section !== 'agents' && <AddPath section={section} chatId={chatId} disabled={locked} send={send} />}
+              </section>
+            )
+          })}
       </div>
     </aside>
   )

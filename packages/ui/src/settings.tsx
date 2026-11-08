@@ -33,6 +33,7 @@ import {
   useReturnFocus,
 } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
+import { showPaths, usePathsShown } from './paths.ts'
 import { Appearance } from './themes.tsx'
 
 type PageProps = {
@@ -146,7 +147,12 @@ const PAGES = [
     id: 'appearance',
     group: 'Options',
     title: 'Appearance',
-    body: () => <Appearance />,
+    body: () => (
+      <>
+        <Appearance />
+        <ShownPaths />
+      </>
+    ),
   },
   {
     id: 'accounts',
@@ -384,6 +390,23 @@ const modPages = (mods: ModInfo[]): Page[] =>
     }))
 
 type RowProps = { name: ReactNode; description?: ReactNode; hint?: string; children?: ReactNode; below?: ReactNode }
+
+function ShownPaths() {
+  const paths = usePathsShown()
+  return (
+    <>
+      <div className="pt-24 pb-8 font-semibold">File paths</div>
+      <div className={GROUP}>
+        <SettingRow name="At the top of a space" hint="Show the space's folder beside its name. Hidden, it shows on hover.">
+          <Switch label="Show paths at the top of a space" checked={paths.header} onChange={(on) => showPaths('header', on)} />
+        </SettingRow>
+        <SettingRow name="In the Context panel" hint="Show each AGENTS.md, folder and file's full path on its card">
+          <Switch label="Show paths in the Context panel" checked={paths.context} onChange={(on) => showPaths('context', on)} />
+        </SettingRow>
+      </div>
+    </>
+  )
+}
 
 function SettingRow({ name, description, hint, children, below }: RowProps) {
   return (
