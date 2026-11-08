@@ -279,7 +279,9 @@ export const claudeCode: Adapter = {
         }
         case 'assistant':
           for (const block of msg.message?.content ?? []) {
-            if (block.type === 'text' && !subagent) emit({ type: 'text.completed', text: block.text })
+            // An API error arrives as a made-up reply, then again as the error result.
+            const reply = block.type === 'text' && !subagent && msg.is_api_error_message !== true
+            if (reply) emit({ type: 'text.completed', text: block.text })
             if (block.type === 'tool_use') {
               const kind = kindOf(block.name)
               const summary = summarize(kind, block.input)

@@ -333,7 +333,7 @@ describe('claudeCode adapter', () => {
     expect(fake.sent().at(-1).response.response.updatedInput.answers).toEqual({ 'Color?': 'Purple with green stripes' })
   })
 
-  it('reports an error result and a nonzero exit with the stderr tail', () => {
+  it('reports an API error once, as the error and not as reply text, and a nonzero exit with the stderr tail', () => {
     const { fake, events, session } = startSession()
     session.prompt('hi')
     fake.stdout(fixture('error-result'))
@@ -341,8 +341,8 @@ describe('claudeCode adapter', () => {
     const message =
       "There's an issue with the selected model (claude-nonexistent-9). It may not exist or you may not have access " +
       'to it. Run --model to pick a different model.'
-    expect(events.slice(-3)).toEqual([
-      { type: 'text.completed', text: message },
+    expect(events).toEqual([
+      { type: 'turn.started' },
       { type: 'turn.completed', error: message },
       {
         type: 'session.ended',
