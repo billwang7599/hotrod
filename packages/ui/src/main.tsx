@@ -183,15 +183,6 @@ function App() {
                     select={select}
                     askName={setNameRequest}
                   />
-                  {window.hotrod && (
-                    <div className="flex border-t px-8 py-10">
-                      <Hint text="⌘O">
-                        <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
-                          New {CHAT_NOUN.one} from folder…
-                        </Button>
-                      </Hint>
-                    </div>
-                  )}
                   <div className="px-8 pb-10">
                     <Button
                       variant="ghost"

@@ -10,6 +10,7 @@ import {
   engineOptions,
   familyOf,
   folderName,
+  foldSteps,
   folderOf,
   formatBytes,
   initialState,
@@ -25,6 +26,7 @@ import {
   storedFlag,
   type Action,
   type ChatView,
+  type Item,
   type State,
 } from './state.ts'
 
@@ -233,17 +235,30 @@ describe('reduce', () => {
     expect(listedAccounts(engine('default', [ownSignedOut, work])).accounts).toEqual([ownSignedOut, work])
   })
 
-  it('shows a tool as waiting while its permission is pending', () => {
+  it("keeps a tool's permission on its row: waiting while pending, then the verdict", () => {
     const requested = run(
       snapshot([chat('a')]),
-      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
-      entry('a', { type: 'permission.requested', requestId: 'r1', toolId: 't1', name: 'Bash', kind: 'shell', summary: '', input: {} }),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} }),
+      entry('a', { type: 'permission.requested', requestId: 'r1', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: { command: 'ls' } }),
     )
-    expect(items(requested)[0]).toMatchObject({ toolId: 't1', state: 'waiting' })
+    expect(items(requested)).toEqual([
+      {
+        kind: 'tool',
+        toolId: 't1',
+        name: 'Bash',
+        summary: 'ls',
+        state: 'waiting',
+        output: '',
+        permission: { requestId: 'r1', name: 'Bash', summary: 'ls', input: { command: 'ls' }, outcome: 'pending' },
+      },
+    ])
     const allowed = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: true }))
-    expect(items(allowed)[0]).toMatchObject({ toolId: 't1', state: 'running' })
+    expect(items(allowed)).toHaveLength(1)
+    expect(items(allowed)[0]).toMatchObject({ toolId: 't1', state: 'running', permission: { outcome: 'allowed' } })
+    const auto = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false, auto: true }))
+    expect(items(auto)[0]).toMatchObject({ state: 'running', permission: { outcome: 'denied', auto: true } })
     const ended = reduce(requested, entry('a', { type: 'turn.completed' }))
-    expect(items(ended)[0]).toMatchObject({ toolId: 't1', state: 'stopped' })
+    expect(items(ended)[0]).toMatchObject({ toolId: 't1', state: 'stopped', permission: { outcome: 'cancelled' } })
   })
 
   it('appends entries to the right chat', () => {
@@ -414,6 +429,64 @@ describe('reduce', () => {
     const lists = { ...noLists, chat: ['b'] }
     const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', engine: 'pi', lists })
     expect(state.modelLists).toEqual({ fake: noLists, pi: lists })
+  })
+})
+
+describe('foldSteps', () => {
+  const user = (text: string): Item => ({ kind: 'user', text })
+  const text = (text: string): Item => ({ kind: 'text', text })
+  const tool = (toolId: string): Item => ({ kind: 'tool', toolId, name: 'Bash', summary: '', state: 'done', output: '' })
+  const shown = (items: Item[], running = false) =>
+    foldSteps(items, running).map((row) =>
+      'steps' in row
+        ? `${row.steps.length} steps`
+        : row.item.kind === 'tool'
+          ? row.item.toolId
+          : 'text' in row.item
+            ? row.item.text
+            : row.item.kind,
+    )
+  const twoTurns = [
+    user('a'),
+    tool('t1'),
+    text('Installing'),
+    tool('t2'),
+    text('Done'),
+    user('b'),
+    tool('t3'),
+    { kind: 'thinking', text: 'Hmm' } as Item,
+    tool('t4'),
+  ]
+
+  it("folds everything between a message and its turn's final reply into one row", () => {
+    expect(shown([...twoTurns, text('Ok')])).toEqual(['a', '3 steps', 'Done', 'b', '3 steps', 'Ok'])
+    const [, fold] = foldSteps(twoTurns, false)
+    expect(fold).toEqual({ at: 1, steps: [tool('t1'), text('Installing'), tool('t2')] })
+  })
+
+  it('leaves the running turn unfolded and folds the finished ones above it', () => {
+    expect(shown(twoTurns, true)).toEqual(['a', '3 steps', 'Done', 'b', 't3', 'Hmm', 't4'])
+  })
+
+  it('folds a turn without a reply up to its error line, keeping a reply above the error', () => {
+    const interrupted: Item = { kind: 'error', text: 'Interrupted' }
+    expect(shown([user('a'), tool('t1'), text('Looking'), tool('t2'), interrupted])).toEqual([
+      'a',
+      '3 steps',
+      'Interrupted',
+    ])
+    expect(shown([user('a'), tool('t1'), tool('t2'), text('Partly'), interrupted])).toEqual([
+      'a',
+      '2 steps',
+      'Partly',
+      'Interrupted',
+    ])
+    expect(shown([user('a'), tool('t1'), tool('t2')])).toEqual(['a', '2 steps'])
+  })
+
+  it('leaves a single step unfolded', () => {
+    expect(shown([user('a'), tool('t1'), text('Done')])).toEqual(['a', 't1', 'Done'])
+    expect(shown([user('a'), text('Hi')])).toEqual(['a', 'Hi'])
   })
 })
 
