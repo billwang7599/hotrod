@@ -46,6 +46,7 @@ import {
   accountLabel,
   columnSlider,
   engineOptions,
+  foldSteps,
   formatBytes,
   listedAccounts,
   MAX_PREVIEW_BYTES,
@@ -54,6 +55,7 @@ import {
   previewText,
   type ChatView,
   type Item,
+  type Permission,
 } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
@@ -64,8 +66,12 @@ const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
 const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
 const INTERRUPTED = 'Interrupted'
-const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
-const AUTO_OUTCOMES = { allowed: '✓ Allowed automatically', denied: '✕ Denied: outside the work folder' }
+const VERDICTS = { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled' }
+const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
+const AUTO_VERDICT_HINTS = {
+  allowed: 'An edit inside the work folder, so Hotrod allowed it without asking',
+  denied: 'An edit outside the work folder, so Hotrod denied it without asking',
+}
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -90,7 +96,6 @@ const EDITS_ANYWHERE_ALL_HINT =
 const NOT_SANDBOXED_HINT =
   'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (in its Context ' +
   'panel, or for every chat in Settings → Work folder), and its agents can write anywhere.'
-const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
   'h-12 w-96 appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
@@ -118,13 +123,11 @@ function Dots({ label, className = '' }: { label: string; className?: string }) 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   return (
-    <div
-      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}
-      data-open={open || undefined}
-    >
+    <div className={`rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}>
       <button
-        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left transition-colors hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+        className={`group flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left transition-colors hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
         aria-expanded={open}
+        data-open={open || undefined}
         onClick={() => setOpen(!open)}
       >
         <Chevron />
@@ -330,6 +333,60 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
   )
 }
 
+function Verdict({ permission: { outcome, auto } }: { permission: Permission }) {
+  if (outcome === 'pending') return null
+  const hint = auto && outcome !== 'cancelled' ? AUTO_VERDICT_HINTS[outcome] : undefined
+  return (
+    <Hint text={hint}>
+      <span
+        data-verdict
+        className={`shrink-0 rounded-full px-6 text-xs leading-[1.6] ${VERDICT_COLORS[outcome]} ${hint ? 'cursor-help' : ''}`}
+      >
+        {auto && outcome === 'allowed' ? 'Allowed automatically' : VERDICTS[outcome]}
+      </span>
+    </Hint>
+  )
+}
+
+type PromptProps = {
+  permission: Permission
+  chat: ChatView
+  connected: boolean
+  send: (m: ClientMessage) => void
+}
+
+function PermissionPrompt({ permission, chat, connected, send }: PromptProps) {
+  const respond = (allow: boolean) =>
+    send({ type: 'permission.respond', chatId: chat.id, requestId: permission.requestId, allow })
+  return (
+    <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised">
+      <div className="text-body">
+        Allow <strong>{permission.name}</strong>?
+      </div>
+      <pre className="rounded border bg-bg px-10 py-8">{permission.summary}</pre>
+      <details className="group">
+        <summary className="flex w-fit list-none items-center gap-6 text-sm text-muted hover:text-text">
+          <Chevron />
+          Full input
+        </summary>
+        <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{JSON.stringify(permission.input, null, 2)}</pre>
+      </details>
+      {chat.status === 'waiting' ? (
+        <div className="flex gap-8">
+          <Button variant="primary" disabled={!connected} onClick={() => respond(true)}>
+            Approve
+          </Button>
+          <Button variant="danger" disabled={!connected} onClick={() => respond(false)}>
+            Deny
+          </Button>
+        </div>
+      ) : (
+        <div className="text-sm text-muted">{chat.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
+      )}
+    </div>
+  )
+}
+
 type ItemProps = {
   item: Item
   chat: ChatView
@@ -380,13 +437,14 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
           </div>
         </Row>
       )
-    case 'tool':
-      return (
+    case 'tool': {
+      const row = (
         <Row
           summary={
             <>
               <span className={TOOL_NAME}>{item.name}</span>
               <span className={TOOL_INPUT}>{item.summary}</span>
+              {item.permission && <Verdict permission={item.permission} />}
               {item.state === 'running' ? (
                 <Dots label="running" className="text-sm text-green" />
               ) : (
@@ -411,55 +469,31 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
           </pre>
         </Row>
       )
-    case 'permission': {
-      const input = JSON.stringify(item.input, null, 2)
-      if (item.outcome !== 'pending') {
-        return (
-          <Row
-            summary={
-              <>
-                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>
-                  {item.auto && item.outcome !== 'cancelled' ? AUTO_OUTCOMES[item.outcome] : OUTCOMES[item.outcome]}
-                </span>
-                <span className={TOOL_NAME}>{item.name}</span>
-                <span className={TOOL_INPUT}>{item.summary}</span>
-              </>
-            }
-          >
-            <pre className={`${BODY} border-t pl-26`}>{input}</pre>
-          </Row>
-        )
-      }
-      const respond = (allow: boolean) =>
-        send({ type: 'permission.respond', chatId: chat.id, requestId: item.requestId, allow })
+      if (item.permission?.outcome !== 'pending') return row
       return (
-        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised">
-          <div className="text-body">
-            Allow <strong>{item.name}</strong>?
-          </div>
-          <pre className="rounded border bg-bg px-10 py-8">{item.summary}</pre>
-          <details className="group">
-            <summary className="flex w-fit list-none items-center gap-6 text-sm text-muted hover:text-text">
-              <Chevron />
-              Full input
-            </summary>
-            <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{input}</pre>
-          </details>
-          {chat.status === 'waiting' ? (
-            <div className="flex gap-8">
-              <Button variant="primary" disabled={!connected} onClick={() => respond(true)}>
-                Approve
-              </Button>
-              <Button variant="danger" disabled={!connected} onClick={() => respond(false)}>
-                Deny
-              </Button>
-            </div>
-          ) : (
-            <div className="text-sm text-muted">{chat.status === 'stopping' ? 'Stopping…' : 'Pending'}</div>
-          )}
+        <div className="flex flex-col gap-6">
+          {row}
+          <PermissionPrompt permission={item.permission} chat={chat} connected={connected} send={send} />
         </div>
       )
     }
+    case 'permission':
+      if (item.outcome === 'pending') {
+        return <PermissionPrompt permission={item} chat={chat} connected={connected} send={send} />
+      }
+      return (
+        <Row
+          summary={
+            <>
+              <span className={TOOL_NAME}>{item.name}</span>
+              <span className={TOOL_INPUT}>{item.summary}</span>
+              <Verdict permission={item} />
+            </>
+          }
+        >
+          <pre className={`${BODY} border-t pl-26`}>{JSON.stringify(item.input, null, 2)}</pre>
+        </Row>
+      )
   }
 }
 
@@ -611,6 +645,7 @@ export function Chat(props: ChatProps) {
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
+  const itemProps = { chat, contextItems: props.contextItems, connected, send }
 
   return (
     <div className="flex min-h-0 flex-1" style={{ '--column': `${props.columnPx}px` } as CSSProperties}>
@@ -724,16 +759,29 @@ export function Chat(props: ChatProps) {
                 </span>
               </div>
             )}
-            {chat.items.map((item, i) => (
-              <m.div
-                key={i}
-                className={`group/item flex flex-col ${item.kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
-                initial={item.kind !== 'text' && enter}
-                animate={MOTION.rise.animate}
-              >
-                <ItemView item={item} chat={chat} contextItems={props.contextItems} connected={connected} send={send} />
-              </m.div>
-            ))}
+            {foldSteps(chat.items, busy).map((row) => {
+              const kind = 'item' in row ? row.item.kind : 'steps'
+              return (
+                <m.div
+                  key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                  className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
+                  initial={kind !== 'text' && enter}
+                  animate={MOTION.rise.animate}
+                >
+                  {'steps' in row ? (
+                    <Row quiet summary={`${row.steps.length} steps`}>
+                      <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
+                        {row.steps.map((item, i) => (
+                          <ItemView key={i} item={item} {...itemProps} />
+                        ))}
+                      </div>
+                    </Row>
+                  ) : (
+                    <ItemView item={row.item} {...itemProps} />
+                  )}
+                </m.div>
+              )
+            })}
             {chat.draft && (
               <m.div initial={enter} animate={MOTION.rise.animate}>
                 <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
