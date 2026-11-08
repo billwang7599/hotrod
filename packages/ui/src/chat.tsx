@@ -1,4 +1,5 @@
 import {
+  useContext,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -30,6 +31,7 @@ import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { usePathsShown } from './paths.ts'
 import { useSmoothText } from './smooth.ts'
+import { StepsOpen, useStepsShown } from './steps.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -131,7 +133,10 @@ function Dots({ label, className = '' }: { label: string; className?: string }) 
 }
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
+  // Follows the chat's steps setting until the user opens or closes this row.
+  const opens = useContext(StepsOpen)
+  const [chosen, setOpen] = useState<boolean>()
+  const open = chosen ?? opens
   return (
     <div className={`rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}>
       <button
@@ -549,6 +554,7 @@ export function Chat(props: ChatProps) {
   const jumping = useRef(false)
   const [jumpShown, setJumpShown] = useState(false)
   const reduceMotion = useReducedMotion()
+  const stepsShown = useStepsShown(chat.id)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
@@ -783,49 +789,51 @@ export function Chat(props: ChatProps) {
           onKeyDown={userScrolls}
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
-            {chat.items.length === 0 && !chat.draft && (
-              <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                <strong className="text-body font-semibold text-text">
-                  Start a chat in <span className="font-mono">{chat.name}</span>
-                </strong>
-                <span>
-                  Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
-                </span>
-              </div>
-            )}
-            {foldSteps(chat.items, busy).map((row) => {
-              const kind = 'item' in row ? row.item.kind : 'steps'
-              return (
-                <m.div
-                  key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                  className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
-                  initial={kind !== 'text' && enter}
-                  animate={MOTION.rise.animate}
-                >
-                  {'steps' in row ? (
-                    <Row quiet summary={`${row.steps.length} steps`}>
-                      <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
-                        {row.steps.map((item, i) => (
-                          <ItemView key={i} item={item} {...itemProps} />
-                        ))}
-                      </div>
-                    </Row>
-                  ) : (
-                    <ItemView item={row.item} {...itemProps} />
-                  )}
+            <StepsOpen.Provider value={stepsShown}>
+              {chat.items.length === 0 && !chat.draft && (
+                <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+                  <strong className="text-body font-semibold text-text">
+                    Start a chat in <span className="font-mono">{chat.name}</span>
+                  </strong>
+                  <span>
+                    Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
+                  </span>
+                </div>
+              )}
+              {foldSteps(chat.items, busy || stepsShown).map((row) => {
+                const kind = 'item' in row ? row.item.kind : 'steps'
+                return (
+                  <m.div
+                    key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                    className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
+                    initial={kind !== 'text' && enter}
+                    animate={MOTION.rise.animate}
+                  >
+                    {'steps' in row ? (
+                      <Row quiet summary={`${row.steps.length} steps`}>
+                        <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
+                          {row.steps.map((item, i) => (
+                            <ItemView key={i} item={item} {...itemProps} />
+                          ))}
+                        </div>
+                      </Row>
+                    ) : (
+                      <ItemView item={row.item} {...itemProps} />
+                    )}
+                  </m.div>
+                )
+              })}
+              {chat.draft && (
+                <m.div initial={enter} animate={MOTION.rise.animate}>
+                  <StreamingText text={chat.draft} smooth={!reduceMotion} />
                 </m.div>
-              )
-            })}
-            {chat.draft && (
-              <m.div initial={enter} animate={MOTION.rise.animate}>
-                <StreamingText text={chat.draft} smooth={!reduceMotion} />
-              </m.div>
-            )}
-            {awaitingOutput && (
-              <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
-                <Dots label="Working" />
-              </m.div>
-            )}
+              )}
+              {awaitingOutput && (
+                <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                  <Dots label="Working" />
+                </m.div>
+              )}
+            </StepsOpen.Provider>
           </div>
         </div>
         <div className="relative shrink-0 px-24 pb-16">

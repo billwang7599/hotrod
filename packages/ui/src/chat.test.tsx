@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
+import { reloadSteps, showStepsByDefault } from './steps.ts'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
@@ -353,6 +354,38 @@ test('a turn that ended without a reply keeps its last line below the fold, and 
   render({ items: [USER, tool('done'), { kind: 'text', text: 'Done' }] })
   expect(foldButton()).toBeUndefined()
   expect(rowButtons().map((b) => b.textContent)).toEqual([expect.stringContaining('Bash')])
+})
+
+test('thinking and tool calls show unfolded by default from Settings, and each chat overrides that in its panel', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.clear()
+  reloadSteps()
+  const steps: Item[] = [{ kind: 'thinking', text: 'Pondering' }, tool('done', 'a.txt'), { kind: 'text', text: 'Hm.' }]
+  const items: Item[] = [USER, ...steps, { kind: 'text', text: 'All set' }]
+  const open = () => rowButtons().map((b) => b.getAttribute('aria-expanded'))
+  render({ items }, () => {}, { contextOpen: true })
+  expect(foldButton()?.textContent).toBe('3 steps')
+
+  act(() => showStepsByDefault(true))
+  expect(foldButton()).toBeUndefined()
+  expect(open()).toEqual(['true', 'true'])
+  expect(container.textContent).toContain('Pondering')
+  act(() => rowButtons()[1]!.click())
+  expect(open()).toEqual(['true', 'false'])
+
+  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Thinking and tool calls"]')!
+  expect(select().textContent).toBe('Default (Unfolded)')
+  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const folded = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Folded')!
+  act(() => folded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(select().textContent).toBe('Folded')
+  expect(foldButton()?.textContent).toBe('3 steps')
+  render({ id: 'c2', items }, () => {}, { contextOpen: true })
+  expect(foldButton()).toBeUndefined()
+
+  act(() => showStepsByDefault(false))
+  localStorage.clear()
+  reloadSteps()
 })
 
 test("a permission shows on its tool's row: the prompt under it while pending, then a verdict badge", async () => {

@@ -15,6 +15,7 @@ import {
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
+import { showStepsIn, useStepsChoice, useStepsDefault } from './steps.ts'
 import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -288,6 +289,37 @@ function AddPath({ section, chatId, disabled, send }: {
   )
 }
 
+const STEPS_LABEL = 'Thinking and tool calls'
+const STEPS_HINT =
+  `Unfolded, each finished turn's thinking and tool calls stay listed and open instead of folding into "N steps". ` +
+  'Only changes this view; the default is in Settings → Appearance.'
+
+function StepsSwitch({ chatId }: { chatId: string }) {
+  const chosen = useStepsChoice(chatId)
+  const byDefault = useStepsDefault()
+  const word = (on: boolean) => (on ? 'Unfolded' : 'Folded')
+  return (
+    <section className="flex flex-col" aria-label="View">
+      <h3 className="mb-8 font-semibold">View</h3>
+      <Hint text={STEPS_HINT} align="start">
+        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+          <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
+          <Select
+            label={STEPS_LABEL}
+            value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+            options={[
+              { value: 'default', label: `Default (${word(byDefault)})` },
+              { value: 'on', label: word(true) },
+              { value: 'off', label: word(false) },
+            ]}
+            onChange={(value) => showStepsIn(chatId, value === 'default' ? undefined : value === 'on')}
+          />
+        </div>
+      </Hint>
+    </section>
+  )
+}
+
 type PanelTabId = 'context' | 'permissions'
 const TAB_KEY = 'hotrod.panelTab'
 const TAB_LABEL: Record<PanelTabId, string> = { context: 'Context', permissions: 'Permissions' }
@@ -425,6 +457,7 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
               </section>
             )
           })}
+        {shown === 'context' && chat && <StepsSwitch chatId={chatId} />}
       </div>
     </aside>
   )
