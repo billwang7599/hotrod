@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { Adapter, EngineEvent, Question, ToolKind } from '../shared.ts'
+import type { Adapter, EngineEvent, Question, SessionOptions, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent
@@ -82,7 +82,11 @@ export const FAKE_MODELS = ['fake-large', 'fake-small']
 export const FAKE_THINKING = ['low', 'high']
 export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
 
-export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40): Adapter {
+// A script can depend on the session, such as which account it runs on (options.accountDir).
+export function createFakeAdapter(
+  script: FakeStep[] | ((options: SessionOptions) => FakeStep[]) = demoScript,
+  delayMs = 40,
+): Adapter {
   return {
     id: 'fake',
     imageInput: true,
@@ -121,7 +125,8 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
       logout: async () => {},
       apiKeys: true,
     },
-    start(_machine, _options, emit) {
+    start(_machine, options, emit) {
+      const steps = typeof script === 'function' ? script(options) : script
       let timer: ReturnType<typeof setTimeout> | undefined
       let pending: { requestId: string; toolId?: string; output: string; rest: FakeStep[] } | undefined
       let active = false
@@ -162,7 +167,7 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
           emit({ type: 'turn.started' })
           // Each message is a new session and the log outlives the core, so a counter would repeat ids.
           const suffix = randomUUID().slice(0, 8)
-          play(script.map((step) => ('toolId' in step ? { ...step, toolId: `${step.toolId}-${suffix}` } : step)))
+          play(steps.map((step) => ('toolId' in step ? { ...step, toolId: `${step.toolId}-${suffix}` } : step)))
         },
         respond(requestId, allow, message = 'The user denied this tool call.') {
           if (!pending || pending.requestId !== requestId) return

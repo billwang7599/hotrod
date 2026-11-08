@@ -52,6 +52,14 @@ const CLEAN_ARGS = [
 ]
 
 const DECLINED = 'The user declined to answer.'
+// An error result that means the account is out of usage; older versions add `|<reset epoch>` to the first.
+const LIMIT_ERROR = /usage limit reached|hit your (?:[\w-]+ )?limit|rate[_ ]limit|out of (?:extra )?usage/i
+const LIMIT_NAMES: Record<string, string> = {
+  five_hour: '5-hour',
+  seven_day: 'weekly',
+  seven_day_opus: 'weekly Opus',
+  seven_day_sonnet: 'weekly Sonnet',
+}
 const OUTPUT_TAIL_CHARS = 2000
 // Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
 export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024
@@ -82,6 +90,13 @@ async function authStatus(machine: Machine, accountDir?: string): Promise<Accoun
   } catch {
     return { signedIn: false }
   }
+}
+
+// Claude Code gives resets in seconds since the epoch.
+const isoOf = (epoch: unknown) => {
+  const seconds = Number(epoch)
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined
+  return new Date(seconds < 1e12 ? seconds * 1000 : seconds).toISOString()
 }
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
@@ -235,10 +250,23 @@ export const claudeCode: Adapter = {
     let interrupted = false
     let closed = false
     let interruptCount = 0
+    let limited = false
+    const limit = (message: string, resetsAt?: string) => {
+      if (limited) return
+      limited = true
+      emit({ type: 'limit.reached', message, ...(resetsAt && { resetsAt }) })
+    }
 
     const handle = (msg: any) => {
       const subagent = msg.parent_tool_use_id != null
       switch (msg.type) {
+        case 'rate_limit_event': {
+          const info = msg.rate_limit_info ?? {}
+          // Rejected but on overage (extra usage) means the turn goes on and is billed.
+          if (info.status !== 'rejected' || info.isUsingOverage === true) return
+          const name = LIMIT_NAMES[info.rateLimitType] ?? ''
+          return limit(`The account's ${name ? `${name} ` : ''}usage limit is reached`, isoOf(info.resetsAt))
+        }
         case 'stream_event': {
           const delta = msg.event?.delta
           if (subagent) return
@@ -298,6 +326,11 @@ export const claudeCode: Adapter = {
           return
         }
         case 'result': {
+          const failure = msg.is_error ? String(msg.result || msg.errors?.join('\n') || '') : ''
+          if (!interrupted && LIMIT_ERROR.test(failure)) {
+            const [text = failure, epoch] = failure.split('|')
+            limit(text.trim(), isoOf(epoch))
+          }
           const error = interrupted
             ? 'Interrupted'
             : msg.is_error
@@ -336,6 +369,7 @@ export const claudeCode: Adapter = {
           .filter(({ base64 }) => base64.length <= MAX_IMAGE_BASE64_CHARS)
           .map(({ mimeType, base64 }) => ({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }))
         const content = blocks.length ? [{ type: 'text', text }, ...blocks] : text
+        limited = false
         send({ type: 'user', message: { role: 'user', content } })
         emit({ type: 'turn.started' })
       },

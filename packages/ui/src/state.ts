@@ -53,6 +53,7 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
+  | { kind: 'note'; text: string }
 
 export type ChatView = ChatInfo & {
   status: ChatStatus
@@ -191,6 +192,10 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       )
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
+    case 'mod.note':
+      return [...items, { kind: 'note', text: entry.text }]
+    // The turn's error or a mod's note says it.
+    case 'limit.reached':
     case 'turn.started':
       return items
   }
@@ -211,7 +216,7 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   let turn: Shown[] = []
   const endTurn = (live: boolean) => {
     let end = turn.length
-    while (turn[end - 1]?.item.kind === 'error') end--
+    while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
     if (live || end < 2) rows.push(...turn)
     else rows.push({ at: turn[0]!.at, steps: turn.slice(0, end).map((s) => s.item) }, ...turn.slice(end))

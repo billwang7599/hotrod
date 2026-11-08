@@ -351,6 +351,48 @@ describe('claudeCode adapter', () => {
     ])
   })
 
+  describe('usage limits', () => {
+    const rateLimit = (info: Record<string, unknown>) =>
+      JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info }) + '\n'
+    const result = (text: string) =>
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: text }) + '\n'
+
+    it('reports a rejected rate limit once a turn, named and with its reset, and ignores the rest', () => {
+      const { fake, events, session } = startSession()
+      session.prompt('hi')
+      fake.stdout(rateLimit({ status: 'allowed_warning', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' }))
+      fake.stdout(rateLimit({ status: 'rejected', rateLimitType: 'seven_day', isUsingOverage: true }))
+      fake.stdout(rateLimit({ status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' }))
+      fake.stdout(result("You've hit your 5-hour limit · resets 3pm"))
+      const limit = {
+        type: 'limit.reached',
+        message: "The account's 5-hour usage limit is reached",
+        resetsAt: '2030-03-17T17:46:40.000Z',
+      }
+      const ended = { type: 'turn.completed', error: "You've hit your 5-hour limit · resets 3pm" }
+      expect(events.slice(1)).toEqual([limit, ended])
+
+      session.prompt('again')
+      fake.stdout(rateLimit({ status: 'rejected' }))
+      expect(events.at(-1)).toEqual({ type: 'limit.reached', message: "The account's usage limit is reached" })
+    })
+
+    it('reads a limit from the error result alone, with the reset older versions add after a bar', () => {
+      const { fake, events, session } = startSession()
+      session.prompt('hi')
+      fake.stdout(result('Claude AI usage limit reached|1900000000'))
+      expect(events.slice(1, 2)).toEqual([
+        { type: 'limit.reached', message: 'Claude AI usage limit reached', resetsAt: '2030-03-17T17:46:40.000Z' },
+      ])
+      session.prompt('hi')
+      fake.stdout(result('API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}'))
+      expect(events.at(-2)).toMatchObject({ type: 'limit.reached' })
+      session.prompt('hi')
+      fake.stdout(result('Something else broke'))
+      expect(events.at(-2)).toEqual({ type: 'turn.started' })
+    })
+  })
+
   it('ends the session cleanly on exit 0', () => {
     const { fake, events } = startSession()
     fake.exit(0)

@@ -107,6 +107,35 @@ describe('reduce', () => {
     ])
   })
 
+  it("shows a mod's note after the turn's error, outside the folded steps, and nothing for the raw limit", () => {
+    const state = run(
+      snapshot([
+        chat('a', [
+          { at, type: 'user.message', text: 'hi' },
+          { at, type: 'turn.started' },
+          { at, type: 'text.completed', text: 'Looking' },
+          { at, type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} },
+          { at, type: 'limit.reached', message: 'Out of usage' },
+          { at, type: 'turn.completed', error: 'Out of usage' },
+          { at, type: 'mod.note', text: 'Switched to Spare' },
+          { at, type: 'user.message', text: 'hi' },
+        ]),
+      ]),
+    )
+    expect(items(state).slice(-3)).toEqual([
+      { kind: 'error', text: 'Out of usage' },
+      { kind: 'note', text: 'Switched to Spare' },
+      { kind: 'user', text: 'hi' },
+    ])
+    const rows = foldSteps(items(state), false)
+    expect(rows.slice(1).map((row) => ('steps' in row ? 'steps' : row.item.kind))).toEqual([
+      'steps',
+      'error',
+      'note',
+      'user',
+    ])
+  })
+
   it('keeps the selection across a reconnect snapshot, and falls back to Main once it is gone', () => {
     const both = snapshot([chat(MAIN_CHAT_ID), chat('a'), chat('b')])
     const state = run(both, { type: 'select', chatId: 'b' }, { type: 'connection', connected: false }, both)

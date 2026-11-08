@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { Mod, ModChat, ModSession } from '@hotrod/mod-api'
+import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
@@ -3266,5 +3266,125 @@ describe('mods', () => {
       expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
       expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
     })
+  })
+})
+
+describe('usage limits', () => {
+  const limitedScript: FakeStep[] = [
+    { type: 'text.delta', text: 'Work' },
+    { type: 'limit.reached', message: 'Out of usage', resetsAt: at },
+    { type: 'text.completed', text: 'Working on it anyway' },
+  ]
+  type Seen = { limit: LimitReached; status?: string; host: ModHost }
+
+  // Chats whose work folder is listed wait on a permission; the rest run out of usage on every account but `spare`.
+  const asking = new Set<string>()
+  const byAccount = (options: SessionOptions) =>
+    asking.has(basename(options.cwd))
+      ? permissionScript
+      : basename(options.accountDir ?? '') === 'spare'
+        ? textScript
+        : limitedScript
+
+  function setupLimits(onLimit?: (seen: Seen, t: ReturnType<typeof setup>) => void) {
+    const seen: Seen[] = []
+    const watcher: Mod = {
+      id: 'watcher',
+      name: 'Watcher',
+      description: '',
+      enabledByDefault: true,
+      onLimitReached(limit, { host }) {
+        const entry = { limit, status: statusOf(t.core, limit.chat.id), host }
+        seen.push(entry)
+        onLimit?.(entry, t)
+      },
+    }
+    const t = setup(createFakeAdapter(byAccount, 0), tempDir(), TEST_STOP_GRACE_MS, [watcher])
+    return { ...t, seen }
+  }
+
+  it('logs the limit and lets the turn run its course while no mod watches for limits', async () => {
+    const t = setup(limitedScript, tempDir(), TEST_STOP_GRACE_MS, [])
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(types(entriesOf(t.core, chat.id))).toEqual([
+      'user.message',
+      'turn.started',
+      'limit.reached',
+      'text.completed',
+      'turn.completed',
+    ])
+    expect(t.calls[0]!.interrupted).toBeUndefined()
+  })
+
+  it('stops the turn and tells each mod that watches, with the chat idle and the account it ran on', async () => {
+    const t = setupLimits()
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => t.seen.length > 0)
+    expect(t.calls[0]!.interrupted).toBe(true)
+    expect(t.seen).toEqual([
+      {
+        limit: {
+          chat: { id: chat.id, name: 'Chat', engine: 'fake' },
+          engine: 'fake',
+          account: 'default',
+          message: 'Out of usage',
+          resetsAt: at,
+        },
+        status: 'idle',
+        host: expect.anything(),
+      },
+    ])
+    const end = entriesOf(t.core, chat.id).at(-1)
+    expect(end).toMatchObject({ type: 'turn.completed', error: 'Out of usage' })
+    expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'text.completed')).toEqual([
+      { at: expect.any(String), type: 'text.completed', text: 'Work' },
+    ])
+  })
+
+  it("lets a mod list accounts, switch while other chats run, note it and send the message again", async () => {
+    const t = setupLimits(({ limit, host }) => {
+      const { accounts } = host.accounts('fake')!
+      const next = accounts.find((a) => a.id !== limit.account)!
+      host.useAccount('fake', next.id)
+      host.note(limit.chat.id, `Switched to ${next.name}`)
+      host.retry(limit.chat.id)
+    })
+    t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Spare', key: 'sk-spare' })
+    const busy = createChat(t, { name: 'Busy' })
+    const chat = createChat(t)
+    asking.add(busy.id)
+    t.handle({ type: 'chat.send', chatId: busy.id, text: 'Ask first' })
+    // Busy waits on a permission it never gets, so it runs throughout.
+    await until(() => statusOf(t.core, busy.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'And then this' })
+    const done = () => statusOf(t.core, chat.id) === 'idle' && !chatOf(t.core, chat.id)?.queue.length
+    await until(() => t.seen.length > 0 && done())
+
+    expect(t.seen[0]!.host.accounts('fake')).toEqual({
+      engine: 'fake',
+      active: 'spare',
+      accounts: [
+        { id: 'default', name: 'Default', signedIn: true },
+        { id: 'spare', name: 'Spare', signedIn: true },
+      ],
+    })
+    expect(t.seen[0]!.host.accounts('nope')).toBeUndefined()
+    const entries = entriesOf(t.core, chat.id)
+    const shown = entries.flatMap((e) =>
+      e.type === 'user.message' || e.type === 'mod.note' ? [`${e.type}: ${e.text}`] : [],
+    )
+    expect(shown).toEqual([
+      'user.message: Go',
+      'mod.note: Switched to Spare',
+      'user.message: Go\n\nAnd then this',
+    ])
+    expect(entries.at(-1)).toEqual({ at: expect.any(String), type: 'turn.completed' })
+    expect(basename(t.calls.at(-1)!.options.accountDir!)).toBe('spare')
+    expect(statusOf(t.core, busy.id)).toBe('waiting')
+    expect(t.calls[0]!.options.accountDir).toBeUndefined()
   })
 })

@@ -31,6 +31,8 @@ export type EngineEvent =
       input: unknown
     }
   | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
+  // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
+  | { type: 'limit.reached'; message: string; resetsAt?: string }
   | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 
@@ -274,6 +276,7 @@ export type ChatEntry = { at: string } & (
   | ({ type: 'subagent.report'; text: string } & SubagentReport)
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
+  | { type: 'mod.note'; text: string }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 

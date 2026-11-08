@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { Mod, ModRun } from '@hotrod/mod-api'
+import type { Mod, ModHost, ModRun } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
@@ -109,6 +109,9 @@ type Chat = {
   queue: QueuedMessage[]
   summaries: Summaries
   turns: number
+  // The account the running turn started on, and the limit it ran into, if any.
+  account?: string
+  limit?: { message: string; resetsAt?: string }
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -469,7 +472,11 @@ export function openCore(options: {
 
   const allStopped = () => [...chats.values()].every((chat) => !chat.session)
 
-  const endTurn = (chat: Chat, end: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
+  const endTurn = (chat: Chat, ended: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
+    const { limit, account } = chat
+    chat.limit = undefined
+    // A turn the core stopped for its limit shows the limit, not "Interrupted".
+    const end = limit && ended.error ? { ...ended, error: limit.message } : ended
     if (chat.unsavedText) append(chat, { at: end.at, type: 'text.completed', text: chat.unsavedText })
     chat.unsavedText = ''
     append(chat, end)
@@ -479,6 +486,9 @@ export function openCore(options: {
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
+    if (limit) reportLimit(chat, account, limit)
+    // A mod sent the message again, so the turn goes on.
+    if (chat.status !== 'idle') return
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
@@ -499,6 +509,61 @@ export function openCore(options: {
     const reply = chat.entries.slice(asked + 1).findLast((e) => e.type === 'text.completed')
     const text = reply?.type === 'text.completed' ? reply.text : ''
     return { text, report: { chatId: chat.info.id, name: chat.info.name, ...(error && { error }) } }
+  }
+
+  const limitWatchers = () => mods.filter((mod) => isOn(mod) && mod.onLimitReached)
+
+  const reportLimit = (chat: Chat, account: string | undefined, { message, resetsAt }: NonNullable<Chat['limit']>) => {
+    const { engine } = chat.info
+    const limit = {
+      chat: summaryOf(chat.info),
+      engine,
+      ...(account !== undefined && { account }),
+      message,
+      ...(resetsAt && { resetsAt }),
+    }
+    for (const mod of limitWatchers()) {
+      reportErrors(() => mod.onLimitReached!(limit, { values: modValues(mod), host: modHost }))
+    }
+  }
+
+  // A turn's input is the subagent reports and the message it started with, logged together at its start.
+  const retry = (chat: Chat) => {
+    const isInput = (e: ChatEntry) => e.type === 'user.message' || e.type === 'subagent.report'
+    const end = chat.entries.findLastIndex(isInput)
+    if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
+    const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
+    let start = end
+    while (together(chat.entries[start - 1])) start--
+    const again = chat.entries.slice(start, end + 1).map((e): QueuedMessage => {
+      const id = randomBytes(4).toString('hex')
+      if (e.type === 'subagent.report') {
+        const { chatId, name, error } = e
+        return { id, text: e.text, report: { chatId, name, ...(error !== undefined && { error }) } }
+      }
+      const { text, attachments } = e as Extract<ChatEntry, { type: 'user.message' }>
+      return { id, text, ...(attachments && { attachments }) }
+    })
+    setQueue(chat, [...again, ...chat.queue])
+    if (chat.status === 'idle') sendQueue(chat)
+  }
+
+  const modHost: ModHost = {
+    createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
+    send: (chatId, text) => send(chatFor(chatId), text),
+    accounts(engine) {
+      const found = accounts.list().find((state) => state.engine === engine)
+      if (!found) return undefined
+      const list = found.accounts.map(({ id, name, signedIn }) => ({
+        id,
+        name,
+        ...(signedIn !== undefined && { signedIn }),
+      }))
+      return { engine, active: found.active, accounts: list }
+    },
+    useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
+    retry: (chatId) => retry(chatFor(chatId)),
+    note: (chatId, text) => append(chatFor(chatId), { at: new Date().toISOString(), type: 'mod.note', text }),
   }
 
   const removeChats = (family: Chat[]) => {
@@ -968,6 +1033,13 @@ export function openCore(options: {
         }
         if (event.type === 'text.completed') chat.unsavedText = ''
         append(chat, { at, ...event })
+        if (event.type === 'limit.reached') {
+          const { message, resetsAt } = event
+          chat.limit ??= { message, ...(resetsAt && { resetsAt }) }
+          // An engine may wait out the limit; a mod that reacts to it gets the chat idle.
+          if (limitWatchers().length) interrupt(chat, false)
+          return
+        }
         if (event.type === 'question.asked') {
           chat.pendingRequests.set(event.requestId, 'question')
           return setStatus(chat, 'waiting')
@@ -1007,6 +1079,7 @@ export function openCore(options: {
           ...(thinking && { thinking }),
           ...(jail && { sandbox: jail }),
         }
+        chat.account = accounts.activeOf(adapter.id)
         session = adapter.start(machine, options, emit)
         if (chat.status === 'idle') return session.close()
         chat.session = session
@@ -1106,6 +1179,7 @@ export function openCore(options: {
   }
 
   const mcp = openHotrodMcp({
+    host: modHost,
     chats: () => shownChats().map(state),
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,

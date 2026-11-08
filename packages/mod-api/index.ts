@@ -13,10 +13,26 @@ export type ChatSummary = { id: string; name: string; engine: string; parentId?:
 // A mod's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its own.
 export type ModChat = { id: string; name: string; instructions: string; seesAll?: boolean }
 
+export type ModAccount = { id: string; name: string; signedIn?: boolean }
+
+export type ModAccounts = { engine: string; active: string; accounts: ModAccount[] }
+
 export type ModHost = {
   createChat(spec: { name: string; folders?: string[]; files?: string[]; engine?: string }): { id: string }
   send(chatId: string, text: string): void
+  // An engine's saved accounts, in the order Settings lists them, or undefined if it keeps none.
+  accounts(engine: string): ModAccounts | undefined
+  // Makes the account the engine's active one, for every chat. Turns already running keep theirs.
+  useAccount(engine: string, accountId: string): void
+  // Sends the chat's last message again, ahead of anything queued.
+  retry(chatId: string): void
+  // A short line in the chat's transcript, for the user. Agents don't see it.
+  note(chatId: string, text: string): void
 }
+
+// account is the one the turn ran on, absent if the engine keeps no accounts; the active account may have changed
+// since. resetsAt is ISO, if the engine said.
+export type LimitReached = { chat: ChatSummary; engine: string; account?: string; message: string; resetsAt?: string }
 
 export type ModTool = {
   name: string
@@ -59,4 +75,6 @@ export type Mod = {
   tools?: ModTool[]
   mcpServers?(session: ModSession): McpServer[]
   setup?: ModSetup
+  // A turn ran into its account's usage limit. The core stops the turn first, so the chat is idle here.
+  onLimitReached?(limit: LimitReached, context: { values: ModValues; host: ModHost }): void
 }

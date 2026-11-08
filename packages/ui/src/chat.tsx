@@ -719,6 +719,8 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
       ) : (
         <ErrorText>{item.text}</ErrorText>
       )
+    case 'note':
+      return <div className="text-sm text-muted">{item.text}</div>
     case 'thinking':
       return (
         <Row quiet summary={<span className="italic">Thinking…</span>}>
