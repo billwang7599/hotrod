@@ -250,3 +250,20 @@ test('the header warns while a chat may edit anywhere, and where nothing is sand
   expect(header()).toContain('Not sandboxed')
   expect(header()).not.toContain('Edits anywhere')
 })
+
+test('says when Hotrod answered an edit itself', () => {
+  const permission = (outcome: 'allowed' | 'denied', auto?: true): Item => ({
+    kind: 'permission',
+    requestId: `r-${outcome}-${auto}`,
+    name: 'Write',
+    summary: '/x.ts',
+    input: {},
+    outcome,
+    ...(auto && { auto }),
+  })
+  render({ items: [USER, permission('allowed', true), permission('denied', true), permission('denied')] })
+  const text = container.textContent
+  expect(text).toContain('✓ Allowed automatically')
+  expect(text).toContain('✕ Denied: outside the work folder')
+  expect(text).toContain('✕ DeniedWrite')
+})

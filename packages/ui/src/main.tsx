@@ -5,7 +5,7 @@ import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
-import { SettingsDialog, type SettingsPage } from './settings.tsx'
+import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
 import {
@@ -37,7 +37,7 @@ const subscribeResize = (listener: () => void) => {
 declare global {
   interface Window {
     hotrod?: {
-      pickFolder(): Promise<string | null>
+      pickFolder(title?: string): Promise<string | null>
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
@@ -73,6 +73,9 @@ function App() {
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
+  const [changingWorkFolder, setChangingWorkFolder] = useState(false)
+  useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
     setSettingsOpen(true)
@@ -242,6 +245,8 @@ function App() {
               instructions={state.instructions}
               mods={state.mods}
               modelLists={state.modelLists}
+              workFolder={state.workFolder}
+              chooseWorkFolder={() => setChangingWorkFolder(true)}
               connected={connected}
               send={send}
               page={settingsPage}
@@ -310,6 +315,15 @@ function App() {
             send={send}
             pickFolder={window.hotrod?.pickFolder}
             close={() => setNameRequest(null)}
+          />
+          <WorkFolderDialog
+            open={firstRun || changingWorkFolder}
+            workFolder={state.workFolder}
+            connected={connected}
+            send={send}
+            toasts={state.toasts}
+            pickFolder={window.hotrod?.pickFolder}
+            close={firstRun ? undefined : () => setChangingWorkFolder(false)}
           />
           <ConfirmDialog />
         </div>

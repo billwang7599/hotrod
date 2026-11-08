@@ -240,7 +240,10 @@ export function NameDialog({ request, connected, send, pickFolder, close }: Name
                 </label>
                 {isNew && (
                   <label className="flex flex-col gap-4">
-                    <Hint text={`The ${CHAT_NOUN.one} runs in this folder`} side="right">
+                    <Hint
+                      text={`Its agents read this folder; a git folder is checked out in the work folder for them`}
+                      side="right"
+                    >
                       <span className="w-fit text-muted">
                         Folder <span className="text-faint">(optional)</span>
                       </span>

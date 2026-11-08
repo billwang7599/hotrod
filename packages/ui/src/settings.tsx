@@ -13,6 +13,7 @@ import {
   type ModelLists,
   type ModelRole,
   type ModInfo,
+  type WorkFolder,
 } from '@hotrod/core/shared'
 import type { ModSetting } from '@hotrod/mod-api'
 import { SECTIONS } from './context-panel.tsx'
@@ -39,6 +40,8 @@ type PageProps = {
   instructions: { path: string; text: string }
   mods: ModInfo[]
   modelLists: Record<string, ModelLists>
+  workFolder: WorkFolder
+  chooseWorkFolder: () => void
   connected: boolean
   send: (m: ClientMessage) => void
 }
@@ -52,6 +55,11 @@ type Page = {
 }
 
 const NAV_GROUPS = ['Options', 'Mods'] as const
+
+const WORK_FOLDER_TITLE = 'Choose a work folder'
+const WORK_FOLDER_HINT =
+  'Agents and subagents do all their work here, and can write nowhere else unless you allow it for a chat. ' +
+  `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
 
 const ROLES: Record<ModelRole, { name: string; about: string }> = {
   chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
@@ -90,6 +98,25 @@ const PAGES = [
             </SettingRow>
           )
         })}
+      </div>
+    ),
+  },
+  {
+    id: 'work',
+    group: 'Options',
+    title: 'Work folder',
+    hint: WORK_FOLDER_HINT,
+    body: ({ workFolder, chooseWorkFolder, connected }: PageProps) => (
+      <div className={GROUP}>
+        <SettingRow
+          name="Work folder"
+          description={<span className="font-mono">{workFolder.path ?? 'Not chosen'}</span>}
+          hint={`Changing it moves only new ${CHAT_NOUN.many}; existing ones keep their folder.`}
+        >
+          <Button disabled={!connected} onClick={chooseWorkFolder}>
+            Change…
+          </Button>
+        </SettingRow>
       </div>
     ),
   },
@@ -552,6 +579,113 @@ function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) 
       onBlur={commit}
       onKeyDown={(e) => e.key === 'Enter' && commit()}
     />
+  )
+}
+
+type WorkFolderDialogProps = {
+  open: boolean
+  workFolder: WorkFolder
+  connected: boolean
+  send: (m: ClientMessage) => void
+  toasts: { id: number; message: string }[]
+  pickFolder?: (title: string) => Promise<string | null>
+  close?: () => void
+}
+
+export function WorkFolderDialog({ open, workFolder, connected, send, toasts, pickFolder, close }: WorkFolderDialogProps) {
+  const [shown, setShown] = useState(false)
+  const [path, setPath] = useState('')
+  const [sentAfter, setSentAfter] = useState<number>()
+  if (open !== shown) {
+    setShown(open)
+    setPath(workFolder.path ?? '')
+    setSentAfter(undefined)
+  }
+  // The core refuses a folder with an error toast, which the dialog would hide, so it shows here.
+  const error = sentAfter === undefined ? undefined : toasts.findLast((t) => t.id > sentAfter)?.message
+  const focus = useReturnFocus()
+  const choose = (chosen: string) => {
+    setSentAfter(toasts.at(-1)?.id ?? 0)
+    send({ type: 'workFolder.set', path: chosen })
+  }
+  const pick = async () => {
+    const picked = await pickFolder?.(WORK_FOLDER_TITLE)
+    if (!picked) return
+    setPath(picked)
+    choose(picked)
+  }
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (connected && path.trim()) choose(path.trim())
+  }
+  return (
+    <Dialog.Root open={open} onOpenChange={(open) => open || close?.()}>
+      <AnimatePresence>
+        {open && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </Dialog.Overlay>
+            <Dialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={focus.remember}
+              onCloseAutoFocus={focus.restore}
+            >
+              <m.form
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                {...MOTION.pop}
+                onSubmit={submit}
+              >
+                <Hint text={WORK_FOLDER_HINT} side="bottom" align="start">
+                  <Dialog.Title className="w-fit cursor-help text-[16px] font-semibold">{WORK_FOLDER_TITLE}</Dialog.Title>
+                </Hint>
+                <label className="flex flex-col gap-4">
+                  <span className="text-muted">Folder</span>
+                  <span className="flex gap-6">
+                    <input
+                      className="flex-1 font-mono text-sm"
+                      value={path}
+                      placeholder={workFolder.defaultPath}
+                      spellCheck={false}
+                      onChange={(e) => setPath(e.target.value)}
+                    />
+                    {pickFolder && (
+                      <Button type="button" disabled={!connected} onClick={() => void pick()}>
+                        Choose…
+                      </Button>
+                    )}
+                  </span>
+                </label>
+                <p className="text-sm text-muted">
+                  Default: <span className="font-mono wrap-anywhere">{workFolder.defaultPath}</span>
+                </p>
+                {error && <ErrorText>{error}</ErrorText>}
+                <div className="flex flex-wrap justify-end gap-8">
+                  <Button
+                    type="button"
+                    className="mr-auto"
+                    disabled={!connected}
+                    onClick={() => choose(workFolder.defaultPath)}
+                  >
+                    Use default
+                  </Button>
+                  {close && (
+                    <Dialog.Close asChild>
+                      <Button type="button">Cancel</Button>
+                    </Dialog.Close>
+                  )}
+                  <Button variant="primary" disabled={!connected || !path.trim()}>
+                    Use this folder
+                  </Button>
+                </div>
+              </m.form>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
+    </Dialog.Root>
   )
 }
 
