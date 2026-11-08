@@ -500,7 +500,7 @@ it('tells a chat that can spawn subagents the saved subagent instructions, or th
   expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
 })
 
-it("starts a subagent on its role's list, keeping only its parent's thinking level", async () => {
+it("starts a subagent on its parent's model and thinking level, unless a role or the Subagents list picks one", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
@@ -513,17 +513,17 @@ it("starts a subagent on its role's list, keeping only its parent's thinking lev
   const token = send('main', 'Plan it').options.hotrodMcp!.token
 
   const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
-  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', thinking })
-  expect(chatIn(core, helper).model).toBeUndefined()
-  expect(sessionOf(helper).options).toMatchObject({ model: small, thinking })
+  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', model: large, thinking })
+  expect(sessionOf(helper).options).toMatchObject({ model: large, thinking })
 
   const planner = (await json(token, 'spawn_subagent', { task: 'Plan', role: 'planning' })).chatId
   expect(sessionOf(planner).options.model).toBe(large)
   expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
 
-  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [large] })
+  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [small] })
   const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
-  expect(sessionOf(next).options.model).toBe(large)
+  expect(chatIn(core, next).model).toBeUndefined()
+  expect(sessionOf(next).options).toMatchObject({ model: small, thinking })
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy", async () => {

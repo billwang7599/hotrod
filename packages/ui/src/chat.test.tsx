@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
-import { reloadSteps, showStepsByDefault } from './steps.ts'
+import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
+import { ChatNav } from './sidebar.tsx'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
@@ -89,10 +90,11 @@ type RenderOptions = {
   contextOpen?: boolean
   contextItems?: ContextItem[]
   folder?: string
+  chats?: ChatView[]
+  select?: (chatId: string) => void
 }
 
-function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
-  const view: ChatView = {
+const viewOf = (chat: Partial<ChatView>): ChatView => ({
     id: 'c1',
     name: 'demo',
     folders: [],
@@ -105,7 +107,10 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
     draft: '',
     queue: [],
     ...chat,
-  }
+})
+
+function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
+  const view = viewOf(chat)
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -114,7 +119,8 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
             <Chat
               chat={view}
               folder={options.folder}
-              chats={[view]}
+              chats={[view, ...(options.chats ?? [])]}
+              select={options.select}
               engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
               connected
               send={send}
@@ -666,4 +672,80 @@ test('each context card collapses to its header, its switch still working, and s
   await vi.waitFor(() => expect(globalBox()).not.toBeNull())
   showPaths('context', false)
   localStorage.clear()
+})
+
+const SPACE = viewOf({ id: 'p1', name: 'Space' })
+const pendingTool = (outcome: 'pending' | 'allowed') =>
+  tool(outcome === 'pending' ? 'waiting' : 'running', '', {
+    summary: 'rm -rf build',
+    permission: { requestId: 'r1', name: 'Bash', toolKind: 'shell', summary: 'rm -rf build', input: {}, outcome },
+  })
+const subagent = (change: Partial<ChatView> = {}) =>
+  viewOf({ id: 's1', name: 'Fix tests', parentId: 'p1', subagent: true, status: 'waiting', items: [USER, pendingTool('pending')], ...change })
+
+test("a subagent's permission request waits in its space, which answers it and turns the down button amber", () => {
+  const sent: ClientMessage[] = []
+  const space = { ...SPACE, status: 'running' as const, items: [USER, REPLY], draft: 'More' }
+  render(space, (m) => sent.push(m), { chats: [subagent()] })
+  const card = () => container.querySelector('[aria-label="Request from subagent Fix tests"]')
+  expect(card()!.textContent).toContain('Subagent Fix tests wants to run Bash')
+  expect(card()!.textContent).toContain('rm -rf build')
+  scrollTo(0)
+  grow(JUMP_BELOW_PX * 3)
+  expect(container.querySelector('[aria-label="Scroll to the permission request"]')!.className).toContain('text-amber')
+
+  const approve = [...card()!.querySelectorAll('button')].find((b) => b.textContent === 'Approve')!
+  act(() => approve.click())
+  expect(sent.at(-1)).toEqual({ type: 'permission.respond', chatId: 's1', requestId: 'r1', allow: true })
+
+  render(space, () => {}, { chats: [subagent({ status: 'running', items: [USER, pendingTool('allowed')] })] })
+  expect(card()).toBeNull()
+  render(space, () => {}, { chats: [subagent({ status: 'stopping' })] })
+  expect(card()).toBeNull()
+})
+
+test("a subagent's own view shows where its request waits, with a way to the space instead of Approve", () => {
+  const select = vi.fn()
+  render(subagent(), () => {}, { chats: [SPACE], select })
+  expect(container.textContent).toContain('Waiting for approval in Space')
+  const buttons = [...container.querySelectorAll('button')]
+  expect(buttons.some((b) => b.textContent === 'Approve')).toBe(false)
+  act(() => buttons.find((b) => b.textContent === 'Go to Space')!.click())
+  expect(select).toHaveBeenCalledWith('p1')
+})
+
+test("a subagent without its own choice shows thinking and tool calls the way its space does", () => {
+  const steps: Item[] = [tool('done', 'a.txt'), { kind: 'text', text: 'Installing them.' }, tool('done', '', { toolId: 't2' })]
+  const sub = subagent({ status: 'idle', items: [USER, ...steps, { kind: 'text', text: 'All set' }] })
+  render(sub, () => {}, { chats: [SPACE] })
+  expect(foldButton()?.textContent).toBe('3 steps')
+  act(() => showStepsIn('p1', true))
+  expect(foldButton()).toBeUndefined()
+  act(() => showStepsIn('s1', false))
+  expect(foldButton()?.textContent).toBe('3 steps')
+  localStorage.clear()
+  act(() => reloadSteps())
+})
+
+test("the sidebar shows a space as waiting while a subagent below it waits for approval", () => {
+  const dot = (name: string) =>
+    [...container.querySelectorAll('nav button, button')]
+      .find((b) => b.textContent?.startsWith(name))
+      ?.querySelector('[data-status]')
+      ?.getAttribute('data-status')
+  const nav = (chats: ChatView[]) =>
+    act(() =>
+      root.render(
+        <LazyMotion features={domAnimation} strict>
+          <Tooltip.Provider delayDuration={0}>
+            <ChatNav chats={chats} selectedId="p1" connected send={() => {}} select={() => {}} askName={() => {}} />
+          </Tooltip.Provider>
+        </LazyMotion>,
+      ),
+    )
+  nav([SPACE, subagent()])
+  expect(dot('Space')).toBe('waiting')
+  expect(dot('Fix tests')).toBe('waiting')
+  nav([SPACE, subagent({ status: 'running', items: [USER, pendingTool('allowed')] })])
+  expect(dot('Space')).toBe('idle')
 })

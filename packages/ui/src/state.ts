@@ -328,6 +328,32 @@ export const familyOf = (chats: ChatView[], chatId: string): ChatView[] => [
   ...chats.filter((c) => c.parentId === chatId).flatMap((c) => familyOf(chats, c.id)),
 ]
 
+/** The chat and the chats above it, nearest first, ending at its space. */
+export function lineOf(chats: ChatView[], chat: ChatView): ChatView[] {
+  const parent = chats.find((c) => c.id === chat.parentId)
+  return parent ? [chat, ...lineOf(chats, parent)] : [chat]
+}
+
+const pendingIn = (chat: ChatView): Permission[] =>
+  chat.status !== 'waiting'
+    ? []
+    : chat.items.flatMap((i) =>
+        i.kind === 'permission' && i.outcome === 'pending'
+          ? [i]
+          : i.kind === 'tool' && i.permission?.outcome === 'pending'
+            ? [i.permission]
+            : [],
+      )
+
+export type SubagentRequest = { chat: ChatView; permission: Permission }
+
+/** Permission requests waiting in the subagents below a chat, which the user answers from that chat. */
+export const subagentRequests = (chats: ChatView[], chatId: string): SubagentRequest[] =>
+  familyOf(chats, chatId)
+    .slice(1)
+    .filter((c) => c.subagent && !c.archived)
+    .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
+
 export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {
   const parent = chats.find((c) => c.id === chat.parentId)
   return chat.folders[0] ?? (parent && folderOf(chats, parent))

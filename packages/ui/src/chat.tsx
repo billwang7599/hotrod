@@ -63,6 +63,8 @@ import {
   type ChatView,
   type Item,
   type Permission,
+  lineOf,
+  subagentRequests,
 } from './state.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
@@ -368,15 +370,31 @@ type PromptProps = {
   chat: ChatView
   connected: boolean
   send: (m: ClientMessage) => void
+  // Set in a subagent's own view: its requests are answered in this chat, its space, not here.
+  space?: ChatView
+  select?: (chatId: string) => void
+  // Set in a space, on the requests of a subagent below it.
+  fromSubagent?: boolean
 }
 
-function PermissionPrompt({ permission, chat, connected, send }: PromptProps) {
+function PermissionPrompt({ permission, chat, connected, send, space, select, fromSubagent }: PromptProps) {
   const respond = (allow: boolean) =>
     send({ type: 'permission.respond', chatId: chat.id, requestId: permission.requestId, allow })
   return (
-    <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised">
+    <div
+      className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised"
+      aria-label={fromSubagent ? `Request from subagent ${chat.name}` : undefined}
+    >
       <div className="text-body">
-        Allow <strong>{permission.name}</strong>?
+        {fromSubagent ? (
+          <>
+            Subagent <strong>{chat.name}</strong> wants to run <strong>{permission.name}</strong>
+          </>
+        ) : (
+          <>
+            Allow <strong>{permission.name}</strong>?
+          </>
+        )}
       </div>
       <pre className="rounded border bg-bg px-10 py-8">{permission.summary}</pre>
       <details className="group">
@@ -386,7 +404,16 @@ function PermissionPrompt({ permission, chat, connected, send }: PromptProps) {
         </summary>
         <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{JSON.stringify(permission.input, null, 2)}</pre>
       </details>
-      {chat.status === 'waiting' ? (
+      {space && chat.status === 'waiting' ? (
+        <div className="flex items-center gap-8 text-sm text-muted" data-waiting-in={space.id}>
+          <span className="flex-1">Waiting for approval in {space.name}</span>
+          {select && (
+            <Button size="small" onClick={() => select(space.id)}>
+              Go to {space.name}
+            </Button>
+          )}
+        </div>
+      ) : chat.status === 'waiting' ? (
         <div className="flex gap-8">
           <Button variant="primary" disabled={!connected} onClick={() => respond(true)}>
             Approve
@@ -408,9 +435,12 @@ type ItemProps = {
   contextItems?: ContextItem[]
   connected: boolean
   send: (m: ClientMessage) => void
+  space?: ChatView
+  select?: (chatId: string) => void
 }
 
-function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
+function ItemView({ item, chat, contextItems, connected, send, space, select }: ItemProps) {
+  const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
     case 'user':
       return (
@@ -498,13 +528,13 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
       return (
         <div className="flex flex-col gap-6">
           {row}
-          <PermissionPrompt permission={item.permission} chat={chat} connected={connected} send={send} />
+          <PermissionPrompt permission={item.permission} {...promptProps} />
         </div>
       )
     }
     case 'permission':
       if (item.outcome === 'pending') {
-        return <PermissionPrompt permission={item} chat={chat} connected={connected} send={send} />
+        return <PermissionPrompt permission={item} {...promptProps} />
       }
       return (
         <Row
@@ -545,6 +575,7 @@ type ChatProps = {
   setColumnPx: (px: number) => void
   notify: (message: string) => void
   workFolder: WorkFolder
+  select?: (chatId: string) => void
 }
 
 export function Chat(props: ChatProps) {
@@ -566,7 +597,12 @@ export function Chat(props: ChatProps) {
   const jumping = useRef(false)
   const [jumpShown, setJumpShown] = useState(false)
   const reduceMotion = useReducedMotion()
-  const stepsShown = useStepsShown(chat.id)
+  const line = lineOf(props.chats, chat)
+  const space = line.at(-1)!
+  const stepsShown = useStepsShown(chat.id, ...line.slice(1).map((c) => c.id))
+  const viewOnly = !!chat.subagent
+  // Subagents never ask in their own view: their requests wait in the space above them.
+  const requests = viewOnly ? [] : subagentRequests(props.chats, chat.id)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
@@ -596,7 +632,7 @@ export function Chat(props: ChatProps) {
     jumping.current = false
   }
 
-  useLayoutEffect(follow, [chat.items, chat.status, chat.draft])
+  useLayoutEffect(follow, [chat.items, chat.status, chat.draft, requests.length])
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -624,9 +660,8 @@ export function Chat(props: ChatProps) {
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
   const working = busy && !archived && !text
-  const asking = chat.status === 'waiting'
+  const asking = chat.status === 'waiting' || requests.length > 0
   const canQueue = connected && busy && !archived
-  const viewOnly = !!chat.subagent
   const showEngineNote = engineOff && !archived && chat.status === 'idle' && !viewOnly
   const last = chat.items.at(-1)
   const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
@@ -692,7 +727,13 @@ export function Chat(props: ChatProps) {
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
-  const itemProps = { chat, contextItems: props.contextItems, connected, send }
+  const itemProps = {
+    chat,
+    contextItems: props.contextItems,
+    connected,
+    send,
+    ...(viewOnly && space !== chat && { space, select: props.select }),
+  }
 
   return (
     <div className="flex min-h-0 flex-1" style={{ '--column': `${props.columnPx}px` } as CSSProperties}>
@@ -745,12 +786,12 @@ export function Chat(props: ChatProps) {
               </span>
             )}
           </div>
-          {(editsAnywhere(chat, workFolder) || !workFolder.canSandbox) && (
+          {(editsAnywhere(...line, workFolder) || !workFolder.canSandbox) && (
             <Hint
               text={
                 !workFolder.canSandbox
                   ? NOT_SANDBOXED_HINT
-                  : chat.editAnywhere === undefined
+                  : line.every((c) => c.editAnywhere === undefined)
                     ? EDITS_ANYWHERE_ALL_HINT
                     : EDITS_ANYWHERE_HINT
               }
@@ -939,6 +980,18 @@ export function Chat(props: ChatProps) {
               </m.div>
             )}
           </AnimatePresence>
+          {requests.length > 0 && (
+            <ul
+              className="mx-auto mb-8 flex max-h-[50vh] max-w-column flex-col gap-8 overflow-y-auto"
+              aria-label="Subagent requests"
+            >
+              {requests.map(({ chat: below, permission }) => (
+                <li key={`${below.id}-${permission.requestId}`}>
+                  <PermissionPrompt permission={permission} chat={below} connected={connected} send={send} fromSubagent />
+                </li>
+              ))}
+            </ul>
+          )}
           {viewOnly && !archived && (
             <div
               className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-10 text-muted"

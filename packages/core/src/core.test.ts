@@ -755,20 +755,37 @@ describe('edits', () => {
     expect(t.calls[1]?.options.sandbox).toBeDefined()
   })
 
-  it('never passes edits anywhere on: subagents and new spaces start without it', async () => {
-    const first = setup(editScript(join(tempDir(), 'a.ts')))
+  it("runs a subagent on its space's permission switches, live, unless it has its own; new spaces start without", async () => {
+    const first = setup(textScript)
     const space = createChat(first, { name: 'Space' })
-    first.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
     first.core.close()
     mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
     const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
     writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
-    const t = setup(textScript, first.garage)
-    expect(chatOf(t.core, space.id)?.editAnywhere).toBe(true)
+    const t = setup(editScript(join(tempDir(), 'a.ts')), first.garage)
+    const edit = async (until_: 'idle' | 'waiting') => {
+      t.handle({ type: 'chat.send', chatId: 'sub', text: 'edit' })
+      await until(() => statusOf(t.core, 'sub') === until_)
+      return t.calls.at(-1)!.options
+    }
+    expect((await edit('idle')).sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
+
+    // Switching edits anywhere on in the space applies to its subagent at once, which then asks the user.
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
     expect(chatOf(t.core, 'sub')).not.toHaveProperty('editAnywhere')
-    t.handle({ type: 'chat.send', chatId: 'sub', text: 'hi' })
+    expect(await edit('waiting')).not.toHaveProperty('sandbox')
+    const request = entriesOf(t.core, 'sub').findLast((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: 'sub', requestId: request.requestId, allow: true })
     await until(() => statusOf(t.core, 'sub') === 'idle')
-    expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
+    expect(resolved(t, 'sub').at(-1)).toMatchObject({ requestId: request.requestId, allow: true })
+    expect(entriesOf(t.core, 'sub').findLast((e) => e.type === 'tool.completed')).toMatchObject({ output: 'written' })
+
+    // Its own switch wins over the space's.
+    t.handle({ type: 'chat.setPermission', chatId: 'sub', name: 'editAnywhere', enabled: false })
+    expect((await edit('idle')).sandbox).toBeDefined()
+
+    expect(createChat(t, { name: 'Next' })).not.toHaveProperty('editAnywhere')
     const nope = { type: 'chat.setPermission' as const, chatId: 'nope', name: 'editAnywhere' as const, enabled: true }
     expect(() => t.handle(nope)).toThrow('Unknown chat')
   })

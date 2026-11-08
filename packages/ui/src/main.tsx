@@ -269,6 +269,7 @@ function App() {
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists[selected.engine]}
+                select={select}
               />
             ) : (
               <>

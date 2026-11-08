@@ -58,9 +58,10 @@ export function useStepsDefault(): boolean {
   return useSyncExternalStore(subscribe, snapshot, snapshot).default
 }
 
-export function useStepsShown(chatId: string): boolean {
+/** A chat without a choice of its own follows the first chat above it that has one (a subagent, its space's). */
+export function useStepsShown(chatId: string, ...above: string[]): boolean {
   const saved = useSyncExternalStore(subscribe, snapshot, snapshot)
-  return saved.chats[chatId] ?? saved.default
+  return [chatId, ...above].map((id) => saved.chats[id]).find((on) => on !== undefined) ?? saved.default
 }
 
 /** Whether thinking and tool rows start open, for the rows inside one chat's transcript. */

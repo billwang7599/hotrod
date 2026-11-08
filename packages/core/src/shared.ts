@@ -169,8 +169,8 @@ export type Worktree = { path: string; branch: string }
 
 export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
-export const editsAnywhere = (chat: PermissionSwitches, workFolder: PermissionSwitches) =>
-  switchedOn('editAnywhere', chat, workFolder)
+// Layers nearest first: a chat, the chats above it, then the work folder's defaults.
+export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('editAnywhere', ...layers)
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 

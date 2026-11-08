@@ -17,7 +17,7 @@ import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, 
 import { usePathsShown } from './paths.ts'
 import { showStepsIn, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
-import { folderName, type ChatView } from './state.ts'
+import { folderName, lineOf, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
@@ -60,7 +60,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   },
 }
 const PERMISSIONS_HINT =
-  'Each shows Settings → Work folder until you pick. A pick is for this chat only; its subagents follow their own.'
+  'Each shows Settings → Work folder until you pick, or for a subagent, its space. A pick is for this chat only.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -371,6 +371,8 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
+  // A subagent follows its space's switches unless it has its own.
+  const above = chat ? lineOf(chats, chat).slice(1) : []
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const [tab, setTab] = useState<PanelTabId>(() => {
@@ -410,7 +412,7 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
             {PERMISSION_SWITCHES.map((name) => {
               const { label, amberWhileOn } = PERMISSIONS[name]
-              const on = switchedOn(name, chat, workFolder)
+              const on = switchedOn(name, chat, ...above, workFolder)
               const amber = amberWhileOn && on
               return (
                 <div

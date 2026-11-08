@@ -4,7 +4,7 @@ import { Dialog, DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
-import { chatTree, familyOf, folderOf, type ChatView, type TreeRow } from './state.ts'
+import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
 const DOTS: Record<ChatStatus, string> = {
@@ -61,16 +61,16 @@ type RowProps = {
   animate: boolean
   title: string
   selected: boolean
+  // Shown as the chat's status while a subagent below it waits for approval, since the user answers it here.
+  status: ChatStatus
   showEngine: boolean
   select: () => void
   menu?: MenuItem[]
   fold?: { folded: boolean; hidden: ChatView[]; toggle: () => void }
 }
 
-function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, select, menu, fold }: RowProps) {
-  const status = fold?.folded
-    ? BUSIEST.find((s) => [chat, ...fold.hidden].some((c) => c.status === s))!
-    : chat.status
+function ChatRow({ row: { chat, depth }, animate, title, selected, status: own, showEngine, select, menu, fold }: RowProps) {
+  const status = fold?.folded ? BUSIEST.find((s) => [own, ...fold.hidden.map((c) => c.status)].includes(s))! : own
   const highlight = selected
     ? 'bg-raised text-text'
     : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
@@ -88,7 +88,7 @@ function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, s
         title={title}
         onClick={select}
       >
-        <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} />
+        <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} data-status={status} />
         {chat.mod === 'home' && <HouseIcon />}
         <span className="min-w-0 flex-1 truncate">{chat.name}</span>
         {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
@@ -179,6 +179,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
     const folder = folderOf(chats, chat) ?? 'Not tied to a folder'
     const below = familyOf(chats, chat.id).filter((c) => c.id !== chat.id && c.archived === chat.archived)
     const isFolded = folded.has(chat.id)
+    const asksBelow = !chat.subagent && subagentRequests(chats, chat.id).length > 0
     return (
       <ChatRow
         key={chat.id}
@@ -186,6 +187,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         animate={settled.current}
         title={`${chat.name}: ${folder}`}
         selected={chat.id === selectedId}
+        status={asksBelow ? 'waiting' : chat.status}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
         menu={chat.mod ? undefined : chatMenu(chat)}

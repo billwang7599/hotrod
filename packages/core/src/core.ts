@@ -440,6 +440,10 @@ export function openCore(options: {
     return parent ? [...chainOf(parent), chat] : [chat]
   }
 
+  // A chat's permission switches, nearest first: its own, then each chat above it (a subagent follows its space live),
+  // then the defaults in settings.
+  const switchesOf = (chat: Chat) => [...chainOf(chat).reverse().map((c) => c.info), settings]
+
   const familyOf = (chat: Chat): Chat[] => [
     chat,
     ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id).flatMap(familyOf),
@@ -576,7 +580,12 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt: new Date().toISOString(),
-      ...(parent?.info.engine === engine && { thinking: parent.info.thinking }),
+      // A subagent on its parent's engine takes its thinking level, and its model unless a role picks one: the role
+      // the tool call names, or the Subagents model list once the user has filled it in.
+      ...(parent?.info.engine === engine && {
+        thinking: parent.info.thinking,
+        ...(spec.role === undefined && !listsOf(engine).subagents.length && { model: parent.info.model }),
+      }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parentMemory?.messages.length) {
@@ -832,7 +841,7 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
-    const editAnywhere = editsAnywhere(chat.info, settings)
+    const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
       throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
     }
@@ -902,7 +911,7 @@ export function openCore(options: {
           const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
           return { allow: false, message }
         }
-        const on = (name: PermissionSwitch) => switchedOn(name, chat.info, settings)
+        const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
         if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
         return { allow: true }
