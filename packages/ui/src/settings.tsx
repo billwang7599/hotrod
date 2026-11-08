@@ -62,10 +62,6 @@ const WORK_FOLDER_HINT =
   'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
 
-const EDIT_ANYWHERE_ALL_HINT =
-  `Every chat: Home, ${CHAT_NOUN.many} and subagents. On: no sandbox, and edits outside the work folder ask you ` +
-  'first, from each chat’s next message. Off: each chat’s own switch in its Context panel decides.'
-
 const PERMISSION_DEFAULT_HINT =
   `The default for every chat: Home, ${CHAT_NOUN.many} and subagents. Each can choose otherwise in its Context panel.`
 
@@ -125,31 +121,24 @@ const PAGES = [
             Change…
           </Button>
         </SettingRow>
-        <SettingRow
-          name={<span className={workFolder.editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>}
-          hint={EDIT_ANYWHERE_ALL_HINT}
-        >
-          <Switch
-            label="Allow edits outside the work folder"
-            checked={workFolder.editAnywhere === true}
-            disabled={!connected}
-            onChange={(enabled) => send({ type: 'workFolder.setEditAnywhere', enabled })}
-          />
-        </SettingRow>
-        {PERMISSION_SWITCHES.map((name) => (
-          <SettingRow
-            key={name}
-            name={PERMISSIONS[name].label}
-            hint={`${PERMISSIONS[name].about} ${PERMISSION_DEFAULT_HINT}`}
-          >
-            <Switch
-              label={PERMISSIONS[name].label}
-              checked={switchedOn(name, workFolder)}
-              disabled={!connected}
-              onChange={(enabled) => send({ type: 'permission.setDefault', name, enabled })}
-            />
-          </SettingRow>
-        ))}
+        {PERMISSION_SWITCHES.map((name) => {
+          const { label, about, amberWhileOn } = PERMISSIONS[name]
+          const on = switchedOn(name, workFolder)
+          return (
+            <SettingRow
+              key={name}
+              name={<span className={amberWhileOn && on ? 'text-amber' : ''}>{label}</span>}
+              hint={`${about} ${PERMISSION_DEFAULT_HINT}`}
+            >
+              <Switch
+                label={label}
+                checked={on}
+                disabled={!connected}
+                onChange={(enabled) => send({ type: 'permission.setDefault', name, enabled })}
+              />
+            </SettingRow>
+          )
+        })}
       </div>
     ),
   },

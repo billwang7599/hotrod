@@ -116,19 +116,6 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
   return sent
 }
 
-test('Settings → Work folder turns edits outside the work folder on for every chat', () => {
-  const editSwitch = () =>
-    dialog().querySelector('[aria-label="Allow edits outside the work folder"]') as HTMLButtonElement
-  const sent = renderSettings({ ...workFolder, path: '/garage/work' })
-  expect(editSwitch().getAttribute('aria-checked')).toBe('false')
-  act(() => editSwitch().click())
-  expect(sent).toEqual([{ type: 'workFolder.setEditAnywhere', enabled: true }])
-  renderSettings({ ...workFolder, path: '/garage/work', editAnywhere: true }, sent)
-  expect(editSwitch().getAttribute('aria-checked')).toBe('true')
-  act(() => editSwitch().click())
-  expect(sent.at(-1)).toEqual({ type: 'workFolder.setEditAnywhere', enabled: false })
-})
-
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
   for (const name of PERMISSION_SWITCHES) {
     const toggle = () =>

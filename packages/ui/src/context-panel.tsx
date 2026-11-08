@@ -3,7 +3,6 @@ import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
   CONTEXT_SECTIONS,
-  editsAnywhere,
   GLOBAL_CONTEXT,
   PERMISSION_SWITCHES,
   switchedOn,
@@ -36,7 +35,14 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
     inherited: `The files of the ${CHAT_NOUN.many} above`,
   },
 }
-export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: string }> = {
+export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: string; amberWhileOn?: true }> = {
+  editAnywhere: {
+    label: 'Allow edits outside the work folder',
+    about:
+      'On: no sandbox, and edits outside the work folder ask you first. Off: agents write only in the chat’s ' +
+      'folder in the work folder, and edits elsewhere are denied. From the chat’s next message.',
+    amberWhileOn: true,
+  },
   autoRunCommands: {
     label: 'Run commands without asking',
     about:
@@ -64,13 +70,6 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
-const EDIT_ANYWHERE_HINT =
-  'Off: agents in this chat write only in its folder in the work folder, and edits elsewhere are denied. On: no ' +
-  'sandbox, and edits elsewhere ask you first. This chat only, from its next message; its subagents don’t get it. ' +
-  'Settings → Work folder turns it on for every chat.'
-const EDIT_ANYWHERE_ALL_HINT =
-  'On for every chat in Settings → Work folder: no sandbox, and edits outside the work folder ask you first. Turn ' +
-  'it off there to choose per chat.'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -242,7 +241,6 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
-  const editAnywhere = chat !== undefined && editsAnywhere(chat, workFolder)
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   return (
@@ -259,24 +257,14 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             <Hint text={PERMISSIONS_HINT} align="start">
               <h3 className="w-fit font-semibold">Permissions</h3>
             </Hint>
-            <Hint text={workFolder.editAnywhere ? EDIT_ANYWHERE_ALL_HINT : EDIT_ANYWHERE_HINT} align="start">
-              <label className="flex items-center justify-between gap-8 rounded-lg border px-10 py-8">
-                <span className={editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
-                <Switch
-                  label="Allow edits outside the work folder"
-                  checked={editAnywhere}
-                  disabled={locked || workFolder.editAnywhere === true}
-                  onChange={(enabled) => send({ type: 'chat.setEditAnywhere', chatId, enabled })}
-                />
-              </label>
-            </Hint>
             {PERMISSION_SWITCHES.map((name) => {
-              const { label, about } = PERMISSIONS[name]
+              const { label, about, amberWhileOn } = PERMISSIONS[name]
               const chosen = chat[name]
+              const amber = amberWhileOn && switchedOn(name, chat, workFolder)
               return (
                 <Hint key={name} text={about} align="start">
                   <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
-                    <span className="min-w-0 flex-1">{label}</span>
+                    <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
                     <Select
                       label={label}
                       value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}

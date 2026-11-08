@@ -9,6 +9,7 @@ import { PERMISSIONS } from './context-panel.tsx'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
+  PERMISSION_SWITCHES,
   type ClientMessage,
   type ContextItem,
   type ToolKind,
@@ -274,22 +275,6 @@ const hintOf = async (element: Element) => {
   return document.querySelector('[role="tooltip"]')?.textContent
 }
 
-test("a chat's edits anywhere switch shows on and locked while Settings turns it on for every chat", async () => {
-  const sent: ClientMessage[] = []
-  const editSwitch = () =>
-    container.querySelector('[aria-label="Allow edits outside the work folder"]') as HTMLButtonElement
-  render({}, (m) => sent.push(m), { contextOpen: true })
-  expect(editSwitch().getAttribute('aria-checked')).toBe('false')
-  expect(editSwitch().disabled).toBe(false)
-  act(() => editSwitch().click())
-  expect(sent.at(-1)).toEqual({ type: 'chat.setEditAnywhere', chatId: 'c1', enabled: true })
-
-  render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
-  expect(editSwitch().getAttribute('aria-checked')).toBe('true')
-  expect(editSwitch().disabled).toBe(true)
-  expect(await hintOf(editSwitch().closest('label')!)).toContain('every chat in Settings')
-})
-
 const rowButtons = () => [...list().querySelectorAll<HTMLButtonElement>('button[aria-expanded]')]
 const foldButton = () => rowButtons().find((b) => /^\d+ steps$/.test(b.textContent ?? ''))
 const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
@@ -409,28 +394,43 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
 
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
-  const [name, { label }] = Object.entries(PERMISSIONS)[0]! as [keyof typeof PERMISSIONS, { label: string }]
-  const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
-  const fallback = PERMISSION_DEFAULTS[name] ? 'On' : 'Off'
-  const flipped = PERMISSION_DEFAULTS[name] ? 'Off' : 'On'
-  for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
-    const sent: ClientMessage[] = []
-    render(chat, (m) => sent.push(m), { contextOpen: true })
-    expect(select().textContent).toBe(`Default (${fallback})`)
-    act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-    const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith(flipped))!
-    act(() => option.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-    const chatId = 'id' in chat ? chat.id : 'c1'
-    expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId, name, enabled: !PERMISSION_DEFAULTS[name] })
+  const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
+    act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
+    act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   }
+  for (const name of PERMISSION_SWITCHES) {
+    const select = () =>
+      container.querySelector<HTMLButtonElement>(`aside button[aria-label="${PERMISSIONS[name].label}"]`)!
+    const [fallback, flipped] = PERMISSION_DEFAULTS[name] ? ['On', 'Off'] : ['Off', 'On']
+    for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
+      const sent: ClientMessage[] = []
+      render(chat, (m) => sent.push(m), { contextOpen: true })
+      expect(select().textContent).toBe(`Default (${fallback})`)
+      choose(select(), (text) => text.endsWith(flipped))
+      const chatId = 'id' in chat ? chat.id : 'c1'
+      expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId, name, enabled: !PERMISSION_DEFAULTS[name] })
+    }
 
-  render({}, () => {}, { contextOpen: true, workFolder: { [name]: !PERMISSION_DEFAULTS[name] } })
-  expect(select().textContent).toBe(`Default (${flipped})`)
-  const sent: ClientMessage[] = []
-  render({ [name]: true }, (m) => sent.push(m), { contextOpen: true })
-  expect(select().textContent).toBe('On')
-  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  const option = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.includes('Default'))!
-  act(() => option.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
+    render({}, () => {}, { contextOpen: true, workFolder: { [name]: !PERMISSION_DEFAULTS[name] } })
+    expect(select().textContent).toBe(`Default (${flipped})`)
+    const sent: ClientMessage[] = []
+    render({ [name]: true }, (m) => sent.push(m), { contextOpen: true })
+    expect(select().textContent).toBe('On')
+    choose(select(), (text) => text.includes('Default'))
+    expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
+  }
+})
+
+test('a chat turns edits anywhere off while Settings turns it on by default, its label amber only while on', () => {
+  const { label } = PERMISSIONS.editAnywhere
+  const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
+  const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
+  render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
+  expect(select().textContent).toBe('Default (On)')
+  expect(amber()).toContain('text-amber')
+  render({ editAnywhere: false }, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
+  expect(select().textContent).toBe('Off')
+  expect(select().disabled).toBe(false)
+  expect(amber()).not.toContain('text-amber')
 })

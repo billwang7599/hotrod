@@ -149,7 +149,6 @@ export function openCore(options: {
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
     workFolder?: string
-    editAnywhere?: true
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -204,7 +203,6 @@ export function openCore(options: {
     ...(settings.workFolder && { path: settings.workFolder }),
     defaultPath: defaultWorkFolder,
     canSandbox: machine.canSandbox,
-    ...(settings.editAnywhere && { editAnywhere: true }),
     ...Object.fromEntries(
       PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
     ),
@@ -598,11 +596,6 @@ export function openCore(options: {
     })
   }
 
-  const setEditAnywhere = (chat: Chat, enabled: boolean) => {
-    checkActive(chat)
-    updateChat(chat, { editAnywhere: enabled || undefined })
-  }
-
   const checkActive = (chat: Chat) => {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
@@ -776,7 +769,7 @@ export function openCore(options: {
     checkEnabled(adapter.id)
     const editAnywhere = editsAnywhere(chat.info, settings)
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
-      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or for every chat in Settings → Work folder, to run it unsandboxed.")
+      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
     }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
@@ -1090,8 +1083,6 @@ export function openCore(options: {
           return setEngine(chatFor(message.chatId), String(message.engine))
         case 'chat.setModel':
           return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
-        case 'chat.setEditAnywhere':
-          return setEditAnywhere(chatFor(message.chatId), message.enabled === true)
         case 'chat.setPermission': {
           const chat = chatFor(message.chatId)
           const name = checkSwitch(message.name)
@@ -1127,10 +1118,6 @@ export function openCore(options: {
           return writeAgentsFile(globalAgentsFile, message.text)
         case 'workFolder.set':
           return setWorkFolder(message.path)
-        case 'workFolder.setEditAnywhere':
-          settings.editAnywhere = message.enabled === true || undefined
-          saveSettings()
-          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
         case 'permission.setDefault':
           settings[checkSwitch(message.name)] = message.enabled === true
           saveSettings()

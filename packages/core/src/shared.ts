@@ -127,7 +127,7 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const PERMISSION_DEFAULTS = { autoRunCommands: true, askNetworkCommands: true }
+export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true }
 
 export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
 
@@ -157,20 +157,14 @@ export type ChatInfo = PermissionSwitches & {
   thinking?: string
   workDir?: string
   worktrees?: Record<string, Worktree>
-  editAnywhere?: true
 }
 
 export type Worktree = { path: string; branch: string }
 
-export type WorkFolder = PermissionSwitches & {
-  path?: string
-  defaultPath: string
-  canSandbox: boolean
-  editAnywhere?: true
-}
+export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
-export const editsAnywhere = (chat: Pick<ChatInfo, 'editAnywhere'>, workFolder: Pick<WorkFolder, 'editAnywhere'>) =>
-  chat.editAnywhere === true || workFolder.editAnywhere === true
+export const editsAnywhere = (chat: PermissionSwitches, workFolder: PermissionSwitches) =>
+  switchedOn('editAnywhere', chat, workFolder)
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -267,7 +261,6 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
-  | { type: 'chat.setEditAnywhere'; chatId: string; enabled: boolean }
   | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
@@ -281,7 +274,6 @@ export type ClientMessage =
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
   | { type: 'workFolder.set'; path: string }
-  | { type: 'workFolder.setEditAnywhere'; enabled: boolean }
   | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }

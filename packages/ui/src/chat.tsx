@@ -705,7 +705,7 @@ export function Chat(props: ChatProps) {
               text={
                 !workFolder.canSandbox
                   ? NOT_SANDBOXED_HINT
-                  : workFolder.editAnywhere
+                  : chat.editAnywhere === undefined
                     ? EDITS_ANYWHERE_ALL_HINT
                     : EDITS_ANYWHERE_HINT
               }
