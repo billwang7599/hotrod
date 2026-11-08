@@ -75,7 +75,6 @@ const ASSISTANT = 'min-w-0 text-body leading-[1.6] wrap-break-word'
 const TOOL_NAME = 'shrink-0 font-mono text-sm leading-[normal] font-semibold'
 const TOOL_INPUT = 'min-w-0 flex-1 truncate font-mono text-sm leading-[normal] text-muted'
 const TOOL_STATES: Record<string, string> = {
-  running: 'text-green before:animate-blink',
   waiting: 'text-amber',
   error: 'text-red',
 }
@@ -87,6 +86,21 @@ const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
 const FILE_ACTION =
   'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
+const DOT_STAGGER_MS = 200
+
+function Dots({ label, className = '' }: { label: string; className?: string }) {
+  return (
+    <span role="img" aria-label={label} className={`flex h-[1lh] shrink-0 items-center gap-4 ${className}`}>
+      {[2, 1, 0].map((lag) => (
+        <span
+          key={lag}
+          className="size-5 rounded-full bg-current animate-blink motion-reduce:animate-none"
+          style={{ animationDelay: `-${lag * DOT_STAGGER_MS}ms` }}
+        />
+      ))}
+    </span>
+  )
+}
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(false)
@@ -347,7 +361,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
       )
     case 'thinking':
       return (
-        <Row quiet summary={<span className="italic group-last/item:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
+        <Row quiet summary={<span className="italic">Thinking…</span>}>
           <div className="mt-2 mb-4 ml-13 max-h-320 overflow-y-auto border-l-2 pl-12 text-sm leading-[1.5] whitespace-pre-wrap">
             {item.text}
           </div>
@@ -360,17 +374,27 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             <>
               <span className={TOOL_NAME}>{item.name}</span>
               <span className={TOOL_INPUT}>{item.summary}</span>
-              <span
-                className={`flex shrink-0 items-center gap-6 text-sm before:size-6 before:rounded-full before:bg-current ${TOOL_STATES[item.state] ?? 'text-faint'}`}
-              >
-                {item.state === 'waiting' ? 'waiting for approval' : item.state}
-              </span>
+              {item.state === 'running' ? (
+                <Dots label="running" className="text-sm text-green" />
+              ) : (
+                <span
+                  className={`flex shrink-0 items-center gap-6 text-sm before:size-6 before:rounded-full before:bg-current ${TOOL_STATES[item.state] ?? 'text-faint'}`}
+                >
+                  {item.state === 'waiting' ? 'waiting for approval' : item.state}
+                </span>
+              )}
             </>
           }
         >
           <pre className={`${BODY} border-t pl-26`}>
             {item.output ||
-              (item.state === 'running' ? 'Running…' : item.state === 'waiting' ? 'Waiting for approval…' : 'No output')}
+              (item.state === 'running' ? (
+                <Dots label="running" />
+              ) : item.state === 'waiting' ? (
+                'Waiting for approval…'
+              ) : (
+                'No output'
+              ))}
           </pre>
         </Row>
       )
@@ -493,6 +517,8 @@ export function Chat(props: ChatProps) {
   const busy = chat.status !== 'idle'
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
+  const last = chat.items.at(-1)
+  const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
   const hasContent = text.trim() !== '' || pending.length > 0
   const unattach = (removed: Pending[]) => {
@@ -668,6 +694,11 @@ export function Chat(props: ChatProps) {
             {chat.draft && (
               <m.div initial={enter} animate={MOTION.rise.animate}>
                 <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
+              </m.div>
+            )}
+            {awaitingOutput && (
+              <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                <Dots label="Working" />
               </m.div>
             )}
           </div>
