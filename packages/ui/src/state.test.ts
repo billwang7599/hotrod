@@ -131,6 +131,15 @@ describe('reduce', () => {
     expect(state.selectedId).toBe('c')
   })
 
+  it('moves the view up to the closest chat still here when the viewed subagent is removed', () => {
+    const tree = [chat(MAIN_CHAT_ID), chat('c'), chat('s', [], { parentId: 'c' }), chat('t', [], { parentId: 's' })]
+    const removed = (chatId: string): Action => ({ type: 'chat.removed', chatId })
+    const on = (chatId: string) => run(snapshot(tree), { type: 'select', chatId })
+    expect(reduce(on('s'), removed('s')).selectedId).toBe('c')
+    expect(reduce(reduce(on('t'), removed('s')), removed('t')).selectedId).toBe('c')
+    expect(reduce(on(MAIN_CHAT_ID), removed('s')).selectedId).toBe(MAIN_CHAT_ID)
+  })
+
   it('adds a chat once and selects it, then follows its name, folders and archive flag', () => {
     const added: Action = { type: 'chat.added', chat: chat('c', [], { name: 'Build' }) }
     const state = run(

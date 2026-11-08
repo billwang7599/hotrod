@@ -243,8 +243,14 @@ export function reduce(state: State, action: Action): State {
         thinking: undefined,
         ...action.chat,
       }))
-    case 'chat.removed':
-      return keepSelection({ ...state, chats: state.chats.filter((c) => c.id !== action.chatId) })
+    case 'chat.removed': {
+      const chats = state.chats.filter((c) => c.id !== action.chatId)
+      const removed = familyOf(state.chats, action.chatId)
+      if (!removed.some((c) => c.id === state.selectedId)) return keepSelection({ ...state, chats })
+      // A subagent goes once it's done, with any below it; whoever was watching lands on the chat above them.
+      const parentId = removed[0]?.parentId
+      return keepSelection({ ...state, chats, selectedId: parentId ?? state.selectedId })
+    }
     case 'chat.entry':
       return updateChat(state, action.chatId, (c) => ({
         ...c,

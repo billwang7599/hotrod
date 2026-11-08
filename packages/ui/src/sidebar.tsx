@@ -190,7 +190,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         status={asksBelow ? 'waiting' : chat.status}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.mod ? undefined : chatMenu(chat)}
+        menu={chat.mod || chat.subagent ? undefined : chatMenu(chat)}
         fold={below.length ? { folded: isFolded, hidden: below, toggle: () => foldChat(chat.id, !isFolded) } : undefined}
       />
     )

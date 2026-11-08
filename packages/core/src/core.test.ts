@@ -176,6 +176,8 @@ const withoutRules = (instructions = '') =>
     .join('\n\n')
 const chatOf = (core: Core, id: string) => core.chats().find((c) => c.id === id)
 const statusOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.status
+// A subagent is removed when its turn ends, so it counts as idle once it's gone.
+const settled = (core: Core, id: string) => (statusOf(core, id) ?? 'idle') === 'idle'
 const entriesOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.entries ?? []
 const types = (entries: ChatEntry[]) => entries.map((e) => e.type)
 const chatFile = (t: { garage: string }, id: string) => join(t.garage, 'chats', id, 'chat.json')
@@ -356,6 +358,24 @@ describe('chats', () => {
     expect(JSON.parse(readFileSync(chatFile(t, 'aaaa0001'), 'utf8'))).not.toHaveProperty('parentId')
   })
 
+  it('removes a subagent left over from before, once it has worked, with its folder', () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    for (const id of ['done', 'fresh']) {
+      mkdirSync(join(first.garage, 'chats', id), { recursive: true })
+      const saved = { id, name: id, parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+      writeFileSync(join(first.garage, 'chats', id, 'chat.json'), JSON.stringify(saved))
+    }
+    const entry = { at, type: 'user', text: 'Go' }
+    writeFileSync(join(first.garage, 'chats', 'done', 'log.jsonl'), JSON.stringify(entry) + '\n')
+    const t = setup(textScript, first.garage)
+    expect(chatOf(t.core, 'done')).toBeUndefined()
+    expect(existsSync(join(t.garage, 'chats', 'done'))).toBe(false)
+    expect(chatOf(t.core, 'fresh')).toBeDefined()
+    expect(chatOf(t.core, space.id)).toBeDefined()
+  })
+
   it('renames a chat and saves it', () => {
     const t = setup(textScript)
     const chat = createChat(t, { name: 'Old' })
@@ -428,7 +448,7 @@ describe('work folder', () => {
   const workOf = (t: { garage: string }) => join(t.garage, 'work')
   const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options
   }
   const saveSubagent = (garage: string, id: string, parentId: string) => {
@@ -512,7 +532,7 @@ describe('work folder', () => {
       expect(await sessionOf(t, chatId!)).toMatchObject({ cwd: dir, sandbox: { writable: [dir] } })
     }
     expect(chatOf(t.core, 'main')).not.toHaveProperty('workDir')
-    expect(chatOf(t.core, 'spacesub')).not.toHaveProperty('workDir')
+    expect(chatOf(t.core, 'spacesub')).toBeUndefined()
     expect(chatOf(t.core, space.id)?.workDir).toBe(join(workOf(t), space.id))
   })
 
@@ -758,30 +778,41 @@ describe('edits', () => {
   it("runs a subagent on its space's permission switches, live, unless it has its own; new spaces start without", async () => {
     const first = setup(textScript)
     const space = createChat(first, { name: 'Space' })
-    first.core.close()
-    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
-    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
-    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
-    const t = setup(editScript(join(tempDir(), 'a.ts')), first.garage)
-    const edit = async (until_: 'idle' | 'waiting') => {
-      t.handle({ type: 'chat.send', chatId: 'sub', text: 'edit' })
-      await until(() => statusOf(t.core, 'sub') === until_)
-      return t.calls.at(-1)!.options
+    const file = join(tempDir(), 'a.ts')
+    let t = first
+    // A subagent is removed once its turn ends, so each run starts one afresh from what's saved.
+    const freshSub = () => {
+      t.core.close()
+      mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+      const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+      writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+      t = setup(editScript(file), first.garage)
     }
+    // The subagent's session, not the space's that its report wakes.
+    const edit = async (until_: 'idle' | 'waiting') => {
+      const before = t.calls.length
+      t.handle({ type: 'chat.send', chatId: 'sub', text: 'edit' })
+      await until(() => (until_ === 'idle' ? settled(t.core, 'sub') : statusOf(t.core, 'sub') === until_))
+      return t.calls[before]!.options
+    }
+    freshSub()
     expect((await edit('idle')).sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
 
     // Switching edits anywhere on in the space applies to its subagent at once, which then asks the user.
+    freshSub()
     t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
     expect(chatOf(t.core, 'sub')).not.toHaveProperty('editAnywhere')
     expect(await edit('waiting')).not.toHaveProperty('sandbox')
     const request = entriesOf(t.core, 'sub').findLast((e) => e.type === 'permission.requested')
     if (request?.type !== 'permission.requested') throw new Error('no request')
     t.handle({ type: 'permission.respond', chatId: 'sub', requestId: request.requestId, allow: true })
-    await until(() => statusOf(t.core, 'sub') === 'idle')
-    expect(resolved(t, 'sub').at(-1)).toMatchObject({ requestId: request.requestId, allow: true })
-    expect(entriesOf(t.core, 'sub').findLast((e) => e.type === 'tool.completed')).toMatchObject({ output: 'written' })
+    await until(() => settled(t.core, 'sub'))
+    const sent = t.messages.flatMap((m) => (m.type === 'chat.entry' && m.chatId === 'sub' ? [m.entry] : []))
+    expect(sent.findLast((e) => e.type === 'permission.resolved')).toMatchObject({ requestId: request.requestId, allow: true })
+    expect(sent.findLast((e) => e.type === 'tool.completed')).toMatchObject({ output: 'written' })
 
     // Its own switch wins over the space's.
+    freshSub()
     t.handle({ type: 'chat.setPermission', chatId: 'sub', name: 'editAnywhere', enabled: false })
     expect((await edit('idle')).sandbox).toBeDefined()
 
@@ -811,7 +842,7 @@ describe('edits', () => {
       expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
       expect(t.calls.at(-1)?.options.instructions).not.toContain(WRITE_RULES)
       t.handle({ type: 'chat.interrupt', chatId, force: true })
-      await until(() => statusOf(t.core, chatId) === 'idle')
+      await until(() => settled(t.core, chatId))
     }
 
     t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: false })
@@ -885,7 +916,7 @@ describe('commands', () => {
     const status = statusOf(t.core, chatId)
     if (status === 'waiting') {
       t.handle({ type: 'chat.interrupt', chatId, force: true })
-      await until(() => statusOf(t.core, chatId) === 'idle')
+      await until(() => settled(t.core, chatId))
     }
     return status
   }
@@ -2409,7 +2440,7 @@ describe('context', () => {
   }
   const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
@@ -2489,8 +2520,9 @@ describe('context', () => {
     expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: join(work, app.id), extraDirs: [a, b] })
     t.handle({ type: 'context.set', chatId: app.id, path: a, enabled: false })
     expect(await sessionOf(t, app.id)).toMatchObject({ extraDirs: [b] })
-    expect(await sessionOf(t, subagentId)).toMatchObject({ extraDirs: [b] })
-    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: join(work, 'home') })
+    const again = reopenWithSubagent(t, app.id)
+    expect(await sessionOf(again.t, subagentId)).toMatchObject({ extraDirs: [b] })
+    expect(await sessionOf(again.t, 'main')).toMatchObject({ cwd: join(work, 'home') })
   })
 
   it('gives a file that is not text by path with read access, never pasted, down to the subagents', async () => {
@@ -2677,7 +2709,7 @@ describe('models', () => {
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options.model
   }
 

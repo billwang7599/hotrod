@@ -479,6 +479,8 @@ export function openCore(options: {
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
+    // Subagents are workers for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
+    if (chat.info.subagent && chat.status === 'idle') removeChats(familyOf(chat))
   }
 
   const reportErrors = (run: () => void) => {
@@ -495,6 +497,16 @@ export function openCore(options: {
     const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
     const early = error ? ` (The turn ended early: ${error})` : ''
     return `[subagent "${chat.info.name}" (${chat.info.id})] ${text}${early}`
+  }
+
+  const removeChats = (family: Chat[]) => {
+    for (const c of family) {
+      stopSession(c)
+      chats.delete(c.info.id)
+      rmSync(c.dir, { recursive: true, force: true })
+      broadcast({ type: 'chat.removed', chatId: c.info.id })
+      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
+    }
   }
 
   const forceStop = (chat: Chat) =>
@@ -551,6 +563,13 @@ export function openCore(options: {
   for (const id of readdirSync(chatsDir)) {
     if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
+  }
+  // Nothing runs yet, so a subagent that has worked and is still here (Hotrod quit or crashed mid-task, or an older
+  // Hotrod kept it) goes now.
+  for (const chat of chats.values()) {
+    if (!chat.info.subagent || !chat.entries.length) continue
+    chats.delete(chat.info.id)
+    rmSync(chat.dir, { recursive: true, force: true })
   }
 
   const createChat = (spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }) => {
@@ -619,12 +638,7 @@ export function openCore(options: {
   const deleteChat = (chat: Chat) => {
     const family = familyOf(chat)
     family.forEach(checkRemovable)
-    for (const c of family) {
-      chats.delete(c.info.id)
-      rmSync(c.dir, { recursive: true, force: true })
-      broadcast({ type: 'chat.removed', chatId: c.info.id })
-      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
-    }
+    removeChats(family)
   }
 
   const setModEnabled = (mod: Mod, enabled: boolean) => {

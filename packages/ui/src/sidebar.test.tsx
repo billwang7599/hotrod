@@ -67,7 +67,7 @@ const names = (el: Element) => [...el.querySelectorAll('button[title]')].map((b)
 const rowOf = (name: string) =>
   [...container.querySelectorAll('button[title]')].find((b) => b.textContent === name) as HTMLButtonElement
 
-test('Home sits above the spaces, outside their section, and still selects', () => {
+test('Home sits above the spaces, outside their section, and still selects; Home and subagents get no row menu', () => {
   const selected: string[] = []
   render([SPACE, SUBAGENT, HOME], selected)
   expect(container.querySelector('#spaces-label')?.textContent).toBe('spaces')
@@ -78,6 +78,7 @@ test('Home sits above the spaces, outside their section, and still selects', () 
   expect(home.querySelector('svg')).not.toBeNull()
   expect(container.querySelector('[aria-label="More for Home"]')).toBeNull()
   expect(container.querySelector('[aria-label="More for Hotrod"]')).not.toBeNull()
+  expect(container.querySelector('[aria-label="More for Worker"]')).toBeNull()
   act(() => home.click())
   expect(selected).toEqual(['main'])
 })
