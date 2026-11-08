@@ -5,6 +5,8 @@ import { startCore } from '@hotrod/core/main'
 
 const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))
 const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
+// A page that dies again this soon after a reload stays dead instead of looping.
+const RELOAD_COOLDOWN_MS = 10_000
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const VIBRANCY = 'sidebar'
@@ -39,6 +41,12 @@ async function start() {
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, plugins: true },
   })
   window.once('ready-to-show', () => window.show())
+  let lastReloadMs = 0
+  window.webContents.on('render-process-gone', (_event, { reason }) => {
+    if (reason === 'clean-exit' || Date.now() - lastReloadMs < RELOAD_COOLDOWN_MS) return
+    lastReloadMs = Date.now()
+    window.reload()
+  })
 
   let closing: Promise<void> | undefined
   let closed = false
