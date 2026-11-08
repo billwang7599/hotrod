@@ -44,6 +44,8 @@ export function useSettled(ready = true) {
 
 export const CHAT_NOUN = { one: 'space', many: 'spaces' }
 
+export const GROUP = 'flex flex-col rounded-lg border bg-panel px-14 shadow-raised'
+
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
 

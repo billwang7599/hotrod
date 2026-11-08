@@ -15,7 +15,18 @@ import {
   type Mods,
 } from '@hotrod/core/shared'
 import { SECTIONS } from './context-panel.tsx'
-import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Select, Switch, useReturnFocus } from './controls.tsx'
+import {
+  Button,
+  CHAT_NOUN,
+  confirm,
+  ErrorText,
+  GROUP,
+  MOTION,
+  NAV_LABEL,
+  Select,
+  Switch,
+  useReturnFocus,
+} from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 import { Appearance } from './themes.tsx'
 
@@ -53,29 +64,32 @@ const PAGES = [
     group: 'Options',
     title: 'Engines',
     hint: 'Hotrod only starts the engines you turn on here.',
-    body: ({ engines, connected, send }: PageProps) =>
-      engines.map((engine) => {
-        const problem = engineProblem(engine)
-        return (
-          <SettingRow
-            key={engine.id}
-            name={<span className="font-mono">{engine.id}</span>}
-            description={
-              <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
-                {problem ?? 'Ready'}
-                {engine.detail && ` · ${engine.detail}`}
-              </span>
-            }
-          >
-            <Switch
-              label={`${engine.id} on`}
-              checked={engine.enabled}
-              disabled={!connected}
-              onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
-            />
-          </SettingRow>
-        )
-      }),
+    body: ({ engines, connected, send }: PageProps) => (
+      <div className={GROUP}>
+        {engines.map((engine) => {
+          const problem = engineProblem(engine)
+          return (
+            <SettingRow
+              key={engine.id}
+              name={<span className="font-mono">{engine.id}</span>}
+              description={
+                <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
+                  {problem ?? 'Ready'}
+                  {engine.detail && ` · ${engine.detail}`}
+                </span>
+              }
+            >
+              <Switch
+                label={`${engine.id} on`}
+                checked={engine.enabled}
+                disabled={!connected}
+                onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
+              />
+            </SettingRow>
+          )
+        })}
+      </div>
+    ),
   },
   {
     id: 'appearance',
@@ -124,17 +138,20 @@ const PAGES = [
     hint:
       `What a ${CHAT_NOUN.one} uses from ${WORKSHOP_NAME} and the ${CHAT_NOUN.many} above it, unless you switch it in its Context panel. ` +
       'Its own AGENTS.md, folders and files always start on.',
-    body: ({ contextDefaults, connected, send }: PageProps) =>
-      CONTEXT_SECTIONS.map((section) => (
-        <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
-          <Switch
-            label={`${SECTIONS[section].label} from above on by default`}
-            checked={contextDefaults[section]}
-            disabled={!connected}
-            onChange={(enabled) => send({ type: 'context.setDefault', section, enabled })}
-          />
-        </SettingRow>
-      )),
+    body: ({ contextDefaults, connected, send }: PageProps) => (
+      <div className={GROUP}>
+        {CONTEXT_SECTIONS.map((section) => (
+          <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
+            <Switch
+              label={`${SECTIONS[section].label} from above on by default`}
+              checked={contextDefaults[section]}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'context.setDefault', section, enabled })}
+            />
+          </SettingRow>
+        ))}
+      </div>
+    ),
   },
   {
     id: 'mods',
@@ -142,17 +159,19 @@ const PAGES = [
     title: 'Built-in mods',
     hint: 'Mods that ship with Hotrod. Each is off until you turn it on.',
     body: ({ mods: { subagents }, connected, send }: PageProps) => (
-      <SettingRow
-        name="Subagents"
-        description="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
-      >
-        <Switch
-          label="Subagents"
-          checked={subagents.enabled}
-          disabled={!connected}
-          onChange={(on) => send({ type: 'subagents.set', enabled: on, limit: subagents.limit })}
-        />
-      </SettingRow>
+      <div className={GROUP}>
+        <SettingRow
+          name="Subagents"
+          description="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
+        >
+          <Switch
+            label="Subagents"
+            checked={subagents.enabled}
+            disabled={!connected}
+            onChange={(on) => send({ type: 'subagents.set', enabled: on, limit: subagents.limit })}
+          />
+        </SettingRow>
+      </div>
     ),
   },
   {
@@ -161,7 +180,9 @@ const PAGES = [
     title: 'Subagents',
     shown: ({ mods }: PageProps) => mods.subagents.enabled,
     body: ({ mods, connected, send }: PageProps) => (
-      <SubagentLimit subagents={mods.subagents} connected={connected} send={send} />
+      <div className={GROUP}>
+        <SubagentLimit subagents={mods.subagents} connected={connected} send={send} />
+      </div>
     ),
   },
 ] as const satisfies readonly Page[]
@@ -201,83 +222,86 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
           {engine.id} lists no models{engineProblem(engine) && ` (${engineProblem(engine)})`}.
         </p>
       )}
-      {offered.length > 0 &&
-        MODEL_ROLES.map((role) => {
-          const list = lists[role]
-          const { name, about } = ROLES[role]
-          const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
-          const move = (from: number, to: number) => {
-            const next = [...list]
-            next.splice(to, 0, ...next.splice(from, 1))
-            setList(next)
-          }
-          const items = list.map((id, i) => {
-            const label = labelOf(id)
+      {offered.length > 0 && (
+        <div className={GROUP}>
+          {MODEL_ROLES.map((role) => {
+            const list = lists[role]
+            const { name, about } = ROLES[role]
+            const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
+            const move = (from: number, to: number) => {
+              const next = [...list]
+              next.splice(to, 0, ...next.splice(from, 1))
+              setList(next)
+            }
+            const items = list.map((id, i) => {
+              const label = labelOf(id)
+              return (
+                <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
+                  <span className="w-16 text-sm text-faint">{i + 1}</span>
+                  <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
+                    {label ?? `${id} (not offered, skipped)`}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${label ?? id} up`}
+                    disabled={!connected || i === 0}
+                    onClick={() => move(i, i - 1)}
+                  >
+                    ↑
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${label ?? id} down`}
+                    disabled={!connected || i === list.length - 1}
+                    onClick={() => move(i, i + 1)}
+                  >
+                    ↓
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove ${label ?? id}`}
+                    disabled={!connected}
+                    onClick={() => setList(list.filter((m) => m !== id))}
+                  >
+                    ×
+                  </Button>
+                </li>
+              )
+            })
+            const addable = offered.filter((m) => !list.includes(m.id))
             return (
-              <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
-                <span className="w-16 text-sm text-faint">{i + 1}</span>
-                <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
-                  {label ?? `${id} (not offered, skipped)`}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Move ${label ?? id} up`}
-                  disabled={!connected || i === 0}
-                  onClick={() => move(i, i - 1)}
-                >
-                  ↑
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Move ${label ?? id} down`}
-                  disabled={!connected || i === list.length - 1}
-                  onClick={() => move(i, i + 1)}
-                >
-                  ↓
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove ${label ?? id}`}
-                  disabled={!connected}
-                  onClick={() => setList(list.filter((m) => m !== id))}
-                >
-                  ×
-                </Button>
-              </li>
+              <SettingRow
+                key={role}
+                name={name}
+                description={about}
+                below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
+              >
+                <Select
+                  label={`Add a ${name} model for ${engine.id}`}
+                  value=""
+                  placeholder="Add model…"
+                  disabled={!connected || !addable.length}
+                  options={addable.map((m) => ({ value: m.id, label: m.label }))}
+                  onChange={(model) => setList([...list, model])}
+                />
+              </SettingRow>
             )
-          })
-          const addable = offered.filter((m) => !list.includes(m.id))
-          return (
-            <SettingRow
-              key={role}
-              name={name}
-              description={about}
-              below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
-            >
+          })}
+          {engine.defaultThinking && (
+            <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
               <Select
-                label={`Add a ${name} model for ${engine.id}`}
-                value=""
-                placeholder="Add model…"
-                disabled={!connected || !addable.length}
-                options={addable.map((m) => ({ value: m.id, label: m.label }))}
-                onChange={(model) => setList([...list, model])}
+                label={`Default thinking for ${engine.id}`}
+                value={engine.defaultThinking}
+                disabled={!connected}
+                options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
+                onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
               />
             </SettingRow>
-          )
-        })}
-      {offered.length > 0 && engine.defaultThinking && (
-        <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
-          <Select
-            label={`Default thinking for ${engine.id}`}
-            value={engine.defaultThinking}
-            disabled={!connected}
-            options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
-            onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
-          />
-        </SettingRow>
+          )}
+        </div>
       )}
     </section>
   )
@@ -329,108 +353,110 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   return (
     <section className="flex flex-col not-first:pt-24" aria-label={`${id} accounts`}>
       <h3 className="pb-8 font-mono font-semibold">{id}</h3>
-      {listed.accounts.map((a) => (
-        <SettingRow
-          key={a.id}
-          name={accountLabel(a)}
-          description={
-            a.id === 'default' &&
-            (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
-          }
-        >
-          {a.id === listed.active ? (
-            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
-          ) : (
-            <Button
-              size="small"
-              disabled={!connected}
-              onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
-            >
-              Use
-            </Button>
-          )}
-          {a.id !== 'default' && (
-            <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
-              Remove
-            </Button>
-          )}
-        </SettingRow>
-      ))}
-      {!login ? (
-        <SettingRow name="Add account" description="Sign in to another account in your browser.">
-          <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
-            <input
-              className="w-160"
-              value={name}
-              placeholder="Name, e.g. Work"
-              onChange={(e) => setName(e.target.value)}
-            />
-            <Button variant="primary" disabled={!connected || !name.trim()}>
-              Sign in…
-            </Button>
-          </form>
-        </SettingRow>
-      ) : login.error ? (
-        <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
-          <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
-        </SettingRow>
-      ) : (
-        <>
-          <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
-            {!login.url && cancelLogin}
+      <div className={GROUP}>
+        {listed.accounts.map((a) => (
+          <SettingRow
+            key={a.id}
+            name={accountLabel(a)}
+            description={
+              a.id === 'default' &&
+              (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
+            }
+          >
+            {a.id === listed.active ? (
+              <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
+            ) : (
+              <Button
+                size="small"
+                disabled={!connected}
+                onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
+              >
+                Use
+              </Button>
+            )}
+            {a.id !== 'default' && (
+              <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
+                Remove
+              </Button>
+            )}
           </SettingRow>
-          {login.url && (
-            <SettingRow
-              name="Paste a code"
-              description={
-                <>
-                  No window, or it is signed in to another account? Open{' '}
-                  <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
-                    this sign-in link
-                  </a>{' '}
-                  (a private window lets you pick the account), then paste the code it shows.
-                </>
-              }
-            >
-              <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
-                <input
-                  className="w-120"
-                  value={code}
-                  placeholder="Code"
-                  spellCheck={false}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <Button variant="primary" disabled={!connected || !code.trim()}>
-                  Submit code
-                </Button>
-              </form>
-              {cancelLogin}
+        ))}
+        {!login ? (
+          <SettingRow name="Add account" description="Sign in to another account in your browser.">
+            <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
+              <input
+                className="w-160"
+                value={name}
+                placeholder="Name, e.g. Work"
+                onChange={(e) => setName(e.target.value)}
+              />
+              <Button variant="primary" disabled={!connected || !name.trim()}>
+                Sign in…
+              </Button>
+            </form>
+          </SettingRow>
+        ) : login.error ? (
+          <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
+            <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
+          </SettingRow>
+        ) : (
+          <>
+            <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
+              {!login.url && cancelLogin}
             </SettingRow>
-          )}
-        </>
-      )}
-      {accounts.apiKeys && (
-        <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
-          <form className="flex min-w-0 gap-6" onSubmit={addKey}>
-            <input
-              className="w-120"
-              value={keyName}
-              placeholder="API key name"
-              onChange={(e) => setKeyName(e.target.value)}
-            />
-            <input
-              className="w-140"
-              type="password"
-              value={key}
-              placeholder="API key"
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => setKey(e.target.value)}
-            />
-            <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add</Button>
-          </form>
-        </SettingRow>
-      )}
+            {login.url && (
+              <SettingRow
+                name="Paste a code"
+                description={
+                  <>
+                    No window, or it is signed in to another account? Open{' '}
+                    <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                      this sign-in link
+                    </a>{' '}
+                    (a private window lets you pick the account), then paste the code it shows.
+                  </>
+                }
+              >
+                <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
+                  <input
+                    className="w-120"
+                    value={code}
+                    placeholder="Code"
+                    spellCheck={false}
+                    onChange={(e) => setCode(e.target.value)}
+                  />
+                  <Button variant="primary" disabled={!connected || !code.trim()}>
+                    Submit code
+                  </Button>
+                </form>
+                {cancelLogin}
+              </SettingRow>
+            )}
+          </>
+        )}
+        {accounts.apiKeys && (
+          <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
+            <form className="flex min-w-0 gap-6" onSubmit={addKey}>
+              <input
+                className="w-120"
+                value={keyName}
+                placeholder="API key name"
+                onChange={(e) => setKeyName(e.target.value)}
+              />
+              <input
+                className="w-140"
+                type="password"
+                value={key}
+                placeholder="API key"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setKey(e.target.value)}
+              />
+              <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add</Button>
+            </form>
+          </SettingRow>
+        )}
+      </div>
     </section>
   )
 }

@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
-import { Select } from './controls.tsx'
+import { GROUP, Select } from './controls.tsx'
 
 export const TOKENS = [
   'bg',
@@ -489,19 +489,21 @@ export function Appearance() {
   const shown = dark ? 'dark' : 'light'
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
-        <div className="flex min-w-200 flex-1 flex-col gap-2">
-          Base color scheme
-          <div className="text-sm text-muted">Every theme has a light and a dark version. System follows your OS.</div>
+      <div className={GROUP}>
+        <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
+          <div className="flex min-w-200 flex-1 flex-col gap-2">
+            Base color scheme
+            <div className="text-sm text-muted">Every theme has a light and a dark version. System follows your OS.</div>
+          </div>
+          <Select
+            label="Base color scheme"
+            value={scheme}
+            options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
+            onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
+          />
         </div>
-        <Select
-          label="Base color scheme"
-          value={scheme}
-          options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
-          onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
-        />
       </div>
-      <div className="border-t pt-12 pb-10">Themes</div>
+      <div className="pt-24 pb-8 font-semibold">Themes</div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-12">
         {Object.entries(THEMES).map(([id, theme]: [string, Theme]) => (
           <button
