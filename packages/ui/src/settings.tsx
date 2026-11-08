@@ -21,6 +21,7 @@ import {
   confirm,
   ErrorText,
   GROUP,
+  Hint,
   MOTION,
   NAV_LABEL,
   Select,
@@ -141,7 +142,7 @@ const PAGES = [
     body: ({ contextDefaults, connected, send }: PageProps) => (
       <div className={GROUP}>
         {CONTEXT_SECTIONS.map((section) => (
-          <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
+          <SettingRow key={section} name={SECTIONS[section].label} hint={SECTIONS[section].inherited}>
             <Switch
               label={`${SECTIONS[section].label} from above on by default`}
               checked={contextDefaults[section]}
@@ -162,7 +163,7 @@ const PAGES = [
       <div className={GROUP}>
         <SettingRow
           name="Subagents"
-          description="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
+          hint="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
         >
           <Switch
             label="Subagents"
@@ -189,18 +190,20 @@ const PAGES = [
 
 export type SettingsPage = (typeof PAGES)[number]['id']
 
-type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode; below?: ReactNode }
+type RowProps = { name: ReactNode; description?: ReactNode; hint?: string; children?: ReactNode; below?: ReactNode }
 
-function SettingRow({ name, description, children, below }: RowProps) {
+function SettingRow({ name, description, hint, children, below }: RowProps) {
   return (
-    <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
-      <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
-        {name}
-        {description && <div className="text-sm text-muted">{description}</div>}
+    <Hint text={hint} align="start">
+      <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
+        <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
+          {name}
+          {description && <div className="text-sm text-muted">{description}</div>}
+        </div>
+        <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
+        {below && <div className="basis-full">{below}</div>}
       </div>
-      <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
-      {below && <div className="basis-full">{below}</div>}
-    </div>
+    </Hint>
   )
 }
 
@@ -276,7 +279,7 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
               <SettingRow
                 key={role}
                 name={name}
-                description={about}
+                hint={about}
                 below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
               >
                 <Select
@@ -291,7 +294,7 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
             )
           })}
           {engine.defaultThinking && (
-            <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
+            <SettingRow name="Default thinking" hint={`For ${CHAT_NOUN.many} that don't pick a level.`}>
               <Select
                 label={`Default thinking for ${engine.id}`}
                 value={engine.defaultThinking}
@@ -358,10 +361,8 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           <SettingRow
             key={a.id}
             name={accountLabel(a)}
-            description={
-              a.id === 'default' &&
-              (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
-            }
+            description={a.id === 'default' && !a.signedIn && `No one is signed in to ${id} itself`}
+            hint={a.id === 'default' && a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : undefined}
           >
             {a.id === listed.active ? (
               <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
@@ -382,7 +383,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           </SettingRow>
         ))}
         {!login ? (
-          <SettingRow name="Add account" description="Sign in to another account in your browser.">
+          <SettingRow name="Add account" hint="Sign in to another account in your browser.">
             <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
               <input
                 className="w-160"
@@ -435,7 +436,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           </>
         )}
         {accounts.apiKeys && (
-          <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
+          <SettingRow name="Add API key" hint="Use an API key instead of a sign-in.">
             <form className="flex min-w-0 gap-6" onSubmit={addKey}>
               <input
                 className="w-120"
@@ -473,7 +474,7 @@ function SubagentLimit({ subagents: { enabled, limit }, connected, send }: Subag
     } else setDraft(String(limit))
   }
   return (
-    <SettingRow name="Max running per chat" description="How many subagents one chat can run at once. -1 for no limit.">
+    <SettingRow name="Max running per chat" hint="How many subagents one chat can run at once. -1 for no limit.">
       <input
         className="w-72"
         aria-label="Max running per chat"
@@ -537,12 +538,12 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                         {pages
                           .filter((p) => p.group === group)
                           .map((p) => (
-                            <Tabs.Trigger
-                              key={p.id}
-                              value={p.id}
-                              className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text"
-                            >
-                              {p.title}
+                            <Tabs.Trigger key={p.id} value={p.id} asChild>
+                              <Hint text={p.hint} side="right">
+                                <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
+                                  {p.title}
+                                </button>
+                              </Hint>
                             </Tabs.Trigger>
                           ))}
                       </Fragment>
@@ -556,7 +557,6 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                         animate={MOTION.fade.animate}
                       >
                         <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
-                        {p.hint && <p className="mt-4 text-muted">{p.hint}</p>}
                         <div className="mt-16 flex flex-col">{p.body(props)}</div>
                       </m.div>
                     </Tabs.Content>

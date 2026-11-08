@@ -98,6 +98,10 @@
     cursor: pointer;
   }
 
+  [data-hint]:not(button, a, input, [role]) {
+    cursor: help;
+  }
+
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 1px;

@@ -7,7 +7,7 @@ import {
   type ContextItem,
   type ContextSection,
 } from '@hotrod/core/shared'
-import { Button, CHAT_NOUN, Chevron, MOTION, Switch, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, Hint, MOTION, Switch, useSettled } from './controls.tsx'
 import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -18,7 +18,9 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   },
   folders: {
     label: 'Folders',
-    about: 'Where it works; each folder’s AGENTS.md is read in',
+    about:
+      'Where it works; each folder’s AGENTS.md is read in. With none, it runs in the nearest folder above, or a ' +
+      'scratch folder',
     inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
@@ -29,7 +31,7 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
 }
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
-  folders: 'No folders. It runs in the nearest folder above, or a scratch folder.',
+  folders: 'No folders.',
   files: 'No files.',
 }
 const HOME_INTRO = `${WORKSHOP_NAME} keeps no folders or files; name a folder in the chat to work there.`
@@ -95,16 +97,17 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
           {folderName(item.path)}
         </span>
         {own && (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={`Remove ${item.path}`}
-            title="Remove from this chat's context"
-            disabled={readOnly}
-            onClick={() => send({ type: 'context.remove', chatId, section, path: item.path })}
-          >
-            ×
-          </Button>
+          <Hint text="Remove from this chat's context">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove ${item.path}`}
+              disabled={readOnly}
+              onClick={() => send({ type: 'context.remove', chatId, section, path: item.path })}
+            >
+              ×
+            </Button>
+          </Hint>
         )}
         <Switch
           label={`Use ${item.path}`}
@@ -119,9 +122,9 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
       <div className="flex items-start gap-6 text-xs text-faint">
         <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
         {item.section === 'files' && (
-          <span className={PILL} title={item.binary ? 'Not text, so the engine gets its path and opens it' : undefined}>
-            {item.binary ? 'By path' : 'Pasted in full'}
-          </span>
+          <Hint text={item.binary && 'Not text, so the engine gets its path and opens it'}>
+            <span className={PILL}>{item.binary ? 'By path' : 'Pasted in full'}</span>
+          </Hint>
         )}
         {item.binary ? null : item.text.trim() ? (
           <details className="group min-w-0 flex-1">
@@ -187,20 +190,18 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send }
   return (
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center border-b px-14">
-        <span className="font-semibold">Context</span>
+        <Hint text={`${home ? HOME_INTRO : CHAT_INTRO} Edits apply from the next message.`} side="bottom" align="start">
+          <span className="font-semibold">Context</span>
+        </Hint>
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
-        <p className="text-sm text-faint">
-          {home ? HOME_INTRO : CHAT_INTRO} Edits apply from the next message.
-        </p>
         {sections.map((section) => {
           const listed = items?.filter((item) => item.section === section) ?? []
           return (
             <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
-              <h3 className="mb-8 flex flex-col">
-                <span className="font-semibold">{SECTIONS[section].label}</span>
-                <span className="text-sm text-faint">{home ? HOME_AGENTS_ABOUT : SECTIONS[section].about}</span>
-              </h3>
+              <Hint text={home ? HOME_AGENTS_ABOUT : SECTIONS[section].about} align="start">
+                <h3 className="mb-8 w-fit font-semibold">{SECTIONS[section].label}</h3>
+              </Hint>
               <AnimatePresence initial={false}>
                 {listed.map((item) => (
                   <m.div key={item.path} {...MOTION.collapse} initial={settled.current && MOTION.collapse.initial}>

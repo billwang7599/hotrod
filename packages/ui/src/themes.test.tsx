@@ -1,6 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { Tooltip } from 'radix-ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Appearance, chooseAppearance, ELEVATION, startAppearance, THEMES, TOKENS } from './themes.tsx'
 
@@ -233,9 +234,26 @@ describe('appearance', () => {
     fakePage({ dark: true })
     startAppearance()
     chooseAppearance({ theme: 'rosePine' })
-    const html = renderToStaticMarkup(<Appearance />)
+    const html = renderToStaticMarkup(
+      <Tooltip.Provider>
+        <Appearance />
+      </Tooltip.Provider>,
+    )
     for (const theme of Object.values(THEMES)) expect(html).toContain(`>${theme.name}<`)
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
     expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Rosé Pine/)
+  })
+
+  it('explains the color scheme on hover, not on the page', () => {
+    fakePage({ dark: true })
+    startAppearance()
+    const html = renderToStaticMarkup(
+      <Tooltip.Provider>
+        <Appearance />
+      </Tooltip.Provider>,
+    )
+    expect(html).toContain('Base color scheme')
+    expect(html).not.toContain('System follows your OS')
+    expect(html).toMatch(/data-state="closed"[^>]*>(?:(?!<\/div>).)*Base color scheme/)
   })
 })

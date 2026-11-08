@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
-import { Button, CHAT_NOUN, Chevron, confirm, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { chatTree, familyOf, folderName, folderOf, MAIN_CHAT_ID, type ChatView, type TreeRow } from './state.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
@@ -36,15 +36,15 @@ function RowMenu({ label, items }: { label: string; items: MenuItem[] }) {
             transition={MOTION.menu.transition}
           >
             {items.map((item) => (
-              <DropdownMenu.Item
-                key={item.label}
-                disabled={!!item.disabledReason}
-                title={item.disabledReason}
-                onSelect={item.run}
-                className={`flex h-26 items-center rounded-sm px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
-              >
-                {item.label}
-              </DropdownMenu.Item>
+              <Hint key={item.label} text={item.disabledReason} side="left">
+                <DropdownMenu.Item
+                  disabled={!!item.disabledReason}
+                  onSelect={item.run}
+                  className={`flex h-26 items-center rounded-sm px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
+                >
+                  {item.label}
+                </DropdownMenu.Item>
+              </Hint>
             ))}
           </m.div>
         </DropdownMenu.Content>
@@ -235,9 +235,11 @@ export function NameDialog({ request, connected, send, pickFolder, close }: Name
                 </label>
                 {isNew && (
                   <label className="flex flex-col gap-4">
-                    <span className="text-muted">
-                      Folder <span className="text-faint">(optional; it runs there)</span>
-                    </span>
+                    <Hint text={`The ${CHAT_NOUN.one} runs in this folder`} side="right">
+                      <span className="w-fit text-muted">
+                        Folder <span className="text-faint">(optional)</span>
+                      </span>
+                    </Hint>
                     <span className="flex gap-6">
                       <input
                         className="flex-1 font-mono text-sm"

@@ -25,7 +25,7 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, Select, SidePanel, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, Hint, MOTION, Select, SidePanel, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
@@ -100,29 +100,30 @@ type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; o
 
 function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="grid place-items-center aria-pressed:text-text"
-      aria-label={label}
-      aria-pressed={open}
-      title={`${open ? 'Hide' : 'Show'} ${noun}`}
-      onClick={toggle}
-    >
-      <svg
-        className={side === 'left' ? '-scale-x-100' : ''}
-        width="16"
-        height="16"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        aria-hidden="true"
+    <Hint text={`${open ? 'Hide' : 'Show'} ${noun}`}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="grid place-items-center aria-pressed:text-text"
+        aria-label={label}
+        aria-pressed={open}
+        onClick={toggle}
       >
-        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-        <path d="M10 2.5v11" />
-        {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
-      </svg>
-    </Button>
+        <svg
+          className={side === 'left' ? '-scale-x-100' : ''}
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+          <path d="M10 2.5v11" />
+          {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
+        </svg>
+      </Button>
+    </Hint>
   )
 }
 
@@ -206,7 +207,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
     <>
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Trigger asChild>
-          <button className={FILE_ACTION} aria-label={`Open ${name}`} title="Preview">
+          <button className={FILE_ACTION} aria-label={`Open ${name}`}>
             Open
           </button>
         </Dialog.Trigger>
@@ -274,17 +275,18 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
         </AnimatePresence>
       </Dialog.Root>
       {pin && (
-        <button
-          className={FILE_ACTION}
-          disabled={!connected}
-          aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
-          title={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}
-          onClick={() =>
-            send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
-          }
-        >
-          {pin === 'pinned' ? 'Unpin' : 'Pin'}
-        </button>
+        <Hint text={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}>
+          <button
+            className={FILE_ACTION}
+            disabled={!connected}
+            aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
+            onClick={() =>
+              send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
+            }
+          >
+            {pin === 'pinned' ? 'Unpin' : 'Pin'}
+          </button>
+        </Hint>
       )}
     </>
   )
@@ -306,14 +308,15 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
         </div>
       )}
       {pin === 'pinned' && (
-        <span
-          className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
-          role="img"
-          aria-label="Pinned to the context"
-          title="Pinned to this chat's context"
-        >
-          <PinIcon />
-        </span>
+        <Hint text="Pinned to this chat's context">
+          <span
+            className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
+            role="img"
+            aria-label="Pinned to the context"
+          >
+            <PinIcon />
+          </span>
+        </Hint>
       )}
     </div>
   )
@@ -507,7 +510,6 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
-  const hint = chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
   const canAttach = canSend || canQueue
@@ -772,14 +774,15 @@ export function Chat(props: ChatProps) {
                           <FileLabel name={p.name} size={p.size} />
                         </div>
                       )}
-                      <button
-                        className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
-                        aria-label={`Remove ${p.name}`}
-                        title="Remove"
-                        onClick={() => unattach([p])}
-                      >
-                        ×
-                      </button>
+                      <Hint text="Remove">
+                        <button
+                          className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
+                          aria-label={`Remove ${p.name}`}
+                          onClick={() => unattach([p])}
+                        >
+                          ×
+                        </button>
+                      </Hint>
                     </li>
                   ))}
                 </ul>
@@ -807,17 +810,18 @@ export function Chat(props: ChatProps) {
               />
               <div className="flex items-center gap-8 px-6 pb-6">
                 <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="grid shrink-0 place-items-center"
-                    aria-label="Attach files"
-                    title="Attach files, or paste or drop them here"
-                    disabled={!canAttach}
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    <PaperclipIcon />
-                  </Button>
+                  <Hint text="Attach files, or paste or drop them here">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="grid shrink-0 place-items-center"
+                      aria-label="Attach files"
+                      disabled={!canAttach}
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      <PaperclipIcon />
+                    </Button>
+                  </Hint>
                   <input
                     ref={fileInput}
                     type="file"
@@ -828,18 +832,13 @@ export function Chat(props: ChatProps) {
                       e.target.value = ''
                     }}
                   />
-                  <span className="@container min-w-0 flex-1">
-                    <span className="block truncate text-sm text-faint @max-[8rem]:hidden" title={hint}>
-                      {hint}
-                    </span>
-                  </span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
                   {menu.model && (
                     <Select
                       variant="chip"
                       label="Model"
-                      title={MODEL_HINT}
+                      hint={MODEL_HINT}
                       value={menu.model}
                       disabled={!canChange}
                       options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
@@ -850,7 +849,7 @@ export function Chat(props: ChatProps) {
                     <Select
                       variant="chip"
                       label="Thinking"
-                      title={THINKING_HINT}
+                      hint={THINKING_HINT}
                       value={menu.thinking}
                       disabled={!canChange}
                       options={menu.levels.map((l) => ({ value: l, label: l }))}
@@ -860,37 +859,50 @@ export function Chat(props: ChatProps) {
                   {busy ? (
                     <>
                       {hasContent && (
-                        <Button size="small" disabled={!canQueue} onClick={submit}>
-                          Queue
-                        </Button>
+                        <Hint text={QUEUE_HINT}>
+                          <Button size="small" disabled={!canQueue} onClick={submit}>
+                            Queue
+                          </Button>
+                        </Hint>
                       )}
-                      <Button
-                        variant="danger"
-                        className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
-                        disabled={!connected}
-                        title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                        onClick={stop}
-                      >
-                        {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                      </Button>
+                      <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                        <Button
+                          variant="danger"
+                          className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                          disabled={!connected}
+                          onClick={stop}
+                        >
+                          {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                        </Button>
+                      </Hint>
                     </>
                   ) : (
-                    <Button variant="primary" disabled={!canSend || !hasContent} onClick={submit}>
-                      Send
-                    </Button>
+                    <Hint text={SEND_HINT}>
+                      <span className="flex">
+                        <Button
+                          variant="primary"
+                          className="disabled:pointer-events-none"
+                          disabled={!canSend || !hasContent}
+                          onClick={submit}
+                        >
+                          Send
+                        </Button>
+                      </span>
+                    </Hint>
                   )}
                 </span>
               </div>
             </div>
           )}
-          <input
-            type="range"
-            className={`absolute right-24 bottom-2 ${SLIDER}`}
-            aria-label="Chat width"
-            title="Chat width"
-            {...columnSlider(props.columnPx, paneColumnPx)}
-            onChange={(e) => props.setColumnPx(Number(e.target.value))}
-          />
+          <Hint text="Chat width">
+            <input
+              type="range"
+              className={`absolute right-24 bottom-2 ${SLIDER}`}
+              aria-label="Chat width"
+              {...columnSlider(props.columnPx, paneColumnPx)}
+              onChange={(e) => props.setColumnPx(Number(e.target.value))}
+            />
+          </Hint>
         </div>
       </main>
       <AnimatePresence initial={false}>

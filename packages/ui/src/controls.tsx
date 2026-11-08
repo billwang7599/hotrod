@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import { AnimatePresence, m, type Transition } from 'motion/react'
-import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive } from 'radix-ui'
+import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive, Tooltip } from 'radix-ui'
 
 const TOAST_MS = 6_000
 const EASE_OUT = [0.2, 0, 0, 1] as const
@@ -44,6 +52,51 @@ export function useSettled(ready = true) {
 
 export const CHAT_NOUN = { one: 'space', many: 'spaces' }
 
+// Radix Select hands focus back as :focus-visible even after a click, so hints track the last input instead.
+let typing = false
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', () => (typing = true), true)
+  document.addEventListener('pointerdown', () => (typing = false), true)
+}
+
+type HintProps = Omit<ComponentProps<typeof Tooltip.Trigger>, 'asChild'> & {
+  text?: ReactNode
+  side?: 'top' | 'right' | 'bottom' | 'left'
+  align?: 'start' | 'center' | 'end'
+  children: ReactElement
+}
+
+// Inside another Radix trigger, nest the Hint in it: wrapped around one, the tooltip's data-state would win.
+export function Hint({ text, side, align, children, onFocus, ...props }: HintProps) {
+  return (
+    <Tooltip.Root open={text ? undefined : false}>
+      <Tooltip.Trigger
+        asChild
+        data-hint={text ? '' : undefined}
+        {...props}
+        onFocus={(e) => {
+          onFocus?.(e)
+          if (!typing) e.preventDefault()
+        }}
+      >
+        {children}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content asChild side={side} align={align} sideOffset={6} collisionPadding={8}>
+          <m.div
+            className="z-50 max-w-280 rounded border bg-panel px-8 py-4 text-sm leading-[1.4] text-text shadow-floating"
+            initial={MOTION.menu.initial}
+            animate={MOTION.menu.animate}
+            transition={MOTION.menu.transition}
+          >
+            {text}
+          </m.div>
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  )
+}
+
 export const GROUP = 'flex flex-col rounded-lg border bg-panel px-14 shadow-raised'
 
 export const NAV_LABEL =
@@ -86,27 +139,30 @@ type SelectProps = {
   options: SelectOption[]
   onChange: (value: string) => void
   placeholder?: string
-  title?: string
+  hint?: string
   disabled?: boolean
   variant?: keyof typeof SELECT_TRIGGERS
 }
 
-export function Select({ label, value, options, onChange, placeholder, title, disabled, variant = 'field' }: SelectProps) {
+export function Select({ label, value, options, onChange, placeholder, hint, disabled, variant = 'field' }: SelectProps) {
+  const [open, setOpen] = useState(false)
   return (
-    <SelectPrimitive.Root value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectPrimitive.Trigger
-        aria-label={label}
-        title={title}
-        className={`flex min-w-0 items-center whitespace-nowrap transition-[background-color,border-color,color,box-shadow] data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
-      >
-        <span className="min-w-0 truncate">
-          <SelectPrimitive.Value placeholder={placeholder} />
-        </span>
-        <SelectPrimitive.Icon className="shrink-0 text-faint">
-          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" aria-hidden="true">
-            <path d="M1 1l4 4 4-4" strokeWidth="1.5" />
-          </svg>
-        </SelectPrimitive.Icon>
+    <SelectPrimitive.Root value={value} onValueChange={onChange} disabled={disabled} open={open} onOpenChange={setOpen}>
+      <SelectPrimitive.Trigger asChild aria-label={label}>
+        <Hint text={!open && hint}>
+          <button
+            className={`flex min-w-0 items-center whitespace-nowrap transition-[background-color,border-color,color,box-shadow] data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
+          >
+            <span className="min-w-0 truncate">
+              <SelectPrimitive.Value placeholder={placeholder} />
+            </span>
+            <SelectPrimitive.Icon className="shrink-0 text-faint">
+              <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M1 1l4 4 4-4" strokeWidth="1.5" />
+              </svg>
+            </SelectPrimitive.Icon>
+          </button>
+        </Hint>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
@@ -141,7 +197,6 @@ type SwitchProps = { label: string; checked: boolean; disabled?: boolean; onChan
 export function Switch({ label, checked, disabled, onChange }: SwitchProps) {
   return (
     <SwitchPrimitive.Root
-      title={label}
       aria-label={label}
       checked={checked}
       disabled={disabled}

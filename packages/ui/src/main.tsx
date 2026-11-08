@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
+import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
@@ -25,6 +26,7 @@ const SELECTED_KEY = 'hotrod.selectedChat'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
 const COLUMN_KEY = 'hotrod.columnWidth'
+const HINT_DELAY_MS = 400
 
 type Overlay = 'sidebar' | 'context' | null
 
@@ -155,16 +157,17 @@ function App() {
                 <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
                   <div className="flex h-44 items-center justify-between pr-8 pl-16">
                     <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`New ${CHAT_NOUN.one}`}
-                      title={`New ${CHAT_NOUN.one}`}
-                      disabled={!connected}
-                      onClick={() => setNameRequest({ kind: 'new' })}
-                    >
-                      +
-                    </Button>
+                    <Hint text={`New ${CHAT_NOUN.one}`}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`New ${CHAT_NOUN.one}`}
+                        disabled={!connected}
+                        onClick={() => setNameRequest({ kind: 'new' })}
+                      >
+                        +
+                      </Button>
+                    </Hint>
                   </div>
                   <ChatNav
                     chats={state.chats}
@@ -175,11 +178,12 @@ function App() {
                     askName={setNameRequest}
                   />
                   {window.hotrod && (
-                    <div className="flex items-center gap-6 border-t px-8 py-10">
-                      <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
-                        New {CHAT_NOUN.one} from folder…
-                      </Button>
-                      <span className="text-sm text-faint">⌘O</span>
+                    <div className="flex border-t px-8 py-10">
+                      <Hint text="⌘O">
+                        <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
+                          New {CHAT_NOUN.one} from folder…
+                        </Button>
+                      </Hint>
                     </div>
                   )}
                   <div className="px-8 pb-10">
@@ -289,4 +293,8 @@ function App() {
 }
 
 startAppearance()
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(
+  <Tooltip.Provider delayDuration={HINT_DELAY_MS}>
+    <App />
+  </Tooltip.Provider>,
+)
