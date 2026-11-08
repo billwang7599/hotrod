@@ -42,7 +42,12 @@ export interface Machine {
   run(
     command: string,
     args: string[],
-    options: SpawnOptions & { input?: string; timeoutMs?: number },
+    options: SpawnOptions & {
+      input?: string
+      timeoutMs?: number
+      onStdout?: (chunk: string) => void
+      signal?: AbortSignal
+    },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -190,6 +195,16 @@ export type ModInfo = {
   enabled: boolean
   settings: ModSetting[]
   values: ModValues
+  setup?: SetupState
+}
+
+export type SetupState = {
+  description: string
+  status: 'checking' | 'missing' | 'installing' | 'ready'
+  message?: string
+  progressText?: string
+  progress?: number
+  error?: string
 }
 
 export function settingProblem(setting: ModSetting, value: unknown) {
@@ -278,6 +293,8 @@ export type ClientMessage =
   | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
+  | { type: 'mod.install'; modId: string }
+  | { type: 'mod.cancelInstall'; modId: string }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }

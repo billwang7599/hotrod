@@ -34,6 +34,19 @@ export type McpServer = {
 
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
 
+export type ModRun = (
+  command: string,
+  args: string[],
+  options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; onStdout?: (chunk: string) => void },
+) => Promise<{ code: number | null; stdout: string; stderr: string }>
+
+// progress runs from 0 to 1.
+export type ModSetup = {
+  description: string
+  check(run: ModRun): Promise<{ ready: boolean; message?: string }>
+  install(run: ModRun, report: (update: { text?: string; progress?: number }) => void): Promise<void>
+}
+
 export type Mod = {
   id: string
   name: string
@@ -43,4 +56,5 @@ export type Mod = {
   chats?: ModChat[]
   tools?: ModTool[]
   mcpServers?(session: ModSession): McpServer[]
+  setup?: ModSetup
 }

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import { Dialog, Tabs } from 'radix-ui'
+import { AlertDialog, Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
@@ -208,35 +208,167 @@ const PAGES = [
     id: 'mods',
     group: 'Mods',
     title: 'Built-in mods',
-    hint: 'Mods that ship with Hotrod. One with settings gets its own page while it is on.',
-    body: ({ mods, connected, send }: PageProps) => (
-      <div className={GROUP}>
-        {mods.map((mod) => (
-          <SettingRow key={mod.id} name={mod.name} hint={mod.description}>
-            <Switch
-              label={mod.name}
-              checked={mod.enabled}
-              disabled={!connected}
-              onChange={(enabled) => send({ type: 'mod.setEnabled', modId: mod.id, enabled })}
-            />
-          </SettingRow>
-        ))}
-      </div>
-    ),
+    hint: 'Mods that ship with Hotrod. One with settings or a setup gets its own page while it is on.',
+    body: (props: PageProps) => <ModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
 
 export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
+function ModsPage({ mods, connected, send }: PageProps) {
+  const [setupFor, setSetupFor] = useState<string>()
+  const [setupShown, setSetupShown] = useState(false)
+  const mod = mods.find((m) => m.id === setupFor && m.enabled)
+  const status = mod?.setup?.status
+  const settled = !status || status === 'ready'
+  if (setupFor && settled && status !== undefined) setSetupFor(undefined)
+  const open = !settled && (setupShown || status !== 'checking')
+  if (open !== setupShown) setSetupShown(open)
+  const close = () => {
+    setSetupFor(undefined)
+    setSetupShown(false)
+  }
+  return (
+    <div className={GROUP}>
+      {mods.map((m) => (
+        <SettingRow
+          key={m.id}
+          name={m.name}
+          description={
+            m.enabled && m.setup?.status === 'missing' && <span className="text-amber">{setupTitle(m)}</span>
+          }
+          hint={m.description}
+        >
+          <Switch
+            label={m.name}
+            checked={m.enabled}
+            disabled={!connected}
+            onChange={(enabled) => {
+              send({ type: 'mod.setEnabled', modId: m.id, enabled })
+              if (enabled && m.setup) setSetupFor(m.id)
+            }}
+          />
+        </SettingRow>
+      ))}
+      {mod?.setup && <ModSetupDialog open={open} mod={mod} connected={connected} send={send} close={close} />}
+    </div>
+  )
+}
+
+const setupTitle = (mod: ModInfo) => mod.setup?.message ?? `${mod.name} isn't set up`
+
+type SetupProps = { mod: ModInfo; connected: boolean; send: (m: ClientMessage) => void }
+
+function SetupStatus({ mod }: { mod: ModInfo }) {
+  const setup = mod.setup!
+  const percent = Math.round((setup.progress ?? 0) * 100)
+  return (
+    <>
+      {setup.status === 'installing' && (
+        <div className="flex flex-col gap-6">
+          <div
+            role="progressbar"
+            aria-label={`Installing ${mod.name}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent}
+            className="h-6 overflow-hidden rounded-full bg-raised shadow-sunken"
+          >
+            <div className="h-full bg-accent transition-[width]" style={{ width: `${percent}%` }} />
+          </div>
+          <span className="text-sm text-muted">{setup.progressText ?? 'Installing…'}</span>
+        </div>
+      )}
+      {setup.status === 'checking' && <span className="text-sm text-muted">Checking…</span>}
+      {setup.error && <ErrorText>{setup.error}</ErrorText>}
+    </>
+  )
+}
+
+function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { open: boolean; close: () => void }) {
+  const focus = useReturnFocus()
+  const installing = mod.setup?.status === 'installing'
+  const cancel = () => {
+    if (installing) send({ type: 'mod.cancelInstall', modId: mod.id })
+    close()
+  }
+  return (
+    <AlertDialog.Root open={open} onOpenChange={(open) => open || close()}>
+      <AnimatePresence>
+        {open && (
+          <AlertDialog.Portal forceMount>
+            <AlertDialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </AlertDialog.Overlay>
+            <AlertDialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={focus.remember}
+              onCloseAutoFocus={focus.restore}
+            >
+              <m.div
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                {...MOTION.pop}
+              >
+                <Hint text={mod.setup?.description} side="bottom" align="start">
+                  <AlertDialog.Title className="w-fit cursor-help text-[16px] font-semibold">
+                    {setupTitle(mod)}
+                  </AlertDialog.Title>
+                </Hint>
+                <SetupStatus mod={mod} />
+                <div className="flex justify-end gap-8">
+                  <Button onClick={cancel}>Cancel</Button>
+                  <Button
+                    variant="primary"
+                    disabled={!connected || mod.setup?.status !== 'missing'}
+                    onClick={() => send({ type: 'mod.install', modId: mod.id })}
+                  >
+                    {installing ? 'Installing…' : 'Install'}
+                  </Button>
+                </div>
+              </m.div>
+            </AlertDialog.Content>
+          </AlertDialog.Portal>
+        )}
+      </AnimatePresence>
+    </AlertDialog.Root>
+  )
+}
+
+function ModSetupRow({ mod, connected, send }: SetupProps) {
+  const status = mod.setup!.status
+  return (
+    <SettingRow
+      name={<span className={status === 'ready' ? '' : 'text-amber'}>{setupTitle(mod)}</span>}
+      hint={mod.setup!.description}
+      below={(status === 'installing' || status === 'checking' || mod.setup!.error) && <SetupStatus mod={mod} />}
+    >
+      {status === 'ready' && <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Ready</span>}
+      {status === 'missing' && (
+        <Button variant="primary" disabled={!connected} onClick={() => send({ type: 'mod.install', modId: mod.id })}>
+          Install
+        </Button>
+      )}
+      {status === 'installing' && (
+        <Button disabled={!connected} onClick={() => send({ type: 'mod.cancelInstall', modId: mod.id })}>
+          Cancel
+        </Button>
+      )}
+    </SettingRow>
+  )
+}
+
 const modPages = (mods: ModInfo[]): Page[] =>
   mods
-    .filter((mod) => mod.enabled && mod.settings.length)
+    .filter((mod) => mod.enabled && (mod.settings.length || mod.setup))
     .map((mod) => ({
       id: `mod:${mod.id}`,
       group: 'Mods',
       title: mod.name,
       body: ({ connected, send }: PageProps) => (
         <div className={GROUP}>
+          {mod.setup && <ModSetupRow mod={mod} connected={connected} send={send} />}
           {mod.settings.map((setting) => (
             <SettingRow key={setting.key} name={setting.label} hint={setting.description}>
               <ModSettingControl

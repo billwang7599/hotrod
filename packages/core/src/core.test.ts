@@ -133,8 +133,9 @@ function open(
   stopGraceMs = TEST_STOP_GRACE_MS,
   enabled = adapters.map((a) => a.id),
   mods: Mod[] = [mainMod],
+  machine: Machine = sandboxingMachine,
 ) {
-  const core = openCore({ garage, adapters, defaultEngine, machine: sandboxingMachine, stopGraceMs, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -2927,6 +2928,128 @@ describe('mods', () => {
         })
         expect(t.calls).toEqual([])
       }
+    })
+  })
+
+  describe('setup', () => {
+    const description = 'Downloads the tool.'
+    const tool: Mod = {
+      id: 'tool',
+      name: 'Tool',
+      description: '',
+      enabledByDefault: true,
+      mcpServers: () => [{ name: 'tool', command: 'tool-mcp' }],
+      setup: {
+        description,
+        async check(run) {
+          const { code } = await run('check', [])
+          return { ready: code === 0, message: code === 0 ? 'Tool installed' : 'Tool not installed' }
+        },
+        async install(run, report) {
+          const onStdout = (chunk: string) =>
+            report({ text: `Got ${chunk.trim()}`, progress: parseInt(chunk) / 100 })
+          const { code, stderr } = await run('install', ['--all'], { timeoutMs: 1000, onStdout })
+          if (code !== 0) throw new Error(stderr)
+        },
+      },
+    }
+
+    function start() {
+      const state = { installed: false, finish: (_code: number | null, _stderr?: string) => {} }
+      const runs: { command: string; args: string[]; options: Parameters<Machine['run']>[2] }[] = []
+      const machine: Machine = {
+        ...sandboxingMachine,
+        async run(command, args, options) {
+          runs.push({ command, args, options })
+          if (command === 'check') return { code: state.installed ? 0 : 1, stdout: '', stderr: '' }
+          options.onStdout?.('10%\n')
+          options.onStdout?.('60%\n')
+          return new Promise((resolve) => {
+            state.finish = (code, stderr = '') => {
+              if (code === 0) state.installed = true
+              resolve({ code, stdout: '', stderr })
+            }
+            options.signal?.addEventListener('abort', () => state.finish(null, 'killed'))
+          })
+        },
+      }
+      const { adapter, calls } = recording({ ...createFakeAdapter(textScript, 0), hotrodMcp: true })
+      const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [tool], machine)
+      const setupOf = () => t.core.mods()[0]!.setup!
+      const turn = async () => {
+        const chat = createChat(t)
+        t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
+        await until(() => statusOf(t.core, chat.id) === 'idle')
+        return calls.at(-1)!.options
+      }
+      return { ...t, state, runs, setupOf, turn }
+    }
+
+    it('checks each mod that is on at start, then installs it with progress and checks again', async () => {
+      const t = start()
+      expect(t.setupOf()).toEqual({ description, status: 'checking' })
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
+      expect(t.runs[0]).toMatchObject({ command: 'check', args: [], options: { cwd: '/' } })
+
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      const progress = t.messages.flatMap((m) => (m.type === 'mod.updated' ? [m.mod.setup?.progress] : []))
+      expect(progress).toEqual([undefined, undefined, 0.1, 0.6])
+      const installing = { status: 'installing', message: 'Tool not installed', progressText: 'Got 60%', progress: 0.6 }
+      expect(t.setupOf()).toEqual({ description, ...installing })
+      const install = t.runs.at(-1)!
+      expect(install).toMatchObject({ command: 'install', args: ['--all'], options: { cwd: '/', timeoutMs: 1000 } })
+      expect(install.options).not.toHaveProperty('sandbox')
+      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installing')
+
+      t.state.finish(0)
+      await until(() => t.setupOf().status === 'ready')
+      expect(t.setupOf()).toEqual({ description, status: 'ready', message: 'Tool installed' })
+      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installed')
+    })
+
+    it('stops an install on cancel, and shows why one failed', async () => {
+      const t = start()
+      await until(() => t.setupOf().status === 'missing')
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      expect(t.runs.at(-1)!.options.signal?.aborted).toBe(true)
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
+
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.state.finish(1, 'Disk full')
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed', error: 'Disk full' })
+    })
+
+    it("offers a mod's MCP servers only once it is set up, and checks again when it is turned on", async () => {
+      const t = start()
+      await until(() => t.setupOf().status === 'missing')
+      expect((await t.turn()).mcpServers).toBeUndefined()
+      t.state.installed = true
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: false })
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
+      expect(t.setupOf().status).toBe('checking')
+      await until(() => t.setupOf().status === 'ready')
+      expect((await t.turn()).mcpServers).toEqual([{ name: 'tool', command: 'tool-mcp' }])
+    })
+
+    it('checks a mod that is off once it is turned on, and refuses to install one with no setup', async () => {
+      const garage = tempDir()
+      writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { tool: { enabled: false } } }))
+      const checks: string[] = []
+      const check = async () => (checks.push('check'), { ready: true })
+      const quiet: Mod = { ...tool, setup: { ...tool.setup!, check } }
+      const t = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [quiet, tester])
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(checks).toEqual([])
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
+      await until(() => t.core.mods()[0]?.setup?.status === 'ready')
+      expect(checks).toEqual(['check'])
+      expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
+      expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
     })
   })
 })

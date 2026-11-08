@@ -159,6 +159,22 @@ describe('localMachine', () => {
     expect((await fast.run(node, ['-e', echo], { cwd })).stdout).toBe('')
   })
 
+  it('hands a run its output as it comes, and stops it when its signal aborts', async () => {
+    const chunks: string[] = []
+    const controller = new AbortController()
+    const tick = `console.log('one'); setTimeout(() => console.log('two'), 50); setInterval(() => {}, 1000)`
+    const running = fast.run(node, ['-e', tick], {
+      cwd,
+      timeoutMs: 5000,
+      signal: controller.signal,
+      onStdout: (chunk) => chunks.push(chunk),
+    })
+    await waitFor(() => chunks.join('').includes('two'))
+    controller.abort()
+    expect(await running).toMatchObject({ code: null, stdout: 'one\ntwo\n' })
+    expect(chunks.join('')).toBe('one\ntwo\n')
+  })
+
   it('reports a missing command without rejecting', async () => {
     const result = await fast.run('hotrod-no-such-command', [], { cwd })
     expect(result.code).toBeNull()

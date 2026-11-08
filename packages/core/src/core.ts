@@ -12,7 +12,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { Mod } from '@hotrod/mod-api'
+import type { Mod, ModRun } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
@@ -66,6 +66,7 @@ import {
   type PermissionSwitches,
   type QueuedMessage,
   type Session,
+  type SetupState,
   type Upload,
   type WorkFolder,
   type Worktree,
@@ -166,9 +167,13 @@ export function openCore(options: {
     return typeof saved === 'boolean' ? saved : mod.enabledByDefault
   }
   const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
+  const setups = new Map<string, Omit<SetupState, 'description'>>()
+  const installs = new Map<string, AbortController>()
   const modInfo = (mod: Mod): ModInfo => {
     const { id, name, description, settings: declared = [] } = mod
-    return { id, name, description, enabled: isOn(mod), settings: declared, values: modValues(mod) }
+    const setup = mod.setup && { description: mod.setup.description, ...(setups.get(id) ?? { status: 'checking' }) }
+    const info = { id, name, description, enabled: isOn(mod), settings: declared, values: modValues(mod) }
+    return { ...info, ...(setup && { setup }) }
   }
   const listsOf = (engine: string): ModelLists => ({
     chat: [],
@@ -225,6 +230,52 @@ export function openCore(options: {
     settings.mods = { ...settings.mods, [mod.id]: { ...settings.mods?.[mod.id], ...change } }
     saveSettings()
     broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+  }
+  const setSetup = (mod: Mod, state: Omit<SetupState, 'description'>) => {
+    setups.set(mod.id, state)
+    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+  }
+  const runFor =
+    (signal?: AbortSignal): ModRun =>
+    (command, args, options) =>
+      machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
+  const checkSetup = async (mod: Mod, installError?: string) => {
+    if (!mod.setup || installs.has(mod.id)) return
+    const { message } = setups.get(mod.id) ?? {}
+    setSetup(mod, { status: 'checking', ...(message && { message }) })
+    let checked: Omit<SetupState, 'description'>
+    try {
+      const result = await mod.setup.check(runFor())
+      checked = { status: result.ready ? 'ready' : 'missing', ...(result.message && { message: result.message }) }
+    } catch (error) {
+      checked = { status: 'missing', error: messageOf(error) }
+    }
+    if (checked.status === 'missing' && installError) checked.error = installError
+    if (!installs.has(mod.id)) setSetup(mod, checked)
+  }
+  const install = (mod: Mod) => {
+    if (!mod.setup) throw new Error(`${mod.name} has nothing to install`)
+    if (installs.has(mod.id)) throw new Error(`${mod.name} is already installing`)
+    if (setups.get(mod.id)?.status === 'ready') throw new Error(`${mod.name} is already installed`)
+    const controller = new AbortController()
+    installs.set(mod.id, controller)
+    const { message } = setups.get(mod.id) ?? {}
+    setSetup(mod, { status: 'installing', ...(message && { message }) })
+    const report = ({ text, progress }: { text?: string; progress?: number }) => {
+      if (installs.get(mod.id) !== controller) return
+      const update = { ...(text && { progressText: text }), ...(progress !== undefined && { progress }) }
+      setSetup(mod, { ...setups.get(mod.id)!, ...update })
+    }
+    void mod.setup.install(runFor(controller.signal), report).then(
+      () => {
+        installs.delete(mod.id)
+        return checkSetup(mod)
+      },
+      (error) => {
+        installs.delete(mod.id)
+        return checkSetup(mod, controller.signal.aborted ? undefined : messageOf(error))
+      },
+    )
   }
   const setModValue = (mod: Mod, key: string, value: unknown) => {
     const setting = mod.settings?.find((s) => s.key === key)
@@ -316,7 +367,9 @@ export function openCore(options: {
   const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
   const modServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
     const session = { chat: summaryOf(chat.info), workDir, sandboxed }
-    const servers = mods.filter(isOn).flatMap((mod) => mod.mcpServers?.({ ...session, values: modValues(mod) }) ?? [])
+    const servers = mods
+      .filter((mod) => isOn(mod) && (!mod.setup || setups.get(mod.id)?.status === 'ready'))
+      .flatMap((mod) => mod.mcpServers?.({ ...session, values: modValues(mod) }) ?? [])
     const names = ['hotrod', ...servers.map((server) => server.name)]
     const twin = names.find((name, i) => names.indexOf(name) !== i)
     if (twin !== undefined) throw new Error(`Two MCP servers are named "${twin}"`)
@@ -425,7 +478,7 @@ export function openCore(options: {
     try {
       run()
     } catch (error) {
-      broadcast({ type: 'error', message: error instanceof Error ? error.message : String(error) })
+      broadcast({ type: 'error', message: messageOf(error) })
     }
   }
 
@@ -571,6 +624,7 @@ export function openCore(options: {
     if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${mod.name} off`)
     const changed = isOn(mod) !== enabled
     saveMod(mod, { enabled })
+    if (enabled) void checkSetup(mod)
     if (!changed) return
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
@@ -753,7 +807,7 @@ export function openCore(options: {
       })
       return { folder, worktree, writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
     } catch (error) {
-      throw new Error(`Couldn't check out ${folder} in the work folder: ${error instanceof Error ? error.message : error}`)
+      throw new Error(`Couldn't check out ${folder} in the work folder: ${messageOf(error)}`)
     }
   }
 
@@ -923,8 +977,7 @@ export function openCore(options: {
       (checkouts) => stillStarting() && start(checkouts),
       (error) => {
         if (!stillStarting()) return
-        const reason = error instanceof Error ? error.message : String(error)
-        endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: reason })
+        endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: messageOf(error) })
       },
     )
   }
@@ -1031,6 +1084,8 @@ export function openCore(options: {
     chat.session.respond(requestId, allow)
   }
 
+  for (const mod of mods.filter(isOn)) void checkSetup(mod)
+
   return {
     engines: engineInfos,
     async refreshEngines() {
@@ -1039,8 +1094,7 @@ export function openCore(options: {
           try {
             detected.set(adapter.id, nameModels(await adapter.detect(machine)))
           } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error)
-            detected.set(adapter.id, { installed: false, signedIn: false, detail })
+            detected.set(adapter.id, { installed: false, signedIn: false, detail: messageOf(error) })
           }
           broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
         }),
@@ -1141,6 +1195,10 @@ export function openCore(options: {
           return setModEnabled(modFor(String(message.modId)), message.enabled === true)
         case 'mod.setValue':
           return setModValue(modFor(String(message.modId)), String(message.key), message.value)
+        case 'mod.install':
+          return install(modFor(String(message.modId)))
+        case 'mod.cancelInstall':
+          return installs.get(modFor(String(message.modId)).id)?.abort()
         case 'memory.set':
           return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':
@@ -1222,6 +1280,8 @@ const freeName = (base: string, taken: (name: string) => boolean) => {
   for (let copy = 2; taken(name); copy++) name = `${base}-${copy}`
   return name
 }
+
+const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
