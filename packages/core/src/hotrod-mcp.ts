@@ -22,7 +22,7 @@ export const SUBAGENT_INSTRUCTIONS =
 export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
   name: 'Subagents',
-  description: 'Chats can hand a task to a new chat that reports back when it ends. Claude Code only.',
+  description: 'Chats can hand a task to a new chat that reports back when it ends.',
   enabledByDefault: true,
   settings: [
     {

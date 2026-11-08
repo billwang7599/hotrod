@@ -27,19 +27,31 @@ const CLEAN_ARGS = [
   '--no-extensions',
   '--no-skills',
   '--no-prompt-templates',
-  '--no-mcp',
   '--no-context-files',
   '--no-approve',
 ]
 
 const RPC_ARGS = ['--mode', 'rpc', ...CLEAN_ARGS]
 
+// pi reads MCP servers only from <agent dir>/mcp.json, so each session gets its own agent dir with only pi's login
+// and model lists linked in. The launched process makes it, so it is on the machine that runs pi.
+const LAUNCH = `dir=$(mktemp -d "\${TMPDIR:-/tmp}/hotrod-pi.XXXXXX") || exit
+trap 'rm -rf "$dir"' EXIT
+trap 'exit 143' HUP INT TERM
+for file in auth.json models.json models-store.json; do ln -s "$HOTROD_PI_LOGIN/$file" "$dir/$file"; done
+printf %s "$HOTROD_PI_MCP" > "$dir/mcp.json"
+PI_CODING_AGENT_DIR=$dir pi "$@"`
+
+// pi's default 60 s would end a tool call that waits on the user.
+const MCP_CALL_TIMEOUT_S = 24 * 60 * 60
+
 // pi fails with its login read-only, and needs nothing else of its state folder.
 const STATE_FILES = ['auth.json*', 'settings.json.lock*', 'models-store.json*', 'install/update.lock*']
 
+const stateDir = () => process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent')
+
 function jailed(sandbox: Sandbox) {
-  const stateDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent')
-  return { ...sandbox, writable: [...sandbox.writable, ...STATE_FILES.map((file) => join(stateDir, file))] }
+  return { ...sandbox, writable: [...sandbox.writable, ...STATE_FILES.map((file) => join(stateDir(), file))] }
 }
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
@@ -55,13 +67,14 @@ const textOf = (content: any): string =>
 export const pi: Adapter = {
   id: 'pi',
   imageInput: true,
+  hotrodMcp: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
     const version = await machine.run('pi', ['--version'], options).catch(() => null)
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const input = ['get_available_models', 'get_state'].map((type) => JSON.stringify({ type }) + '\n').join('')
-    const rpc = await machine.run('pi', [...RPC_ARGS, '--offline'], { ...options, input }).catch(() => null)
+    const rpc = await machine.run('pi', [...RPC_ARGS, '--no-mcp', '--offline'], { ...options, input }).catch(() => null)
     const answers: Record<string, any> = {}
     for (const line of rpc?.stdout.split('\n') ?? []) {
       try {
@@ -87,7 +100,7 @@ export const pi: Adapter = {
   },
 
   async complete(machine, { cwd, system, prompt, model, timeoutMs, sandbox }) {
-    const args = ['-p', ...CLEAN_ARGS, '--no-tools', '--offline', '--model', model, '--thinking', 'off']
+    const args = ['-p', ...CLEAN_ARGS, '--no-mcp', '--no-tools', '--offline', '--model', model, '--thinking', 'off']
     args.push('--system-prompt', system)
     const options = { cwd, input: prompt, timeoutMs, ...(sandbox && { sandbox: jailed(sandbox) }) }
     const { code, stdout, stderr } = await machine.run('pi', args, options)
@@ -95,14 +108,31 @@ export const pi: Adapter = {
     return stdout
   },
 
-  start(machine, { cwd, instructions, extraDirs = [], model, thinking, sandbox }, emit) {
-    const args = [...RPC_ARGS]
+  start(machine, { cwd, instructions, hotrodMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
+    const args = [...RPC_ARGS, '-e', 'builtin:mcp']
     if (model) args.push('--model', model)
     if (thinking) args.push('--thinking', thinking)
     const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
     const systemPrompt = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean)
     if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))
-    const proc = machine.spawn('pi', args, { cwd, ...(sandbox && { sandbox: jailed(sandbox) }) })
+    const direct = { exposure: 'direct', timeout: MCP_CALL_TIMEOUT_S }
+    const servers: Record<string, object> = {}
+    if (hotrodMcp) {
+      servers.hotrod = { url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }, ...direct }
+    }
+    for (const server of mcpServers) {
+      servers[server.name] = { command: server.command, args: server.args ?? [], env: server.env ?? {}, ...direct }
+    }
+    const env = {
+      HOTROD_PI_LOGIN: stateDir(),
+      HOTROD_PI_MCP: JSON.stringify({ mcpServers: servers }),
+      ...(hotrodMcp && { HOTROD_MCP_TOKEN: hotrodMcp.token }),
+    }
+    const proc = machine.spawn('/bin/sh', ['-c', LAUNCH, 'pi', ...args], {
+      cwd,
+      env,
+      ...(sandbox && { sandbox: jailed(sandbox) }),
+    })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''
     let turnError: string | undefined
