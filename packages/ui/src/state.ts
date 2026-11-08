@@ -17,6 +17,15 @@ import type {
   WorkFolder,
 } from '@hotrod/core/shared'
 
+export type Permission = {
+  requestId: string
+  name: string
+  summary: string
+  input: unknown
+  outcome: 'pending' | 'allowed' | 'denied' | 'cancelled'
+  auto?: true
+}
+
 export type Item =
   | { kind: 'user'; text: string; attachments?: Attachment[] }
   | { kind: 'text'; text: string }
@@ -28,17 +37,9 @@ export type Item =
       summary: string
       state: 'running' | 'waiting' | 'done' | 'error' | 'stopped'
       output: string
+      permission?: Permission
     }
-  | {
-      kind: 'permission'
-      requestId: string
-      toolId?: string
-      name: string
-      summary: string
-      input: unknown
-      outcome: 'pending' | 'allowed' | 'denied' | 'cancelled'
-      auto?: true
-    }
+  | ({ kind: 'permission' } & Permission)
   | { kind: 'error'; text: string }
 
 export type ChatView = ChatInfo & {
@@ -87,11 +88,7 @@ export const initialState: State = {
   nextToastId: 1,
 }
 
-function setToolState(items: Item[], toolId: string | undefined, state: 'running' | 'waiting'): Item[] {
-  return items.map((i) =>
-    i.kind === 'tool' && i.toolId === toolId && (i.state === 'running' || i.state === 'waiting') ? { ...i, state } : i,
-  )
-}
+const cancel = <P extends Permission>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
 
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
@@ -119,35 +116,40 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
           ? { ...i, state: entry.isError ? 'error' : 'done', output: entry.output }
           : i,
       )
-    case 'permission.requested':
-      return [
-        ...setToolState(items, entry.toolId, 'waiting'),
-        {
-          kind: 'permission',
-          requestId: entry.requestId,
-          ...(entry.toolId ? { toolId: entry.toolId } : {}),
-          name: entry.name,
-          summary: entry.summary,
-          input: entry.input,
-          outcome: 'pending',
-        },
-      ]
+    case 'permission.requested': {
+      const { requestId, name, summary, input, toolId } = entry
+      const permission: Permission = { requestId, name, summary, input, outcome: 'pending' }
+      const own = (i: Item) => i.kind === 'tool' && i.toolId === toolId
+      if (!items.some(own)) return [...items, { kind: 'permission', ...permission }]
+      return items.map((i) =>
+        i.kind === 'tool' && own(i) ? { ...i, state: i.state === 'running' ? 'waiting' : i.state, permission } : i,
+      )
+    }
     case 'permission.resolved': {
-      const request = items.find((i) => i.kind === 'permission' && i.requestId === entry.requestId)
-      const toolId = request?.kind === 'permission' ? request.toolId : undefined
-      return setToolState(items, toolId, 'running').map((i) =>
+      const resolve = <P extends Permission>(p: P): P => ({
+        ...p,
+        outcome: entry.allow ? 'allowed' : 'denied',
+        ...(entry.auto && { auto: true }),
+      })
+      return items.map((i) =>
         i.kind === 'permission' && i.requestId === entry.requestId
-          ? { ...i, outcome: entry.allow ? 'allowed' : 'denied', ...(entry.auto && { auto: true }) }
-          : i,
+          ? resolve(i)
+          : i.kind === 'tool' && i.permission?.requestId === entry.requestId
+            ? { ...i, state: i.state === 'waiting' ? 'running' : i.state, permission: resolve(i.permission) }
+            : i,
       )
     }
     case 'turn.completed':
     case 'session.ended': {
       const settled = items.filter((i) => i.kind !== 'thinking').map((i): Item =>
-        i.kind === 'tool' && (i.state === 'running' || i.state === 'waiting')
-          ? { ...i, state: 'stopped' }
-          : i.kind === 'permission' && i.outcome === 'pending'
-            ? { ...i, outcome: 'cancelled' }
+        i.kind === 'tool'
+          ? {
+              ...i,
+              ...((i.state === 'running' || i.state === 'waiting') && { state: 'stopped' }),
+              ...(i.permission && { permission: cancel(i.permission) }),
+            }
+          : i.kind === 'permission'
+            ? cancel(i)
             : i,
       )
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
@@ -158,6 +160,31 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
 }
 
 const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
+
+type Shown = { at: number; item: Item }
+type TranscriptRow = Shown | { at: number; steps: Item[] }
+
+export function foldSteps(items: Item[], running: boolean): TranscriptRow[] {
+  const rows: TranscriptRow[] = []
+  let turn: Shown[] = []
+  const endTurn = (live: boolean) => {
+    let end = turn.length
+    while (turn[end - 1]?.item.kind === 'error') end--
+    if (turn[end - 1]?.item.kind === 'text') end--
+    if (live || end < 2) rows.push(...turn)
+    else rows.push({ at: turn[0]!.at, steps: turn.slice(0, end).map((s) => s.item) }, ...turn.slice(end))
+    turn = []
+  }
+  items.forEach((item, at) => {
+    if (item.kind !== 'user') turn.push({ at, item })
+    else {
+      endTurn(false)
+      rows.push({ at, item })
+    }
+  })
+  endTurn(running)
+  return rows
+}
 
 function updateChat(state: State, id: string, update: (c: ChatView) => ChatView): State {
   return { ...state, chats: state.chats.map((c) => (c.id === id ? update(c) : c)) }

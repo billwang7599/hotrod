@@ -11,13 +11,15 @@ import type { ChatView, Item } from './state.ts'
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
 const USER: Item = { kind: 'user', text: 'Hi' }
-const tool = (state: 'running' | 'done', output = ''): Item => ({
+type Tool = Extract<Item, { kind: 'tool' }>
+const tool = (state: Tool['state'], output = '', change: Partial<Tool> = {}): Item => ({
   kind: 'tool',
   toolId: 't1',
   name: 'Bash',
   summary: 'ls',
   state,
   output,
+  ...change,
 })
 
 const VIEW_PX = 500
@@ -280,21 +282,77 @@ test("a chat's edits anywhere switch shows on and locked while Settings turns it
   expect(await hintOf(editSwitch().closest('label')!)).toContain('every chat in Settings')
 })
 
-test('says when Hotrod answered an edit itself', () => {
-  const permission = (outcome: 'allowed' | 'denied', auto?: true): Item => ({
-    kind: 'permission',
-    requestId: `r-${outcome}-${auto}`,
-    name: 'Write',
-    summary: '/x.ts',
-    input: {},
-    outcome,
-    ...(auto && { auto }),
-  })
-  render({ items: [USER, permission('allowed', true), permission('denied', true), permission('denied')] })
-  const text = container.textContent
-  expect(text).toContain('✓ Allowed automatically')
-  expect(text).toContain('✕ Denied: outside the work folder')
-  expect(text).toContain('✕ DeniedWrite')
+const rowButtons = () => [...list().querySelectorAll<HTMLButtonElement>('button[aria-expanded]')]
+const foldButton = () => rowButtons().find((b) => /^\d+ steps$/.test(b.textContent ?? ''))
+const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+test('a finished turn folds its steps into one row above the reply, which opens and closes in place', async () => {
+  const steps: Item[] = [tool('done', 'a.txt'), { kind: 'text', text: 'Installing them.' }, tool('done', '', { toolId: 't2' })]
+  const items: Item[] = [USER, ...steps, { kind: 'text', text: 'All set' }]
+  render({ status: 'running', items })
+  expect(foldButton()).toBeUndefined()
+  expect(container.textContent).toContain('Installing them.')
+
+  render({ status: 'idle', items })
+  const fold = foldButton()!
+  expect(fold.textContent).toBe('3 steps')
+  expect(container.textContent).not.toContain('Installing them.')
+  expect(rowButtons()).toEqual([fold])
+  const reply = [...container.querySelectorAll('p')].find((p) => p.textContent === 'All set')!
+  expect(before(fold, reply)).toBe(true)
+
+  act(() => fold.click())
+  expect(fold.getAttribute('aria-expanded')).toBe('true')
+  expect(container.textContent).toContain('Installing them.')
+  const chevronTurned = (b: Element) => !!b.firstElementChild!.closest('.group[data-open]')
+  expect(rowButtons().map(chevronTurned)).toEqual([true, false, false])
+  act(() => fold.click())
+  await vi.waitFor(() => expect(container.textContent).not.toContain('Installing them.'))
+})
+
+test('a turn that ended without a reply keeps its last line below the fold, and one step never folds', () => {
+  const looked: Item[] = [tool('done'), { kind: 'text', text: 'Looking.' }, tool('stopped', '', { toolId: 't2' })]
+  render({ items: [USER, ...looked, { kind: 'error', text: 'Interrupted' }] })
+  expect(foldButton()?.textContent).toBe('3 steps')
+  expect(container.textContent).toContain('Interrupted')
+  render({ items: [USER, tool('done'), { kind: 'text', text: 'Done' }] })
+  expect(foldButton()).toBeUndefined()
+  expect(rowButtons().map((b) => b.textContent)).toEqual([expect.stringContaining('Bash')])
+})
+
+test("a permission shows on its tool's row: the prompt under it while pending, then a verdict badge", async () => {
+  const asked = { requestId: 'r1', name: 'Bash', summary: 'ls', input: { command: 'ls' } }
+  const withVerdict = (toolId: string, outcome: 'pending' | 'allowed' | 'denied', auto?: true): Item =>
+    tool(outcome === 'pending' ? 'waiting' : 'done', '', {
+      toolId,
+      permission: { ...asked, requestId: `r-${toolId}`, outcome, ...(auto && { auto }) },
+    })
+  const sent: ClientMessage[] = []
+  render({ status: 'waiting', items: [USER, withVerdict('t1', 'pending')] }, (m) => sent.push(m))
+  const [row] = rowButtons()
+  expect(rowButtons()).toHaveLength(1)
+  expect(row!.textContent).toContain('waiting for approval')
+  const approve = [...container.querySelectorAll('button')].find((b) => b.textContent === 'Approve')!
+  expect(before(row!, approve)).toBe(true)
+  act(() => approve.click())
+  expect(sent.at(-1)).toEqual({ type: 'permission.respond', chatId: 'c1', requestId: 'r-t1', allow: true })
+
+  const verdicts = [withVerdict('t1', 'allowed'), withVerdict('t2', 'allowed', true), withVerdict('t3', 'denied', true)]
+  render({ status: 'running', items: [USER, ...verdicts, withVerdict('t4', 'denied')] })
+  const rows = rowButtons()
+  expect(rows).toHaveLength(4)
+  const badges = rows.map((b) => b.querySelector('[data-verdict]')?.textContent)
+  expect(badges).toEqual(['Allowed', 'Allowed automatically', 'Denied', 'Denied'])
+  expect(container.textContent).not.toContain('Approve')
+  expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the work folder')
+})
+
+test('a permission without a tool row keeps a row of its own, with the same badge', () => {
+  const permission: Item = { kind: 'permission', requestId: 'r1', name: 'Write', summary: '/x.ts', input: {}, outcome: 'denied' }
+  render({ status: 'running', items: [USER, permission] })
+  const [row] = rowButtons()
+  expect(row!.textContent).toContain('Write')
+  expect(row!.querySelector('[data-verdict]')?.textContent).toBe('Denied')
 })
 
 test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
