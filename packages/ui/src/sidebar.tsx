@@ -155,7 +155,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
       <Button
         variant="ghost"
         size="small"
-        className="mt-2 ml-14 self-start"
+        className="mt-2 w-full pl-22 text-left"
         disabled={!connected}
         onClick={() => askName({ kind: 'new' })}
       >
