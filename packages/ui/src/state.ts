@@ -14,6 +14,7 @@ import type {
   ModelLists,
   ModInfo,
   QueuedMessage,
+  WorkFolder,
 } from '@hotrod/core/shared'
 
 export type Item =
@@ -58,6 +59,7 @@ export type State = {
   instructions: { path: string; text: string }
   mods: ModInfo[]
   modelLists: Record<string, ModelLists>
+  workFolder: WorkFolder
   context?: { chatId: string; items: ContextItem[] }
   toasts: { id: number; message: string }[]
   nextToastId: number
@@ -81,6 +83,7 @@ export const initialState: State = {
   instructions: { path: '', text: '' },
   mods: [],
   modelLists: {},
+  workFolder: { defaultPath: '' },
   toasts: [],
   nextToastId: 1,
 }
@@ -182,6 +185,7 @@ export function reduce(state: State, action: Action): State {
         instructions: action.instructions,
         mods: action.mods,
         modelLists: action.modelLists,
+        workFolder: action.workFolder,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -248,6 +252,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
     case 'memory.updated':
       return state
+    case 'workFolder.updated':
+      return { ...state, workFolder: action.workFolder }
     case 'error':
       return {
         ...state,

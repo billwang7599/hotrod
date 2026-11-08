@@ -140,7 +140,10 @@ export type ChatInfo = {
   role?: ModelRole
   model?: string
   thinking?: string
+  workDir?: string
 }
+
+export type WorkFolder = { path?: string; defaultPath: string }
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -248,6 +251,7 @@ export type ClientMessage =
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
+  | { type: 'workFolder.set'; path: string }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
@@ -272,6 +276,7 @@ export type CoreMessage =
       mods: ModInfo[]
       modelLists: Record<string, ModelLists>
       memory: MemorySettings
+      workFolder: WorkFolder
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -289,4 +294,5 @@ export type CoreMessage =
   | { type: 'mod.updated'; mod: ModInfo }
   | { type: 'models.updated'; engine: string; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
+  | { type: 'workFolder.updated'; workFolder: WorkFolder }
   | { type: 'error'; message: string }

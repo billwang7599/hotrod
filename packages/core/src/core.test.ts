@@ -10,12 +10,12 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
 import type { Mod, ModChat } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { openCore, SUMMARY_MODELS, type Core } from './core.ts'
+import { openCore, SUMMARY_MODELS, WRITE_RULES, type Core } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -105,6 +105,8 @@ function recording(adapter: Adapter) {
 
 let dirs: string[] = []
 let cores: Core[] = []
+// The fake engine never starts a process, so this machine can claim a sandbox on any platform.
+const sandboxing = { ...localMachine, canSandbox: true }
 
 function tempDir() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
@@ -130,10 +132,10 @@ function open(
   enabled = adapters.map((a) => a.id),
   mods: Mod[] = [mainMod],
 ) {
-  const machine = localMachine
-  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine: sandboxing, stopGraceMs, mods })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
+  core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const replies: CoreMessage[] = []
@@ -164,6 +166,11 @@ async function until(check: () => boolean) {
   if (!check()) throw new Error('timed out')
 }
 
+const withoutRules = (instructions = '') =>
+  instructions
+    .split('\n\n')
+    .filter((part) => !part.startsWith(WRITE_RULES))
+    .join('\n\n')
 const chatOf = (core: Core, id: string) => core.chats().find((c) => c.id === id)
 const statusOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.status
 const entriesOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.entries ?? []
@@ -198,9 +205,9 @@ describe('chats', () => {
     expect(chatOf(t.core, 'main')?.parentId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(t.core, 'main') === 'idle')
-    expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'home'))
+    expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'work', 'home'))
     expect(t.calls[0]?.options.instructions.split('\n\n')[0]).toBe(MAIN.instructions)
-    expect(statSync(join(t.garage, 'home')).isDirectory()).toBe(true)
+    expect(statSync(join(t.garage, 'work', 'home')).isDirectory()).toBe(true)
     const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n')).toHaveLength(4)
 
@@ -230,7 +237,7 @@ describe('chats', () => {
     expect(existsSync(join(garage, 'chats', 'main', 'AGENTS.md'))).toBe(false)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(t.core, 'main') === 'idle')
-    expect(t.calls[0]?.options.cwd).toBe(join(garage, 'home'))
+    expect(t.calls[0]?.options.cwd).toBe(join(garage, 'work', 'home'))
     expect(t.calls[0]?.options).not.toHaveProperty('extraDirs')
   })
 
@@ -319,7 +326,7 @@ describe('chats', () => {
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'Please look into why the build is slow on CI today' })
     await until(() => statusOf(t.core, chat.id) === 'idle')
     expect(chatOf(t.core, chat.id)?.name).toBe('Build speed')
-    expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'home'))
+    expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'work', chat.id))
     const other = createChat(t, { name: 'Other', parentId: 'main' } as never)
     expect(other).not.toHaveProperty('parentId')
 
@@ -414,6 +421,108 @@ describe('chats', () => {
   })
 })
 
+describe('work folder', () => {
+  const workOf = (t: { garage: string }) => join(t.garage, 'work')
+  const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+    return t.calls.at(-1)!.options
+  }
+  const saveSubagent = (garage: string, id: string, parentId: string) => {
+    mkdirSync(join(garage, 'chats', id), { recursive: true })
+    const saved = { id, name: id, parentId, subagent: true, engine: 'fake', archived: false, createdAt: at }
+    writeFileSync(join(garage, 'chats', id, 'chat.json'), JSON.stringify(saved))
+  }
+
+  it('refuses to run any chat until a work folder is chosen', () => {
+    const garage = tempDir()
+    const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxing, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    expect(core.workFolder()).toEqual({ defaultPath: join(garage, 'work') })
+    const send = () => core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
+    expect(send).toThrow('Choose a work folder first')
+    expect(calls).toHaveLength(0)
+    expect(entriesOf(core, 'main')).toEqual([])
+  })
+
+  it('makes the chosen folder, saves it and tells every client', () => {
+    const t = setup(textScript)
+    expect(t.core.workFolder()).toEqual({ path: workOf(t), defaultPath: workOf(t) })
+    const chosen = join(tempDir(), 'deep', 'work')
+    t.handle({ type: 'workFolder.set', path: chosen })
+    expect(statSync(chosen).isDirectory()).toBe(true)
+    expect(t.core.workFolder()).toEqual({ path: chosen, defaultPath: workOf(t) })
+    expect(t.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: t.core.workFolder() })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).workFolder).toBe(chosen)
+  })
+
+  it('refuses a folder that would let agents write the garage, the home folder or the whole disk', () => {
+    const t = setup(textScript)
+    const file = join(tempDir(), 'file.txt')
+    writeFileSync(file, '')
+    const refused = ['/', homedir(), t.garage, dirname(t.garage), join(t.garage, 'chats'), 'relative/work', file]
+    for (const path of refused) expect(() => t.handle({ type: 'workFolder.set', path })).toThrow()
+    expect(t.core.workFolder().path).toBe(workOf(t))
+  })
+
+  it('runs each space in its own folder there, made at its first message and kept, and lets it write only there', async () => {
+    const t = setup(textScript)
+    const repo = tempDir()
+    const chat = createChat(t, { name: 'App', folders: [repo] })
+    expect(chat).not.toHaveProperty('workDir')
+    const dir = join(workOf(t), chat.id)
+    expect(existsSync(dir)).toBe(false)
+    expect(await sessionOf(t, chat.id)).toMatchObject({
+      cwd: dir,
+      extraDirs: [repo],
+      sandbox: { writable: [dir], tmpDir: join(dir, '.tmp') },
+    })
+    expect(statSync(dir).isDirectory()).toBe(true)
+    expect(chatOf(t.core, chat.id)?.workDir).toBe(dir)
+    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).workDir).toBe(dir)
+    expect(t.calls.at(-1)?.options.instructions).toContain(`${WRITE_RULES}\nYour work folder: ${dir}`)
+
+    const moved = join(tempDir(), 'elsewhere')
+    t.handle({ type: 'workFolder.set', path: moved })
+    expect((await sessionOf(t, chat.id)).cwd).toBe(dir)
+    const later = createChat(t, { name: 'Later' })
+    expect((await sessionOf(t, later.id)).cwd).toBe(join(moved, later.id))
+  })
+
+  it("runs a mod's chat and its subagents in <work>/home, and a space's subagents in the space's folder", async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    saveSubagent(first.garage, 'homesub', 'main')
+    saveSubagent(first.garage, 'spacesub', space.id)
+    const t = setup(textScript, first.garage)
+    const home = join(workOf(t), 'home')
+    for (const [chatId, dir] of [['main', home], ['homesub', home], ['spacesub', join(workOf(t), space.id)]]) {
+      expect(await sessionOf(t, chatId!)).toMatchObject({ cwd: dir, sandbox: { writable: [dir] } })
+    }
+    expect(chatOf(t.core, 'main')).not.toHaveProperty('workDir')
+    expect(chatOf(t.core, 'spacesub')).not.toHaveProperty('workDir')
+    expect(chatOf(t.core, space.id)?.workDir).toBe(join(workOf(t), space.id))
+  })
+
+  it('runs engines unsandboxed on a machine that cannot sandbox', async () => {
+    const t = setup(textScript)
+    t.core.close()
+    const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
+    const machine = { ...localMachine, canSandbox: false }
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
+    await until(() => statusOf(core, 'main') === 'idle')
+    expect(calls[0]?.options.cwd).toBe(join(workOf(t), 'home'))
+    expect(calls[0]?.options).not.toHaveProperty('sandbox')
+    expect(calls[0]?.options.instructions).not.toContain(WRITE_RULES)
+  })
+})
+
 describe('chat', () => {
   it('streams a turn, saves it without deltas and closes the session', async () => {
     const t = setup(textScript)
@@ -434,7 +543,7 @@ describe('chat', () => {
     expect(statuses).toEqual(['running', 'idle'])
     const log = readFileSync(join(t.garage, 'chats', chat.id, 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n').map((l) => JSON.parse(l).type)).toEqual(types(entriesOf(t.core, chat.id)))
-    expect(t.calls[0]?.options.cwd).toBe(chat.path)
+    expect(t.calls[0]?.options.extraDirs).toEqual([chat.path])
     expect(t.calls[0]?.closed).toBe(true)
   })
 
@@ -617,7 +726,7 @@ describe('chat', () => {
       ].join('\n\n'),
     )
 
-    const instructions = t.calls[1]?.options.instructions ?? ''
+    const instructions = withoutRules(t.calls[1]?.options.instructions)
     expect(instructions.startsWith(MEMORY_INSTRUCTIONS)).toBe(true)
     expect(instructions).toContain('GLOBAL RULES')
     expect(instructions).toContain('REPO RULES')
@@ -829,7 +938,7 @@ describe('settings', () => {
     const fake = recording(createFakeAdapter(textScript, 0))
     const t = open(tempDir(), [fake.adapter], 'fake', TEST_STOP_GRACE_MS, [])
     expect(t.core.engines()).toEqual([{ id: 'fake', enabled: false, installed: false, signedIn: false }])
-    expect(existsSync(settingsFile(t))).toBe(false)
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8')).engines).toEqual({})
     expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow(/"fake" is off.*Settings/)
     expect(fake.calls).toHaveLength(0)
     expect(entriesOf(t.core, 'main')).toEqual([])
@@ -839,13 +948,14 @@ describe('settings', () => {
 
   it('turns an engine on, saves it in settings.json and tells every client', async () => {
     const garage = tempDir()
+    const work = join(garage, 'work')
     const t = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, [])
     t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
     expect(t.messages.at(-1)).toEqual({
       type: 'engine.updated',
       engine: { id: 'fake', enabled: true, installed: false, signedIn: false },
     })
-    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: true } })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: true }, workFolder: work })
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     expect(types(entriesOf(t.core, 'main'))).toContain('text.completed')
@@ -854,7 +964,7 @@ describe('settings', () => {
     const reopened = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, [])
     expect(engineInfo(reopened.core, 'fake')?.enabled).toBe(true)
     reopened.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: false })
-    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: false } })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: false }, workFolder: work })
   })
 
   it('keeps other settings when saving and rejects an unknown engine', () => {
@@ -866,6 +976,7 @@ describe('settings', () => {
     expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({
       engines: { gone: true, fake: true },
       theme: 'dark',
+      workFolder: join(garage, 'work'),
     })
   })
 
@@ -1347,6 +1458,7 @@ describe('memory', () => {
       complete?: Adapter['complete']
       others?: Adapter[]
       models?: string[]
+      work?: false
     } = {},
   ) {
     const { garage = tempDir(), script = textScript, others = [] } = options
@@ -1367,12 +1479,13 @@ describe('memory', () => {
       garage,
       adapters,
       defaultEngine: 'fake',
-      machine: localMachine,
+      machine: sandboxing,
       mods: [mainMod],
       compactDebounceMs: 0,
     })
     cores.push(core)
     for (const { id } of adapters) core.handle({ type: 'engine.setEnabled', engine: id, enabled: true }, () => {})
+    if (options.work !== false) core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
     const messages: CoreMessage[] = []
     core.onMessage((m) => messages.push(m))
     const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
@@ -1387,10 +1500,12 @@ describe('memory', () => {
     const t = setupMemory()
     writeFileSync(join(t.garage, 'AGENTS.md'), 'RULES')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
-    expect(t.calls[0]?.options.instructions).toBe([MAIN.instructions, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+    const home = join(t.garage, 'work', 'home')
+    const rules = `${WRITE_RULES}\nYour work folder: ${home}`
+    expect(t.calls[0]?.options.instructions).toBe([MAIN.instructions, rules, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
     const chat = createChat({ ...t, replies: [] }, { name: 'App' })
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(t.calls[1]?.options.instructions).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+    expect(withoutRules(t.calls[1]?.options.instructions)).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
   })
 
   it('summarizes a backlog once engines are detected, and the next prompt shows the summary lines', async () => {
@@ -1402,7 +1517,7 @@ describe('memory', () => {
     await until(() => summarized(t, 'main'))
 
     expect(t.completions[0]).toMatchObject({
-      cwd: join(t.garage, 'home'),
+      cwd: join(t.garage, 'work', 'home'),
       model: SUMMARY_MODELS[0],
       timeoutMs: COMPLETE_TIMEOUT_MS,
     })
@@ -1412,6 +1527,20 @@ describe('memory', () => {
     expect(prompt).toContain('\n0+1|user: question 0\n1+1|talk: summary of 1+1\n')
     expect(prompt).toContain('<message id="39" kind="talk">')
     expect(prompt.endsWith('New message from the user:\n\nnext')).toBe(true)
+  })
+
+  it('waits for a work folder, then writes summaries in <work>/home, sandboxed there', async () => {
+    const garage = tempDir()
+    writeLog(garage, 'main', 40)
+    const t = setupMemory({ garage, work: false })
+    await t.core.refreshEngines()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(t.completions).toHaveLength(0)
+    t.handle({ type: 'workFolder.set', path: join(garage, 'work') })
+    await until(() => summarized(t, 'main'))
+    const home = join(garage, 'work', 'home')
+    expect(t.completions[0]).toMatchObject({ cwd: home, sandbox: { writable: [home], tmpDir: join(home, '.tmp') } })
+    expect(t.messages.filter((m) => m.type === 'error')).toEqual([])
   })
 
   it('summarizes after a turn ends, but only once the messages pass COMPACT_MIN_CHARS', async () => {
@@ -1819,7 +1948,7 @@ describe('context', () => {
     return t.calls.at(-1)!.options
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
-    (await sessionOf(t, chatId)).instructions
+    withoutRules((await sessionOf(t, chatId)).instructions)
       .split('\n\n')
       .filter((part) => part !== MEMORY_INSTRUCTIONS)
       .join('\n\n')
@@ -1881,23 +2010,22 @@ describe('context', () => {
     expect(itemsOf(t, 'main').map((item) => item.text)).toEqual(['GLOBAL RULES'])
   })
 
-  it("runs in its first enabled folder, else its nearest ancestor's, else home, with the rest as extras", async () => {
+  it("runs in its space's work folder, with every enabled folder from the space down as an extra", async () => {
     const first = setup(textScript)
     const [a, b] = [folderWith(''), folderWith('')]
-    const home = join(first.garage, 'home')
+    const work = join(first.garage, 'work')
     const plain = createChat(first, { name: 'Plain' })
-    expect(await sessionOf(first, plain.id)).toMatchObject({ cwd: home })
+    expect(await sessionOf(first, plain.id)).toMatchObject({ cwd: join(work, plain.id) })
     expect(first.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
     const app = createChat(first, { name: 'App', folders: [a, b] })
-    expect(await sessionOf(first, app.id)).toMatchObject({ cwd: a, extraDirs: [b] })
+    expect(await sessionOf(first, app.id)).toMatchObject({ cwd: join(work, app.id), extraDirs: [a, b] })
 
     const { t, subagentId } = reopenWithSubagent(first, app.id)
-    expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: a, extraDirs: [b] })
+    expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: join(work, app.id), extraDirs: [a, b] })
     t.handle({ type: 'context.set', chatId: app.id, path: a, enabled: false })
-    expect(await sessionOf(t, app.id)).toMatchObject({ cwd: b })
-    expect(t.calls.at(-1)?.options).not.toHaveProperty('extraDirs')
-    expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: b })
-    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: home })
+    expect(await sessionOf(t, app.id)).toMatchObject({ extraDirs: [b] })
+    expect(await sessionOf(t, subagentId)).toMatchObject({ extraDirs: [b] })
+    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: join(work, 'home') })
   })
 
   it('gives a file that is not text by path with read access, never pasted, down to the subagents', async () => {
@@ -1928,7 +2056,7 @@ describe('context', () => {
     const subagent = t.calls[before]!.options
     for (const options of [own, subagent]) {
       const file = `<file path="${notes}">\nNOTES\n</file>`
-      expect(options.instructions).toBe([MEMORY_INSTRUCTIONS, byPath, file].join('\n\n'))
+      expect(withoutRules(options.instructions)).toBe([MEMORY_INSTRUCTIONS, byPath, file].join('\n\n'))
       expect(options.readFiles).toEqual([image])
     }
     expect(subagent).not.toHaveProperty('extraDirs')
@@ -2016,6 +2144,7 @@ describe('context', () => {
     expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toEqual({
       theme: 'dark',
       engines: { fake: true },
+      workFolder: join(garage, 'work'),
       context: { repo: false, agents: false, folders: false },
     })
     const switches = (chatId: string) => itemsOf(t, chatId).map((i) => [i.from, i.section, i.enabled])

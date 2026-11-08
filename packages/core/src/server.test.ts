@@ -45,6 +45,7 @@ async function start(port = 0) {
     defaultEngine: 'fake',
     machine: localMachine,
   })
+  core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   cleanups.push(() => {
     core.close()
     rmSync(garage, { recursive: true, force: true })
@@ -204,6 +205,7 @@ it('serves the UI folder when given one', async () => {
 it("serves a chat's attachments with the token, images and PDFs inline and anything else as a download", async () => {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
   const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: localMachine })
+  core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const server = await startServer({ core, port: 0, uiOrigin: origin, token })
   cleanups.push(() => {
     core.close()
@@ -334,8 +336,10 @@ async function startHeld({ hotrodMcp = true } = {}) {
       }
     },
   }
-  const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine: localMachine, mods: [mainMod] })
+  const machine = { ...localMachine, canSandbox: true }
+  const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine, mods: [mainMod] })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
+  core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const server = await startServer({ core, port: 0, uiOrigin: origin, token })
@@ -409,7 +413,7 @@ it("runs a mod's tool, whose host makes a top-level chat and starts it, shown li
   expect(child).not.toHaveProperty('parentId')
   expect(messages.some((m) => m.type === 'chat.added' && m.chat.id === chatId)).toBe(true)
   expect(sessions.at(-1)?.prompt).toBe('Look around')
-  expect(sessions.at(-1)?.options.cwd).toBe(folders[0])
+  expect(sessions.at(-1)?.options).toMatchObject({ cwd: join(garage, 'work', chatId), extraDirs: folders })
 
   expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toEqual({
     isError: true,
@@ -453,7 +457,8 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
     engine: 'held',
     status: 'running',
   })
-  expect(sessions.at(-1)).toMatchObject({ prompt: 'Read the tests', options: { cwd: join(garage, 'home') } })
+  const cwd = join(garage, 'work', subchat.id)
+  expect(sessions.at(-1)).toMatchObject({ prompt: 'Read the tests', options: { cwd } })
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentId).toBe(subchat.id)
 
   expect(await tool(lead, 'spawn_subagent', { task: 'More' })).toEqual({
@@ -536,7 +541,7 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
   expect(itemsOf(chatId).map((i) => i.from)).toEqual([GLOBAL_CONTEXT, subchat.id, chatId])
   handle({ type: 'chat.send', chatId, text: 'again' })
   const instructions = sessionOf(chatId).options.instructions.split('\n\n')
-  expect(instructions.slice(0, 2)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
+  expect(instructions.slice(1, 3)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
   expect(instructions.slice(-3)).toEqual(['WORKSHOP', 'PARENT', 'OWN'])
   sessionOf(chatId).end('ok')
   sessionOf(subchat.id).end('ok')

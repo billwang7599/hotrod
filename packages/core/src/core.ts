@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { Mod } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD } from './hotrod-mcp.ts'
@@ -60,10 +60,13 @@ import {
   type QueuedMessage,
   type Session,
   type Upload,
+  type WorkFolder,
 } from './shared.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
+export const WRITE_RULES =
+  'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
 
 type Chat = {
   info: ChatInfo
@@ -121,6 +124,7 @@ export function openCore(options: {
     models?: Record<string, Partial<ModelLists>>
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
+    workFolder?: string
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -169,8 +173,13 @@ export function openCore(options: {
   const newChatEngine = () =>
     isEnabled(defaultEngine) ? defaultEngine : (adapters.find((a) => isEnabled(a.id))?.id ?? defaultEngine)
   const chatsDir = join(garage, 'chats')
-  const homeDir = join(garage, 'home')
-  for (const dir of [chatsDir, homeDir]) mkdirSync(dir, { recursive: true })
+  mkdirSync(chatsDir, { recursive: true })
+  const defaultWorkFolder = join(garage, 'work')
+  const workFolder = (): WorkFolder => ({
+    ...(settings.workFolder && { path: settings.workFolder }),
+    defaultPath: defaultWorkFolder,
+  })
+  const sandboxIn = (dir: string) => (machine.canSandbox ? { writable: [dir], tmpDir: join(dir, '.tmp') } : undefined)
   const chats = new Map<string, Chat>()
   const allStoppedWaiters: (() => void)[] = []
   let quitting = false
@@ -229,6 +238,27 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'memory.updated', memory: settings.memory })
   }
+  // A work folder holding the garage would let an agent write chat.json, settings and accounts.
+  const checkWorkFolder = (path: string) => {
+    const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
+    const reachesGarage = within(garage, path) || (within(path, garage) && path !== defaultWorkFolder)
+    if (reachesGarage || [homedir(), realpathSync(homedir())].includes(path)) {
+      throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Hotrod's`)
+    }
+  }
+  const setWorkFolder = (rawPath: unknown) => {
+    const typed = String(rawPath ?? '').trim().replace(/^~(?=$|\/)/, homedir())
+    if (!isAbsolute(typed)) throw new Error(`The path must be absolute: ${rawPath}`)
+    checkWorkFolder(resolve(typed))
+    if (existsSync(typed) && !statSync(typed).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)
+    mkdirSync(typed, { recursive: true })
+    const path = realpathSync(typed)
+    checkWorkFolder(path)
+    settings.workFolder = path
+    saveSettings()
+    broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
+    compactBacklog()
+  }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
     writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
@@ -258,6 +288,10 @@ export function openCore(options: {
 
   const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
   const takesMcp = (engine: string) => adapterFor(engine)?.hotrodMcp === true && mcpUrl !== undefined
+  const chosenWorkFolder = () => {
+    if (!settings.workFolder) throw new Error('Choose a work folder first, in Settings → Work folder')
+    return settings.workFolder
+  }
 
   const compactor = openCompactor({
     chat: (chatId) => {
@@ -269,11 +303,23 @@ export function openCore(options: {
       const adapter = engine === undefined ? undefined : adapterFor(engine)
       if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
       checkEnabled(adapter.id)
-      return adapter.complete(machine, { ...request, cwd: homeDir, model, ...accounts.sessionFor(adapter.id) })
+      const cwd = join(chosenWorkFolder(), 'home')
+      mkdirSync(cwd, { recursive: true })
+      const sandbox = sandboxIn(cwd)
+      const options = { ...request, cwd, model, ...accounts.sessionFor(adapter.id), ...(sandbox && { sandbox }) }
+      return adapter.complete(machine, options)
     },
     onFailure: (reason) => broadcast({ type: 'error', message: `Memory summaries are failing: ${reason}. Retrying.` }),
     ...(compactDebounceMs !== undefined && { debounceMs: compactDebounceMs }),
   })
+  let enginesDetected = false
+  // Summaries need a detected engine and a work folder to run in, so the backlog waits for both.
+  const compactBacklog = () => {
+    if (!enginesDetected || !settings.workFolder) return
+    const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
+    const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
+    for (const chat of byActivity) compactor.touch(chat.info.id)
+  }
 
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
@@ -612,6 +658,14 @@ export function openCore(options: {
 
   const attachmentsDirOf = (chat: Chat) => join(chat.dir, 'attachments')
 
+  // A space keeps the folder it got first, so changing the setting moves only new spaces.
+  const workDirOf = (chat: Chat) => {
+    const space = chainOf(chat)[0]!
+    if (space.info.mod) return join(chosenWorkFolder(), 'home')
+    if (!space.info.workDir) updateChat(space, { workDir: join(chosenWorkFolder(), space.info.id) })
+    return space.info.workDir!
+  }
+
   const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
@@ -621,6 +675,8 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
+    const workDir = workDirOf(chat)
+    mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text, attachments)
     const zoomable = takesMcp(adapter.id)
     const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable })
@@ -646,13 +702,12 @@ export function openCore(options: {
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
     ]
-    const instructions = [...(role ? [role] : []), ...memory, ...contextText].join('\n\n')
-    const folders = items.filter((item) => item.section === 'folders')
-    const nearest = folders.at(-1)?.from
-    const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
+    const sandbox = sandboxIn(workDir)
+    const rules = sandbox ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []
+    const instructions = [...(role ? [role] : []), ...rules, ...memory, ...contextText].join('\n\n')
     const attachmentsDir = attachmentsDirOf(chat)
     const extraDirs = [
-      ...folders.map((folder) => folder.path).filter((path) => path !== cwd),
+      ...items.flatMap((item) => (item.section === 'folders' ? [item.path] : [])),
       ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
     ]
 
@@ -690,7 +745,7 @@ export function openCore(options: {
             .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
         : []
       const options = {
-        cwd,
+        cwd: workDir,
         instructions,
         ...(extraDirs.length && { extraDirs }),
         ...(readFiles.length && { readFiles }),
@@ -698,6 +753,7 @@ export function openCore(options: {
         ...(hotrodMcp && { hotrodMcp }),
         ...(model && { model }),
         ...(thinking && { thinking }),
+        ...(sandbox && { sandbox }),
       }
       session = adapter.start(machine, options, emit)
       if (chat.status === 'idle') return session.close()
@@ -824,10 +880,8 @@ export function openCore(options: {
           broadcast({ type: 'engine.updated', engine: engineInfo(adapter.id) })
         }),
       )
-      const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
-      // Summaries need a detected engine, so the backlog waits for this.
-      const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
-      for (const chat of byActivity) compactor.touch(chat.info.id)
+      enginesDetected = true
+      compactBacklog()
     },
     setEngineEnabled,
     contextDefaults,
@@ -835,6 +889,8 @@ export function openCore(options: {
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     memory: () => settings.memory ?? {},
     chats: () => shownChats().map(state),
+    workFolder,
+    setWorkFolder,
     instructions: () => ({ path: globalAgentsFile, text: readBytes(globalAgentsFile).toString('utf8') }),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
@@ -900,6 +956,8 @@ export function openCore(options: {
         case 'instructions.write':
           if (typeof message.text !== 'string') throw new Error('Instructions text is missing')
           return writeAgentsFile(globalAgentsFile, message.text)
+        case 'workFolder.set':
+          return setWorkFolder(message.path)
         case 'context.setDefault':
           if (!CONTEXT_SECTIONS.includes(message.section)) {
             throw new Error(`Unknown context section "${message.section}"`)

@@ -34,7 +34,7 @@ async function start() {
       }
     },
   }
-  const env = { HOTROD_ENGINE: 'held', HOTROD_GARAGE: garage, HOTROD_PORT: '0' }
+  const env = { HOTROD_ENGINE: 'held', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
   const hotrod = await startCore({ env, adapters: [held], mods: [home] })
   cleanups.push(async () => {
     await hotrod.close(true)
@@ -70,7 +70,7 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   const { core, garage, sessions, send, tool, names } = await start()
   expect(core.chats().map((c) => c.id)).toEqual([homeChat.id])
   const session = send(homeChat.id, 'Set up the app')
-  expect(session.options.cwd).toBe(join(garage, 'home'))
+  expect(session.options.cwd).toBe(join(garage, 'work', 'home'))
   expect(session.options.instructions.startsWith(homeChat.instructions)).toBe(true)
   const token = session.options.hotrodMcp!.token
   expect(await names(token)).toEqual(['create_chat', 'date', 'list_chats', 'read_chat', 'send_message', 'zoom'])
@@ -86,7 +86,8 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   const space = core.chats().find((c) => c.id === chatId)
   expect(space).toMatchObject({ name: 'App', folders: [realpathSync(folder)], status: 'running' })
   expect(space).not.toHaveProperty('parentId')
-  expect(sessions.at(-1)).toMatchObject({ prompt: 'Look around', options: { cwd: realpathSync(folder) } })
+  const options = { cwd: join(garage, 'work', chatId), extraDirs: [realpathSync(folder)] }
+  expect(sessions.at(-1)).toMatchObject({ prompt: 'Look around', options })
   expect(JSON.parse((await tool(token, 'list_chats')).text).map((c: { id: string }) => c.id)).toEqual([chatId])
   expect(await names(sessions.at(-1)!.options.hotrodMcp!.token)).toEqual(['date', 'zoom'])
 })

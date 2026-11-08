@@ -27,6 +27,7 @@ export async function startCore(
   const defaultEngine = env.HOTROD_ENGINE ?? adapters[0]?.id ?? ''
   const core = openCore({ garage, adapters, defaultEngine, machine: localMachine, mods })
   if (env.HOTROD_ENGINE) core.setEngineEnabled(env.HOTROD_ENGINE, true)
+  if (env.HOTROD_WORK) core.setWorkFolder(env.HOTROD_WORK)
   await core.refreshEngines()
   const server = await startServer({ core, port, uiOrigin: uiUrl, token, uiDir })
   return {

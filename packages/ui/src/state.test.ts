@@ -60,7 +60,18 @@ const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
 const instructions = { path: '/g/AGENTS.md', text: 'RULES' }
 const snapshot = (chats: ChatState[]): Action =>
-  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, instructions, mods, modelLists, memory: {} })
+  ({
+    type: 'snapshot',
+    engines,
+    accounts: [],
+    chats,
+    contextDefaults,
+    instructions,
+    mods,
+    modelLists,
+    memory: {},
+    workFolder: { defaultPath: '/g/work' },
+  })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
