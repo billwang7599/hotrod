@@ -4,12 +4,31 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAbsolute } from 'node:path'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { McpServer } from '@modelcontextprotocol/server'
+import type { Mod } from '@hotrod/mod-api'
 import * as z from 'zod'
 import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
 import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
 export const SUBAGENT_NAME_MAX_CHARS = 40
+
+export const SUBAGENTS_MOD: Mod = {
+  id: 'subagents',
+  name: 'Subagents',
+  description: 'Chats can hand a task to a new chat that reports back when it ends. Claude Code only.',
+  enabledByDefault: false,
+  settings: [
+    {
+      key: 'limit',
+      label: 'Max running per chat',
+      description: 'How many subagents one chat can run at once. -1 for no limit.',
+      type: 'number',
+      default: 4,
+      min: -1,
+      integer: true,
+    },
+  ],
+}
 
 type Hub = {
   chats(): ChatState[]

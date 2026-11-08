@@ -4,6 +4,7 @@ import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
+  settingProblem,
   WORKSHOP_NAME,
   type Account,
   type ClientMessage,
@@ -12,8 +13,9 @@ import {
   type EngineInfo,
   type ModelLists,
   type ModelRole,
-  type Mods,
+  type ModInfo,
 } from '@hotrod/core/shared'
+import type { ModSetting } from '@hotrod/mod-api'
 import { SECTIONS } from './context-panel.tsx'
 import {
   Button,
@@ -35,7 +37,7 @@ type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextSection, boolean>
-  mods: Mods
+  mods: ModInfo[]
   modelLists: Record<string, ModelLists>
   connected: boolean
   send: (m: ClientMessage) => void
@@ -46,7 +48,6 @@ type Page = {
   group: (typeof NAV_GROUPS)[number]
   title: string
   hint?: string
-  shown?: (props: PageProps) => boolean
   body: (props: PageProps) => ReactNode
 }
 
@@ -158,37 +159,48 @@ const PAGES = [
     id: 'mods',
     group: 'Mods',
     title: 'Built-in mods',
-    hint: 'Mods that ship with Hotrod. Each is off until you turn it on.',
-    body: ({ mods: { subagents }, connected, send }: PageProps) => (
-      <div className={GROUP}>
-        <SettingRow
-          name="Subagents"
-          hint="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
-        >
-          <Switch
-            label="Subagents"
-            checked={subagents.enabled}
-            disabled={!connected}
-            onChange={(on) => send({ type: 'subagents.set', enabled: on, limit: subagents.limit })}
-          />
-        </SettingRow>
-      </div>
-    ),
-  },
-  {
-    id: 'subagents',
-    group: 'Mods',
-    title: 'Subagents',
-    shown: ({ mods }: PageProps) => mods.subagents.enabled,
+    hint: 'Mods that ship with Hotrod. One with settings gets its own page while it is on.',
     body: ({ mods, connected, send }: PageProps) => (
       <div className={GROUP}>
-        <SubagentLimit subagents={mods.subagents} connected={connected} send={send} />
+        {mods.map((mod) => (
+          <SettingRow key={mod.id} name={mod.name} hint={mod.description}>
+            <Switch
+              label={mod.name}
+              checked={mod.enabled}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'mod.setEnabled', modId: mod.id, enabled })}
+            />
+          </SettingRow>
+        ))}
       </div>
     ),
   },
 ] as const satisfies readonly Page[]
 
-export type SettingsPage = (typeof PAGES)[number]['id']
+export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
+
+const modPages = (mods: ModInfo[]): Page[] =>
+  mods
+    .filter((mod) => mod.enabled && mod.settings.length)
+    .map((mod) => ({
+      id: `mod:${mod.id}`,
+      group: 'Mods',
+      title: mod.name,
+      body: ({ connected, send }: PageProps) => (
+        <div className={GROUP}>
+          {mod.settings.map((setting) => (
+            <SettingRow key={setting.key} name={setting.label} hint={setting.description}>
+              <ModSettingControl
+                setting={setting}
+                value={mod.values[setting.key]}
+                disabled={!connected}
+                save={(value) => send({ type: 'mod.setValue', modId: mod.id, key: setting.key, value })}
+              />
+            </SettingRow>
+          ))}
+        </div>
+      ),
+    }))
 
 type RowProps = { name: ReactNode; description?: ReactNode; hint?: string; children?: ReactNode; below?: ReactNode }
 
@@ -462,32 +474,52 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   )
 }
 
-type SubagentLimitProps = { subagents: Mods['subagents']; connected: boolean; send: (m: ClientMessage) => void }
+type ModSettingProps = {
+  setting: ModSetting
+  value: string | number | boolean | undefined
+  disabled: boolean
+  save: (value: string | number | boolean) => void
+}
 
-function SubagentLimit({ subagents: { enabled, limit }, connected, send }: SubagentLimitProps) {
-  const [draft, setDraft] = useState(String(limit))
-  useEffect(() => setDraft(String(limit)), [limit])
-  const save = () => {
+function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  if (setting.type === 'boolean') {
+    return <Switch label={setting.label} checked={value === true} disabled={disabled} onChange={save} />
+  }
+  if (setting.type === 'select') {
+    return (
+      <Select
+        label={setting.label}
+        value={String(value)}
+        disabled={disabled}
+        options={setting.options.map((option) => ({ value: String(option.value), label: option.label }))}
+        onChange={(picked) => {
+          const option = setting.options.find((o) => String(o.value) === picked)
+          if (option) save(option.value)
+        }}
+      />
+    )
+  }
+  const commit = () => {
     const next = Number(draft)
-    if (draft.trim() && Number.isInteger(next) && next >= -1 && next !== limit) {
-      send({ type: 'subagents.set', enabled, limit: next })
-    } else setDraft(String(limit))
+    if (draft.trim() && !settingProblem(setting, next) && next !== value) save(next)
+    else setDraft(String(value))
   }
   return (
-    <SettingRow name="Max running per chat" hint="How many subagents one chat can run at once. -1 for no limit.">
-      <input
-        className="w-72"
-        aria-label="Max running per chat"
-        type="number"
-        min={-1}
-        step={1}
-        value={draft}
-        disabled={!connected}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => e.key === 'Enter' && save()}
-      />
-    </SettingRow>
+    <input
+      className="w-72"
+      aria-label={setting.label}
+      type="number"
+      min={setting.min}
+      max={setting.max}
+      step={setting.integer ? 1 : 'any'}
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && commit()}
+    />
   )
 }
 
@@ -500,7 +532,7 @@ type SettingsProps = PageProps & {
 
 export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
-  const pages: readonly Page[] = PAGES.filter((p) => !('shown' in p) || p.shown(props))
+  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods)]
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open={open} onOpenChange={(open) => open || close()}>

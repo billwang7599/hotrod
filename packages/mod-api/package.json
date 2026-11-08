@@ -1,0 +1,6 @@
+{
+  "name": "@hotrod/mod-api",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./index.ts" }
+}

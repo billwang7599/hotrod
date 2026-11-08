@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage } from '@hotrod/core/shared'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo } from '@hotrod/core/shared'
 import type { Account, EngineAccounts } from '@hotrod/core/shared'
 import {
   accountLabel,
@@ -47,7 +47,15 @@ const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> 
   ...change,
 })
 const contextDefaults = { agents: true, folders: true, files: true }
-const mods = { subagents: { enabled: false, limit: 4 } }
+const modInfo = (id: string, enabled = false): ModInfo => ({
+  id,
+  name: id,
+  description: '',
+  enabled,
+  settings: [{ key: 'limit', label: 'Limit', type: 'number', default: 4 }],
+  values: { limit: 4 },
+})
+const mods = [modInfo('subagents'), modInfo('other')]
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
 const snapshot = (chats: ChatState[]): Action =>
@@ -371,11 +379,11 @@ describe('reduce', () => {
     expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
   })
 
-  it('loads the mods from the snapshot and follows their updates', () => {
+  it('loads the mods from the snapshot and replaces only the one that changed', () => {
     const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
     expect(loaded.mods).toEqual(mods)
-    const on = { subagents: { enabled: true, limit: -1 } }
-    expect(reduce(loaded, { type: 'mods.updated', mods: on }).mods).toEqual(on)
+    const on = { ...modInfo('subagents', true), values: { limit: -1 } }
+    expect(reduce(loaded, { type: 'mod.updated', mod: on }).mods).toEqual([on, mods[1]])
   })
 
   it('loads the model lists from the snapshot and replaces one engine on update', () => {

@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@hotrod/core": "*",
+    "@hotrod/mod-api": "*",
     "motion": "^14.10.1",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",

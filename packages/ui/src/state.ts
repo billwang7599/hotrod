@@ -1,4 +1,4 @@
-import { DEFAULT_SUBAGENT_LIMIT, looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/shared'
+import { looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/shared'
 import type {
   Account,
   Attachment,
@@ -12,7 +12,7 @@ import type {
   EngineAccounts,
   EngineInfo,
   ModelLists,
-  Mods,
+  ModInfo,
   QueuedMessage,
 } from '@hotrod/core/shared'
 
@@ -56,7 +56,7 @@ export type State = {
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextSection, boolean>
-  mods: Mods
+  mods: ModInfo[]
   modelLists: Record<string, ModelLists>
   context?: { chatId: string; items: ContextItem[] }
   toasts: { id: number; message: string }[]
@@ -77,7 +77,7 @@ export const initialState: State = {
   chats: [],
   selectedId: MAIN_CHAT_ID,
   contextDefaults: { agents: true, folders: true, files: true },
-  mods: { subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } },
+  mods: [],
   modelLists: {},
   toasts: [],
   nextToastId: 1,
@@ -234,8 +234,8 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
-    case 'mods.updated':
-      return { ...state, mods: action.mods }
+    case 'mod.updated':
+      return { ...state, mods: state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) }
     case 'models.updated':
       return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
     case 'memory.updated':

@@ -1,3 +1,5 @@
+import type { ModSetting, ModValues } from '@hotrod/mod-api'
+
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
 export type EngineEvent =
@@ -145,11 +147,28 @@ export function pickModel(engine: EngineInfo | undefined, lists: ModelLists, cha
 export const pickThinking = (engine: EngineInfo | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
   chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
 
-export type Mods = { subagents: { enabled: boolean; limit: number } }
+export type ModInfo = {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  settings: ModSetting[]
+  values: ModValues
+}
+
+export function settingProblem(setting: ModSetting, value: unknown) {
+  if (setting.type === 'select') {
+    if (setting.options.some((option) => option.value === value)) return undefined
+    return `must be one of: ${setting.options.map((option) => option.label).join(', ')}`
+  }
+  if (setting.type === 'boolean') return typeof value === 'boolean' ? undefined : 'must be on or off'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'must be a number'
+  if (setting.integer && !Number.isInteger(value)) return 'must be a whole number'
+  if (setting.min !== undefined && value < setting.min) return `must be at least ${setting.min}`
+  if (setting.max !== undefined && value > setting.max) return `must be at most ${setting.max}`
+}
 
 export type MemorySettings = { engine?: string; model?: string }
-
-export const DEFAULT_SUBAGENT_LIMIT = 4
 
 export const CONTEXT_SECTIONS = ['agents', 'folders', 'files'] as const
 
@@ -215,7 +234,8 @@ export type ClientMessage =
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
-  | { type: 'subagents.set'; enabled: boolean; limit: number }
+  | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
+  | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
@@ -234,7 +254,7 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
-      mods: Mods
+      mods: ModInfo[]
       modelLists: Record<string, ModelLists>
       memory: MemorySettings
     }
@@ -251,7 +271,7 @@ export type CoreMessage =
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
-  | { type: 'mods.updated'; mods: Mods }
+  | { type: 'mod.updated'; mod: ModInfo }
   | { type: 'models.updated'; engine: string; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'error'; message: string }

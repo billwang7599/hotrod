@@ -15,6 +15,7 @@ import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
+import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
@@ -124,6 +125,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
     memory: {},
+    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: false, values: { limit: expect.any(Number) } })],
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -386,6 +388,10 @@ it('lets the Workshop make a named chat with a folder and start it, shown like o
 
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
   core.handle(m, () => {})
+const subagentsOn = (core: ReturnType<typeof openCore>, limit?: number) => {
+  handleOn(core)({ type: 'mod.setEnabled', modId: SUBAGENTS_MOD.id, enabled: true })
+  if (limit !== undefined) handleOn(core)({ type: 'mod.setValue', modId: SUBAGENTS_MOD.id, key: 'limit', value: limit })
+}
 const chatIn = (core: ReturnType<typeof openCore>, id: string) => core.chats().find((c) => c.id === id)!
 
 it('lets every user chat spawn subagents while the mod is on, up to the limit of running ones', async () => {
@@ -402,7 +408,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
     'Tool spawn_subagent not found',
   )
 
-  handle({ type: 'subagents.set', enabled: true, limit: 1 })
+  subagentsOn(core, 1)
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
   const lead = send(subchat.id, 'again').options.hotrodMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Read the tests' })
@@ -429,7 +435,7 @@ it("starts a subagent on its role's list, keeping only its parent's thinking lev
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
-  handle({ type: 'subagents.set', enabled: true, limit: -1 })
+  subagentsOn(core, -1)
   const [large, small] = heldOffers.models as [string, string]
   const thinking = heldOffers.thinking[1]
   handle({ type: 'chat.setModel', chatId: 'main', model: large, thinking })
@@ -454,7 +460,7 @@ it("starts a subagent on its role's list, keeping only its parent's thinking lev
 it("wakes the parent with a subagent's final reply, queued while the parent is busy", async () => {
   const { core, sessionOf, sessionsOf, json, send } = await startHeld()
   const handle = handleOn(core)
-  handle({ type: 'subagents.set', enabled: true, limit: -1 })
+  subagentsOn(core, -1)
   const parent = send('main', 'Plan it')
   const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Search the docs' })
 
@@ -476,7 +482,7 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
 it("gives a subagent its parent's items plus its own, and archives and deletes it with its parent", async () => {
   const { core, garage, sessionOf, sessionsOf, json, send } = await startHeld()
   const handle = handleOn(core)
-  handle({ type: 'subagents.set', enabled: true, limit: 4 })
+  subagentsOn(core)
   handle({ type: 'chat.create', name: 'Side' })
   const subchat = core.chats().find((c) => c.id !== 'main')!
   writeFileSync(join(garage, 'AGENTS.md'), 'WORKSHOP')
@@ -534,7 +540,7 @@ it('lets every chat zoom its own memory, and cuts a long message only where zoom
 
 it("gives a subagent its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
-  handleOn(core)({ type: 'subagents.set', enabled: true, limit: -1 })
+  subagentsOn(core, -1)
   const parent = send('main', 'Plan the release')
   const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Check the changelog' })
   const frozen = '<message id="0" kind="user">\nPlan the release\n</message>'

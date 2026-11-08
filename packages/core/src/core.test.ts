@@ -12,9 +12,11 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import type { Mod } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, SUMMARY_MODELS, type Core } from './core.ts'
+import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
 import {
   COMPACT_MIN_CHARS,
@@ -26,7 +28,6 @@ import {
   pendingOf,
 } from './memory.ts'
 import {
-  DEFAULT_SUBAGENT_LIMIT,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   WORKSHOP_NAME,
@@ -109,9 +110,9 @@ function tempDir() {
   return dir
 }
 
-function setup(source: FakeStep[] | Adapter, garage = tempDir(), stopGraceMs = TEST_STOP_GRACE_MS) {
+function setup(source: FakeStep[] | Adapter, garage = tempDir(), stopGraceMs = TEST_STOP_GRACE_MS, mods: Mod[] = []) {
   const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
-  return { ...open(garage, [adapter], adapter.id, stopGraceMs), calls }
+  return { ...open(garage, [adapter], adapter.id, stopGraceMs, [adapter.id], mods), calls }
 }
 
 function open(
@@ -120,9 +121,10 @@ function open(
   defaultEngine: string,
   stopGraceMs = TEST_STOP_GRACE_MS,
   enabled = adapters.map((a) => a.id),
+  mods: Mod[] = [],
 ) {
   const machine = localMachine
-  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs })
+  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   const messages: CoreMessage[] = []
@@ -2103,23 +2105,95 @@ describe('models', () => {
   })
 })
 
-describe('subagents mod', () => {
-  it('is off by default, and saves its switch and limit in settings.json', () => {
+describe('mods', () => {
+  const tester: Mod = {
+    id: 'tester',
+    name: 'Tester',
+    description: 'For tests',
+    enabledByDefault: true,
+    settings: [
+      {
+        key: 'size',
+        label: 'Size',
+        type: 'select',
+        options: [
+          { value: 768, label: 'Small' },
+          { value: 'full', label: 'Full' },
+        ],
+        default: 768,
+      },
+      { key: 'count', label: 'Count', type: 'number', default: 2, min: -1, max: 10, integer: true },
+      { key: 'loud', label: 'Loud', type: 'boolean', default: false },
+    ],
+  }
+  const defaultsOf = (mod: Mod) => Object.fromEntries((mod.settings ?? []).map((s) => [s.key, s.default]))
+  const infoOf = (mod: Mod, enabled: boolean, values = defaultsOf(mod)) => {
+    const { id, name, description, settings = [] } = mod
+    return { id, name, description, enabled, settings, values }
+  }
+  const savedMods = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).mods
+
+  it('lists every mod with its switch and declared defaults, the subagents mod off', () => {
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
+    expect(t.core.mods()).toEqual([infoOf(tester, true), infoOf(SUBAGENTS_MOD, false)])
+  })
+
+  it('saves switches and values flat in settings.json, broadcasts each and keeps them across a restart', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
-    const t = setup(textScript, garage)
-    expect(t.core.mods()).toEqual({ subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT } })
-
-    t.handle({ type: 'subagents.set', enabled: true, limit: -1 })
-    const mods = { subagents: { enabled: true, limit: -1 } }
-    expect(t.messages.at(-1)).toEqual({ type: 'mods.updated', mods })
-    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({ theme: 'dark', mods })
-
-    for (const limit of [-2, 1.5, '3', undefined]) {
-      expect(() => t.handle({ type: 'subagents.set', enabled: true, limit } as never)).toThrow(/limit/)
-    }
-    expect(t.core.mods()).toEqual(mods)
+    const t = setup(textScript, garage, TEST_STOP_GRACE_MS, [tester])
+    t.handle({ type: 'mod.setEnabled', modId: 'tester', enabled: false })
+    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, false) })
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'size', value: 'full' })
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'count', value: -1 })
+    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'loud', value: true })
+    const values = { size: 'full', count: -1, loud: true }
+    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, false, values) })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({
+      theme: 'dark',
+      mods: { tester: { enabled: false, ...values } },
+    })
     t.core.close()
-    expect(setup(textScript, garage).core.mods()).toEqual(mods)
+    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, [tester]).core.mods()[0]).toEqual(
+      infoOf(tester, false, values),
+    )
+  })
+
+  it('refuses a value its declaration rules out, an unknown mod or key, and the reserved key', () => {
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
+    const set = (key: string, value: unknown) => () =>
+      t.handle({ type: 'mod.setValue', modId: 'tester', key, value } as never)
+    expect(set('size', '768')).toThrow('Size must be one of: Small, Full')
+    expect(set('count', 1.5)).toThrow('Count must be a whole number')
+    expect(set('count', -2)).toThrow('Count must be at least -1')
+    expect(set('count', 11)).toThrow('Count must be at most 10')
+    expect(set('count', '3')).toThrow('Count must be a number')
+    expect(set('loud', 'yes')).toThrow('Loud must be on or off')
+    expect(set('nope', 1)).toThrow('Tester has no setting "nope"')
+    expect(set('enabled', false)).toThrow('Tester has no setting "enabled"')
+    expect(() => t.handle({ type: 'mod.setEnabled', modId: 'nope', enabled: true })).toThrow('Unknown mod "nope"')
+    expect(() => t.handle({ type: 'mod.setValue', modId: 'nope', key: 'x', value: 1 })).toThrow('Unknown mod "nope"')
+    expect(t.core.mods()[0]).toEqual(infoOf(tester, true))
+    expect(existsSync(join(t.garage, 'settings.json')) && savedMods(t.garage)).toBeFalsy()
+  })
+
+  it('falls back to the declared default for a saved value its declaration rules out', () => {
+    const garage = tempDir()
+    const saved = { tester: { enabled: 'yes', size: 1024, count: 4, loud: 'no' } }
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: saved }))
+    const t = setup(textScript, garage, TEST_STOP_GRACE_MS, [tester])
+    expect(t.core.mods()[0]).toEqual(infoOf(tester, true, { ...defaultsOf(tester), count: 4 }))
+  })
+
+  it('reads the subagents switch and limit saved before mods had declarations', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { subagents: { enabled: true, limit: -1 } } }))
+    expect(setup(textScript, garage).core.mods()).toEqual([infoOf(SUBAGENTS_MOD, true, { limit: -1 })])
+  })
+
+  it('refuses two mods with one id', () => {
+    expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester, { ...tester, name: 'Again' }])).toThrow(
+      'Two mods have the id "tester"',
+    )
   })
 })

@@ -12,8 +12,9 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
+import type { Mod } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
-import { openHotrodMcp } from './hotrod-mcp.ts'
+import { openHotrodMcp, SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   memoryPrompt,
@@ -25,9 +26,9 @@ import {
   ZOOM_INSTRUCTIONS,
   type Summaries,
 } from './memory.ts'
+import { valuesOf } from './mods.ts'
 import {
   CONTEXT_SECTIONS,
-  DEFAULT_SUBAGENT_LIMIT,
   IMAGE_TYPES,
   looksBinary,
   MAX_ATTACHMENT_BYTES,
@@ -35,6 +36,7 @@ import {
   MODEL_ROLES,
   pickModel,
   pickThinking,
+  settingProblem,
   WORKSHOP_ID,
   WORKSHOP_NAME,
   type Adapter,
@@ -54,7 +56,7 @@ import {
   type MemorySettings,
   type ModelLists,
   type ModelRole,
-  type Mods,
+  type ModInfo,
   type NewChat,
   type QueuedMessage,
   type Session,
@@ -93,6 +95,7 @@ export function openCore(options: {
   adapters: Adapter[]
   defaultEngine: string
   machine: Machine
+  mods?: Mod[]
   stopGraceMs?: number
   compactDebounceMs?: number
 }) {
@@ -107,11 +110,14 @@ export function openCore(options: {
     }
   }
   checkEngine(defaultEngine)
+  const mods = [...(options.mods ?? []), SUBAGENTS_MOD]
+  const twin = mods.find((mod, i) => mods.findIndex((m) => m.id === mod.id) !== i)
+  if (twin) throw new Error(`Two mods have the id "${twin.id}"`)
   const settingsFile = join(garage, 'settings.json')
   const settings: {
     engines: Record<string, boolean>
     context?: Partial<Record<ContextSection, boolean>>
-    mods?: Partial<Mods>
+    mods?: Record<string, Record<string, unknown>>
     models?: Record<string, Partial<ModelLists>>
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
@@ -122,9 +128,17 @@ export function openCore(options: {
     folders: settings.context?.folders ?? true,
     files: settings.context?.files ?? true,
   })
-  const mods = (): Mods => ({
-    subagents: { enabled: false, limit: DEFAULT_SUBAGENT_LIMIT, ...settings.mods?.subagents },
-  })
+  const modFor = (id: string) => {
+    const mod = mods.find((m) => m.id === id)
+    if (!mod) throw new Error(`Unknown mod "${id}"`)
+    return mod
+  }
+  const modInfo = (mod: Mod): ModInfo => {
+    const { enabled, ...saved } = settings.mods?.[mod.id] ?? {}
+    const { id, name, description, settings: declared = [] } = mod
+    const on = typeof enabled === 'boolean' ? enabled : mod.enabledByDefault
+    return { id, name, description, enabled: on, settings: declared, values: valuesOf(mod, saved) }
+  }
   const listsOf = (engine: string): ModelLists => ({
     chat: [],
     planning: [],
@@ -167,13 +181,17 @@ export function openCore(options: {
     saveSettings()
     broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
   }
-  const setSubagents = (enabled: boolean, limit: unknown) => {
-    if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < -1) {
-      throw new Error('The subagent limit must be a whole number, or -1 for no limit')
-    }
-    settings.mods = { ...settings.mods, subagents: { enabled, limit } }
+  const saveMod = (mod: Mod, change: Record<string, unknown>) => {
+    settings.mods = { ...settings.mods, [mod.id]: { ...settings.mods?.[mod.id], ...change } }
     saveSettings()
-    broadcast({ type: 'mods.updated', mods: mods() })
+    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+  }
+  const setModValue = (mod: Mod, key: string, value: unknown) => {
+    const setting = mod.settings?.find((s) => s.key === key)
+    if (!setting) throw new Error(`${mod.name} has no setting "${key}"`)
+    const problem = settingProblem(setting, value)
+    if (problem) throw new Error(`${setting.label} ${problem}`)
+    saveMod(mod, { [key]: value })
   }
   const setModelList = (engine: string, role: unknown, models: unknown) => {
     checkEngine(engine)
@@ -736,7 +754,10 @@ export function openCore(options: {
     },
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
-    subagents: () => mods().subagents,
+    subagents: () => {
+      const { enabled, values } = modInfo(SUBAGENTS_MOD)
+      return { enabled, limit: Number(values.limit) }
+    },
     memory: (chatId) => memoryOf(chatFor(chatId)),
   })
 
@@ -779,7 +800,7 @@ export function openCore(options: {
     },
     setEngineEnabled,
     contextDefaults,
-    mods,
+    mods: () => mods.map(modInfo),
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     memory: () => settings.memory ?? {},
     chats: () => [...chats.values()].map(state),
@@ -850,8 +871,10 @@ export function openCore(options: {
             throw new Error(`Unknown context section "${message.section}"`)
           }
           return setContextDefault(message.section, message.enabled === true)
-        case 'subagents.set':
-          return setSubagents(message.enabled === true, message.limit)
+        case 'mod.setEnabled':
+          return saveMod(modFor(String(message.modId)), { enabled: message.enabled === true })
+        case 'mod.setValue':
+          return setModValue(modFor(String(message.modId)), String(message.key), message.value)
         case 'memory.set':
           return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':

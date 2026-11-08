@@ -7,6 +7,7 @@
     "dev": "node --watch src/main.ts"
   },
   "dependencies": {
+    "@hotrod/mod-api": "*",
     "@modelcontextprotocol/node": "^2.1.2",
     "@modelcontextprotocol/server": "^2.4.0",
     "ws": "^8.22.1",
