@@ -199,8 +199,13 @@ export function openCore(options: {
   const installs = new Map<string, AbortController>()
   const modInfo = (mod: Mod): ModInfo => {
     const { id, name, description, settings: declared = [] } = mod
-    const setup = mod.setup && { description: mod.setup.description, ...(setups.get(id) ?? { status: 'checking' }) }
-    const info = { id, name, description, enabled: isOn(mod), settings: declared, values: modValues(mod) }
+    const values = modValues(mod)
+    const about = mod.setup?.description
+    const setup = mod.setup && {
+      description: typeof about === 'function' ? about(values) : about!,
+      ...(setups.get(id) ?? { status: 'checking' }),
+    }
+    const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
     return { ...info, ...(setup && { setup }) }
   }
   const listsOf = (engine: string): ModelLists => ({
@@ -266,14 +271,17 @@ export function openCore(options: {
   const runFor =
     (signal?: AbortSignal): ModRun =>
     (command, args, options) =>
-      machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
+      // A setup that runs several commands stops at its next one once cancelled.
+      signal?.aborted
+        ? Promise.reject(new Error('Cancelled'))
+        : machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
   const checkSetup = async (mod: Mod, installError?: string) => {
     if (!mod.setup || installs.has(mod.id)) return
     const { message } = setups.get(mod.id) ?? {}
     setSetup(mod, { status: 'checking', ...(message && { message }) })
     let checked: Omit<SetupState, 'description'>
     try {
-      const result = await mod.setup.check(runFor())
+      const result = await mod.setup.check(runFor(), modValues(mod))
       checked = { status: result.ready ? 'ready' : 'missing', ...(result.message && { message: result.message }) }
     } catch (error) {
       checked = { status: 'missing', error: messageOf(error) }
@@ -294,7 +302,7 @@ export function openCore(options: {
       const update = { ...(text && { progressText: text }), ...(progress !== undefined && { progress }) }
       setSetup(mod, { ...setups.get(mod.id)!, ...update })
     }
-    void mod.setup.install(runFor(controller.signal), report).then(
+    void mod.setup.install(runFor(controller.signal), report, modValues(mod)).then(
       () => {
         installs.delete(mod.id)
         return checkSetup(mod)
@@ -311,6 +319,7 @@ export function openCore(options: {
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
     saveMod(mod, { [key]: value })
+    if (isOn(mod)) void checkSetup(mod)
   }
   const setModelList = (engine: string, role: unknown, models: unknown) => {
     checkEngine(engine)

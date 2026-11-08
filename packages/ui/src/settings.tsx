@@ -264,6 +264,18 @@ function ModsPage({ mods, connected, send }: PageProps) {
   )
 }
 
+// A mod's text is plain; its web addresses become links.
+const linked = (text: string) =>
+  text.split(/(https:\/\/[^\s)]*[^\s).,;:])/).map((part, i) =>
+    i % 2 ? (
+      <a key={i} className="text-accent underline" href={part} target="_blank" rel="noreferrer">
+        {part}
+      </a>
+    ) : (
+      part
+    ),
+  )
+
 const setupTitle = (mod: ModInfo) => mod.setup?.message ?? `${mod.name} isn't set up`
 
 type SetupProps = { mod: ModInfo; connected: boolean; send: (m: ClientMessage) => void }
@@ -322,7 +334,7 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
               >
                 <div className="flex flex-col gap-4">
                   <AlertDialog.Title className="text-[16px] font-semibold">{setupTitle(mod)}</AlertDialog.Title>
-                  {mod.setup?.description && <p className="text-sm text-muted">{mod.setup.description}</p>}
+                  {mod.setup?.description && <p className="text-sm text-muted">{linked(mod.setup.description)}</p>}
                 </div>
                 <SetupStatus mod={mod} />
                 <div className="flex justify-end gap-8">
@@ -349,7 +361,7 @@ function ModSetupRow({ mod, connected, send }: SetupProps) {
   return (
     <SettingRow
       name={<span className={status === 'ready' ? '' : 'text-amber'}>{setupTitle(mod)}</span>}
-      description={mod.setup!.description}
+      description={linked(mod.setup!.description)}
       below={(status === 'installing' || status === 'checking' || mod.setup!.error) && <SetupStatus mod={mod} />}
     >
       {status === 'ready' && <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Ready</span>}
@@ -706,7 +718,7 @@ function ModSettingRow({ setting, value, disabled, save }: ModSettingProps) {
   const [draft, setDraft] = useState(String(value))
   useEffect(() => setDraft(String(value)), [value])
   const row = (control: ReactNode, below?: ReactNode) => (
-    <SettingRow name={setting.label} description={setting.description} below={below}>
+    <SettingRow name={setting.label} description={setting.description && linked(setting.description)} below={below}>
       {control}
     </SettingRow>
   )

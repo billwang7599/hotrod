@@ -3465,6 +3465,72 @@ describe('mods', () => {
       expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
       expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
     })
+
+    it("gives a setup the mod's values, describes it by them, and checks again when one changes", async () => {
+      const seen: unknown[] = []
+      const picky: Mod = {
+        ...tool,
+        settings: [
+          {
+            key: 'kind',
+            label: 'Kind',
+            type: 'select',
+            options: [
+              { value: 'a', label: 'A' },
+              { value: 'b', label: 'B' },
+            ],
+            default: 'a',
+          },
+        ],
+        setup: {
+          description: (values) => `Sets up ${values.kind}.`,
+          check: async (_run, values) => (seen.push(values.kind), { ready: values.kind === 'b' }),
+          install: async () => {},
+        },
+      }
+      const t = open(tempDir(), [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [picky])
+      const setupOf = () => t.core.mods()[0]!.setup!
+      await until(() => setupOf().status === 'missing')
+      expect(setupOf().description).toBe('Sets up a.')
+      t.handle({ type: 'mod.setValue', modId: 'tool', key: 'kind', value: 'b' })
+      await until(() => setupOf().status === 'ready')
+      expect(setupOf().description).toBe('Sets up b.')
+      expect(seen).toEqual(['a', 'b'])
+    })
+
+    it('stops a setup that runs several commands at its next one once cancelled', async () => {
+      const runs: string[] = []
+      let next = () => {}
+      const machine: Machine = {
+        ...sandboxingMachine,
+        async run(command) {
+          runs.push(command)
+          if (command === 'step') await new Promise<void>((resolve) => (next = resolve))
+          return { code: 1, stdout: '', stderr: '' }
+        },
+      }
+      const steps: Mod = {
+        ...tool,
+        setup: {
+          description,
+          check: async (run) => ({ ready: (await run('check', [])).code === 0 }),
+          async install(run) {
+            for (;;) await run('step', [])
+          },
+        },
+      }
+      const adapter = createFakeAdapter(textScript, 0)
+      const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [steps], machine)
+      const setupOf = () => t.core.mods()[0]!.setup!
+      await until(() => setupOf().status === 'missing')
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      await until(() => runs.at(-1) === 'step')
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      next()
+      await until(() => setupOf().status === 'missing')
+      expect(setupOf().error).toBeUndefined()
+      expect(runs).toEqual(['check', 'step', 'check'])
+    })
   })
 })
 

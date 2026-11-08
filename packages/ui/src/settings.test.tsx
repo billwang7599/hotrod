@@ -259,6 +259,19 @@ test("a mod's page shows its setup, with Install while it is missing, even when 
   expect([...dialog().querySelectorAll('button')].some((b) => b.textContent === 'Install')).toBe(false)
 })
 
+test("a mod's web addresses are links, in its setup and its settings", () => {
+  const url = 'https://chromewebstore.google.com/detail/playwright-extension/abc'
+  const token: ModSetting = { key: 'token', label: 'Token', description: `Copy it from ${url}.`, type: 'text', default: '' }
+  const mod = setupMod(true, { status: 'missing' }, [token])
+  renderMods([{ ...mod, setup: { ...mod.setup!, description: `Add it (${url}), then wait.` } }], 'mod:browser')
+  const links = [...dialog().querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])
+  expect(links).toEqual([
+    [url, url],
+    [url, url],
+  ])
+  expect(dialog().textContent).toContain(`Add it (${url}), then wait.`)
+})
+
 test("a mod's text setting saves on blur and resets to its default while it differs", () => {
   const notes = { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 } satisfies ModSetting
   const notesMod = (value: string): ModInfo => ({

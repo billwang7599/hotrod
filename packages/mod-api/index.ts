@@ -202,10 +202,15 @@ export type McpServer = {
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
 
 // progress runs from 0 to 1.
+// A setup can depend on the mod's settings: it is checked again whenever one changes.
 export type ModSetup = {
-  description: string
-  check(run: ModRun): Promise<{ ready: boolean; message?: string }>
-  install(run: ModRun, report: (update: { text?: string; progress?: number }) => void): Promise<void>
+  description: string | ((values: ModValues) => string)
+  check(run: ModRun, values: ModValues): Promise<{ ready: boolean; message?: string }>
+  install(
+    run: ModRun,
+    report: (update: { text?: string; progress?: number }) => void,
+    values: ModValues,
+  ): Promise<void>
 }
 
 // A panel's UI, as data: the mod's core side builds it and the UI draws it with Hotrod's own controls, so a panel looks
