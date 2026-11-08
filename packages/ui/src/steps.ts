@@ -42,11 +42,6 @@ export function showStepsIn(chatId: string, shown: boolean | undefined) {
   save({ ...current, chats: shown === undefined ? chats : { ...chats, [chatId]: shown } })
 }
 
-/** One chat's own choice, undefined while it follows Settings. */
-export function useStepsChoice(chatId: string): boolean | undefined {
-  return useSyncExternalStore(subscribe, snapshot, snapshot).chats[chatId]
-}
-
 /** Rereads the saved choice, for tests that clear storage. */
 export function reloadSteps() {
   current = read()
@@ -63,9 +58,10 @@ export function useStepsDefault(): boolean {
   return useSyncExternalStore(subscribe, snapshot, snapshot).default
 }
 
-export function useStepsShown(chatId: string): boolean {
+/** A chat without a choice of its own follows the first chat above it that has one (a subagent, its space's). */
+export function useStepsShown(chatId: string, ...above: string[]): boolean {
   const saved = useSyncExternalStore(subscribe, snapshot, snapshot)
-  return saved.chats[chatId] ?? saved.default
+  return [chatId, ...above].map((id) => saved.chats[id]).find((on) => on !== undefined) ?? saved.default
 }
 
 /** Whether thinking and tool rows start open, for the rows inside one chat's transcript. */

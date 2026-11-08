@@ -7,7 +7,8 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
-import { reloadSteps, showStepsByDefault } from './steps.ts'
+import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
+import { ChatNav } from './sidebar.tsx'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
@@ -80,6 +81,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  delete (navigator as unknown as Record<string, unknown>).clipboard
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
@@ -88,10 +90,11 @@ type RenderOptions = {
   contextOpen?: boolean
   contextItems?: ContextItem[]
   folder?: string
+  chats?: ChatView[]
+  select?: (chatId: string) => void
 }
 
-function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
-  const view: ChatView = {
+const viewOf = (chat: Partial<ChatView>): ChatView => ({
     id: 'c1',
     name: 'demo',
     folders: [],
@@ -104,7 +107,10 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
     draft: '',
     queue: [],
     ...chat,
-  }
+})
+
+function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
+  const view = viewOf(chat)
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -113,7 +119,8 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
             <Chat
               chat={view}
               folder={options.folder}
-              chats={[view]}
+              chats={[view, ...(options.chats ?? [])]}
+              select={options.select}
               engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
               connected
               send={send}
@@ -376,14 +383,19 @@ test('thinking and tool calls show unfolded by default from Settings, and each c
   const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => general.click())
   const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Thinking and tool calls"]')!
-  expect(select().textContent).toBe('Default (Unfolded)')
+  expect(select().textContent).toBe('Unfolded')
   act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  const folded = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Folded')!
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Unfolded', 'Folded'])
+  const folded = options.find((o) => o.textContent === 'Folded')!
   act(() => folded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(select().textContent).toBe('Folded')
   expect(foldButton()?.textContent).toBe('3 steps')
+  act(() => showStepsByDefault(true))
+  expect(select().textContent).toBe('Folded')
   render({ id: 'c2', items }, () => {}, { contextOpen: true })
   expect(foldButton()).toBeUndefined()
+  expect(select().textContent).toBe('Unfolded')
 
   act(() => showStepsByDefault(false))
   localStorage.clear()
@@ -453,6 +465,182 @@ test('a permission without a tool row keeps a row of its own, with the same badg
   const [row] = rowButtons()
   expect(row!.textContent).toContain('Write')
   expect(row!.querySelector('[data-verdict]')?.textContent).toBe('Denied')
+})
+
+test('messages, replies, their code, tool output and permission input each copy their own text', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  const reply = 'Ran **it**:\n\n```sh\nls -a\n```'
+  const input = { path: '/x.ts' }
+  const items: Item[] = [
+    { kind: 'user', text: 'Copy *me*' },
+    tool('done', 'a.txt'),
+    { kind: 'permission', requestId: 'r1', name: 'Write', toolKind: 'edit', summary: '/x.ts', input, outcome: 'denied' },
+    { kind: 'text', text: reply },
+    tool('running', '', { toolId: 't2' }),
+  ]
+  render({ status: 'running', items, draft: 'Streaming' })
+  act(() => foldButton()!.click())
+  act(() => rowButtons().filter((b) => b !== foldButton()).forEach((b) => b.click()))
+  const copies: [string | null, string][] = []
+  for (const button of list().querySelectorAll<HTMLButtonElement>('button[aria-label^="Copy"]')) {
+    const label = button.getAttribute('aria-label')
+    await act(async () => button.click())
+    copies.push([label, writeText.mock.lastCall![0]])
+  }
+  expect(copies).toEqual([
+    ['Copy message', 'Copy *me*'],
+    ['Copy output', 'a.txt'],
+    ['Copy input', JSON.stringify(input, null, 2)],
+    ['Copy code', 'ls -a'],
+    ['Copy reply', reply],
+  ])
+})
+
+const FORMAT = 'How should I format the output?'
+const SECTIONS = 'Which sections should I include?'
+const QUESTIONS = [
+  {
+    header: 'Format',
+    question: FORMAT,
+    options: [
+      { label: 'Summary', description: 'Brief overview' },
+      { label: 'Detailed', description: 'Full explanation' },
+    ],
+    multiSelect: false,
+  },
+  {
+    header: 'Sections',
+    question: SECTIONS,
+    options: [
+      { label: 'Introduction', description: 'Opening context' },
+      { label: 'Body', description: 'The main part' },
+      { label: 'Conclusion', description: 'Final summary' },
+    ],
+    multiSelect: true,
+  },
+]
+type QuestionItem = Extract<Item, { kind: 'question' }>
+const question = (change: Partial<QuestionItem> = {}): Item => ({
+  kind: 'question',
+  requestId: 'q1',
+  questions: QUESTIONS,
+  outcome: 'pending',
+  ...change,
+})
+const card = () => container.querySelector<HTMLElement>('[aria-label="Question"]')
+const press = (key: string, target: Element = document.body) =>
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+const choices = () => [...card()!.querySelectorAll<HTMLButtonElement>('[role="radio"], [role="checkbox"]')]
+const checked = () => choices().flatMap((c) => (c.getAttribute('aria-checked') === 'true' ? [c.dataset.label] : []))
+const buttonNamed = (name: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === name)!
+
+test('a pending question is a card: a tab per question, option rows, number keys, an Other field, Enter submits', () => {
+  const sent: ClientMessage[] = []
+  render({ status: 'waiting', items: [USER, question()] }, (m) => sent.push(m))
+  const tabs = [...card()!.querySelectorAll('[role="tab"]')]
+  expect(tabs.map((t) => t.textContent)).toEqual(['Format', 'Sections'])
+  expect(card()!.textContent).toContain(FORMAT)
+  expect(choices().map((c) => c.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
+  const [summary] = choices()
+  expect(summary!.querySelector('strong')?.textContent).toBe('Summary')
+  expect(summary!.textContent).toContain('Brief overview')
+  expect(choices().at(-1)!.textContent).toContain('Other…')
+
+  press('2')
+  expect(card()!.textContent).toContain(SECTIONS)
+  expect(tabs[1]!.getAttribute('aria-selected')).toBe('true')
+  expect(choices().map((c) => c.getAttribute('role'))).toEqual(Array(4).fill('checkbox'))
+  press('1')
+  press('3')
+  press('2')
+  press('2')
+  expect(checked()).toEqual(['Introduction', 'Conclusion'])
+  press('4')
+  const other = card()!.querySelector<HTMLInputElement>('input[aria-label="Other answer"]')!
+  expect(document.activeElement).toBe(other)
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(other, 'Appendix')
+    other.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  press('1', other)
+  expect(checked()).toEqual(['Introduction', 'Conclusion', 'Other'])
+  press('Enter', other)
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([
+    {
+      type: 'question.respond',
+      chatId: 'c1',
+      requestId: 'q1',
+      answers: { [FORMAT]: ['Detailed'], [SECTIONS]: ['Introduction', 'Conclusion', 'Appendix'] },
+    },
+  ])
+})
+
+test('Submit waits for an answer to every question, Enter shows the first one left, and Skip declines', () => {
+  const sent: ClientMessage[] = []
+  render({ status: 'waiting', items: [USER, question()] }, (m) => sent.push(m))
+  const tabs = () => [...card()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  const tab = (name: string) => tabs().find((t) => t.textContent?.includes(name))!
+  act(() => tab('Sections').click())
+  act(() => choices()[1]!.click())
+  expect(buttonNamed('Submit').disabled).toBe(true)
+  press('Enter')
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([])
+  expect(tab('Format').getAttribute('aria-selected')).toBe('true')
+  act(() => choices()[0]!.click())
+  expect(buttonNamed('Submit').disabled).toBe(false)
+  act(() => buttonNamed('Submit').click())
+  press('Enter')
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([
+    { type: 'question.respond', chatId: 'c1', requestId: 'q1', answers: { [FORMAT]: ['Summary'], [SECTIONS]: ['Body'] } },
+  ])
+  expect(buttonNamed('Skip').disabled).toBe(true)
+
+  render({ status: 'waiting', items: [USER, question({ requestId: 'q2' })] }, (m) => sent.push(m))
+  act(() => buttonNamed('Skip').click())
+  expect(sent.at(-1)).toEqual({ type: 'question.respond', chatId: 'c1', requestId: 'q2' })
+})
+
+test('one question shows no tabs, and keys typed elsewhere never pick an option', () => {
+  render({ status: 'waiting', items: [USER, question({ questions: QUESTIONS.slice(0, 1) })] })
+  expect(card()!.querySelector('[role="tab"]')).toBeNull()
+  const composer = container.querySelector('textarea')!
+  composer.focus()
+  press('1', composer)
+  expect(checked()).toEqual([])
+  const placeholder = composer.placeholder || composer.getAttribute('aria-placeholder')
+  expect(placeholder).toBe('Waiting for your answer… Enter queues a message')
+  render({ status: 'stopping', items: [USER, question({ questions: QUESTIONS.slice(0, 1) })] })
+  expect(card()!.textContent).toContain('Stopping…')
+  expect(choices().every((c) => c.disabled)).toBe(true)
+})
+
+test('an answered question shrinks to a row of its answers that folds with the steps', () => {
+  const answers = { [FORMAT]: ['Detailed'], [SECTIONS]: ['Introduction', 'Body'] }
+  const items: Item[] = [USER, tool('done'), question({ outcome: 'answered', answers }), REPLY]
+  render({ status: 'running', items })
+  expect(card()).toBeNull()
+  act(() => foldButton()!.click())
+  const row = rowButtons().find((b) => b.textContent?.includes('Format'))!
+  expect(row.textContent).toContain('Format → Detailed')
+  expect(row.textContent).toContain('Sections → Introduction, Body')
+  act(() => row.click())
+  expect(container.textContent).toContain(SECTIONS)
+  render({ status: 'idle', items })
+  expect(foldButton()?.textContent).toBe('2 steps')
+  render({ status: 'running', items: [USER, question({ outcome: 'skipped' })] })
+  expect(rowButtons()[0]!.querySelector('[data-verdict]')?.textContent).toBe('Skipped')
+})
+
+test('the down button points at a question waiting below', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
+  grow(JUMP_BELOW_PX * 3)
+  render({ status: 'waiting', items: [USER, REPLY, question()] })
+  const asking = container.querySelector<HTMLButtonElement>('[aria-label="Scroll to the question"]')!
+  expect(asking.className).toContain('text-amber')
 })
 
 test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
@@ -563,19 +751,22 @@ test('every chat, Home too, overrides each permission default in its Context pan
     for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
       const sent: ClientMessage[] = []
       render(chat, (m) => sent.push(m), { contextOpen: true })
-      expect(select().textContent).toBe(`Default (${fallback})`)
-      choose(select(), (text) => text.endsWith(flipped))
+      expect(select().textContent).toBe(fallback)
+      choose(select(), (text) => text.startsWith(flipped))
       const chatId = 'id' in chat ? chat.id : 'c1'
       expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId, name, enabled: !PERMISSION_DEFAULTS[name] })
     }
 
     render({}, () => {}, { contextOpen: true, workFolder: { [name]: !PERMISSION_DEFAULTS[name] } })
-    expect(select().textContent).toBe(`Default (${flipped})`)
-    const sent: ClientMessage[] = []
-    render({ [name]: true }, (m) => sent.push(m), { contextOpen: true })
+    expect(select().textContent).toBe(flipped)
+    render({ [name]: true }, () => {}, { contextOpen: true, workFolder: { [name]: false } })
     expect(select().textContent).toBe('On')
-    choose(select(), (text) => text.includes('Default'))
-    expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
+    act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect([...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.replace('✓', ''))).toEqual([
+      'On',
+      'Off',
+    ])
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
   }
   localStorage.clear()
 })
@@ -586,7 +777,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
   localStorage.setItem('hotrod.panelTab', 'permissions')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
-  expect(select().textContent).toBe('Default (On)')
+  expect(select().textContent).toBe('On')
   expect(amber()).toContain('text-amber')
   render({ editAnywhere: false }, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('Off')
@@ -627,4 +818,80 @@ test('each context card collapses to its header, its switch still working, and s
   await vi.waitFor(() => expect(globalBox()).not.toBeNull())
   showPaths('context', false)
   localStorage.clear()
+})
+
+const SPACE = viewOf({ id: 'p1', name: 'Space' })
+const pendingTool = (outcome: 'pending' | 'allowed') =>
+  tool(outcome === 'pending' ? 'waiting' : 'running', '', {
+    summary: 'rm -rf build',
+    permission: { requestId: 'r1', name: 'Bash', toolKind: 'shell', summary: 'rm -rf build', input: {}, outcome },
+  })
+const subagent = (change: Partial<ChatView> = {}) =>
+  viewOf({ id: 's1', name: 'Fix tests', parentId: 'p1', subagent: true, status: 'waiting', items: [USER, pendingTool('pending')], ...change })
+
+test("a subagent's permission request waits in its space, which answers it and turns the down button amber", () => {
+  const sent: ClientMessage[] = []
+  const space = { ...SPACE, status: 'running' as const, items: [USER, REPLY], draft: 'More' }
+  render(space, (m) => sent.push(m), { chats: [subagent()] })
+  const card = () => container.querySelector('[aria-label="Request from subagent Fix tests"]')
+  expect(card()!.textContent).toContain('Subagent Fix tests wants to run Bash')
+  expect(card()!.textContent).toContain('rm -rf build')
+  scrollTo(0)
+  grow(JUMP_BELOW_PX * 3)
+  expect(container.querySelector('[aria-label="Scroll to the permission request"]')!.className).toContain('text-amber')
+
+  const approve = [...card()!.querySelectorAll('button')].find((b) => b.textContent === 'Approve')!
+  act(() => approve.click())
+  expect(sent.at(-1)).toEqual({ type: 'permission.respond', chatId: 's1', requestId: 'r1', allow: true })
+
+  render(space, () => {}, { chats: [subagent({ status: 'running', items: [USER, pendingTool('allowed')] })] })
+  expect(card()).toBeNull()
+  render(space, () => {}, { chats: [subagent({ status: 'stopping' })] })
+  expect(card()).toBeNull()
+})
+
+test("a subagent's own view shows where its request waits, with a way to the space instead of Approve", () => {
+  const select = vi.fn()
+  render(subagent(), () => {}, { chats: [SPACE], select })
+  expect(container.textContent).toContain('Waiting for approval in Space')
+  const buttons = [...container.querySelectorAll('button')]
+  expect(buttons.some((b) => b.textContent === 'Approve')).toBe(false)
+  act(() => buttons.find((b) => b.textContent === 'Go to Space')!.click())
+  expect(select).toHaveBeenCalledWith('p1')
+})
+
+test("a subagent without its own choice shows thinking and tool calls the way its space does", () => {
+  const steps: Item[] = [tool('done', 'a.txt'), { kind: 'text', text: 'Installing them.' }, tool('done', '', { toolId: 't2' })]
+  const sub = subagent({ status: 'idle', items: [USER, ...steps, { kind: 'text', text: 'All set' }] })
+  render(sub, () => {}, { chats: [SPACE] })
+  expect(foldButton()?.textContent).toBe('3 steps')
+  act(() => showStepsIn('p1', true))
+  expect(foldButton()).toBeUndefined()
+  act(() => showStepsIn('s1', false))
+  expect(foldButton()?.textContent).toBe('3 steps')
+  localStorage.clear()
+  act(() => reloadSteps())
+})
+
+test("the sidebar shows a space as waiting while a subagent below it waits for approval", () => {
+  const dot = (name: string) =>
+    [...container.querySelectorAll('nav button, button')]
+      .find((b) => b.textContent?.startsWith(name))
+      ?.querySelector('[data-status]')
+      ?.getAttribute('data-status')
+  const nav = (chats: ChatView[]) =>
+    act(() =>
+      root.render(
+        <LazyMotion features={domAnimation} strict>
+          <Tooltip.Provider delayDuration={0}>
+            <ChatNav chats={chats} selectedId="p1" connected send={() => {}} select={() => {}} askName={() => {}} />
+          </Tooltip.Provider>
+        </LazyMotion>,
+      ),
+    )
+  nav([SPACE, subagent()])
+  expect(dot('Space')).toBe('waiting')
+  expect(dot('Fix tests')).toBe('waiting')
+  nav([SPACE, subagent({ status: 'running', items: [USER, pendingTool('allowed')] })])
+  expect(dot('Space')).toBe('idle')
 })

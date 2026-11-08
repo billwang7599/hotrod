@@ -246,11 +246,12 @@ function ModsPage({ mods, connected, send }: PageProps) {
               {m.enabled && m.setup?.status === 'missing' && <span className="block text-amber">{setupTitle(m)}</span>}
             </>
           }
+          below={m.loadError && <ErrorText>Couldn't load: {m.loadError}</ErrorText>}
         >
           <Switch
             label={m.name}
             checked={m.enabled}
-            disabled={!connected}
+            disabled={!connected || m.loadError !== undefined}
             onChange={(enabled) => {
               send({ type: 'mod.setEnabled', modId: m.id, enabled })
               if (enabled && m.setup) setSetupFor(m.id)

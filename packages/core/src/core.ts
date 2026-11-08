@@ -44,6 +44,7 @@ import {
   settingProblem,
   switchedOn,
   type Adapter,
+  type Answers,
   type Attachment,
   type ChatEntry,
   type ChatInfo,
@@ -101,7 +102,7 @@ type Chat = {
   session?: Session
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
-  pendingRequests: Set<string>
+  pendingRequests: Map<string, 'permission' | 'question'>
   mcpToken?: string
   queue: QueuedMessage[]
   summaries: Summaries
@@ -116,6 +117,7 @@ export function openCore(options: {
   defaultEngine: string
   machine: Machine
   mods?: Mod[]
+  brokenMods?: { id: string; loadError: string }[]
   stopGraceMs?: number
   compactDebounceMs?: number
 }) {
@@ -157,10 +159,12 @@ export function openCore(options: {
     folders: settings.context?.folders ?? true,
     files: settings.context?.files ?? true,
   })
+  const brokenMods = options.brokenMods ?? []
   const modFor = (id: string) => {
     const mod = mods.find((m) => m.id === id)
-    if (!mod) throw new Error(`Unknown mod "${id}"`)
-    return mod
+    if (mod) return mod
+    const broken = brokenMods.find((m) => m.id === id)
+    throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
   }
   const isOn = (mod: Mod) => {
     const saved = settings.mods?.[mod.id]?.enabled
@@ -437,6 +441,10 @@ export function openCore(options: {
     return parent ? [...chainOf(parent), chat] : [chat]
   }
 
+  // A chat's permission switches, nearest first: its own, then each chat above it (a subagent follows its space live),
+  // then the defaults in settings.
+  const switchesOf = (chat: Chat) => [...chainOf(chat).reverse().map((c) => c.info), settings]
+
   const familyOf = (chat: Chat): Chat[] => [
     chat,
     ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id).flatMap(familyOf),
@@ -472,6 +480,8 @@ export function openCore(options: {
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
+    // Subagents are workers for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
+    if (chat.info.subagent && chat.status === 'idle') removeChats(familyOf(chat))
   }
 
   const reportErrors = (run: () => void) => {
@@ -488,6 +498,16 @@ export function openCore(options: {
     const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
     const early = error ? ` (The turn ended early: ${error})` : ''
     return `[subagent "${chat.info.name}" (${chat.info.id})] ${text}${early}`
+  }
+
+  const removeChats = (family: Chat[]) => {
+    for (const c of family) {
+      stopSession(c)
+      chats.delete(c.info.id)
+      rmSync(c.dir, { recursive: true, force: true })
+      broadcast({ type: 'chat.removed', chatId: c.info.id })
+      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
+    }
   }
 
   const forceStop = (chat: Chat) =>
@@ -516,7 +536,7 @@ export function openCore(options: {
       entries,
       status: 'idle',
       unsavedText: '',
-      pendingRequests: new Set(),
+      pendingRequests: new Map(),
       queue: [],
       summaries: openSummaries(join(dir, 'summaries.jsonl')),
       turns: 0,
@@ -544,6 +564,13 @@ export function openCore(options: {
   for (const id of readdirSync(chatsDir)) {
     if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
+  }
+  // Nothing runs yet, so a subagent that has worked and is still here (Hotrod quit or crashed mid-task, or an older
+  // Hotrod kept it) goes now.
+  for (const chat of chats.values()) {
+    if (!chat.info.subagent || !chat.entries.length) continue
+    chats.delete(chat.info.id)
+    rmSync(chat.dir, { recursive: true, force: true })
   }
 
   const createChat = (spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }) => {
@@ -573,7 +600,12 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt: new Date().toISOString(),
-      ...(parent?.info.engine === engine && { thinking: parent.info.thinking }),
+      // A subagent on its parent's engine takes its thinking level, and its model unless a role picks one: the role
+      // the tool call names, or the Subagents model list once the user has filled it in.
+      ...(parent?.info.engine === engine && {
+        thinking: parent.info.thinking,
+        ...(spec.role === undefined && !listsOf(engine).subagents.length && { model: parent.info.model }),
+      }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parentMemory?.messages.length) {
@@ -607,12 +639,7 @@ export function openCore(options: {
   const deleteChat = (chat: Chat) => {
     const family = familyOf(chat)
     family.forEach(checkRemovable)
-    for (const c of family) {
-      chats.delete(c.info.id)
-      rmSync(c.dir, { recursive: true, force: true })
-      broadcast({ type: 'chat.removed', chatId: c.info.id })
-      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
-    }
+    removeChats(family)
   }
 
   const setModEnabled = (mod: Mod, enabled: boolean) => {
@@ -829,7 +856,7 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
-    const editAnywhere = editsAnywhere(chat.info, settings)
+    const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
       throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
     }
@@ -899,7 +926,7 @@ export function openCore(options: {
           const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
           return { allow: false, message }
         }
-        const on = (name: PermissionSwitch) => switchedOn(name, chat.info, settings)
+        const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
         if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
         return { allow: true }
@@ -921,10 +948,14 @@ export function openCore(options: {
         }
         if (event.type === 'text.completed') chat.unsavedText = ''
         append(chat, { at, ...event })
+        if (event.type === 'question.asked') {
+          chat.pendingRequests.set(event.requestId, 'question')
+          return setStatus(chat, 'waiting')
+        }
         if (event.type !== 'permission.requested') return
         const verdict = verdictOf(event)
         if (!verdict) {
-          chat.pendingRequests.add(event.requestId)
+          chat.pendingRequests.set(event.requestId, 'permission')
           return setStatus(chat, 'waiting')
         }
         const { requestId } = event
@@ -1077,13 +1108,31 @@ export function openCore(options: {
     chat.session.interrupt()
   }
 
-  const respond = (chat: Chat, requestId: string, allow: boolean) => {
-    if (!chat.session || !chat.pendingRequests.delete(requestId)) {
-      throw new Error(`No pending permission request "${requestId}"`)
+  const settle = (chat: Chat, entry: Extract<ChatEntry, { type: 'permission.resolved' | 'question.resolved' }>) => {
+    const kind = entry.type === 'question.resolved' ? 'question' : 'permission'
+    if (!chat.session || chat.pendingRequests.get(entry.requestId) !== kind) {
+      throw new Error(`No pending ${kind === 'question' ? kind : 'permission request'} "${entry.requestId}"`)
     }
-    append(chat, { at: new Date().toISOString(), type: 'permission.resolved', requestId, allow })
+    chat.pendingRequests.delete(entry.requestId)
+    append(chat, entry)
     if (chat.pendingRequests.size === 0) setStatus(chat, 'running')
-    chat.session.respond(requestId, allow)
+    return chat.session
+  }
+
+  const respond = (chat: Chat, requestId: string, allow: boolean) => {
+    const entry = { at: new Date().toISOString(), type: 'permission.resolved' as const, requestId, allow }
+    settle(chat, entry).respond(requestId, allow)
+  }
+
+  const answer = (chat: Chat, requestId: string, answers: unknown) => {
+    const valid = (list: unknown) => Array.isArray(list) && list.every((text) => typeof text === 'string')
+    const isObject = typeof answers === 'object' && answers !== null && !Array.isArray(answers)
+    if (answers !== undefined && !(isObject && Object.values(answers).every(valid))) {
+      throw new Error('Answers must give each question a list of choices')
+    }
+    const given = answers as Answers | undefined
+    const entry = { at: new Date().toISOString(), type: 'question.resolved' as const, requestId }
+    settle(chat, { ...entry, ...(given && { answers: given }) }).answer?.(requestId, given)
   }
 
   for (const mod of mods.filter(isOn)) void checkSetup(mod)
@@ -1106,7 +1155,18 @@ export function openCore(options: {
     },
     setEngineEnabled,
     contextDefaults,
-    mods: () => mods.map(modInfo),
+    mods: (): ModInfo[] => [
+      ...mods.map(modInfo),
+      ...brokenMods.map(({ id, loadError }) => ({
+        id,
+        name: id,
+        description: '',
+        enabled: false,
+        settings: [],
+        values: {},
+        loadError,
+      })),
+    ],
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     memory: () => settings.memory ?? {},
     chats: () => shownChats().map(state),
@@ -1207,6 +1267,8 @@ export function openCore(options: {
           return setModelList(String(message.engine), message.role, message.models)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
+        case 'question.respond':
+          return answer(chatFor(message.chatId), message.requestId, message.answers)
         case 'account.login':
           return accounts.login(String(message.engine), String(message.name ?? ''))
         case 'account.addApiKey':

@@ -1,6 +1,7 @@
 import { looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
+  Answers,
   Attachment,
   ChatEntry,
   ChatInfo,
@@ -14,6 +15,7 @@ import type {
   ModelLists,
   ModInfo,
   QueuedMessage,
+  Question,
   ToolKind,
   WorkFolder,
 } from '@hotrod/core/shared'
@@ -42,6 +44,13 @@ export type Item =
       permission?: Permission
     }
   | ({ kind: 'permission' } & Permission)
+  | {
+      kind: 'question'
+      requestId: string
+      questions: Question[]
+      outcome: 'pending' | 'answered' | 'skipped' | 'cancelled'
+      answers?: Answers
+    }
   | { kind: 'error'; text: string }
 
 export type ChatView = ChatInfo & {
@@ -90,7 +99,7 @@ export const initialState: State = {
   nextToastId: 1,
 }
 
-const cancel = <P extends Permission>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
+const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
 
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
@@ -141,6 +150,17 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
             : i,
       )
     }
+    case 'question.asked': {
+      const { requestId, questions, toolId } = entry
+      const asked: Item = { kind: 'question', requestId, questions, outcome: 'pending' }
+      const own = items.findIndex((i) => i.kind === 'tool' && i.toolId === toolId)
+      return own < 0 ? [...items, asked] : items.with(own, asked)
+    }
+    case 'question.resolved': {
+      const { requestId, answers } = entry
+      const outcome = answers ? { outcome: 'answered' as const, answers } : { outcome: 'skipped' as const }
+      return items.map((i) => (i.kind === 'question' && i.requestId === requestId ? { ...i, ...outcome } : i))
+    }
     case 'turn.completed':
     case 'session.ended': {
       const settled = items.filter((i) => i.kind !== 'thinking').map((i): Item =>
@@ -150,7 +170,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
               ...((i.state === 'running' || i.state === 'waiting') && { state: 'stopped' }),
               ...(i.permission && { permission: cancel(i.permission) }),
             }
-          : i.kind === 'permission'
+          : i.kind === 'permission' || i.kind === 'question'
             ? cancel(i)
             : i,
       )
@@ -233,7 +253,8 @@ export function reduce(state: State, action: Action): State {
       return {
         ...state,
         chats: state.chats.some((c) => c.id === action.chat.id) ? state.chats : [...state.chats, toView(action.chat)],
-        selectedId: action.chat.id,
+        // A subagent appears under its space without taking the view from the chat the user is reading.
+        selectedId: action.chat.parentId ? state.selectedId : action.chat.id,
       }
     case 'chat.updated':
       return updateChat(state, action.chat.id, (c) => ({
@@ -242,8 +263,14 @@ export function reduce(state: State, action: Action): State {
         thinking: undefined,
         ...action.chat,
       }))
-    case 'chat.removed':
-      return keepSelection({ ...state, chats: state.chats.filter((c) => c.id !== action.chatId) })
+    case 'chat.removed': {
+      const chats = state.chats.filter((c) => c.id !== action.chatId)
+      const removed = familyOf(state.chats, action.chatId)
+      if (!removed.some((c) => c.id === state.selectedId)) return keepSelection({ ...state, chats })
+      // A subagent goes once it's done, with any below it; whoever was watching lands on the chat above them.
+      const parentId = removed[0]?.parentId
+      return keepSelection({ ...state, chats, selectedId: parentId ?? state.selectedId })
+    }
     case 'chat.entry':
       return updateChat(state, action.chatId, (c) => ({
         ...c,
@@ -327,6 +354,32 @@ export const familyOf = (chats: ChatView[], chatId: string): ChatView[] => [
   ...chats.filter((c) => c.parentId === chatId).flatMap((c) => familyOf(chats, c.id)),
 ]
 
+/** The chat and the chats above it, nearest first, ending at its space. */
+export function lineOf(chats: ChatView[], chat: ChatView): ChatView[] {
+  const parent = chats.find((c) => c.id === chat.parentId)
+  return parent ? [chat, ...lineOf(chats, parent)] : [chat]
+}
+
+const pendingIn = (chat: ChatView): Permission[] =>
+  chat.status !== 'waiting'
+    ? []
+    : chat.items.flatMap((i) =>
+        i.kind === 'permission' && i.outcome === 'pending'
+          ? [i]
+          : i.kind === 'tool' && i.permission?.outcome === 'pending'
+            ? [i.permission]
+            : [],
+      )
+
+export type SubagentRequest = { chat: ChatView; permission: Permission }
+
+/** Permission requests waiting in the subagents below a chat, which the user answers from that chat. */
+export const subagentRequests = (chats: ChatView[], chatId: string): SubagentRequest[] =>
+  familyOf(chats, chatId)
+    .slice(1)
+    .filter((c) => c.subagent && !c.archived)
+    .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
+
 export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {
   const parent = chats.find((c) => c.id === chat.parentId)
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
@@ -337,9 +390,9 @@ export const PANEL_PX = { sidebar: 232, context: 320 }
 const PANE_PADDING_PX = 24
 export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, default: 760 }
 
-export function dockedPanels(windowPx: number) {
-  const sidebar = PANEL_PX.sidebar + MIN_WINDOW_PX.width
-  if (windowPx >= sidebar + PANEL_PX.context) return 'both'
+export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
+  const sidebar = widths.sidebar + MIN_WINDOW_PX.width
+  if (windowPx >= sidebar + widths.context) return 'both'
   return windowPx >= sidebar ? 'sidebar' : 'none'
 }
 

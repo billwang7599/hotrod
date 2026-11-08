@@ -232,6 +232,18 @@ test('turning on a mod that is not set up asks to install it, shows the progress
   expect(setupDialog()).toBeNull()
 })
 
+test("a mod that didn't load is listed off, its switch disabled and the reason under it", () => {
+  const loadError = "@playwright/mcp isn't installed. Run npm install in the Hotrod folder, then restart Hotrod."
+  const broken: ModInfo = { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError }
+  const sent = renderMods([broken], 'mods')
+  const toggle = dialog().querySelector('[aria-label="browser"]') as HTMLButtonElement
+  expect(toggle.getAttribute('aria-checked')).toBe('false')
+  expect(toggle.disabled).toBe(true)
+  expect(dialog().textContent).toContain(`Couldn't load: ${loadError}`)
+  act(() => toggle.click())
+  expect(sent).toEqual([])
+})
+
 test("a mod's page shows its setup, with Install while it is missing, even when it has no settings", () => {
   const sent = renderMods([setupMod(true, { status: 'missing', message: 'Browser not installed' })], 'mod:browser')
   const tabs = [...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)

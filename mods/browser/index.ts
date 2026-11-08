@@ -27,7 +27,7 @@ const browser: Mod = {
   name: 'Browser',
   description:
     "Agents browse the web with Playwright, in a Chromium of Hotrod's own, never your Chrome or its logins. Each " +
-    'space keeps its own browser profile, so a login there stays. Claude Code only: pi takes no MCP servers.',
+    'space keeps its own browser profile, so a login there stays.',
   enabledByDefault: false,
   settings: [
     {
@@ -42,7 +42,8 @@ const browser: Mod = {
     {
       key: 'askEachAction',
       label: 'Ask before each browser action',
-      description: 'Each browser tool call waits for your approval. Off, the agent browses without asking.',
+      description:
+        'Each browser tool call waits for your approval. Off, the agent browses without asking. pi never asks.',
       type: 'boolean',
       default: false,
     },

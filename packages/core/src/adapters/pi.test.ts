@@ -1,7 +1,8 @@
-import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
 import { pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
@@ -32,24 +33,55 @@ describe('pi adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--thinking')
   })
 
-  it('spawns pi in rpc mode with the clean flags in the project folder', () => {
+  it('spawns pi in rpc mode with the clean flags and only its built-in MCP support, in the project folder', () => {
     const { fake } = startSession()
-    expect(fake.spawned).toEqual([
-      {
-        command: 'pi',
-        cwd: '/tmp/project',
-        args: [
-          '--mode', 'rpc',
-          '--no-session',
-          '--no-extensions',
-          '--no-skills',
-          '--no-prompt-templates',
-          '--no-mcp',
-          '--no-context-files',
-          '--no-approve',
-        ],
-      },
+    const [spawned] = fake.spawned
+    expect(spawned).toMatchObject({ command: '/bin/sh', cwd: '/tmp/project' })
+    expect(spawned?.args.slice(0, 1)).toEqual(['-c'])
+    expect(spawned?.args.slice(2)).toEqual([
+      'pi',
+      '--mode', 'rpc',
+      '--no-session',
+      '--no-extensions',
+      '--no-skills',
+      '--no-prompt-templates',
+      '--no-context-files',
+      '--no-approve',
+      '-e', 'builtin:mcp',
     ])
+  })
+
+  it('takes the Hotrod MCP server and mod servers', () => {
+    expect(pi.hotrodMcp).toBe(true)
+  })
+
+  it("gives pi exactly Hotrod's server and the mods' servers, direct, with the token only in its env", () => {
+    const token = 'secret-token'
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token }
+    const mcpServers = [
+      { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { TMPDIR: '/t' }, allowTools: true },
+      { name: 'bare', command: 'tool' },
+    ]
+    const spawned = startSession('', { hotrodMcp, mcpServers }).fake.spawned[0]!
+    const config = JSON.parse(spawned.env?.HOTROD_PI_MCP ?? '')
+    const direct = { exposure: 'direct', timeout: expect.any(Number) }
+    expect(config).toEqual({
+      mcpServers: {
+        hotrod: { url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }, ...direct },
+        browser: { command: '/bin/node', args: ['cli.js', '--headless'], env: { TMPDIR: '/t' }, ...direct },
+        bare: { command: 'tool', args: [], env: {}, ...direct },
+      },
+    })
+    expect(config.mcpServers.hotrod.timeout).toBeGreaterThanOrEqual(60 * 60)
+    expect(spawned.env?.HOTROD_MCP_TOKEN).toBe(token)
+    expect(spawned.args.join(' ')).not.toContain(token)
+    expect(spawned.env?.HOTROD_PI_MCP).not.toContain(token)
+  })
+
+  it('gives pi no MCP servers but the ones it is handed', () => {
+    const spawned = startSession().fake.spawned[0]!
+    expect(JSON.parse(spawned.env?.HOTROD_PI_MCP ?? '')).toEqual({ mcpServers: {} })
+    expect(spawned.env?.HOTROD_MCP_TOKEN).toBeUndefined()
   })
 
   it('appends instructions to the system prompt when given', () => {
@@ -304,9 +336,9 @@ describe('pi.complete', () => {
           '--no-extensions',
           '--no-skills',
           '--no-prompt-templates',
-          '--no-mcp',
           '--no-context-files',
           '--no-approve',
+          '--no-mcp',
           '--no-tools',
           '--offline',
           '--model', 'anthropic/x',
@@ -329,8 +361,8 @@ describe('pi.detect', () => {
   const version = { code: 0, stdout: '1.5.0\n', stderr: '' }
 
   const rpc =
-    'pi --mode rpc --no-session --no-extensions --no-skills --no-prompt-templates --no-mcp --no-context-files ' +
-    '--no-approve --offline'
+    'pi --mode rpc --no-session --no-extensions --no-skills --no-prompt-templates --no-context-files --no-approve ' +
+    '--no-mcp --offline'
   const listed = [
     ['anthropic', 'claude-haiku-4-5'],
     ['anthropic', 'claude-haiku-4-5-20251001'],
@@ -389,6 +421,55 @@ describe('pi.detect', () => {
   it('reports not installed', async () => {
     const { machine } = fakeMachine()
     expect(await pi.detect(machine)).toEqual({ installed: false, signedIn: false })
+  })
+})
+
+describe("pi's own agent folder", () => {
+  const saved = { PATH: process.env.PATH, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR }
+  let root = ''
+  afterEach(() => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('makes one per session from the mcp.json and links to the login, and removes it when pi exits', async () => {
+    root = mkdtempSync(join(tmpdir(), 'hotrod-pi-test-'))
+    const bin = join(root, 'bin')
+    const login = join(root, 'login')
+    const project = join(root, 'project')
+    for (const dir of [bin, login, project]) mkdirSync(dir)
+    for (const file of ['auth.json', 'settings.json', 'mcp.json', 'AGENTS.md']) writeFileSync(join(login, file), '{}')
+    writeFileSync(
+      join(bin, 'pi'),
+      '#!/bin/sh\nout=$PWD\ncd "$PI_CODING_AGENT_DIR" || exit 1\necho "$PWD" > "$out/dir"\nls -A > "$out/entries"\n' +
+        'readlink auth.json models.json models-store.json > "$out/links"\ncp mcp.json "$out/mcp.json"\n' +
+        'echo "$@" > "$out/args"\n',
+    )
+    chmodSync(join(bin, 'pi'), 0o755)
+    process.env.PATH = `${bin}:${process.env.PATH}`
+    process.env.PI_CODING_AGENT_DIR = login
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const ended = new Promise<EngineEvent>((resolve) =>
+      pi.start(localMachine, { cwd: project, instructions: '', hotrodMcp }, (e) => e.type === 'session.ended' && resolve(e)),
+    )
+    expect(await ended).toEqual({ type: 'session.ended' })
+    const read = (name: string) => readFileSync(join(project, name), 'utf8')
+    expect(read('entries').split('\n').filter(Boolean).sort()).toEqual([
+      'auth.json',
+      'mcp.json',
+      'models-store.json',
+      'models.json',
+    ])
+    expect(read('links').split('\n').filter(Boolean)).toEqual(
+      ['auth.json', 'models.json', 'models-store.json'].map((file) => join(login, file)),
+    )
+    expect(Object.keys(JSON.parse(read('mcp.json')).mcpServers)).toEqual(['hotrod'])
+    expect(read('args').trim()).toMatch(/^--mode rpc .*-e builtin:mcp$/)
+    expect(existsSync(read('dir').trim())).toBe(false)
+    expect(readFileSync(join(login, 'mcp.json'), 'utf8')).toBe('{}')
   })
 })
 

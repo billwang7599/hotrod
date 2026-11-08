@@ -124,6 +124,22 @@ describe('reduce', () => {
     expect(run(snapshot([chat('a')]), { type: 'chat.removed', chatId: 'a' }).selectedId).toBe('')
   })
 
+  it('adds a subagent without switching the view to it', () => {
+    const sub: Action = { type: 'chat.added', chat: chat('s', [], { name: 'Search', parentId: 'c' }) }
+    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), { type: 'select', chatId: 'c' }, sub)
+    expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'c', 's'])
+    expect(state.selectedId).toBe('c')
+  })
+
+  it('moves the view up to the closest chat still here when the viewed subagent is removed', () => {
+    const tree = [chat(MAIN_CHAT_ID), chat('c'), chat('s', [], { parentId: 'c' }), chat('t', [], { parentId: 's' })]
+    const removed = (chatId: string): Action => ({ type: 'chat.removed', chatId })
+    const on = (chatId: string) => run(snapshot(tree), { type: 'select', chatId })
+    expect(reduce(on('s'), removed('s')).selectedId).toBe('c')
+    expect(reduce(reduce(on('t'), removed('s')), removed('t')).selectedId).toBe('c')
+    expect(reduce(on(MAIN_CHAT_ID), removed('s')).selectedId).toBe(MAIN_CHAT_ID)
+  })
+
   it('adds a chat once and selects it, then follows its name, folders and archive flag', () => {
     const added: Action = { type: 'chat.added', chat: chat('c', [], { name: 'Build' }) }
     const state = run(
@@ -373,6 +389,35 @@ describe('reduce', () => {
     expect(items(allowed)[0]).not.toHaveProperty('auto')
     const auto = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false, auto: true }))
     expect(items(auto)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied', auto: true })
+  })
+
+  it("turns a question's tool row into the question, then shows its answers, a skip or a cancel", () => {
+    const questions = [
+      { header: 'Format', question: 'Format?', options: [{ label: 'Summary', description: 'Brief' }], multiSelect: false },
+    ]
+    const asked = run(
+      snapshot([chat('a')]),
+      entry('a', { type: 'user.message', text: 'go' }),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'AskUserQuestion', kind: 'other', summary: '{}', input: {} }),
+      entry('a', { type: 'question.asked', requestId: 'q1', toolId: 't1', questions }),
+    )
+    const question = { kind: 'question', requestId: 'q1', questions, outcome: 'pending' }
+    expect(items(asked)).toEqual([{ kind: 'user', text: 'go' }, question])
+
+    const answers = { 'Format?': ['Summary'] }
+    const done = [
+      entry('a', { type: 'question.resolved', requestId: 'q1', answers }),
+      entry('a', { type: 'tool.completed', toolId: 't1', output: 'answered', isError: false }),
+      entry('a', { type: 'turn.completed' }),
+    ].reduce(reduce, asked)
+    expect(items(done)).toEqual([{ kind: 'user', text: 'go' }, { ...question, outcome: 'answered', answers }])
+
+    const skipped = reduce(asked, entry('a', { type: 'question.resolved', requestId: 'q1' }))
+    expect(items(skipped)[1]).toEqual({ ...question, outcome: 'skipped' })
+    const ended = reduce(asked, entry('a', { type: 'turn.completed', error: 'Interrupted' }))
+    expect(items(ended)[1]).toEqual({ ...question, outcome: 'cancelled' })
+    const alone = run(snapshot([chat('a')]), entry('a', { type: 'question.asked', requestId: 'q2', questions }))
+    expect(items(alone)).toEqual([{ ...question, requestId: 'q2' }])
   })
 
   it('stops unfinished tools and permissions when the turn ends', () => {
@@ -634,6 +679,12 @@ describe('dockedPanels', () => {
     expect(dockedPanels(sidebar)).toBe('sidebar')
     expect(dockedPanels(both - 1)).toBe('sidebar')
     expect(dockedPanels(both)).toBe('both')
+  })
+
+  it('counts the widths the panels were resized to', () => {
+    const widths = { sidebar: 400, context: 500 }
+    expect(dockedPanels(400 + MIN_WINDOW_PX.width + 499, widths)).toBe('sidebar')
+    expect(dockedPanels(400 + MIN_WINDOW_PX.width + 500, widths)).toBe('both')
   })
 })
 

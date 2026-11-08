@@ -14,14 +14,15 @@ export const SUBAGENT_INSTRUCTIONS =
   'Delegate by default. Any task that needs more than a few tool calls (exploring code, making a change, running ' +
   'tests, researching) goes to a subagent you start with spawn_subagent, not to you, so you stay free to keep ' +
   'talking with the user while it runs. Split the work into as many subagents as it needs, each with a whole task ' +
-  'it can finish on its own, independent of the others: never two on the same files. Do the work yourself only ' +
-  "for quick answers and one-line changes. Each subagent's final reply comes back to you as a message, so don't " +
-  'wait for it or poll it; tell the user what you started and carry on.'
+  "it can finish on its own, independent of the others. You can edit the same files, just ensure they're in " +
+  'different worktrees, and make a stack PR so we have less merge conflicts. Do the work yourself only for quick ' +
+  "answers and one-line changes. Each subagent's final reply comes back to you as a message, so don't wait for it " +
+  'or poll it; tell the user what you started and carry on.'
 
 export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
   name: 'Subagents',
-  description: 'Chats can hand a task to a new chat that reports back when it ends. Claude Code only.',
+  description: 'Chats can hand a task to a new chat that reports back when it ends.',
   enabledByDefault: true,
   settings: [
     {

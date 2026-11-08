@@ -3,7 +3,8 @@ import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
-import { chatTree, familyOf, folderOf, type ChatView, type TreeRow } from './state.ts'
+import { foldChat, useFoldedChats } from './folded.ts'
+import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
 const DOTS: Record<ChatStatus, string> = {
@@ -12,6 +13,8 @@ const DOTS: Record<ChatStatus, string> = {
   waiting: 'bg-amber',
   stopping: 'bg-amber',
 }
+/** A folded row shows the busiest status among the subagents it hides. */
+const BUSIEST: ChatStatus[] = ['waiting', 'stopping', 'running', 'idle']
 const INDENTS = ['pl-8', 'pl-22', 'pl-36', 'pl-50']
 const ROW_ACTION = 'hidden group-hover/row:block group-focus-within/row:block'
 
@@ -58,12 +61,16 @@ type RowProps = {
   animate: boolean
   title: string
   selected: boolean
+  // Shown as the chat's status while a subagent below it waits for approval, since the user answers it here.
+  status: ChatStatus
   showEngine: boolean
   select: () => void
   menu?: MenuItem[]
+  fold?: { folded: boolean; hidden: ChatView[]; toggle: () => void }
 }
 
-function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, select, menu }: RowProps) {
+function ChatRow({ row: { chat, depth }, animate, title, selected, status: own, showEngine, select, menu, fold }: RowProps) {
+  const status = fold?.folded ? BUSIEST.find((s) => [own, ...fold.hidden.map((c) => c.status)].includes(s))! : own
   const highlight = selected
     ? 'bg-raised text-text'
     : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
@@ -81,13 +88,38 @@ function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, s
         title={title}
         onClick={select}
       >
-        <span className={`size-7 shrink-0 rounded-full ${DOTS[chat.status]}`} />
+        <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} data-status={status} />
+        {chat.mod === 'home' && <HouseIcon />}
         <span className="min-w-0 flex-1 truncate">{chat.name}</span>
         {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
         {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
+      {fold && (
+        <Hint text={fold.folded ? 'Show subagents' : 'Hide subagents'}>
+          <Button
+            variant="ghost"
+            size="none"
+            className="group mr-2 flex h-22 items-center gap-4 px-4 text-xs text-faint"
+            aria-label={fold.folded ? 'Show subagents' : 'Hide subagents'}
+            aria-expanded={!fold.folded}
+            data-open={fold.folded ? undefined : ''}
+            onClick={fold.toggle}
+          >
+            {fold.folded && <span className="tabular-nums">{fold.hidden.length}</span>}
+            <Chevron />
+          </Button>
+        </Hint>
+      )}
       {menu && <RowMenu label={chat.name} items={menu} />}
     </m.div>
+  )
+}
+
+function HouseIcon() {
+  return (
+    <svg className="size-14 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+      <path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3v-3.5h2V13h3V6.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
   )
 }
 
@@ -106,6 +138,16 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
+  // Mod chats (Home) sort first; they sit above the spaces, apart from them.
+  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.mod)
+  const split = firstSpace < 0 ? tree.active.length : firstSpace
+  const folded = useFoldedChats()
+  // A row is hidden while a chat above it is folded, unless it's the chat being viewed.
+  const ancestors = (chat: ChatView): ChatView[] => {
+    const parent = chats.find((c) => c.id === chat.parentId)
+    return parent ? [parent, ...ancestors(parent)] : []
+  }
+  const shown = (row: TreeRow) => row.chat.id === selectedId || !ancestors(row.chat).some((c) => folded.has(c.id))
   const mixedEngines = new Set(chats.map((c) => c.engine)).size > 1
 
   const chatMenu = (chat: ChatView): MenuItem[] => {
@@ -135,6 +177,9 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
   const row = (row: TreeRow) => {
     const { chat } = row
     const folder = folderOf(chats, chat) ?? 'Not tied to a folder'
+    const below = familyOf(chats, chat.id).filter((c) => c.id !== chat.id && c.archived === chat.archived)
+    const isFolded = folded.has(chat.id)
+    const asksBelow = !chat.subagent && subagentRequests(chats, chat.id).length > 0
     return (
       <ChatRow
         key={chat.id}
@@ -142,16 +187,24 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         animate={settled.current}
         title={`${chat.name}: ${folder}`}
         selected={chat.id === selectedId}
+        status={asksBelow ? 'waiting' : chat.status}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.mod ? undefined : chatMenu(chat)}
+        menu={chat.mod || chat.subagent ? undefined : chatMenu(chat)}
+        fold={below.length ? { folded: isFolded, hidden: below, toggle: () => foldChat(chat.id, !isFolded) } : undefined}
       />
     )
   }
 
   return (
     <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pb-8">
-      <AnimatePresence>{tree.active.map(row)}</AnimatePresence>
+      <AnimatePresence>{tree.active.slice(0, split).filter(shown).map(row)}</AnimatePresence>
+      <h2 id="spaces-label" className={NAV_LABEL}>
+        {CHAT_NOUN.many}
+      </h2>
+      <div role="group" aria-labelledby="spaces-label" className="flex flex-col gap-1">
+        <AnimatePresence>{tree.active.slice(split).filter(shown).map(row)}</AnimatePresence>
+      </div>
       <Button
         variant="ghost"
         size="small"
@@ -168,7 +221,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
             <Chevron />
             Archived ({tree.archived.filter((r) => r.depth === 0).length})
           </summary>
-          <AnimatePresence>{tree.archived.map(row)}</AnimatePresence>
+          <AnimatePresence>{tree.archived.filter(shown).map(row)}</AnimatePresence>
         </details>
       )}
     </nav>

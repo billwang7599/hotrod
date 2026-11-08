@@ -500,7 +500,7 @@ it('tells a chat that can spawn subagents the saved subagent instructions, or th
   expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
 })
 
-it("starts a subagent on its role's list, keeping only its parent's thinking level", async () => {
+it("starts a subagent on its parent's model and thinking level, unless a role or the Subagents list picks one", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
@@ -513,43 +513,51 @@ it("starts a subagent on its role's list, keeping only its parent's thinking lev
   const token = send('main', 'Plan it').options.hotrodMcp!.token
 
   const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
-  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', thinking })
-  expect(chatIn(core, helper).model).toBeUndefined()
-  expect(sessionOf(helper).options).toMatchObject({ model: small, thinking })
+  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', model: large, thinking })
+  expect(sessionOf(helper).options).toMatchObject({ model: large, thinking })
 
   const planner = (await json(token, 'spawn_subagent', { task: 'Plan', role: 'planning' })).chatId
   expect(sessionOf(planner).options.model).toBe(large)
   expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
 
-  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [large] })
+  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [small] })
   const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
-  expect(sessionOf(next).options.model).toBe(large)
+  expect(chatIn(core, next).model).toBeUndefined()
+  expect(sessionOf(next).options).toMatchObject({ model: small, thinking })
 })
 
-it("wakes the parent with a subagent's final reply, queued while the parent is busy", async () => {
-  const { core, sessionOf, sessionsOf, json, send } = await startHeld()
-  const handle = handleOn(core)
+it("wakes the parent with a subagent's final reply, queued while the parent is busy, then removes the subagent", async () => {
+  const { core, garage, sessionOf, sessionsOf, json, tool, send } = await startHeld()
   subagentsOn(core, -1)
   const parent = send('main', 'Plan it')
-  const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Search the docs' })
+  const token = parent.options.hotrodMcp!.token
+  const { chatId } = await json(token, 'spawn_subagent', { task: 'Search the docs' })
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(true)
 
   sessionOf(chatId).end('Found it')
   const report = `[subagent "Search the docs" (${chatId})] Found it`
   expect(chatIn(core, 'main').queue.map((q) => q.text)).toEqual([report])
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+  expect(await tool(token, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: true })
+  expect(await tool(token, 'read_chat', { chatId })).toMatchObject({ isError: true })
   parent.end('Waiting')
   expect(sessionOf('main').prompt?.endsWith(report)).toBe(true)
   expect(chatIn(core, 'main').status).toBe('running')
-  sessionOf('main').end('Thanks')
+  const lead = sessionOf('main')
 
-  handle({ type: 'chat.send', chatId, text: 'One more thing' })
-  sessionOf(chatId).end(undefined, 'Interrupted')
-  const failed = `[subagent "Search the docs" (${chatId})] (No reply) (The turn ended early: Interrupted)`
+  const stopped = (await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
+  lead.end('Thanks')
+  sessionOf(stopped).end(undefined, 'Interrupted')
+  const failed = `[subagent "Look again" (${stopped})] (No reply) (The turn ended early: Interrupted)`
   expect(sessionOf('main').prompt?.endsWith(failed)).toBe(true)
   expect(sessionsOf('main')).toHaveLength(3)
+  expect(core.chats().some((c) => c.id === stopped)).toBe(false)
+  expect(existsSync(join(garage, 'chats', stopped))).toBe(false)
 })
 
-it("gives a subagent its parent's items plus its own, and archives and deletes it with its parent", async () => {
-  const { core, garage, sessionOf, sessionsOf, json, send } = await startHeld()
+it("gives a subagent its parent's items plus its own while it works", async () => {
+  const { core, garage, sessionOf, json, send } = await startHeld()
   const handle = handleOn(core)
   subagentsOn(core)
   handle({ type: 'chat.create', name: 'Side' })
@@ -559,9 +567,6 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
   const lead = send(subchat.id, 'hi').options.hotrodMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Go' })
   writeFileSync(join(garage, 'chats', chatId, 'AGENTS.md'), 'OWN')
-  sessionOf(chatId).end('ok')
-  sessionOf(subchat.id).end('ok')
-  sessionOf(subchat.id).end('ok')
 
   const itemsOf = (id: string) => {
     const replies: CoreMessage[] = []
@@ -569,24 +574,15 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
     return replies[0]?.type === 'chat.context' ? replies[0].items : []
   }
   expect(itemsOf(chatId).map((i) => i.from)).toEqual([GLOBAL_CONTEXT, subchat.id, chatId])
-  handle({ type: 'chat.send', chatId, text: 'again' })
   const instructions = sessionOf(chatId).options.instructions.split('\n\n')
   expect(instructions.slice(1, 3)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
-  expect(instructions.slice(-3)).toEqual(['WORKSHOP', 'PARENT', 'OWN'])
-  sessionOf(chatId).end('ok')
-  sessionOf(subchat.id).end('ok')
-  expect(sessionsOf(subchat.id)).toHaveLength(3)
+  expect(instructions.slice(-2)).toEqual(['WORKSHOP', 'PARENT'])
 
   const parentRules = join(garage, 'chats', subchat.id, 'AGENTS.md')
   handle({ type: 'context.set', chatId: subchat.id, path: parentRules, enabled: false })
   expect(itemsOf(chatId).find((i) => i.path === parentRules)).toMatchObject({ enabled: false })
-
-  handle({ type: 'chat.archive', chatId: subchat.id, archived: true })
-  expect(chatIn(core, chatId).archived).toBe(true)
-  expect(() => handle({ type: 'chat.archive', chatId, archived: false })).toThrow(/Unarchive "Side" first/)
-  handle({ type: 'chat.delete', chatId: subchat.id })
+  sessionOf(chatId).end('ok')
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
-  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
 })
 
 it('lets every chat zoom its own memory, and cuts a long message only where zoom can bring it back', async () => {
@@ -623,15 +619,10 @@ it("gives a subagent its parent's memory frozen at launch, with read-only zoom a
   expect((await tool(token, 'zoom', { id: 0, parent: true })).text).toMatch(/\n\nPlan the release$/)
   expect((await tool(token, 'date', { id: 0, parent: true })).isError).toBe(false)
 
-  first.end('Checked')
-  parent.end('Waiting')
-  sessionOf('main').end('Thanks')
-  handleOn(core)({ type: 'chat.send', chatId, text: 'Once more' })
-  const again = sessionOf(chatId)
-  expect(again.options.instructions).toContain(frozen)
-  expect(again.options.instructions).not.toContain('Waiting')
-  expect(await tool(again.options.hotrodMcp!.token, 'zoom', { id: 1, parent: true })).toEqual({
+  expect(await tool(token, 'zoom', { id: 1, parent: true })).toEqual({
     isError: true,
     text: 'No message 1; this chat has messages 0 to 0',
   })
+  first.end('Checked')
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })

@@ -15,8 +15,9 @@ import {
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
-import { showStepsIn, useStepsChoice, useStepsDefault } from './steps.ts'
-import { folderName, PANEL_PX, type ChatView } from './state.ts'
+import { showStepsIn, useStepsShown } from './steps.ts'
+import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
+import { folderName, lineOf, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
@@ -59,7 +60,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   },
 }
 const PERMISSIONS_HINT =
-  'Default follows Settings → Work folder. Each choice is for this chat only; its subagents follow their own.'
+  'Each shows Settings → Work folder until you pick, or for a subagent, its space. A pick is for this chat only.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -291,22 +292,19 @@ function AddPath({ section, chatId, disabled, send }: {
 
 const STEPS_LABEL = 'Thinking and tool calls'
 function StepsSwitch({ chatId }: { chatId: string }) {
-  const chosen = useStepsChoice(chatId)
-  const byDefault = useStepsDefault()
-  const word = (on: boolean) => (on ? 'Unfolded' : 'Folded')
+  const shown = useStepsShown(chatId)
   return (
     <section className="flex flex-col" aria-label="View">
       <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
         <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
         <Select
           label={STEPS_LABEL}
-          value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+          value={shown ? 'on' : 'off'}
           options={[
-            { value: 'default', label: `Default (${word(byDefault)})` },
-            { value: 'on', label: word(true) },
-            { value: 'off', label: word(false) },
+            { value: 'on', label: 'Unfolded' },
+            { value: 'off', label: 'Folded' },
           ]}
-          onChange={(value) => showStepsIn(chatId, value === 'default' ? undefined : value === 'on')}
+          onChange={(value) => showStepsIn(chatId, value === 'on')}
         />
       </div>
     </section>
@@ -373,6 +371,8 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
+  // A subagent follows its space's switches unless it has its own.
+  const above = chat ? lineOf(chats, chat).slice(1) : []
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const [tab, setTab] = useState<PanelTabId>(() => {
@@ -384,8 +384,10 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
     setTab(id)
   }
   const shown: PanelTabId = chat ? tab : 'context'
+  const width = usePanelWidth('context')
   return (
-    <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
+    <aside className="relative flex shrink-0 flex-col border-l bg-panel" style={{ width }} aria-label="Context">
+      <ResizeHandle panel="context" />
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
           {chat && (
@@ -410,8 +412,8 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
             {PERMISSION_SWITCHES.map((name) => {
               const { label, amberWhileOn } = PERMISSIONS[name]
-              const chosen = chat[name]
-              const amber = amberWhileOn && switchedOn(name, chat, workFolder)
+              const on = switchedOn(name, chat, ...above, workFolder)
+              const amber = amberWhileOn && on
               return (
                 <div
                   key={name}
@@ -420,21 +422,13 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
                   <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
                   <Select
                     label={label}
-                    value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+                    value={on ? 'on' : 'off'}
                     disabled={locked}
                     options={[
-                      { value: 'default', label: `Default (${switchedOn(name, workFolder) ? 'On' : 'Off'})` },
                       { value: 'on', label: 'On' },
                       { value: 'off', label: 'Off' },
                     ]}
-                    onChange={(value) =>
-                      send({
-                        type: 'chat.setPermission',
-                        chatId,
-                        name,
-                        ...(value !== 'default' && { enabled: value === 'on' }),
-                      })
-                    }
+                    onChange={(value) => send({ type: 'chat.setPermission', chatId, name, enabled: value === 'on' })}
                   />
                 </div>
               )

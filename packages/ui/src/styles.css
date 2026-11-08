@@ -202,7 +202,8 @@
     margin-bottom: 0;
   }
 
-  .markdown :is(p, ul, ol, pre, blockquote, table) {
+  /* :where keeps this below `.markdown > :last-child`, which a class inside :is would outrank. */
+  .markdown :where(p, ul, ol, .code-block, blockquote, table) {
     margin: 0 0 10px;
   }
 
@@ -312,7 +313,7 @@
   }
 
   .streaming
-    :is(p, li, pre, h1, h2, h3, h4, h5, h6, th, td):last-child:not(:has(> :is(p, ul, ol, pre, blockquote, table))):not(
+    :is(p, li, pre, h1, h2, h3, h4, h5, h6, th, td):last-child:not(:has(> :is(p, ul, ol, .code-block, blockquote, table))):not(
       .streaming :not(:last-child) *
     )::after {
     content: '▍';

@@ -2,6 +2,16 @@ import type { McpServer, ModSetting, ModValues } from '@hotrod/mod-api'
 
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
+export type Question = {
+  header: string
+  question: string
+  options: { label: string; description: string }[]
+  multiSelect: boolean
+}
+
+// Keyed by question text: the labels picked, then any text the user typed. Sent without answers, a question is declined.
+export type Answers = Record<string, string[]>
+
 export type EngineEvent =
   | { type: 'turn.started' }
   | { type: 'text.delta'; text: string }
@@ -20,6 +30,7 @@ export type EngineEvent =
       command?: string
       input: unknown
     }
+  | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
   | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 
@@ -96,6 +107,7 @@ export interface Session {
   prompt(text: string, images?: ImageInput[]): void
   interrupt(): void
   respond(requestId: string, allow: boolean, message?: string): void
+  answer?(requestId: string, answers?: Answers): void
   close(): void
 }
 
@@ -169,8 +181,8 @@ export type Worktree = { path: string; branch: string }
 
 export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
-export const editsAnywhere = (chat: PermissionSwitches, workFolder: PermissionSwitches) =>
-  switchedOn('editAnywhere', chat, workFolder)
+// Layers nearest first: a chat, the chats above it, then the work folder's defaults.
+export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('editAnywhere', ...layers)
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -196,6 +208,7 @@ export type ModInfo = {
   settings: ModSetting[]
   values: ModValues
   setup?: SetupState
+  loadError?: string
 }
 
 export type SetupState = {
@@ -248,6 +261,7 @@ export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string; attachments?: Attachment[] }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
+  | { type: 'question.resolved'; requestId: string; answers?: Answers }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
@@ -283,6 +297,7 @@ export type ClientMessage =
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
+  | { type: 'question.respond'; chatId: string; requestId: string; answers?: Answers }
   | { type: 'context.get'; chatId: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }

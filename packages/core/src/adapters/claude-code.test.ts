@@ -259,6 +259,80 @@ describe('claudeCode adapter', () => {
     expect(events.at(-1)).toEqual({ type: 'turn.completed' })
   })
 
+  it('asks the user its questions instead of asking permission, and sends the answers back', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Ask me how to format the output and which sections to include.')
+    fake.stdout(fixture('question'))
+    const requestId = 'ba7cc265-dc80-434a-81c3-62b4c86dd2e1'
+    const toolId = 'toolu_01BqhmLWj3AJEKttR9LsogLH'
+    const format = 'How should I format the output?'
+    const sections = 'Which sections should I include?'
+    const questions = [
+      {
+        header: 'Format',
+        question: format,
+        options: [
+          { label: 'Summary', description: 'A brief, condensed output' },
+          { label: 'Detailed', description: 'A fuller, more thorough output' },
+        ],
+        multiSelect: false,
+      },
+      {
+        header: 'Sections',
+        question: sections,
+        options: [
+          { label: 'Introduction', description: 'Opening section that sets up the content' },
+          { label: 'Body', description: 'Main content section' },
+          { label: 'Conclusion', description: 'Closing section that wraps up the content' },
+        ],
+        multiSelect: true,
+      },
+    ]
+    expect(events.map((e) => e.type)).not.toContain('permission.requested')
+    expect(events).toContainEqual({ type: 'question.asked', requestId, toolId, questions })
+    expect(events.at(-2)).toEqual({ type: 'text.completed', text: 'Format: Detailed\nSections: Introduction, Body' })
+
+    session.answer!(requestId, { [format]: ['Detailed'], [sections]: ['Introduction', 'Body'] })
+    const input = JSON.parse(fixture('question').split('\n').find((l) => l.includes('control_request'))!).request.input
+    expect(fake.sent().at(-1)).toEqual({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: 'allow',
+          updatedInput: { questions: input.questions, answers: { [format]: 'Detailed', [sections]: 'Introduction, Body' } },
+        },
+      },
+    })
+    session.answer!(requestId, { [format]: ['Summary'] })
+    expect(fake.sent()).toHaveLength(2)
+  })
+
+  it('tells Claude Code the user declined to answer when they skip', () => {
+    const { fake, session } = startSession()
+    fake.stdout(fixture('question'))
+    session.answer!('ba7cc265-dc80-434a-81c3-62b4c86dd2e1')
+    const response = fake.sent().at(-1).response.response
+    expect(response).toEqual({ behavior: 'deny', message: expect.stringContaining('declined to answer') })
+  })
+
+  it('passes on only the fields every engine shares, sending typed text as it was typed', () => {
+    const { fake, events, session } = startSession()
+    const question = { question: 'Color?', header: 'Color', options: [{ label: 'Red', preview: '<b>' }] }
+    const request = { subtype: 'can_use_tool', tool_name: 'AskUserQuestion', input: { questions: [question] } }
+    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'q1', request }) + '\n')
+    expect(events).toEqual([
+      {
+        type: 'question.asked',
+        requestId: 'q1',
+        questions: [{ header: 'Color', question: 'Color?', options: [{ label: 'Red', description: '' }], multiSelect: false }],
+      },
+    ])
+    session.answer!('q1', { 'Color?': ['Purple with green stripes'] })
+    expect(fake.sent().at(-1).response.response.updatedInput.answers).toEqual({ 'Color?': 'Purple with green stripes' })
+  })
+
   it('reports an error result and a nonzero exit with the stderr tail', () => {
     const { fake, events, session } = startSession()
     session.prompt('hi')

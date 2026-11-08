@@ -176,6 +176,8 @@ const withoutRules = (instructions = '') =>
     .join('\n\n')
 const chatOf = (core: Core, id: string) => core.chats().find((c) => c.id === id)
 const statusOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.status
+// A subagent is removed when its turn ends, so it counts as idle once it's gone.
+const settled = (core: Core, id: string) => (statusOf(core, id) ?? 'idle') === 'idle'
 const entriesOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.entries ?? []
 const types = (entries: ChatEntry[]) => entries.map((e) => e.type)
 const chatFile = (t: { garage: string }, id: string) => join(t.garage, 'chats', id, 'chat.json')
@@ -356,6 +358,24 @@ describe('chats', () => {
     expect(JSON.parse(readFileSync(chatFile(t, 'aaaa0001'), 'utf8'))).not.toHaveProperty('parentId')
   })
 
+  it('removes a subagent left over from before, once it has worked, with its folder', () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    for (const id of ['done', 'fresh']) {
+      mkdirSync(join(first.garage, 'chats', id), { recursive: true })
+      const saved = { id, name: id, parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+      writeFileSync(join(first.garage, 'chats', id, 'chat.json'), JSON.stringify(saved))
+    }
+    const entry = { at, type: 'user', text: 'Go' }
+    writeFileSync(join(first.garage, 'chats', 'done', 'log.jsonl'), JSON.stringify(entry) + '\n')
+    const t = setup(textScript, first.garage)
+    expect(chatOf(t.core, 'done')).toBeUndefined()
+    expect(existsSync(join(t.garage, 'chats', 'done'))).toBe(false)
+    expect(chatOf(t.core, 'fresh')).toBeDefined()
+    expect(chatOf(t.core, space.id)).toBeDefined()
+  })
+
   it('renames a chat and saves it', () => {
     const t = setup(textScript)
     const chat = createChat(t, { name: 'Old' })
@@ -428,7 +448,7 @@ describe('work folder', () => {
   const workOf = (t: { garage: string }) => join(t.garage, 'work')
   const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options
   }
   const saveSubagent = (garage: string, id: string, parentId: string) => {
@@ -512,7 +532,7 @@ describe('work folder', () => {
       expect(await sessionOf(t, chatId!)).toMatchObject({ cwd: dir, sandbox: { writable: [dir] } })
     }
     expect(chatOf(t.core, 'main')).not.toHaveProperty('workDir')
-    expect(chatOf(t.core, 'spacesub')).not.toHaveProperty('workDir')
+    expect(chatOf(t.core, 'spacesub')).toBeUndefined()
     expect(chatOf(t.core, space.id)?.workDir).toBe(join(workOf(t), space.id))
   })
 
@@ -755,20 +775,48 @@ describe('edits', () => {
     expect(t.calls[1]?.options.sandbox).toBeDefined()
   })
 
-  it('never passes edits anywhere on: subagents and new spaces start without it', async () => {
-    const first = setup(editScript(join(tempDir(), 'a.ts')))
+  it("runs a subagent on its space's permission switches, live, unless it has its own; new spaces start without", async () => {
+    const first = setup(textScript)
     const space = createChat(first, { name: 'Space' })
-    first.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
-    first.core.close()
-    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
-    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
-    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
-    const t = setup(textScript, first.garage)
-    expect(chatOf(t.core, space.id)?.editAnywhere).toBe(true)
+    const file = join(tempDir(), 'a.ts')
+    let t = first
+    // A subagent is removed once its turn ends, so each run starts one afresh from what's saved.
+    const freshSub = () => {
+      t.core.close()
+      mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+      const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+      writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+      t = setup(editScript(file), first.garage)
+    }
+    // The subagent's session, not the space's that its report wakes.
+    const edit = async (until_: 'idle' | 'waiting') => {
+      const before = t.calls.length
+      t.handle({ type: 'chat.send', chatId: 'sub', text: 'edit' })
+      await until(() => (until_ === 'idle' ? settled(t.core, 'sub') : statusOf(t.core, 'sub') === until_))
+      return t.calls[before]!.options
+    }
+    freshSub()
+    expect((await edit('idle')).sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
+
+    // Switching edits anywhere on in the space applies to its subagent at once, which then asks the user.
+    freshSub()
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
     expect(chatOf(t.core, 'sub')).not.toHaveProperty('editAnywhere')
-    t.handle({ type: 'chat.send', chatId: 'sub', text: 'hi' })
-    await until(() => statusOf(t.core, 'sub') === 'idle')
-    expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
+    expect(await edit('waiting')).not.toHaveProperty('sandbox')
+    const request = entriesOf(t.core, 'sub').findLast((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: 'sub', requestId: request.requestId, allow: true })
+    await until(() => settled(t.core, 'sub'))
+    const sent = t.messages.flatMap((m) => (m.type === 'chat.entry' && m.chatId === 'sub' ? [m.entry] : []))
+    expect(sent.findLast((e) => e.type === 'permission.resolved')).toMatchObject({ requestId: request.requestId, allow: true })
+    expect(sent.findLast((e) => e.type === 'tool.completed')).toMatchObject({ output: 'written' })
+
+    // Its own switch wins over the space's.
+    freshSub()
+    t.handle({ type: 'chat.setPermission', chatId: 'sub', name: 'editAnywhere', enabled: false })
+    expect((await edit('idle')).sandbox).toBeDefined()
+
+    expect(createChat(t, { name: 'Next' })).not.toHaveProperty('editAnywhere')
     const nope = { type: 'chat.setPermission' as const, chatId: 'nope', name: 'editAnywhere' as const, enabled: true }
     expect(() => t.handle(nope)).toThrow('Unknown chat')
   })
@@ -794,7 +842,7 @@ describe('edits', () => {
       expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
       expect(t.calls.at(-1)?.options.instructions).not.toContain(WRITE_RULES)
       t.handle({ type: 'chat.interrupt', chatId, force: true })
-      await until(() => statusOf(t.core, chatId) === 'idle')
+      await until(() => settled(t.core, chatId))
     }
 
     t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: false })
@@ -868,7 +916,7 @@ describe('commands', () => {
     const status = statusOf(t.core, chatId)
     if (status === 'waiting') {
       t.handle({ type: 'chat.interrupt', chatId, force: true })
-      await until(() => statusOf(t.core, chatId) === 'idle')
+      await until(() => settled(t.core, chatId))
     }
     return status
   }
@@ -1218,6 +1266,105 @@ describe('chat', () => {
     expect(prompt.match(/<\/message>/gi)).toHaveLength(3)
     expect(prompt.match(/<message id="1" kind="tool">([\s\S]*?)<\/message>/)?.[1]).toContain('after-call')
     expect(prompt.match(/<message id="2" kind="echo">([\s\S]*?)<\/message>/)?.[1]).toContain('after-result')
+  })
+})
+
+describe('questions', () => {
+  const format = 'How should I format it?'
+  const questionScript: FakeStep[] = [
+    { type: 'tool.started', toolId: 'q1', name: 'AskUserQuestion', kind: 'other', summary: 'ask', input: {} },
+    {
+      type: 'question',
+      toolId: 'q1',
+      questions: [
+        {
+          header: 'Format',
+          question: format,
+          options: [
+            { label: 'Summary', description: 'Brief' },
+            { label: 'Detailed', description: 'Long' },
+          ],
+          multiSelect: false,
+        },
+      ],
+    },
+    { type: 'text.completed', text: 'Done' },
+  ]
+  const asked = async (t: ReturnType<typeof setup>, chatId = 'main') => {
+    t.handle({ type: 'chat.send', chatId, text: 'go' })
+    await until(() => statusOf(t.core, chatId) === 'waiting')
+    const question = entriesOf(t.core, chatId).findLast((e) => e.type === 'question.asked')
+    if (question?.type !== 'question.asked') throw new Error('no question')
+    return question.requestId
+  }
+
+  it('waits for the answer, even where commands and edits are allowed without asking, then sends it on', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    expect(entriesOf(t.core, 'main').some((e) => e.type === 'permission.resolved')).toBe(false)
+
+    t.handle({ type: 'question.respond', chatId: 'main', requestId, answers: { [format]: ['Detailed'] } })
+    expect(statusOf(t.core, 'main')).not.toBe('waiting')
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const entries = entriesOf(t.core, 'main')
+    expect(entries.find((e) => e.type === 'question.resolved')).toEqual({
+      at: expect.any(String),
+      type: 'question.resolved',
+      requestId,
+      answers: { [format]: ['Detailed'] },
+    })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ isError: false })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ output: expect.stringContaining('Detailed') })
+    const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
+    expect(log).toContain('"question.asked"')
+    expect(log).toContain('"question.resolved"')
+  })
+
+  it('tells the engine the user declined when they skip', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    t.handle({ type: 'question.respond', chatId: 'main', requestId })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const entries = entriesOf(t.core, 'main')
+    const resolved = entries.find((e) => e.type === 'question.resolved')
+    expect(resolved).toEqual({ at: expect.any(String), type: 'question.resolved', requestId })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ isError: true })
+  })
+
+  it('refuses an answer to anything but a pending question, and answers that are not lists of text', async () => {
+    const t = setup([...permissionScript, ...questionScript])
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'go' })
+    await until(() => statusOf(t.core, 'main') === 'waiting')
+    const permission = entriesOf(t.core, 'main').find((e) => e.type === 'permission.requested')
+    if (permission?.type !== 'permission.requested') throw new Error('no request')
+    const answer = { type: 'question.respond' as const, chatId: 'main', requestId: permission.requestId }
+    expect(() => t.handle(answer)).toThrow('No pending question')
+    t.handle({ type: 'permission.respond', chatId: 'main', requestId: permission.requestId, allow: true })
+
+    await until(() => entriesOf(t.core, 'main').some((e) => e.type === 'question.asked'))
+    const question = entriesOf(t.core, 'main').find((e) => e.type === 'question.asked')
+    if (question?.type !== 'question.asked') throw new Error('no question')
+    const { requestId } = question
+    expect(() => t.handle({ type: 'permission.respond', chatId: 'main', requestId, allow: true })).toThrow()
+    for (const answers of [{ [format]: 'Summary' }, { [format]: [1] }, ['Summary'], 'Summary']) {
+      expect(() => t.handle({ ...answer, requestId, answers } as never)).toThrow('Answers')
+    }
+    expect(statusOf(t.core, 'main')).toBe('waiting')
+    expect(() => t.handle({ ...answer, requestId: 'nope' })).toThrow('No pending question')
+  })
+
+  it('drops a question left open when the turn stops, and keeps it unanswered across a restart', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    t.handle({ type: 'chat.interrupt', chatId: 'main' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(() => t.handle({ type: 'question.respond', chatId: 'main', requestId })).toThrow('No pending question')
+    t.core.close()
+
+    const reopened = setup(questionScript, t.garage)
+    const entries = entriesOf(reopened.core, 'main')
+    expect(types(entries).slice(-2)).toEqual(['question.asked', 'turn.completed'])
+    expect(() => reopened.handle({ type: 'question.respond', chatId: 'main', requestId })).toThrow()
   })
 })
 
@@ -2392,7 +2539,7 @@ describe('context', () => {
   }
   const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
@@ -2472,8 +2619,9 @@ describe('context', () => {
     expect(await sessionOf(t, subagentId)).toMatchObject({ cwd: join(work, app.id), extraDirs: [a, b] })
     t.handle({ type: 'context.set', chatId: app.id, path: a, enabled: false })
     expect(await sessionOf(t, app.id)).toMatchObject({ extraDirs: [b] })
-    expect(await sessionOf(t, subagentId)).toMatchObject({ extraDirs: [b] })
-    expect(await sessionOf(t, 'main')).toMatchObject({ cwd: join(work, 'home') })
+    const again = reopenWithSubagent(t, app.id)
+    expect(await sessionOf(again.t, subagentId)).toMatchObject({ extraDirs: [b] })
+    expect(await sessionOf(again.t, 'main')).toMatchObject({ cwd: join(work, 'home') })
   })
 
   it('gives a file that is not text by path with read access, never pasted, down to the subagents', async () => {
@@ -2660,7 +2808,7 @@ describe('models', () => {
   const settingsFile = (t: { garage: string }) => join(t.garage, 'settings.json')
   const sendAndWait = async (t: ReturnType<typeof setup>, chatId = 'main') => {
     t.handle({ type: 'chat.send', chatId, text: 'hi' })
-    await until(() => statusOf(t.core, chatId) === 'idle')
+    await until(() => settled(t.core, chatId))
     return t.calls.at(-1)!.options.model
   }
 
@@ -2872,6 +3020,28 @@ describe('mods', () => {
     expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.mods()).toEqual([
       infoOf(SUBAGENTS_MOD, true, { ...defaultsOf(SUBAGENTS_MOD), limit: -1 }),
     ])
+  })
+
+  it("lists a mod that didn't load, off with why, and won't turn it on or change its saved switch", () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { browser: { enabled: true } } }))
+    const loadError = "@playwright/mcp isn't installed."
+    const core = openCore({
+      garage,
+      adapters: [createFakeAdapter()],
+      defaultEngine: 'fake',
+      machine: sandboxingMachine,
+      mods: [tester],
+      brokenMods: [{ id: 'browser', loadError }],
+    })
+    cores.push(core)
+    expect(core.mods()).toEqual([
+      infoOf(tester, true),
+      infoOf(SUBAGENTS_MOD, true),
+      { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError },
+    ])
+    expect(() => core.handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true }, () => {})).toThrow(loadError)
+    expect(savedMods(garage)).toEqual({ browser: { enabled: true } })
   })
 
   it('refuses two mods with one id', () => {
