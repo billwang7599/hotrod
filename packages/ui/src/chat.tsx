@@ -68,8 +68,8 @@ const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
-const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
-const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
+const MODEL_HINT = 'Model'
+const THINKING_HINT = 'Thinking level'
 const INTERRUPTED = 'Interrupted'
 const VERDICTS = { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled' }
 const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
@@ -80,8 +80,6 @@ const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, 
   },
   denied: { edit: 'An edit outside the work folder, so Hotrod denied it without asking' },
 }
-const SUBAGENT_HINT =
-  'Its chat started it and sends it messages; you can watch it, answer its permission requests, or stop it'
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -932,11 +930,9 @@ export function Chat(props: ChatProps) {
               className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-10 text-muted"
               aria-label="Subagent"
             >
-              <Hint text={SUBAGENT_HINT}>
-                <span className="min-w-0 flex-1 truncate">
-                  Subagent of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
-                </span>
-              </Hint>
+              <span className="min-w-0 flex-1 truncate">
+                Subagent of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
+              </span>
               {busy && (
                 <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
                   <Button
@@ -1020,7 +1016,7 @@ export function Chat(props: ChatProps) {
               </div>
               <div className="flex items-center gap-8 px-6 pb-6">
                 <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Hint text="Attach files, or paste or drop them here">
+                  <Hint text="Attach files">
                     <Button
                       variant="ghost"
                       size="icon"
