@@ -1,4 +1,6 @@
-import { type AccountStatus, type Adapter, type Machine, type ToolKind } from '../shared.ts'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { type AccountStatus, type Adapter, type Machine, type Sandbox, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -59,6 +61,16 @@ const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 // Each account is its own config folder; Claude Code keys its keychain login by that folder's path.
 const accountEnv = (accountDir?: string, apiKey?: string): { env?: Record<string, string> } =>
   accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir, ...(apiKey && { ANTHROPIC_API_KEY: apiKey }) } } : {}
+
+// Claude Code ignores TMPDIR, and needs its shell snapshots for Bash and the keychain to save a refreshed login.
+function jailed(sandbox: Sandbox, accountDir?: string) {
+  const configDir = accountDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+  const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  return {
+    sandbox: { ...sandbox, writable: [...sandbox.writable, join(configDir, 'shell-snapshots'), keychain] },
+    env: sandbox.tmpDir ? { CLAUDE_CODE_TMPDIR: sandbox.tmpDir } : undefined,
+  }
+}
 
 async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
   const options = { cwd: '/', ...accountEnv(accountDir) }
@@ -128,11 +140,19 @@ export const claudeCode: Adapter = {
     apiKeys: true,
   },
 
-  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey }) {
+  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey, sandbox }) {
     const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
     args.push('--system-prompt', system)
     if (schema) args.push('--json-schema', JSON.stringify(schema))
-    const options = { cwd, input: prompt, timeoutMs, ...accountEnv(accountDir, apiKey) }
+    const jail = sandbox && jailed(sandbox, accountDir)
+    const env = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
+    const options = {
+      cwd,
+      input: prompt,
+      timeoutMs,
+      ...(Object.keys(env).length && { env }),
+      ...(jail && { sandbox: jail.sandbox }),
+    }
     const { code, stdout, stderr } = await machine.run('claude', args, options)
     let reply: any
     try {
@@ -145,7 +165,8 @@ export const claudeCode: Adapter = {
   },
 
   start(machine, options, emit) {
-    const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking } = options
+    const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking, sandbox } =
+      options
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -160,7 +181,8 @@ export const claudeCode: Adapter = {
     if (model) args.push('--model', model)
     if (thinking) args.push('--effort', thinking)
     for (const dir of extraDirs) args.push('--add-dir', dir)
-    const env = accountEnv(accountDir, apiKey).env ?? {}
+    const jail = sandbox && jailed(sandbox, accountDir)
+    const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
     // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
     const allowed = readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`)
     if (hotrodMcp) {
@@ -173,7 +195,11 @@ export const claudeCode: Adapter = {
     }
     if (allowed.length) args.push('--allowedTools', ...allowed)
     if (instructions) args.push('--append-system-prompt', instructions)
-    const proc = machine.spawn('claude', args, { cwd, ...(Object.keys(env).length && { env }) })
+    const proc = machine.spawn('claude', args, {
+      cwd,
+      ...(Object.keys(env).length && { env }),
+      ...(jail && { sandbox: jail.sandbox }),
+    })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
     const pendingInputs = new Map<string, unknown>()
     let buffer = ''
@@ -221,6 +247,7 @@ export const claudeCode: Adapter = {
           }
           pendingInputs.set(msg.request_id, request.input)
           const kind = kindOf(request.tool_name)
+          const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
@@ -228,6 +255,7 @@ export const claudeCode: Adapter = {
             name: request.tool_name,
             kind,
             summary: summarize(kind, request.input),
+            ...(typeof path === 'string' && { path }),
             input: request.input,
           })
           return
@@ -278,13 +306,11 @@ export const claudeCode: Adapter = {
         interrupted = true
         send({ type: 'control_request', request_id: `interrupt-${++interruptCount}`, request: { subtype: 'interrupt' } })
       },
-      respond(requestId, allow) {
+      respond(requestId, allow, message = 'The user denied this tool call.') {
         if (!pendingInputs.has(requestId)) return
         const input = pendingInputs.get(requestId)
         pendingInputs.delete(requestId)
-        const response = allow
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: 'The user denied this tool call.' }
+        const response = allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }
         send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
       },
       close() {

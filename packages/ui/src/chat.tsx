@@ -7,9 +7,10 @@ import {
   type DragEvent,
   type ReactNode,
 } from 'react'
-import { AnimatePresence, m } from 'motion/react'
+import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import {
+  editsAnywhere,
   IMAGE_TYPES,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
@@ -22,10 +23,23 @@ import {
   type EngineInfo,
   type ModelLists,
   type Upload,
+  type WorkFolder,
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, Select, SidePanel, useSettled } from './controls.tsx'
+import {
+  Button,
+  CHAT_NOUN,
+  Chevron,
+  confirm,
+  ErrorText,
+  Hint,
+  MOTION,
+  PanelToggle,
+  Select,
+  SidePanel,
+  useSettled,
+} from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
@@ -34,7 +48,6 @@ import {
   engineOptions,
   formatBytes,
   listedAccounts,
-  MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   modelMenu,
   pinState,
@@ -52,6 +65,7 @@ const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings
 const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
 const INTERRUPTED = 'Interrupted'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
+const AUTO_OUTCOMES = { allowed: '✓ Allowed automatically', denied: '✕ Denied: outside the work folder' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -63,10 +77,19 @@ const ASSISTANT = 'min-w-0 text-body leading-[1.6] wrap-break-word'
 const TOOL_NAME = 'shrink-0 font-mono text-sm leading-[normal] font-semibold'
 const TOOL_INPUT = 'min-w-0 flex-1 truncate font-mono text-sm leading-[normal] text-muted'
 const TOOL_STATES: Record<string, string> = {
-  running: 'text-green before:animate-blink',
   waiting: 'text-amber',
   error: 'text-red',
 }
+const WARNING_CHIP = 'shrink-0 cursor-help rounded-full bg-warning-bg px-8 py-2 text-xs text-amber'
+const EDITS_ANYWHERE_HINT =
+  'This chat runs without the work folder’s sandbox: its agents may edit files anywhere, asking you first. Turn ' +
+  'it off in the Context panel.'
+const EDITS_ANYWHERE_ALL_HINT =
+  'Every chat runs without the work folder’s sandbox: agents may edit files anywhere, asking you first. Turn it ' +
+  'off in Settings → Work folder.'
+const NOT_SANDBOXED_HINT =
+  'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (in its Context ' +
+  'panel, or for every chat in Settings → Work folder), and its agents can write anywhere.'
 const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
@@ -75,16 +98,32 @@ const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
 const FILE_ACTION =
   'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
+const DOT_STAGGER_MS = 200
+export const JUMP_BELOW_PX = 240
+
+function Dots({ label, className = '' }: { label: string; className?: string }) {
+  return (
+    <span role="img" aria-label={label} className={`flex h-[1lh] shrink-0 items-center gap-4 ${className}`}>
+      {[2, 1, 0].map((lag) => (
+        <span
+          key={lag}
+          className="size-5 rounded-full bg-current animate-blink motion-reduce:animate-none"
+          style={{ animationDelay: `-${lag * DOT_STAGGER_MS}ms` }}
+        />
+      ))}
+    </span>
+  )
+}
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   return (
     <div
-      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel'}`}
+      className={`group rounded border ${quiet ? 'border-transparent text-muted' : 'bg-panel shadow-raised'}`}
       data-open={open || undefined}
     >
       <button
-        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left transition-colors hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
@@ -93,36 +132,6 @@ function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean
       </button>
       <AnimatePresence initial={false}>{open && <m.div {...MOTION.collapse}>{children}</m.div>}</AnimatePresence>
     </div>
-  )
-}
-
-type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
-
-function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
-  return (
-    <Button
-      variant="ghost"
-      size="icon"
-      className="grid place-items-center aria-pressed:text-text"
-      aria-label={label}
-      aria-pressed={open}
-      title={`${open ? 'Hide' : 'Show'} ${noun}`}
-      onClick={toggle}
-    >
-      <svg
-        className={side === 'left' ? '-scale-x-100' : ''}
-        width="16"
-        height="16"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        aria-hidden="true"
-      >
-        <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-        <path d="M10 2.5v11" />
-        {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
-      </svg>
-    </Button>
   )
 }
 
@@ -206,7 +215,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
     <>
       <Dialog.Root open={open} onOpenChange={setOpen}>
         <Dialog.Trigger asChild>
-          <button className={FILE_ACTION} aria-label={`Open ${name}`} title="Preview">
+          <button className={FILE_ACTION} aria-label={`Open ${name}`}>
             Open
           </button>
         </Dialog.Trigger>
@@ -218,7 +227,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
               </Dialog.Overlay>
               <Dialog.Content forceMount asChild aria-describedby={undefined}>
                 <m.div
-                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-[10px] border bg-panel shadow"
+                  className="fixed inset-0 m-auto flex size-fit max-h-[calc(100vh-32px)] max-w-[calc(100vw-32px)] min-w-[min(320px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border bg-panel shadow-overlay"
                   {...MOTION.pop}
                 >
                   <header className="flex h-40 shrink-0 items-center gap-8 border-b pr-8 pl-12">
@@ -260,7 +269,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
                         <a
                           href={url}
                           download={name}
-                          className="flex h-24 items-center rounded border bg-raised px-8 text-text hover:bg-hover"
+                          className="flex h-24 items-center rounded border bg-raised px-8 text-text shadow-raised hover:bg-hover active:shadow-sunken"
                         >
                           Download
                         </a>
@@ -274,17 +283,18 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
         </AnimatePresence>
       </Dialog.Root>
       {pin && (
-        <button
-          className={FILE_ACTION}
-          disabled={!connected}
-          aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
-          title={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}
-          onClick={() =>
-            send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
-          }
-        >
-          {pin === 'pinned' ? 'Unpin' : 'Pin'}
-        </button>
+        <Hint text={pin === 'pinned' ? "Remove from this chat's context" : "Add to this chat's context, for every message"}>
+          <button
+            className={FILE_ACTION}
+            disabled={!connected}
+            aria-label={pin === 'pinned' ? `Unpin ${name}` : `Pin ${name}`}
+            onClick={() =>
+              send({ type: pin === 'pinned' ? 'context.remove' : 'context.add', chatId: chat.id, section: 'files', path })
+            }
+          >
+            {pin === 'pinned' ? 'Unpin' : 'Pin'}
+          </button>
+        </Hint>
       )}
     </>
   )
@@ -296,24 +306,25 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
             src={url}
             alt={name}
             title={name}
-            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain"
+            className="block max-h-160 min-h-32 max-w-240 min-w-80 rounded-lg border object-contain shadow-raised"
           />
-          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow ${REVEAL}`}>{actions}</span>
+          <span className={`absolute top-4 right-4 flex rounded border bg-panel p-2 shadow-floating ${REVEAL}`}>{actions}</span>
         </>
       ) : (
-        <div className={`${FILE_CHIP} h-40 bg-panel`} title={name}>
+        <div className={`${FILE_CHIP} h-40 bg-panel shadow-raised`} title={name}>
           <FileLabel name={name} size={size} actions={<span className={`-ml-5 flex ${REVEAL}`}>{actions}</span>} />
         </div>
       )}
       {pin === 'pinned' && (
-        <span
-          className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
-          role="img"
-          aria-label="Pinned to the context"
-          title="Pinned to this chat's context"
-        >
-          <PinIcon />
-        </span>
+        <Hint text="Pinned to this chat's context">
+          <span
+            className="absolute -top-6 -left-6 grid size-18 place-items-center rounded-full bg-accent text-on-accent"
+            role="img"
+            aria-label="Pinned to the context"
+          >
+            <PinIcon />
+          </span>
+        </Hint>
       )}
     </div>
   )
@@ -347,7 +358,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             </div>
           )}
           {item.text && (
-            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
               {item.text}
             </div>
           )}
@@ -363,7 +374,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
       )
     case 'thinking':
       return (
-        <Row quiet summary={<span className="italic group-last/item:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
+        <Row quiet summary={<span className="italic">Thinking…</span>}>
           <div className="mt-2 mb-4 ml-13 max-h-320 overflow-y-auto border-l-2 pl-12 text-sm leading-[1.5] whitespace-pre-wrap">
             {item.text}
           </div>
@@ -376,17 +387,27 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             <>
               <span className={TOOL_NAME}>{item.name}</span>
               <span className={TOOL_INPUT}>{item.summary}</span>
-              <span
-                className={`flex shrink-0 items-center gap-6 text-sm before:size-6 before:rounded-full before:bg-current ${TOOL_STATES[item.state] ?? 'text-faint'}`}
-              >
-                {item.state === 'waiting' ? 'waiting for approval' : item.state}
-              </span>
+              {item.state === 'running' ? (
+                <Dots label="running" className="text-sm text-green" />
+              ) : (
+                <span
+                  className={`flex shrink-0 items-center gap-6 text-sm before:size-6 before:rounded-full before:bg-current ${TOOL_STATES[item.state] ?? 'text-faint'}`}
+                >
+                  {item.state === 'waiting' ? 'waiting for approval' : item.state}
+                </span>
+              )}
             </>
           }
         >
           <pre className={`${BODY} border-t pl-26`}>
             {item.output ||
-              (item.state === 'running' ? 'Running…' : item.state === 'waiting' ? 'Waiting for approval…' : 'No output')}
+              (item.state === 'running' ? (
+                <Dots label="running" />
+              ) : item.state === 'waiting' ? (
+                'Waiting for approval…'
+              ) : (
+                'No output'
+              ))}
           </pre>
         </Row>
       )
@@ -397,7 +418,9 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
           <Row
             summary={
               <>
-                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>{OUTCOMES[item.outcome]}</span>
+                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>
+                  {item.auto && item.outcome !== 'cancelled' ? AUTO_OUTCOMES[item.outcome] : OUTCOMES[item.outcome]}
+                </span>
                 <span className={TOOL_NAME}>{item.name}</span>
                 <span className={TOOL_INPUT}>{item.summary}</span>
               </>
@@ -410,7 +433,7 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
       const respond = (allow: boolean) =>
         send({ type: 'permission.respond', chatId: chat.id, requestId: item.requestId, allow })
       return (
-        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12">
+        <div className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised">
           <div className="text-body">
             Allow <strong>{item.name}</strong>?
           </div>
@@ -460,10 +483,11 @@ type ChatProps = {
   columnPx: number
   setColumnPx: (px: number) => void
   notify: (message: string) => void
+  workFolder: WorkFolder
 }
 
 export function Chat(props: ChatProps) {
-  const { chat, folder, engines, accounts, connected, send, openSettings } = props
+  const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
@@ -473,24 +497,38 @@ export function Chat(props: ChatProps) {
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
-  const stickToBottom = useRef(true)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const bottomUntilReply = useRef(true)
+  const [jumpShown, setJumpShown] = useState(false)
+  const reduceMotion = useReducedMotion()
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
+  const replyStarted = chat.draft !== '' || chat.items.at(-1)?.kind !== 'user'
+
+  const toBottom = () => {
+    const list = listRef.current
+    if (list) list.scrollTop = list.scrollHeight
+  }
+  const measure = () => {
+    const list = listRef.current
+    if (list) setJumpShown(list.scrollHeight - list.scrollTop - list.clientHeight > JUMP_BELOW_PX)
+  }
+
+  useLayoutEffect(() => {
+    if (bottomUntilReply.current) toBottom()
+    if (replyStarted) bottomUntilReply.current = false
+  }, [chat.items, chat.status, replyStarted])
 
   useLayoutEffect(() => {
     const list = listRef.current
-    if (list && stickToBottom.current) list.scrollTop = list.scrollHeight
-  }, [chat.items, chat.draft, chat.status])
-
-  useLayoutEffect(() => {
-    const list = listRef.current
-    if (!list) return
-    const observer = new ResizeObserver(([entry]) => {
-      if (stickToBottom.current) list.scrollTop = list.scrollHeight
-      setPaneColumnPx(entry!.contentRect.width)
+    if (!list || !contentRef.current) return
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) if (entry.target === list) setPaneColumnPx(entry.contentRect.width)
+      measure()
     })
     observer.observe(list)
+    observer.observe(contentRef.current)
     return () => observer.disconnect()
   }, [])
 
@@ -507,9 +545,10 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
-  const hint = chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
+  const last = chat.items.at(-1)
+  const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
   const hasContent = text.trim() !== '' || pending.length > 0
   const unattach = (removed: Pending[]) => {
@@ -552,6 +591,8 @@ export function Chat(props: ChatProps) {
     if (!canAttach || !hasContent) return
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
     send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
+    if (busy) toBottom()
+    else bottomUntilReply.current = true
     setText('')
     unattach(pending)
   }
@@ -614,12 +655,25 @@ export function Chat(props: ChatProps) {
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
             <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
-            {chat.id !== MAIN_CHAT_ID && (
+            {!chat.mod && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>
             )}
           </div>
+          {(editsAnywhere(chat, workFolder) || !workFolder.canSandbox) && (
+            <Hint
+              text={
+                !workFolder.canSandbox
+                  ? NOT_SANDBOXED_HINT
+                  : workFolder.editAnywhere
+                    ? EDITS_ANYWHERE_ALL_HINT
+                    : EDITS_ANYWHERE_HINT
+              }
+            >
+              <span className={WARNING_CHIP}>{workFolder.canSandbox ? 'Edits anywhere' : 'Not sandboxed'}</span>
+            </Hint>
+          )}
           <Select
             variant="chip"
             label="Engine"
@@ -654,14 +708,12 @@ export function Chat(props: ChatProps) {
           />
         </header>
         <div
-          className="flex flex-1 flex-col overflow-y-auto p-24"
+          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
+          className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
           ref={listRef}
-          onScroll={(e) => {
-            const el = e.currentTarget
-            stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
-          }}
+          onScroll={measure}
         >
-          <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10">
+          <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
             {chat.items.length === 0 && !chat.draft && (
               <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
                 <strong className="text-body font-semibold text-text">
@@ -687,9 +739,35 @@ export function Chat(props: ChatProps) {
                 <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
               </m.div>
             )}
+            {awaitingOutput && (
+              <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                <Dots label="Working" />
+              </m.div>
+            )}
           </div>
         </div>
         <div className="relative shrink-0 px-24 pb-16">
+          <div className="pointer-events-none absolute inset-x-24 bottom-full mx-auto flex max-w-column justify-end pb-12">
+            <AnimatePresence>
+              {jumpShown && (
+                <Hint key="jump" text="Jump to the latest output">
+                  <m.button
+                    className="pointer-events-auto grid size-32 place-items-center rounded-full border bg-panel text-muted shadow-floating transition-colors hover:bg-raised hover:text-text"
+                    aria-label="Scroll to bottom"
+                    onClick={() => {
+                      const list = listRef.current
+                      list?.scrollTo({ top: list.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
+                    }}
+                    {...MOTION.pop}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" aria-hidden="true">
+                      <path d="M8 2.5v11M3.5 9 8 13.5 12.5 9" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </m.button>
+                </Hint>
+              )}
+            </AnimatePresence>
+          </div>
           {archived && (
             <div className="mx-auto mb-8 flex max-w-column items-center gap-8 text-sm text-muted">
               <span className="flex-1">
@@ -754,33 +832,39 @@ export function Chat(props: ChatProps) {
           </AnimatePresence>
           {!showEngineNote && (
             <div
-              className={`@container mx-auto max-w-column rounded-lg border has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel' : 'bg-bg'}`}
+              className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
             >
               {pending.length > 0 && (
                 <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
                   {pending.map((p) => (
                     <li key={p.id} className="relative min-w-0">
                       {p.preview ? (
-                        <img src={p.preview} alt={p.name} title={p.name} className="block size-48 rounded-lg border object-cover" />
+                        <img
+                          src={p.preview}
+                          alt={p.name}
+                          title={p.name}
+                          className="block size-48 rounded-lg border object-cover shadow-raised"
+                        />
                       ) : (
-                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20`} title={p.name}>
+                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
                           <FileLabel name={p.name} size={p.size} />
                         </div>
                       )}
-                      <button
-                        className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted hover:text-text"
-                        aria-label={`Remove ${p.name}`}
-                        title="Remove"
-                        onClick={() => unattach([p])}
-                      >
-                        ×
-                      </button>
+                      <Hint text="Remove">
+                        <button
+                          className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
+                          aria-label={`Remove ${p.name}`}
+                          onClick={() => unattach([p])}
+                        >
+                          ×
+                        </button>
+                      </Hint>
                     </li>
                   ))}
                 </ul>
               )}
               <textarea
-                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 py-8 text-body leading-[1.5] field-sizing-content"
+                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
                 value={text}
                 rows={2}
                 placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}
@@ -802,17 +886,18 @@ export function Chat(props: ChatProps) {
               />
               <div className="flex items-center gap-8 px-6 pb-6">
                 <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="grid shrink-0 place-items-center"
-                    aria-label="Attach files"
-                    title="Attach files, or paste or drop them here"
-                    disabled={!canAttach}
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    <PaperclipIcon />
-                  </Button>
+                  <Hint text="Attach files, or paste or drop them here">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="grid shrink-0 place-items-center"
+                      aria-label="Attach files"
+                      disabled={!canAttach}
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      <PaperclipIcon />
+                    </Button>
+                  </Hint>
                   <input
                     ref={fileInput}
                     type="file"
@@ -823,18 +908,13 @@ export function Chat(props: ChatProps) {
                       e.target.value = ''
                     }}
                   />
-                  <span className="@container min-w-0 flex-1">
-                    <span className="block truncate text-sm text-faint @max-[8rem]:hidden" title={hint}>
-                      {hint}
-                    </span>
-                  </span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
                   {menu.model && (
                     <Select
                       variant="chip"
                       label="Model"
-                      title={MODEL_HINT}
+                      hint={MODEL_HINT}
                       value={menu.model}
                       disabled={!canChange}
                       options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
@@ -845,7 +925,7 @@ export function Chat(props: ChatProps) {
                     <Select
                       variant="chip"
                       label="Thinking"
-                      title={THINKING_HINT}
+                      hint={THINKING_HINT}
                       value={menu.thinking}
                       disabled={!canChange}
                       options={menu.levels.map((l) => ({ value: l, label: l }))}
@@ -855,37 +935,50 @@ export function Chat(props: ChatProps) {
                   {busy ? (
                     <>
                       {hasContent && (
-                        <Button size="small" disabled={!canQueue} onClick={submit}>
-                          Queue
-                        </Button>
+                        <Hint text={QUEUE_HINT}>
+                          <Button size="small" disabled={!canQueue} onClick={submit}>
+                            Queue
+                          </Button>
+                        </Hint>
                       )}
-                      <Button
-                        variant="danger"
-                        className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
-                        disabled={!connected}
-                        title={chat.status === 'stopping' ? FORCE_STOP_HINT : undefined}
-                        onClick={stop}
-                      >
-                        {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                      </Button>
+                      <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                        <Button
+                          variant="danger"
+                          className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                          disabled={!connected}
+                          onClick={stop}
+                        >
+                          {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                        </Button>
+                      </Hint>
                     </>
                   ) : (
-                    <Button variant="primary" disabled={!canSend || !hasContent} onClick={submit}>
-                      Send
-                    </Button>
+                    <Hint text={SEND_HINT}>
+                      <span className="flex">
+                        <Button
+                          variant="primary"
+                          className="disabled:pointer-events-none"
+                          disabled={!canSend || !hasContent}
+                          onClick={submit}
+                        >
+                          Send
+                        </Button>
+                      </span>
+                    </Hint>
                   )}
                 </span>
               </div>
             </div>
           )}
-          <input
-            type="range"
-            className={`absolute right-24 bottom-2 ${SLIDER}`}
-            aria-label="Chat width"
-            title="Chat width"
-            {...columnSlider(props.columnPx, paneColumnPx)}
-            onChange={(e) => props.setColumnPx(Number(e.target.value))}
-          />
+          <Hint text="Chat width">
+            <input
+              type="range"
+              className={`absolute right-24 bottom-2 ${SLIDER}`}
+              aria-label="Chat width"
+              {...columnSlider(props.columnPx, paneColumnPx)}
+              onChange={(e) => props.setColumnPx(Number(e.target.value))}
+            />
+          </Hint>
         </div>
       </main>
       <AnimatePresence initial={false}>
@@ -895,9 +988,11 @@ export function Chat(props: ChatProps) {
               chatId={chat.id}
               items={props.contextItems}
               chats={props.chats}
+              workFolder={workFolder}
               readOnly={archived}
               connected={connected}
               send={send}
+              hide={props.contextOverlay ? props.toggleContext : undefined}
             />
           </SidePanel>
         )}

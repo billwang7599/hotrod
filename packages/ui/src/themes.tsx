@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
-import { Select } from './controls.tsx'
+import { GROUP, Hint, Select } from './controls.tsx'
 
 export const TOKENS = [
   'bg',
@@ -15,7 +15,6 @@ export const TOKENS = [
   'green',
   'amber',
   'red',
-  'shadow',
 ] as const
 
 type Palette = Record<(typeof TOKENS)[number], string>
@@ -26,10 +25,26 @@ type Theme = {
   light: Palette
   backdrop?: { dark: readonly string[]; light: readonly string[] }
   vibrancy?: { dark: Partial<Palette>; light: Partial<Palette> }
+  dialog?: { dark: string; light: string }
 }
 
-const SHADOW = { dark: '0 8px 28px rgb(0 0 0 / 0.45)', light: '0 8px 28px rgb(0 0 0 / 0.14)' }
+// One light from above for every theme. Dark surfaces swallow shadows, so dark ones are stronger and add a top highlight.
+export const ELEVATION = {
+  dark: {
+    sunken: 'inset 0 1px 2px rgb(0 0 0 / 0.35)',
+    raised: 'inset 0 1px 0 rgb(255 255 255 / 0.05), 0 1px 2px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(0 0 0 / 0.2)',
+    floating: 'inset 0 1px 0 rgb(255 255 255 / 0.06), 0 2px 4px rgb(0 0 0 / 0.3), 0 10px 28px -4px rgb(0 0 0 / 0.55)',
+    overlay: 'inset 0 1px 0 rgb(255 255 255 / 0.06), 0 4px 10px rgb(0 0 0 / 0.3), 0 28px 64px -12px rgb(0 0 0 / 0.7)',
+  },
+  light: {
+    sunken: 'inset 0 1px 2px rgb(0 0 0 / 0.06)',
+    raised: '0 1px 2px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06)',
+    floating: '0 2px 4px -1px rgb(0 0 0 / 0.06), 0 10px 28px -6px rgb(0 0 0 / 0.16)',
+    overlay: '0 4px 8px -2px rgb(0 0 0 / 0.06), 0 28px 60px -12px rgb(0 0 0 / 0.28)',
+  },
+}
 
+// Light grays under 4.5:1 are darkened toward the theme's dark bg: text to 6:1, muted 5, faint 4.5.
 export const THEMES = {
   default: {
     name: 'Default',
@@ -47,7 +62,6 @@ export const THEMES = {
       green: '#3fb67c',
       amber: '#e3a33b',
       red: '#e5534b',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#ffffff',
@@ -57,13 +71,12 @@ export const THEMES = {
       border: '#dfe0e3',
       text: '#1d1e21',
       muted: '#5f626a',
-      faint: '#8b8e96',
+      faint: '#6d6f76',
       accent: '#c95a22',
       'on-accent': '#ffffff',
       green: '#1f8a55',
       amber: '#a76a0c',
       red: '#c9302c',
-      shadow: SHADOW.light,
     },
   },
   glass: {
@@ -82,7 +95,6 @@ export const THEMES = {
       green: '#3fb67c',
       amber: '#e3a33b',
       red: '#e5534b',
-      shadow: '0 12px 40px rgb(0 0 0 / 0.4)',
     },
     light: {
       bg: '#ffffffb8',
@@ -92,13 +104,12 @@ export const THEMES = {
       border: '#0000001a',
       text: '#1b1c20',
       muted: '#54575f',
-      faint: '#7f828a',
+      faint: '#5b5e65',
       accent: '#c95a22',
       'on-accent': '#ffffff',
       green: '#1f8a55',
       amber: '#a76a0c',
       red: '#c9302c',
-      shadow: '0 12px 40px rgb(0 0 0 / 0.12)',
     },
     backdrop: {
       dark: ['#2b1f4a', '#4a1f33', '#123a47', '#0c0d12'],
@@ -109,6 +120,8 @@ export const THEMES = {
       dark: { bg: '#0c0d1266', panel: '#ffffff0a' },
       light: { bg: '#ffffff66', panel: '#0000000a' },
     },
+    // A lone dialog over the blurred app; light text has the thinner contrast margin, so its tint is thicker.
+    dialog: { dark: '#0c0d1266', light: '#ffffffcc' },
   },
   tokyoNight: {
     name: 'Tokyo Night',
@@ -127,7 +140,6 @@ export const THEMES = {
       green: '#9ece6a',
       amber: '#e0af68',
       red: '#f7768e',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#e1e2e7',
@@ -135,15 +147,14 @@ export const THEMES = {
       raised: '#c4c8da',
       hover: '#a8aecb',
       border: '#b4b5b9',
-      text: '#3760bf',
-      muted: '#6172b0',
-      faint: '#848cb5',
+      text: '#2c4686',
+      muted: '#47537e',
+      faint: '#555a76',
       accent: '#2e7de9',
       'on-accent': '#e1e2e7',
       green: '#587539',
       amber: '#8c6c3e',
       red: '#f52a65',
-      shadow: SHADOW.light,
     },
   },
   catppuccin: {
@@ -163,7 +174,6 @@ export const THEMES = {
       green: '#a6e3a1',
       amber: '#f9e2af',
       red: '#f38ba8',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#eff1f5',
@@ -172,14 +182,13 @@ export const THEMES = {
       hover: '#bcc0cc',
       border: '#ccd0da',
       text: '#4c4f69',
-      muted: '#6c6f85',
-      faint: '#8c8fa1',
+      muted: '#5e6075',
+      faint: '#646678',
       accent: '#8839ef',
       'on-accent': '#eff1f5',
       green: '#40a02b',
       amber: '#df8e1d',
       red: '#d20f39',
-      shadow: SHADOW.light,
     },
   },
   gruvbox: {
@@ -199,7 +208,6 @@ export const THEMES = {
       green: '#b8bb26',
       amber: '#fabd2f',
       red: '#fb4934',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fbf1c7',
@@ -208,14 +216,13 @@ export const THEMES = {
       hover: '#d5c4a1',
       border: '#d5c4a1',
       text: '#3c3836',
-      muted: '#7c6f64',
-      faint: '#928374',
+      muted: '#675d55',
+      faint: '#6d6359',
       accent: '#af3a03',
       'on-accent': '#fbf1c7',
       green: '#79740e',
       amber: '#b57614',
       red: '#9d0006',
-      shadow: SHADOW.light,
     },
   },
   rosePine: {
@@ -235,7 +242,6 @@ export const THEMES = {
       green: '#9ccfd8',
       amber: '#f6c177',
       red: '#eb6f92',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#faf4ed',
@@ -244,14 +250,13 @@ export const THEMES = {
       hover: '#dfdad9',
       border: '#dfdad9',
       text: '#575279',
-      muted: '#797593',
-      faint: '#9893a5',
+      muted: '#696580',
+      faint: '#6f6b7c',
       accent: '#907aa9',
       'on-accent': '#faf4ed',
       green: '#286983',
       amber: '#ea9d34',
       red: '#b4637a',
-      shadow: SHADOW.light,
     },
   },
   kanagawa: {
@@ -271,7 +276,6 @@ export const THEMES = {
       green: '#98bb6c',
       amber: '#e6c384',
       red: '#e46876',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#f2ecbc',
@@ -279,15 +283,14 @@ export const THEMES = {
       raised: '#e7dba0',
       hover: '#e4d794',
       border: '#d5cea3',
-      text: '#545464',
-      muted: '#716e61',
-      faint: '#8a8980',
+      text: '#4c4c5b',
+      muted: '#5c5952',
+      faint: '#5f5f5d',
       accent: '#4d699b',
       'on-accent': '#f2ecbc',
       green: '#6f894e',
       amber: '#cc6d00',
       red: '#c84053',
-      shadow: SHADOW.light,
     },
   },
   everforest: {
@@ -307,7 +310,6 @@ export const THEMES = {
       green: '#a7c080',
       amber: '#dbbc7f',
       red: '#e67e80',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fdf6e3',
@@ -315,15 +317,14 @@ export const THEMES = {
       raised: '#efebd4',
       hover: '#e6e2cc',
       border: '#e6e2cc',
-      text: '#5c6a72',
-      muted: '#829181',
-      faint: '#a6b0a0',
+      text: '#4f5b63',
+      muted: '#5c6861',
+      faint: '#636c68',
       accent: '#8da101',
       'on-accent': '#fdf6e3',
       green: '#8da101',
       amber: '#dfa000',
       red: '#f85552',
-      shadow: SHADOW.light,
     },
   },
   nord: {
@@ -343,7 +344,6 @@ export const THEMES = {
       green: '#a3be8c',
       amber: '#ebcb8b',
       red: '#bf616a',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#eceff4',
@@ -353,14 +353,13 @@ export const THEMES = {
       border: '#d8dee9',
       text: '#2e3440',
       muted: '#4c566a',
-      faint: '#616e88',
+      faint: '#5b6880',
       accent: '#5e81ac',
       'on-accent': '#eceff4',
       // Nord's green and yellow are too light to read on Snow Storm, so they're darkened with nord0.
       green: 'color-mix(in srgb, #a3be8c 60%, #2e3440)',
       amber: 'color-mix(in srgb, #ebcb8b 55%, #2e3440)',
       red: '#bf616a',
-      shadow: SHADOW.light,
     },
   },
   solarized: {
@@ -372,7 +371,8 @@ export const THEMES = {
       raised: '#073642',
       hover: 'color-mix(in srgb, #073642 70%, #586e75)',
       border: 'color-mix(in srgb, #073642 70%, #586e75)',
-      text: '#839496',
+      // base0 reads at 4.1:1 on base02, the sidebar, so text takes base1.
+      text: '#93a1a1',
       muted: '#657b83',
       faint: '#586e75',
       accent: '#268bd2',
@@ -380,7 +380,6 @@ export const THEMES = {
       green: '#859900',
       amber: '#b58900',
       red: '#dc322f',
-      shadow: SHADOW.dark,
     },
     light: {
       bg: '#fdf6e3',
@@ -388,16 +387,15 @@ export const THEMES = {
       raised: '#eee8d5',
       hover: 'color-mix(in srgb, #eee8d5 70%, #93a1a1)',
       border: 'color-mix(in srgb, #eee8d5 70%, #93a1a1)',
-      // base00 is Solarized's body text but reads at 4.1:1 on base3, so text takes base01.
-      text: '#586e75',
-      muted: '#657b83',
-      faint: '#93a1a1',
+      // base00 is Solarized's body text but reads at 4.1:1 on base3, and base01 at 4.4:1 on base2, so text darkens.
+      text: '#3d5961',
+      muted: '#4a656e',
+      faint: '#4f6b70',
       accent: '#268bd2',
       'on-accent': '#fdf6e3',
       green: '#859900',
       amber: '#b58900',
       red: '#dc322f',
-      shadow: SHADOW.light,
     },
   },
 } as const satisfies Record<string, Theme>
@@ -429,13 +427,15 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   const palette = { ...theme[scheme], ...(vibrancy && theme.vibrancy?.[scheme]) }
   const root = document.documentElement
   for (const token of TOKENS) root.style.setProperty(`--${token}`, palette[token])
+  for (const [level, shadow] of Object.entries(ELEVATION[scheme])) root.style.setProperty(`--shadow-${level}`, shadow)
   root.style.setProperty('color-scheme', scheme)
   if (stops) root.setAttribute('data-glass', vibrancy ? 'vibrancy' : 'blur')
   else root.removeAttribute('data-glass')
   if (stops && !vibrancy) root.style.setProperty('background', backdropOf(stops))
   else root.style.removeProperty('background')
-  if (vibrancy) root.style.setProperty('--glass-base', base)
-  else root.style.removeProperty('--glass-base')
+  for (const [name, value] of Object.entries({ '--glass-base': base, '--glass-dialog': theme.dialog?.[scheme] }))
+    if (vibrancy && value) root.style.setProperty(name, value)
+    else root.style.removeProperty(name)
   window.hotrod?.setAppearance({
     scheme: current.scheme,
     vibrancy,
@@ -495,26 +495,27 @@ export function Appearance() {
   const shown = dark ? 'dark' : 'light'
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
-        <div className="flex min-w-200 flex-1 flex-col gap-2">
-          Base color scheme
-          <div className="text-sm text-muted">Every theme has a light and a dark version. System follows your OS.</div>
-        </div>
-        <Select
-          label="Base color scheme"
-          value={scheme}
-          options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
-          onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
-        />
+      <div className={GROUP}>
+        <Hint text="Every theme has a light and a dark version. System follows your OS." align="start">
+          <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
+            <span className="min-w-200 flex-1">Base color scheme</span>
+            <Select
+              label="Base color scheme"
+              value={scheme}
+              options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
+              onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
+            />
+          </div>
+        </Hint>
       </div>
-      <div className="border-t pt-12 pb-10">Themes</div>
+      <div className="pt-24 pb-8 font-semibold">Themes</div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-12">
         {Object.entries(THEMES).map(([id, theme]: [string, Theme]) => (
           <button
             key={id}
             type="button"
             aria-pressed={id === picked}
-            className="flex flex-col gap-6 rounded-lg border p-6 text-left hover:bg-raised aria-pressed:border-accent aria-pressed:ring-1 aria-pressed:ring-accent"
+            className="flex flex-col gap-6 rounded-lg border bg-panel p-6 text-left shadow-raised transition-[background-color,border-color,box-shadow] hover:bg-raised active:shadow-sunken aria-pressed:border-accent aria-pressed:ring-1 aria-pressed:ring-accent"
             onClick={() => chooseAppearance({ theme: id as ThemeId })}
           >
             <Preview theme={theme} scheme={shown} />

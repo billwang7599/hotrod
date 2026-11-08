@@ -1,8 +1,9 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { Tooltip } from 'radix-ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Appearance, chooseAppearance, startAppearance, THEMES, TOKENS } from './themes.tsx'
+import { Appearance, chooseAppearance, ELEVATION, startAppearance, THEMES, TOKENS } from './themes.tsx'
 
 // Vitest loads CSS imports as empty strings, so the stylesheet is read from disk.
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
@@ -23,6 +24,19 @@ function over(top: string, under: string) {
     return Math.round(value).toString(16).padStart(2, '0')
   })
   return `#${mix.join('')}`
+}
+
+const fade = (color: string, by: number) => {
+  const alpha = color.length === 9 ? parseInt(color.slice(7), 16) / 255 : 1
+  return color.slice(0, 7) + Math.round(alpha * by * 255).toString(16).padStart(2, '0')
+}
+
+const declarations = (selector: string) => css.split(`${selector} {`)[1]?.split('}')[0] ?? ''
+
+function appUnderDialog() {
+  const app = declarations(`:root[data-glass='vibrancy'] body:has(> [role$='dialog'][data-state='open']) > #root`)
+  const [, blurPx, opacity] = app.match(/filter: blur\((\d+)px\) opacity\(([\d.]+)\);/) ?? []
+  return { blurPx: Number(blurPx), opacity: Number(opacity) }
 }
 
 const contrast = (a: string, b: string) => {
@@ -63,10 +77,23 @@ function fakePage({ dark = true, desktop = false, vibrancy = false } = {}) {
 }
 
 describe('theme table', () => {
-  it('has a token for every color and shadow the stylesheet maps', () => {
+  it('has a token for every color the stylesheet maps', () => {
     const theme = css.slice(css.indexOf('@theme'))
-    const mapped = [...theme.matchAll(/--(?:color-[\w-]+|shadow): var\(--([\w-]+)\)/g)].map((m) => m[1])
+    const mapped = [...theme.matchAll(/--color-[\w-]+: var\(--([\w-]+)\)/g)].map((m) => m[1])
     expect(new Set(mapped)).toEqual(new Set(TOKENS))
+  })
+
+  it('maps every elevation level, and each scheme defines them all', () => {
+    const theme = css.slice(css.indexOf('@theme'))
+    const mapped = [...theme.matchAll(/--shadow-([\w-]+): var\(--shadow-\1\)/g)].map((m) => m[1])
+    expect(mapped.length).toBeGreaterThan(0)
+    for (const scheme of SCHEMES) expect(Object.keys(ELEVATION[scheme]).sort(), scheme).toEqual(mapped.sort())
+  })
+
+  it('lights dark surfaces from above with a top highlight, since dark shadows barely show', () => {
+    const { sunken, ...lifted } = ELEVATION.dark
+    expect(sunken).toMatch(/^inset /)
+    for (const shadow of Object.values(lifted)) expect(shadow).toMatch(/^inset 0 1px 0 rgb\(255 255 255 \//)
   })
 
   it('leaves the palette out of the stylesheet, so the table is its only source', () => {
@@ -90,7 +117,9 @@ describe('theme table', () => {
 
   it('tints every surface of the see-through window, and paints floating layers solid', () => {
     expect(css).toMatch(/:root \{[^}]*\bbackground: var\(--bg\)/)
-    expect(css).toMatch(/:root\[data-glass='vibrancy'\] \.shadow \{[^}]*background-color: var\(--glass-base\)/)
+    expect(css).toMatch(
+      /:root\[data-glass='vibrancy'\] :is\(\.shadow-floating, \.shadow-overlay\) \{[^}]*background-color: var\(--glass-base\)/,
+    )
     for (const scheme of SCHEMES) {
       const alpha = parseInt(THEMES.glass.vibrancy[scheme].bg.slice(7), 16)
       expect(alpha, scheme).toBeGreaterThan(0)
@@ -99,13 +128,62 @@ describe('theme table', () => {
     }
   })
 
+  it('blurs and dims the app under a lone dialog on the see-through window, and tints the dialog', () => {
+    const vibrancy = `:root[data-glass='vibrancy']`
+    const open = `[role$='dialog'][data-state='open']`
+    const alone = `:not(${open} ~ *)`
+    expect(declarations(`${vibrancy} body:has(> ${open}) > #root`)).not.toMatch(/\bopacity:/)
+    const { blurPx, opacity } = appUnderDialog()
+    expect(blurPx).toBeGreaterThan(0)
+    expect(opacity).toBeGreaterThan(0)
+    expect(opacity).toBeLessThan(1)
+    const dialog = declarations(`${vibrancy} body > [role$='dialog']${alone}`)
+    expect(dialog).toMatch(/background-color: var\(--glass-dialog\);/)
+    expect(declarations(`${vibrancy} body > .bg-backdrop${alone}`)).toMatch(/background-color: transparent;/)
+    const motion = css.split('@media (prefers-reduced-motion: no-preference) {')[1]?.split('}')[0] ?? ''
+    expect(motion).toMatch(/#root \{[^]*transition: filter /)
+    expect(css.replace(motion, '')).not.toMatch(/#root \{[^}]*transition/)
+  })
+
+  it('keeps text readable on the see-through window and on a dialog over the blurred app', () => {
+    const { blurPx, opacity } = appUnderDialog()
+    const controlPx = Number(css.match(/--control: (\d+)px;/)?.[1])
+    // A blur of σ px leaves a bar w px across at most w / (σ√2π) of its color; nothing solid outsizes a control.
+    const coverage = Math.min(1, controlPx / (blurPx * Math.sqrt(2 * Math.PI))) * opacity
+    for (const scheme of SCHEMES) {
+      const { text, muted, faint } = THEMES.glass[scheme]
+      const palette = { ...THEMES.glass[scheme], ...THEMES.glass.vibrancy[scheme] }
+      const { bg, panel } = palette
+      const read = scheme === 'light' ? { text, muted, faint } : { text }
+      for (const material of THEMES.glass.backdrop[scheme]) {
+        const window = over(bg, material)
+        const behind = [window, ...Object.values(palette).map((color) => over(fade(color, coverage), window))]
+        const dialogs = behind.map((under) => over(THEMES.glass.dialog[scheme], under))
+        for (const surface of [window, over(panel, window), ...dialogs, ...dialogs.map((d) => over(panel, d))])
+          for (const [name, color] of Object.entries(read))
+            expect(contrast(color, surface), `${scheme} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+      }
+    }
+  })
+
+  it('keeps secondary text readable on light pages and panels', () => {
+    for (const [id, theme] of Object.entries(THEMES)) {
+      const { bg, panel, muted, faint } = theme.light
+      const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop.light : [bg]
+      for (const under of backdrop)
+        for (const surface of [under, over(bg, under), over(panel, under)])
+          for (const [name, color] of [['muted', muted], ['faint', faint]])
+            expect(contrast(color!, surface), `${id} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
   it('keeps body text readable on every background', () => {
     for (const [id, theme] of Object.entries(THEMES))
       for (const scheme of SCHEMES) {
-        const { bg, text } = theme[scheme]
+        const { bg, panel, text } = theme[scheme]
         const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop[scheme] : [bg]
         for (const under of backdrop)
-          for (const surface of [under, over(bg, under)])
+          for (const surface of [under, over(bg, under), over(panel, under)])
             expect(contrast(text, surface), `${id} ${scheme} on ${surface}`).toBeGreaterThanOrEqual(4.5)
       }
   })
@@ -119,6 +197,14 @@ describe('appearance', () => {
     startAppearance()
     expect(page.props.get('--bg')).toBe(THEMES.default.dark.bg)
     expect(page.props.get('color-scheme')).toBe('dark')
+  })
+
+  it("sets the scheme's elevation shadows with its palette", () => {
+    const page = fakePage({ dark: true })
+    startAppearance()
+    for (const [level, shadow] of Object.entries(ELEVATION.dark)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
+    chooseAppearance({ theme: 'gruvbox', scheme: 'light' })
+    for (const [level, shadow] of Object.entries(ELEVATION.light)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
   })
 
   it('applies a picked theme at once and keeps it for the next start', () => {
@@ -183,10 +269,12 @@ describe('appearance', () => {
     const tinted = { ...THEMES.glass.dark, ...THEMES.glass.vibrancy.dark }
     for (const token of TOKENS) expect(mac.props.get(`--${token}`)).toBe(tinted[token])
     expect(mac.props.get('--glass-base')).toBe(THEMES.glass.backdrop.dark.at(-1))
+    expect(mac.props.get('--glass-dialog')).toBe(THEMES.glass.dialog.dark)
 
     chooseAppearance({ theme: 'gruvbox' })
     expect(mac.attrs.has('data-glass')).toBe(false)
     expect(mac.props.has('--glass-base')).toBe(false)
+    expect(mac.props.has('--glass-dialog')).toBe(false)
     expect(mac.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'dark',
       vibrancy: false,
@@ -210,9 +298,26 @@ describe('appearance', () => {
     fakePage({ dark: true })
     startAppearance()
     chooseAppearance({ theme: 'rosePine' })
-    const html = renderToStaticMarkup(<Appearance />)
+    const html = renderToStaticMarkup(
+      <Tooltip.Provider>
+        <Appearance />
+      </Tooltip.Provider>,
+    )
     for (const theme of Object.values(THEMES)) expect(html).toContain(`>${theme.name}<`)
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
     expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Rosé Pine/)
+  })
+
+  it('explains the color scheme on hover, not on the page', () => {
+    fakePage({ dark: true })
+    startAppearance()
+    const html = renderToStaticMarkup(
+      <Tooltip.Provider>
+        <Appearance />
+      </Tooltip.Provider>,
+    )
+    expect(html).toContain('Base color scheme')
+    expect(html).not.toContain('System follows your OS')
+    expect(html).toMatch(/data-state="closed"[^>]*>(?:(?!<\/div>).)*Base color scheme/)
   })
 })

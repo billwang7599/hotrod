@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('hotrod', {
-  pickFolder: () => ipcRenderer.invoke('pick-folder'),
+  pickFolder: (/** @type {string | undefined} */ title) => ipcRenderer.invoke('pick-folder', title),
   onNewChatFromFolder: (/** @type {() => void} */ listener) => {
     const handler = () => listener()
     ipcRenderer.on('new-chat-from-folder', handler)

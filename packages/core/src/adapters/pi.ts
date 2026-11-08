@@ -1,4 +1,6 @@
-import { type Adapter, type ToolKind } from '../shared.ts'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { type Adapter, type Sandbox, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -31,6 +33,14 @@ const CLEAN_ARGS = [
 ]
 
 const RPC_ARGS = ['--mode', 'rpc', ...CLEAN_ARGS]
+
+// pi fails with its login read-only, and needs nothing else of its state folder.
+const STATE_FILES = ['auth.json*', 'settings.json.lock*', 'models-store.json*', 'install/update.lock*']
+
+function jailed(sandbox: Sandbox) {
+  const stateDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), '.pi', 'agent')
+  return { ...sandbox, writable: [...sandbox.writable, ...STATE_FILES.map((file) => join(stateDir, file))] }
+}
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
@@ -76,23 +86,23 @@ export const pi: Adapter = {
     }
   },
 
-  async complete(machine, { cwd, system, prompt, model, timeoutMs }) {
+  async complete(machine, { cwd, system, prompt, model, timeoutMs, sandbox }) {
     const args = ['-p', ...CLEAN_ARGS, '--no-tools', '--offline', '--model', model, '--thinking', 'off']
     args.push('--system-prompt', system)
-    const options = { cwd, input: prompt, timeoutMs }
+    const options = { cwd, input: prompt, timeoutMs, ...(sandbox && { sandbox: jailed(sandbox) }) }
     const { code, stdout, stderr } = await machine.run('pi', args, options)
     if (code !== 0) throw new Error(stderr.trim() || `pi exited with code ${code}`)
     return stdout
   },
 
-  start(machine, { cwd, instructions, extraDirs = [], model, thinking }, emit) {
+  start(machine, { cwd, instructions, extraDirs = [], model, thinking, sandbox }, emit) {
     const args = [...RPC_ARGS]
     if (model) args.push('--model', model)
     if (thinking) args.push('--thinking', thinking)
     const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
     const systemPrompt = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean)
     if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))
-    const proc = machine.spawn('pi', args, { cwd })
+    const proc = machine.spawn('pi', args, { cwd, ...(sandbox && { sandbox: jailed(sandbox) }) })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     let buffer = ''
     let turnError: string | undefined

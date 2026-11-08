@@ -4,7 +4,7 @@ import { Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
-  WORKSHOP_NAME,
+  settingProblem,
   type Account,
   type ClientMessage,
   type ContextSection,
@@ -12,10 +12,24 @@ import {
   type EngineInfo,
   type ModelLists,
   type ModelRole,
-  type Mods,
+  type ModInfo,
+  type WorkFolder,
 } from '@hotrod/core/shared'
+import type { ModSetting } from '@hotrod/mod-api'
 import { SECTIONS } from './context-panel.tsx'
-import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Select, Switch, useReturnFocus } from './controls.tsx'
+import {
+  Button,
+  CHAT_NOUN,
+  confirm,
+  ErrorText,
+  GROUP,
+  Hint,
+  MOTION,
+  NAV_LABEL,
+  Select,
+  Switch,
+  useReturnFocus,
+} from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 import { Appearance } from './themes.tsx'
 
@@ -23,8 +37,10 @@ type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextSection, boolean>
-  mods: Mods
+  mods: ModInfo[]
   modelLists: Record<string, ModelLists>
+  workFolder: WorkFolder
+  chooseWorkFolder: () => void
   connected: boolean
   send: (m: ClientMessage) => void
 }
@@ -34,11 +50,19 @@ type Page = {
   group: (typeof NAV_GROUPS)[number]
   title: string
   hint?: string
-  shown?: (props: PageProps) => boolean
   body: (props: PageProps) => ReactNode
 }
 
 const NAV_GROUPS = ['Options', 'Mods'] as const
+
+const WORK_FOLDER_TITLE = 'Choose a work folder'
+const WORK_FOLDER_HINT =
+  'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
+  `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
+
+const EDIT_ANYWHERE_ALL_HINT =
+  `Every chat: Home, ${CHAT_NOUN.many} and subagents. On: no sandbox, and edits outside the work folder ask you ` +
+  'first, from each chat’s next message. Off: each chat’s own switch in its Context panel decides.'
 
 const ROLES: Record<ModelRole, { name: string; about: string }> = {
   chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
@@ -53,29 +77,62 @@ const PAGES = [
     group: 'Options',
     title: 'Engines',
     hint: 'Hotrod only starts the engines you turn on here.',
-    body: ({ engines, connected, send }: PageProps) =>
-      engines.map((engine) => {
-        const problem = engineProblem(engine)
-        return (
-          <SettingRow
-            key={engine.id}
-            name={<span className="font-mono">{engine.id}</span>}
-            description={
-              <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
-                {problem ?? 'Ready'}
-                {engine.detail && ` · ${engine.detail}`}
-              </span>
-            }
-          >
-            <Switch
-              label={`${engine.id} on`}
-              checked={engine.enabled}
-              disabled={!connected}
-              onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
-            />
-          </SettingRow>
-        )
-      }),
+    body: ({ engines, connected, send }: PageProps) => (
+      <div className={GROUP}>
+        {engines.map((engine) => {
+          const problem = engineProblem(engine)
+          return (
+            <SettingRow
+              key={engine.id}
+              name={<span className="font-mono">{engine.id}</span>}
+              description={
+                <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
+                  {problem ?? 'Ready'}
+                  {engine.detail && ` · ${engine.detail}`}
+                </span>
+              }
+            >
+              <Switch
+                label={`${engine.id} on`}
+                checked={engine.enabled}
+                disabled={!connected}
+                onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
+              />
+            </SettingRow>
+          )
+        })}
+      </div>
+    ),
+  },
+  {
+    id: 'work',
+    group: 'Options',
+    title: 'Work folder',
+    hint: WORK_FOLDER_HINT,
+    body: ({ workFolder, chooseWorkFolder, connected, send }: PageProps) => (
+      <div className={GROUP}>
+        <SettingRow
+          name="Work folder"
+          description={<span className="font-mono">{workFolder.path ?? 'Not chosen'}</span>}
+          hint={`Changing it moves only new ${CHAT_NOUN.many}; existing ones keep their folder.`}
+        >
+          <Button disabled={!connected} onClick={chooseWorkFolder}>
+            Change…
+          </Button>
+        </SettingRow>
+        <SettingRow
+          name={<span className={workFolder.editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>}
+          hint={EDIT_ANYWHERE_ALL_HINT}
+        >
+          <Switch
+            label="Allow edits outside the work folder"
+            checked={workFolder.editAnywhere === true}
+            disabled={!connected}
+            onChange={(enabled) => send({ type: 'workFolder.setEditAnywhere', enabled })}
+          />
+        </SettingRow>
+      </div>
+    ),
   },
   {
     id: 'appearance',
@@ -122,64 +179,84 @@ const PAGES = [
     group: 'Options',
     title: 'Context',
     hint:
-      `What a ${CHAT_NOUN.one} uses from ${WORKSHOP_NAME} and the ${CHAT_NOUN.many} above it, unless you switch it in its Context panel. ` +
-      'Its own AGENTS.md, folders and files always start on.',
-    body: ({ contextDefaults, connected, send }: PageProps) =>
-      CONTEXT_SECTIONS.map((section) => (
-        <SettingRow key={section} name={SECTIONS[section].label} description={SECTIONS[section].inherited}>
-          <Switch
-            label={`${SECTIONS[section].label} from above on by default`}
-            checked={contextDefaults[section]}
-            disabled={!connected}
-            onChange={(enabled) => send({ type: 'context.setDefault', section, enabled })}
-          />
-        </SettingRow>
-      )),
+      `What a ${CHAT_NOUN.one} uses from the global AGENTS.md and the chats above it, unless you switch it in its ` +
+      'Context panel. Its own AGENTS.md, folders and files always start on.',
+    body: ({ contextDefaults, connected, send }: PageProps) => (
+      <div className={GROUP}>
+        {CONTEXT_SECTIONS.map((section) => (
+          <SettingRow key={section} name={SECTIONS[section].label} hint={SECTIONS[section].inherited}>
+            <Switch
+              label={`${SECTIONS[section].label} from above on by default`}
+              checked={contextDefaults[section]}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'context.setDefault', section, enabled })}
+            />
+          </SettingRow>
+        ))}
+      </div>
+    ),
   },
   {
     id: 'mods',
     group: 'Mods',
     title: 'Built-in mods',
-    hint: 'Mods that ship with Hotrod. Each is off until you turn it on.',
-    body: ({ mods: { subagents }, connected, send }: PageProps) => (
-      <SettingRow
-        name="Subagents"
-        description="Chats can hand a task to a new chat that reports back when it ends. Claude Code only."
-      >
-        <Switch
-          label="Subagents"
-          checked={subagents.enabled}
-          disabled={!connected}
-          onChange={(on) => send({ type: 'subagents.set', enabled: on, limit: subagents.limit })}
-        />
-      </SettingRow>
-    ),
-  },
-  {
-    id: 'subagents',
-    group: 'Mods',
-    title: 'Subagents',
-    shown: ({ mods }: PageProps) => mods.subagents.enabled,
+    hint: 'Mods that ship with Hotrod. One with settings gets its own page while it is on.',
     body: ({ mods, connected, send }: PageProps) => (
-      <SubagentLimit subagents={mods.subagents} connected={connected} send={send} />
+      <div className={GROUP}>
+        {mods.map((mod) => (
+          <SettingRow key={mod.id} name={mod.name} hint={mod.description}>
+            <Switch
+              label={mod.name}
+              checked={mod.enabled}
+              disabled={!connected}
+              onChange={(enabled) => send({ type: 'mod.setEnabled', modId: mod.id, enabled })}
+            />
+          </SettingRow>
+        ))}
+      </div>
     ),
   },
 ] as const satisfies readonly Page[]
 
-export type SettingsPage = (typeof PAGES)[number]['id']
+export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
-type RowProps = { name: ReactNode; description?: ReactNode; children?: ReactNode; below?: ReactNode }
+const modPages = (mods: ModInfo[]): Page[] =>
+  mods
+    .filter((mod) => mod.enabled && mod.settings.length)
+    .map((mod) => ({
+      id: `mod:${mod.id}`,
+      group: 'Mods',
+      title: mod.name,
+      body: ({ connected, send }: PageProps) => (
+        <div className={GROUP}>
+          {mod.settings.map((setting) => (
+            <SettingRow key={setting.key} name={setting.label} hint={setting.description}>
+              <ModSettingControl
+                setting={setting}
+                value={mod.values[setting.key]}
+                disabled={!connected}
+                save={(value) => send({ type: 'mod.setValue', modId: mod.id, key: setting.key, value })}
+              />
+            </SettingRow>
+          ))}
+        </div>
+      ),
+    }))
 
-function SettingRow({ name, description, children, below }: RowProps) {
+type RowProps = { name: ReactNode; description?: ReactNode; hint?: string; children?: ReactNode; below?: ReactNode }
+
+function SettingRow({ name, description, hint, children, below }: RowProps) {
   return (
-    <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
-      <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
-        {name}
-        {description && <div className="text-sm text-muted">{description}</div>}
+    <Hint text={hint} align="start">
+      <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t">
+        <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
+          {name}
+          {description && <div className="text-sm text-muted">{description}</div>}
+        </div>
+        <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
+        {below && <div className="basis-full">{below}</div>}
       </div>
-      <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
-      {below && <div className="basis-full">{below}</div>}
-    </div>
+    </Hint>
   )
 }
 
@@ -201,83 +278,86 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
           {engine.id} lists no models{engineProblem(engine) && ` (${engineProblem(engine)})`}.
         </p>
       )}
-      {offered.length > 0 &&
-        MODEL_ROLES.map((role) => {
-          const list = lists[role]
-          const { name, about } = ROLES[role]
-          const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
-          const move = (from: number, to: number) => {
-            const next = [...list]
-            next.splice(to, 0, ...next.splice(from, 1))
-            setList(next)
-          }
-          const items = list.map((id, i) => {
-            const label = labelOf(id)
+      {offered.length > 0 && (
+        <div className={GROUP}>
+          {MODEL_ROLES.map((role) => {
+            const list = lists[role]
+            const { name, about } = ROLES[role]
+            const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
+            const move = (from: number, to: number) => {
+              const next = [...list]
+              next.splice(to, 0, ...next.splice(from, 1))
+              setList(next)
+            }
+            const items = list.map((id, i) => {
+              const label = labelOf(id)
+              return (
+                <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
+                  <span className="w-16 text-sm text-faint">{i + 1}</span>
+                  <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
+                    {label ?? `${id} (not offered, skipped)`}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${label ?? id} up`}
+                    disabled={!connected || i === 0}
+                    onClick={() => move(i, i - 1)}
+                  >
+                    ↑
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Move ${label ?? id} down`}
+                    disabled={!connected || i === list.length - 1}
+                    onClick={() => move(i, i + 1)}
+                  >
+                    ↓
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`Remove ${label ?? id}`}
+                    disabled={!connected}
+                    onClick={() => setList(list.filter((m) => m !== id))}
+                  >
+                    ×
+                  </Button>
+                </li>
+              )
+            })
+            const addable = offered.filter((m) => !list.includes(m.id))
             return (
-              <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
-                <span className="w-16 text-sm text-faint">{i + 1}</span>
-                <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
-                  {label ?? `${id} (not offered, skipped)`}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Move ${label ?? id} up`}
-                  disabled={!connected || i === 0}
-                  onClick={() => move(i, i - 1)}
-                >
-                  ↑
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Move ${label ?? id} down`}
-                  disabled={!connected || i === list.length - 1}
-                  onClick={() => move(i, i + 1)}
-                >
-                  ↓
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Remove ${label ?? id}`}
-                  disabled={!connected}
-                  onClick={() => setList(list.filter((m) => m !== id))}
-                >
-                  ×
-                </Button>
-              </li>
+              <SettingRow
+                key={role}
+                name={name}
+                hint={about}
+                below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
+              >
+                <Select
+                  label={`Add a ${name} model for ${engine.id}`}
+                  value=""
+                  placeholder="Add model…"
+                  disabled={!connected || !addable.length}
+                  options={addable.map((m) => ({ value: m.id, label: m.label }))}
+                  onChange={(model) => setList([...list, model])}
+                />
+              </SettingRow>
             )
-          })
-          const addable = offered.filter((m) => !list.includes(m.id))
-          return (
-            <SettingRow
-              key={role}
-              name={name}
-              description={about}
-              below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
-            >
+          })}
+          {engine.defaultThinking && (
+            <SettingRow name="Default thinking" hint={`For ${CHAT_NOUN.many} that don't pick a level.`}>
               <Select
-                label={`Add a ${name} model for ${engine.id}`}
-                value=""
-                placeholder="Add model…"
-                disabled={!connected || !addable.length}
-                options={addable.map((m) => ({ value: m.id, label: m.label }))}
-                onChange={(model) => setList([...list, model])}
+                label={`Default thinking for ${engine.id}`}
+                value={engine.defaultThinking}
+                disabled={!connected}
+                options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
+                onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
               />
             </SettingRow>
-          )
-        })}
-      {offered.length > 0 && engine.defaultThinking && (
-        <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
-          <Select
-            label={`Default thinking for ${engine.id}`}
-            value={engine.defaultThinking}
-            disabled={!connected}
-            options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
-            onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
-          />
-        </SettingRow>
+          )}
+        </div>
       )}
     </section>
   )
@@ -329,138 +409,265 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   return (
     <section className="flex flex-col not-first:pt-24" aria-label={`${id} accounts`}>
       <h3 className="pb-8 font-mono font-semibold">{id}</h3>
-      {listed.accounts.map((a) => (
-        <SettingRow
-          key={a.id}
-          name={accountLabel(a)}
-          description={
-            a.id === 'default' &&
-            (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
-          }
-        >
-          {a.id === listed.active ? (
-            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
-          ) : (
-            <Button
-              size="small"
-              disabled={!connected}
-              onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
-            >
-              Use
-            </Button>
-          )}
-          {a.id !== 'default' && (
-            <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
-              Remove
-            </Button>
-          )}
-        </SettingRow>
-      ))}
-      {!login ? (
-        <SettingRow name="Add account" description="Sign in to another account in your browser.">
-          <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
-            <input
-              className="w-160"
-              value={name}
-              placeholder="Name, e.g. Work"
-              onChange={(e) => setName(e.target.value)}
-            />
-            <Button variant="primary" disabled={!connected || !name.trim()}>
-              Sign in…
-            </Button>
-          </form>
-        </SettingRow>
-      ) : login.error ? (
-        <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
-          <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
-        </SettingRow>
-      ) : (
-        <>
-          <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
-            {!login.url && cancelLogin}
+      <div className={GROUP}>
+        {listed.accounts.map((a) => (
+          <SettingRow
+            key={a.id}
+            name={accountLabel(a)}
+            description={a.id === 'default' && !a.signedIn && `No one is signed in to ${id} itself`}
+            hint={a.id === 'default' && a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : undefined}
+          >
+            {a.id === listed.active ? (
+              <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
+            ) : (
+              <Button
+                size="small"
+                disabled={!connected}
+                onClick={() => send({ type: 'account.use', engine: id, accountId: a.id })}
+              >
+                Use
+              </Button>
+            )}
+            {a.id !== 'default' && (
+              <Button size="small" variant="danger" disabled={!connected} onClick={() => remove(a)}>
+                Remove
+              </Button>
+            )}
           </SettingRow>
-          {login.url && (
-            <SettingRow
-              name="Paste a code"
-              description={
-                <>
-                  No window, or it is signed in to another account? Open{' '}
-                  <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
-                    this sign-in link
-                  </a>{' '}
-                  (a private window lets you pick the account), then paste the code it shows.
-                </>
-              }
-            >
-              <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
-                <input
-                  className="w-120"
-                  value={code}
-                  placeholder="Code"
-                  spellCheck={false}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <Button variant="primary" disabled={!connected || !code.trim()}>
-                  Submit code
-                </Button>
-              </form>
-              {cancelLogin}
+        ))}
+        {!login ? (
+          <SettingRow name="Add account" hint="Sign in to another account in your browser.">
+            <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
+              <input
+                className="w-160"
+                value={name}
+                placeholder="Name, e.g. Work"
+                onChange={(e) => setName(e.target.value)}
+              />
+              <Button variant="primary" disabled={!connected || !name.trim()}>
+                Sign in…
+              </Button>
+            </form>
+          </SettingRow>
+        ) : login.error ? (
+          <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
+            <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
+          </SettingRow>
+        ) : (
+          <>
+            <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
+              {!login.url && cancelLogin}
             </SettingRow>
-          )}
-        </>
-      )}
-      {accounts.apiKeys && (
-        <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
-          <form className="flex min-w-0 gap-6" onSubmit={addKey}>
-            <input
-              className="w-120"
-              value={keyName}
-              placeholder="API key name"
-              onChange={(e) => setKeyName(e.target.value)}
-            />
-            <input
-              className="w-140"
-              type="password"
-              value={key}
-              placeholder="API key"
-              autoComplete="off"
-              spellCheck={false}
-              onChange={(e) => setKey(e.target.value)}
-            />
-            <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add</Button>
-          </form>
-        </SettingRow>
-      )}
+            {login.url && (
+              <SettingRow
+                name="Paste a code"
+                description={
+                  <>
+                    No window, or it is signed in to another account? Open{' '}
+                    <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                      this sign-in link
+                    </a>{' '}
+                    (a private window lets you pick the account), then paste the code it shows.
+                  </>
+                }
+              >
+                <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
+                  <input
+                    className="w-120"
+                    value={code}
+                    placeholder="Code"
+                    spellCheck={false}
+                    onChange={(e) => setCode(e.target.value)}
+                  />
+                  <Button variant="primary" disabled={!connected || !code.trim()}>
+                    Submit code
+                  </Button>
+                </form>
+                {cancelLogin}
+              </SettingRow>
+            )}
+          </>
+        )}
+        {accounts.apiKeys && (
+          <SettingRow name="Add API key" hint="Use an API key instead of a sign-in.">
+            <form className="flex min-w-0 gap-6" onSubmit={addKey}>
+              <input
+                className="w-120"
+                value={keyName}
+                placeholder="API key name"
+                onChange={(e) => setKeyName(e.target.value)}
+              />
+              <input
+                className="w-140"
+                type="password"
+                value={key}
+                placeholder="API key"
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setKey(e.target.value)}
+              />
+              <Button disabled={!connected || !keyName.trim() || !key.trim()}>Add</Button>
+            </form>
+          </SettingRow>
+        )}
+      </div>
     </section>
   )
 }
 
-type SubagentLimitProps = { subagents: Mods['subagents']; connected: boolean; send: (m: ClientMessage) => void }
+type ModSettingProps = {
+  setting: ModSetting
+  value: string | number | boolean | undefined
+  disabled: boolean
+  save: (value: string | number | boolean) => void
+}
 
-function SubagentLimit({ subagents: { enabled, limit }, connected, send }: SubagentLimitProps) {
-  const [draft, setDraft] = useState(String(limit))
-  useEffect(() => setDraft(String(limit)), [limit])
-  const save = () => {
+function ModSettingControl({ setting, value, disabled, save }: ModSettingProps) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  if (setting.type === 'boolean') {
+    return <Switch label={setting.label} checked={value === true} disabled={disabled} onChange={save} />
+  }
+  if (setting.type === 'select') {
+    return (
+      <Select
+        label={setting.label}
+        value={String(value)}
+        disabled={disabled}
+        options={setting.options.map((option) => ({ value: String(option.value), label: option.label }))}
+        onChange={(picked) => {
+          const option = setting.options.find((o) => String(o.value) === picked)
+          if (option) save(option.value)
+        }}
+      />
+    )
+  }
+  const commit = () => {
     const next = Number(draft)
-    if (draft.trim() && Number.isInteger(next) && next >= -1 && next !== limit) {
-      send({ type: 'subagents.set', enabled, limit: next })
-    } else setDraft(String(limit))
+    if (draft.trim() && !settingProblem(setting, next) && next !== value) save(next)
+    else setDraft(String(value))
   }
   return (
-    <SettingRow name="Max running per chat" description="How many subagents one chat can run at once. -1 for no limit.">
-      <input
-        className="w-72"
-        aria-label="Max running per chat"
-        type="number"
-        min={-1}
-        step={1}
-        value={draft}
-        disabled={!connected}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={save}
-        onKeyDown={(e) => e.key === 'Enter' && save()}
-      />
-    </SettingRow>
+    <input
+      className="w-72"
+      aria-label={setting.label}
+      type="number"
+      min={setting.min}
+      max={setting.max}
+      step={setting.integer ? 1 : 'any'}
+      value={draft}
+      disabled={disabled}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === 'Enter' && commit()}
+    />
+  )
+}
+
+type WorkFolderDialogProps = {
+  open: boolean
+  workFolder: WorkFolder
+  connected: boolean
+  send: (m: ClientMessage) => void
+  toasts: { id: number; message: string }[]
+  pickFolder?: (title: string) => Promise<string | null>
+  close?: () => void
+}
+
+export function WorkFolderDialog({ open, workFolder, connected, send, toasts, pickFolder, close }: WorkFolderDialogProps) {
+  const [shown, setShown] = useState(false)
+  const [path, setPath] = useState('')
+  const [sentAfter, setSentAfter] = useState<number>()
+  if (open !== shown) {
+    setShown(open)
+    setPath(workFolder.path ?? '')
+    setSentAfter(undefined)
+  }
+  // The core refuses a folder with an error toast, which the dialog would hide, so it shows here.
+  const error = sentAfter === undefined ? undefined : toasts.findLast((t) => t.id > sentAfter)?.message
+  const focus = useReturnFocus()
+  const choose = (chosen: string) => {
+    setSentAfter(toasts.at(-1)?.id ?? 0)
+    send({ type: 'workFolder.set', path: chosen })
+  }
+  const pick = async () => {
+    const picked = await pickFolder?.(WORK_FOLDER_TITLE)
+    if (!picked) return
+    setPath(picked)
+    choose(picked)
+  }
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (connected && path.trim()) choose(path.trim())
+  }
+  return (
+    <Dialog.Root open={open} onOpenChange={(open) => open || close?.()}>
+      <AnimatePresence>
+        {open && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </Dialog.Overlay>
+            <Dialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={focus.remember}
+              onCloseAutoFocus={focus.restore}
+            >
+              <m.form
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                {...MOTION.pop}
+                onSubmit={submit}
+              >
+                <Hint text={WORK_FOLDER_HINT} side="bottom" align="start">
+                  <Dialog.Title className="w-fit cursor-help text-[16px] font-semibold">{WORK_FOLDER_TITLE}</Dialog.Title>
+                </Hint>
+                <label className="flex flex-col gap-4">
+                  <span className="text-muted">Folder</span>
+                  <span className="flex gap-6">
+                    <input
+                      className="flex-1 font-mono text-sm"
+                      value={path}
+                      placeholder={workFolder.defaultPath}
+                      spellCheck={false}
+                      onChange={(e) => setPath(e.target.value)}
+                    />
+                    {pickFolder && (
+                      <Button type="button" disabled={!connected} onClick={() => void pick()}>
+                        Choose…
+                      </Button>
+                    )}
+                  </span>
+                </label>
+                <p className="text-sm text-muted">
+                  Default: <span className="font-mono wrap-anywhere">{workFolder.defaultPath}</span>
+                </p>
+                {error && <ErrorText>{error}</ErrorText>}
+                <div className="flex flex-wrap justify-end gap-8">
+                  <Button
+                    type="button"
+                    className="mr-auto"
+                    disabled={!connected}
+                    onClick={() => choose(workFolder.defaultPath)}
+                  >
+                    Use default
+                  </Button>
+                  {close && (
+                    <Dialog.Close asChild>
+                      <Button type="button">Cancel</Button>
+                    </Dialog.Close>
+                  )}
+                  <Button variant="primary" disabled={!connected || !path.trim()}>
+                    Use this folder
+                  </Button>
+                </div>
+              </m.form>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
+    </Dialog.Root>
   )
 }
 
@@ -473,7 +680,7 @@ type SettingsProps = PageProps & {
 
 export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
-  const pages: readonly Page[] = PAGES.filter((p) => !('shown' in p) || p.shown(props))
+  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods)]
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open={open} onOpenChange={(open) => open || close()}>
@@ -491,7 +698,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-[10px] border bg-bg text-text shadow"
+                className="fixed inset-0 m-auto flex h-[min(620px,calc(100vh-32px))] w-[min(880px,calc(100vw-32px))] overflow-hidden rounded-xl border bg-bg text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <Dialog.Title className="sr-only">Settings</Dialog.Title>
@@ -511,12 +718,12 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                         {pages
                           .filter((p) => p.group === group)
                           .map((p) => (
-                            <Tabs.Trigger
-                              key={p.id}
-                              value={p.id}
-                              className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text"
-                            >
-                              {p.title}
+                            <Tabs.Trigger key={p.id} value={p.id} asChild>
+                              <Hint text={p.hint} side="right">
+                                <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted transition-colors hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
+                                  {p.title}
+                                </button>
+                              </Hint>
                             </Tabs.Trigger>
                           ))}
                       </Fragment>
@@ -530,7 +737,6 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                         animate={MOTION.fade.animate}
                       >
                         <h2 className="pr-24 text-[16px] font-semibold">{p.title}</h2>
-                        {p.hint && <p className="mt-4 text-muted">{p.hint}</p>}
                         <div className="mt-16 flex flex-col">{p.body(props)}</div>
                       </m.div>
                     </Tabs.Content>

@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { isAbsolute } from 'node:path'
+import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@hotrod/mod-api'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
-import { McpServer } from '@modelcontextprotocol/server'
+import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
 import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
 import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
@@ -11,22 +10,44 @@ import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
 export const READ_CHAT_DEFAULT_LAST = 20
 export const SUBAGENT_NAME_MAX_CHARS = 40
 
+export const SUBAGENTS_MOD: Mod = {
+  id: 'subagents',
+  name: 'Subagents',
+  description: 'Chats can hand a task to a new chat that reports back when it ends. Claude Code only.',
+  enabledByDefault: false,
+  settings: [
+    {
+      key: 'limit',
+      label: 'Max running per chat',
+      description: 'How many subagents one chat can run at once. -1 for no limit.',
+      type: 'number',
+      default: 4,
+      min: -1,
+      integer: true,
+    },
+  ],
+}
+
 type Hub = {
   chats(): ChatState[]
-  canNest(chatId: string): boolean
-  createChat(spec: NewChat & { subagent?: boolean; role?: ModelRole }): ChatInfo
+  seesAll(chatId: string): boolean
+  createChat(spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   subagents(): { enabled: boolean; limit: number }
   memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
+  modTools(): { tool: ModTool; values: ModValues }[]
 }
 
-const isBelow = (chats: ChatState[], caller: ChatState, chat: ChatState) => {
-  if (chat.subagent) return chat.parentId === caller.id
-  for (let id = chat.parentId; id !== undefined; id = chats.find((c) => c.id === id)?.parentId) {
-    if (id === caller.id) return true
-  }
-  return false
-}
+const reaches = (hub: Hub, caller: ChatState, chat: ChatState) =>
+  chat.subagent ? chat.parentId === caller.id : chat.id !== caller.id && hub.seesAll(caller.id)
+
+const summaryOf = ({ id, name, engine, parentId, subagent }: ChatState): ChatSummary => ({
+  id,
+  name,
+  engine,
+  ...(parentId !== undefined && { parentId }),
+  ...(subagent && { subagent }),
+})
 
 const subagentName = (task: string) => {
   const line = task.trim().replace(/\s+/g, ' ')
@@ -43,7 +64,7 @@ function messages(chat: ChatState) {
   })
 }
 
-type Context = { hub: Hub; caller: ChatState; below: (chatId: string) => ChatState }
+type Context = { hub: Hub; caller: ChatState; reachable: (chatId: string) => ChatState }
 
 const memoryOf = ({ hub, caller }: Context, parent = false) => {
   if (!parent) return hub.memory(caller.id)
@@ -57,7 +78,7 @@ const memoryOf = ({ hub, caller }: Context, parent = false) => {
 const PARENT_INPUT = z.boolean().optional().describe("A subagent's parent chat, as it was at launch")
 
 type Tool = {
-  for: 'nest' | 'below' | 'subagents' | 'memory'
+  for: 'reach' | 'subagents' | 'memory'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
@@ -90,54 +111,33 @@ const TOOLS: Record<string, Tool> = {
     },
   },
   list_chats: {
-    for: 'below',
-    description: 'List the chats below this one, with their status.',
+    for: 'reach',
+    description: 'List the chats this one can reach, with their status.',
     input: z.object({}),
     run({ hub, caller }: Context) {
-      const chats = hub.chats()
-      return chats
-        .filter((chat) => isBelow(chats, caller, chat))
+      return hub
+        .chats()
+        .filter((chat) => reaches(hub, caller, chat))
         .map(({ id, name, folders, status, engine, archived }) => ({ id, name, folders, status, engine, archived }))
     },
   },
   read_chat: {
-    for: 'below',
-    description: `Read a chat below this one: its last messages (${READ_CHAT_DEFAULT_LAST} by default).`,
+    for: 'reach',
+    description: `Read a chat this one can reach: its last messages (${READ_CHAT_DEFAULT_LAST} by default).`,
     input: z.object({ chatId: z.string(), last: z.number().int().positive().optional() }),
-    run({ below }: Context, { chatId, last = READ_CHAT_DEFAULT_LAST }: { chatId: string; last?: number }) {
-      return messages(below(chatId)).slice(-last).join('\n\n')
+    run({ reachable }: Context, { chatId, last = READ_CHAT_DEFAULT_LAST }: { chatId: string; last?: number }) {
+      return messages(reachable(chatId)).slice(-last).join('\n\n')
     },
   },
   send_message: {
-    for: 'below',
-    description: 'Send a message to an idle chat below this one. It starts a turn there.',
+    for: 'reach',
+    description: 'Send a message to an idle chat this one can reach. It starts a turn there.',
     input: z.object({ chatId: z.string(), text: z.string().min(1) }),
-    run({ hub, below }: Context, { chatId, text }: { chatId: string; text: string }) {
-      const chat = below(chatId)
+    run({ hub, reachable }: Context, { chatId, text }: { chatId: string; text: string }) {
+      const chat = reachable(chatId)
       if (chat.status !== 'idle') throw new Error(`Chat "${chatId}" is ${chat.status}; wait until it is idle`)
       hub.send(chatId, text)
       return { ok: true }
-    },
-  },
-  create_chat: {
-    for: 'nest',
-    description:
-      'Make a named chat below this one. Its folders (absolute paths; missing ones are made) and files go into its ' +
-      'context; it runs in its first folder. Give a prompt to start it. Returns its id.',
-    input: z.object({
-      name: z.string().min(1),
-      prompt: z.string().min(1).optional(),
-      folders: z.array(z.string()).optional(),
-      files: z.array(z.string()).optional(),
-      engine: z.string().optional(),
-    }),
-    run({ hub, caller }: Context, { prompt, ...spec }: Omit<NewChat, 'parentId'> & { prompt?: string }) {
-      const relative = spec.folders?.find((folder) => !isAbsolute(folder))
-      if (relative !== undefined) throw new Error(`The path must be absolute: ${relative}`)
-      for (const folder of spec.folders ?? []) mkdirSync(folder, { recursive: true })
-      const chat = hub.createChat({ parentId: caller.id, ...spec })
-      if (prompt) hub.send(chat.id, prompt)
-      return { chatId: chat.id }
     },
   },
   spawn_subagent: {
@@ -165,40 +165,58 @@ const TOOLS: Record<string, Tool> = {
   },
 }
 
+export const CORE_TOOL_NAMES = Object.keys(TOOLS)
+
 export function openHotrodMcp(hub: Hub) {
   const callers = new Map<string, string>()
+  const host: ModHost = {
+    createChat: ({ name, folders, files, engine }) => hub.createChat({ name, folders, files, engine }),
+    send: (chatId, text) => hub.send(chatId, text),
+  }
 
   const offers = (caller: ChatState, tool: Tool) => {
-    const nests = hub.canNest(caller.id)
     const spawns = !caller.subagent && hub.subagents().enabled
-    if (tool.for === 'nest') return nests
     if (tool.for === 'subagents') return spawns
     if (tool.for === 'memory') return true
-    return nests || spawns
+    return spawns || hub.seesAll(caller.id)
   }
+  const modToolsFor = (caller: ChatState) => hub.modTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
 
   const serverFor = (callerId: string) => {
     const server = new McpServer({ name: 'hotrod', version: '0.0.0' })
+    const caller = hub.chats().find((chat) => chat.id === callerId)
+    if (!caller) return server
+    const answer = async (run: (caller: ChatState, chats: ChatState[]) => unknown) => {
+      const chats = hub.chats()
+      const current = chats.find((chat) => chat.id === callerId)
+      try {
+        if (!current) throw new Error('This chat no longer exists')
+        const result = await run(current, chats)
+        const text = typeof result === 'string' ? result : JSON.stringify(result)
+        return { content: [{ type: 'text' as const, text }] }
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error)
+        return { isError: true, content: [{ type: 'text' as const, text }] }
+      }
+    }
     for (const [name, tool] of Object.entries(TOOLS)) {
-      const caller = hub.chats().find((chat) => chat.id === callerId)
-      if (!caller || !offers(caller, tool)) continue
-      server.registerTool(name, { description: tool.description, inputSchema: tool.input }, async (input: any) => {
-        const chats = hub.chats()
-        const caller = chats.find((chat) => chat.id === callerId)
-        try {
-          if (!caller) throw new Error('This chat no longer exists')
-          const below = (chatId: string) => {
+      if (!offers(caller, tool)) continue
+      server.registerTool(name, { description: tool.description, inputSchema: tool.input }, (input: any) =>
+        answer((caller, chats) => {
+          const reachable = (chatId: string) => {
             const chat = chats.find((c) => c.id === chatId)
-            if (!chat || !isBelow(chats, caller, chat)) throw new Error(`No chat "${chatId}" below this one`)
+            if (!chat || !reaches(hub, caller, chat)) throw new Error(`No chat "${chatId}" this chat can reach`)
             return chat
           }
-          const result = tool.run({ hub, caller, below }, input)
-          return { content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result) }] }
-        } catch (error) {
-          const text = error instanceof Error ? error.message : String(error)
-          return { isError: true, content: [{ type: 'text', text }] }
-        }
-      })
+          return tool.run({ hub, caller, reachable }, input)
+        }),
+      )
+    }
+    for (const { tool, values } of modToolsFor(caller)) {
+      const inputSchema = fromJsonSchema<Record<string, unknown>>(tool.inputSchema)
+      server.registerTool(tool.name, { description: tool.description, inputSchema }, (input) =>
+        answer((caller) => tool.run(input, { caller: summaryOf(caller), values, host })),
+      )
     }
     return server
   }
@@ -206,7 +224,8 @@ export function openHotrodMcp(hub: Hub) {
   return {
     grant(chatId: string) {
       const chat = hub.chats().find((c) => c.id === chatId)
-      if (!chat || !Object.values(TOOLS).some((tool) => offers(chat, tool))) return undefined
+      const offered = chat && (Object.values(TOOLS).some((tool) => offers(chat, tool)) || modToolsFor(chat).length)
+      if (!offered) return undefined
       const token = randomBytes(32).toString('base64url')
       callers.set(token, chatId)
       return token

@@ -4,7 +4,16 @@ import type { Adapter, EngineEvent, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent
-  | { type: 'permission'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown; output: string }
+  | {
+      type: 'permission'
+      toolId: string
+      name: string
+      kind: ToolKind
+      summary: string
+      path?: string
+      input: unknown
+      output: string
+    }
 
 const demoReply = (text: string): FakeStep[] => [
   ...text.split(/(?<= )/).map((word): FakeStep => ({ type: 'text.delta', text: word })),
@@ -99,10 +108,10 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
             emit(step)
             return play(rest)
           }
-          const { toolId, name, kind, summary, input, output } = step
-          const requestId = `perm-${toolId}`
-          pending = { requestId, toolId, output, rest }
-          emit({ type: 'permission.requested', requestId, toolId, name, kind, summary, input })
+          const { type, output, ...request } = step
+          const requestId = `perm-${step.toolId}`
+          pending = { requestId, toolId: step.toolId, output, rest }
+          emit({ type: 'permission.requested', requestId, ...request })
         }, delayMs)
       }
 
@@ -114,11 +123,11 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
           const suffix = randomUUID().slice(0, 8)
           play(script.map((step) => ('toolId' in step ? { ...step, toolId: `${step.toolId}-${suffix}` } : step)))
         },
-        respond(requestId, allow) {
+        respond(requestId, allow, message = 'The user denied this tool call.') {
           if (!pending || pending.requestId !== requestId) return
           const { toolId, output, rest } = pending
           pending = undefined
-          const result = allow ? output : 'The user denied this tool call.'
+          const result = allow ? output : message
           emit({ type: 'tool.completed', toolId, output: result, isError: !allow })
           play(rest)
         },
