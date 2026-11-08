@@ -285,7 +285,17 @@ export const claudeCode: Adapter = {
             if (block.type === 'tool_use') {
               const kind = kindOf(block.name)
               const summary = summarize(kind, block.input)
-              emit({ type: 'tool.started', toolId: block.id, name: block.name, kind, summary, input: block.input })
+              const named = block.input?.file_path ?? block.input?.notebook_path
+              const path = kind === 'edit' || kind === 'read' ? named : undefined
+              emit({
+                type: 'tool.started',
+                toolId: block.id,
+                name: block.name,
+                kind,
+                summary,
+                input: block.input,
+                ...(typeof path === 'string' && { path }),
+              })
             }
           }
           return

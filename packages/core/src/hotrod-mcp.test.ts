@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ModTool, ModValues } from '@hotrod/mod-api'
+import type { ModHost, ModTool, ModValues } from '@hotrod/mod-api'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
 import { messagesOf, openSummaries, zoom } from './memory.ts'
 import type { ChatEntry, ChatState, NewChat } from './shared.ts'
@@ -53,19 +53,14 @@ async function start(subagents = { enabled: false, limit: 4 }) {
     return made
   }
   const modTools: { tool: ModTool; values: ModValues }[] = []
+  const host = {
+    createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
+    send: (chatId, text) => void calls.push(['send', chatId, text]),
+  } as Partial<ModHost> as ModHost
   const mcp = openHotrodMcp({
-    host: {
-      createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
-      send: (chatId, text) => void calls.push(['send', chatId, text]),
-      accounts: () => undefined,
-      useAccount() {},
-      retry() {},
-      continue() {},
-      note() {},
-    },
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
-    modTools: () => modTools,
+    modTools: () => modTools.map((entry) => ({ ...entry, host })),
     createChat: (spec) => created(spec),
     subagents: () => subagents,
     memory(chatId) {

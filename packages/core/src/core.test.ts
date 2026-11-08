@@ -628,8 +628,11 @@ describe('worktrees', () => {
     expect(options).toMatchObject({ cwd: tree, extraDirs: [dir] })
     expect(readFileSync(join(tree, 'README.md'), 'utf8')).toBe('committed\n')
     expect(git(tree, 'branch', '--show-current')).toBe(branch)
-    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [repo]: { path: tree, branch } })
-    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).worktrees).toEqual({ [repo]: { path: tree, branch } })
+    // from: the branch the folder was on.
+    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [repo]: { path: tree, branch, from: 'main' } })
+    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).worktrees).toEqual({
+      [repo]: { path: tree, branch, from: 'main' },
+    })
     expect(options?.instructions).toContain(`${CHECKOUT_RULES}\n- ${repo}: ${tree} (branch ${branch})`)
 
     await sessionOf(t, chat.id)
@@ -690,8 +693,8 @@ describe('worktrees', () => {
     await sessionOf(t, second.id)
     const dir = join(t.garage, 'work', second.id)
     expect(chatOf(t.core, second.id)?.worktrees).toEqual({
-      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2' },
-      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app' },
+      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2', from: 'main' },
+      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app', from: 'main' },
     })
   })
 
@@ -2934,7 +2937,9 @@ describe('context', () => {
     const chat = createChat(t, { name: 'App', folders: [repo] })
 
     t.handle({ type: 'context.set', chatId: chat.id, path: repo, enabled: false })
-    const updated = t.messages.at(-1)
+    // Mods' tabs follow, since a folder can change which a chat gets.
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.mods', chatId: chat.id })
+    const updated = t.messages.at(-2)
     if (updated?.type !== 'chat.context') throw new Error('no chat.context')
     expect(updated.chatId).toBe(chat.id)
     expect(updated.items.find((i) => i.path === repo)?.enabled).toBe(false)

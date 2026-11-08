@@ -30,6 +30,7 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { choosePanelTab, modTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
 import { draftOf, saveDraft } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
@@ -65,6 +66,7 @@ import {
   type ChatView,
   type Item,
   type Permission,
+  type State,
   lineOf,
   subagentRequests,
 } from './state.ts'
@@ -649,9 +651,12 @@ type ItemProps = {
   // Opens a chat that still exists, for a subagent's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
+  // Opens a mod's panel in the right sidebar, for a mod's note.
+  openPanel?: (mod: string, panel: string) => void
 }
 
-function ItemView({ item, chat, contextItems, connected, send, space, select, openChat, revealOf }: ItemProps) {
+function ItemView(props: ItemProps) {
+  const { item, chat, contextItems, connected, send, space, select, openChat, revealOf, openPanel } = props
   const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
     case 'report': {
@@ -719,8 +724,18 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
       ) : (
         <ErrorText>{item.text}</ErrorText>
       )
-    case 'note':
-      return <div className="text-sm text-muted">{item.text}</div>
+    case 'note': {
+      const { mod, panel } = item
+      if (!mod || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
+      return (
+        <button
+          className="w-fit text-left text-sm text-muted underline decoration-faint underline-offset-2 hover:text-text"
+          onClick={() => openPanel(mod, panel)}
+        >
+          {item.text}
+        </button>
+      )
+    }
     case 'thinking':
       return (
         <Row quiet summary={<span className="italic">Thinking…</span>}>
@@ -852,6 +867,8 @@ type ChatProps = {
   contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
+  modUi?: State['modUi']
+  panelViews?: State['panelViews']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
   columnPx: number
@@ -1051,6 +1068,10 @@ export function Chat(props: ChatProps) {
     openChat: (chatId: string) => {
       const select = props.select
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
+    },
+    openPanel: (mod: string, panel: string) => {
+      choosePanelTab(modTabId(mod, panel))
+      if (!props.contextOpen) props.toggleContext()
     },
   }
 
@@ -1525,6 +1546,8 @@ export function Chat(props: ChatProps) {
               connected={connected}
               send={send}
               hide={props.contextOverlay ? props.toggleContext : undefined}
+              modUi={props.modUi}
+              panelViews={props.panelViews}
             />
           </SidePanel>
         )}

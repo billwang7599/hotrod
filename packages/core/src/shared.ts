@@ -1,40 +1,17 @@
-import type { McpServer, ModSetting, ModValues } from '@hotrod/mod-api'
+import type {
+  Answers,
+  Attachment,
+  ChatEntry,
+  ChatStatus,
+  EngineEvent,
+  McpServer,
+  ModAction,
+  ModSetting,
+  ModValues,
+  ModView,
+} from '@hotrod/mod-api'
 
-export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
-
-export type Question = {
-  header: string
-  question: string
-  options: { label: string; description: string }[]
-  multiSelect: boolean
-}
-
-// Keyed by question text: the labels picked, then any text the user typed. Sent without answers, a question is declined.
-export type Answers = Record<string, string[]>
-
-export type EngineEvent =
-  | { type: 'turn.started' }
-  | { type: 'text.delta'; text: string }
-  | { type: 'text.completed'; text: string }
-  | { type: 'thinking.delta'; text: string }
-  | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown }
-  | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
-  | {
-      type: 'permission.requested'
-      requestId: string
-      toolId?: string
-      name: string
-      kind: ToolKind
-      summary: string
-      path?: string
-      command?: string
-      input: unknown
-    }
-  | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
-  // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
-  | { type: 'limit.reached'; message: string; resetsAt?: string }
-  | { type: 'turn.completed'; error?: string }
-  | { type: 'session.ended'; error?: string }
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@hotrod/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -183,7 +160,8 @@ export type ChatInfo = PermissionSwitches & {
   worktrees?: Record<string, Worktree>
 }
 
-export type Worktree = { path: string; branch: string }
+// from: the branch the folder was on when it was checked out.
+export type Worktree = { path: string; branch: string; from?: string }
 
 /** How spaces sort in the sidebar: pinned first, then unordered (newest first), then by `order`. */
 export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>, b: typeof a): number {
@@ -269,23 +247,12 @@ export const looksBinary = (bytes: Uint8Array) => bytes.subarray(0, BINARY_SNIFF
 
 export type NewChat = { name: string; engine?: string; folders?: string[]; files?: string[] }
 
-export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
-
-export type ChatEntry = { at: string } & (
-  | { type: 'user.message'; text: string; attachments?: Attachment[] }
-  | ({ type: 'subagent.report'; text: string } & SubagentReport)
-  | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
-  | { type: 'question.resolved'; requestId: string; answers?: Answers }
-  | { type: 'mod.note'; text: string }
-  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
-)
-
 export const MAX_ATTACHMENT_BYTES = 20_000_000
 // Base64 grows by a third, which keeps 75 MB of files under the WebSocket's 100 MiB message limit.
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type Attachment = { name: string; path: string; mimeType: string; size: number }
+export type { Attachment } from '@hotrod/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
@@ -293,6 +260,10 @@ export type Upload = { name: string; mimeType: string; base64: string }
 export type SubagentReport = { chatId: string; name: string; error?: string }
 
 export type QueuedMessage = { id: string; text: string; attachments?: Attachment[]; report?: SubagentReport }
+
+// A mod's tab in the right sidebar, and a mod's action in the General tab, for one chat.
+export type PanelTab = { mod: string; id: string; title: string }
+export type CommandInfo = { mod: string; id: string; label: string; hint?: string }
 
 export type ChatState = ChatInfo & {
   status: ChatStatus
@@ -318,7 +289,11 @@ export type ClientMessage =
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'question.respond'; chatId: string; requestId: string; answers?: Answers }
+  // Replies with chat.context and chat.mods.
   | { type: 'context.get'; chatId: string }
+  | { type: 'mod.panel.get'; chatId: string; mod: string; panel: string }
+  | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
+  | { type: 'mod.command'; chatId: string; mod: string; command: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
@@ -365,6 +340,8 @@ export type CoreMessage =
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
+  | { type: 'chat.mods'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   | { type: 'mod.updated'; mod: ModInfo }

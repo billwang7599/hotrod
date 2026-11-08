@@ -168,7 +168,9 @@ export const pi: Adapter = {
         case 'tool_execution_start': {
           const kind = kindOf(msg.toolName)
           const summary = summarize(kind, msg.args)
-          emit({ type: 'tool.started', toolId: msg.toolCallId, name: msg.toolName, kind, summary, input: msg.args })
+          const path = kind === 'edit' || kind === 'read' ? msg.args?.path : undefined
+          const { toolCallId: toolId, toolName: name, args: input } = msg
+          emit({ type: 'tool.started', toolId, name, kind, summary, input, ...(typeof path === 'string' && { path }) })
           return
         }
         case 'tool_execution_end':

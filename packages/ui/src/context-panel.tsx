@@ -7,8 +7,10 @@ import {
   PERMISSION_SWITCHES,
   switchedOn,
   type ClientMessage,
+  type CommandInfo,
   type ContextItem,
   type ContextSection,
+  type PanelTab as ModTab,
   type PermissionSwitch,
   type WorkFolder,
   type Worktree,
@@ -17,7 +19,9 @@ import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, 
 import { usePathsShown } from './paths.ts'
 import { showStepsIn, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
-import { folderName, lineOf, type ChatView } from './state.ts'
+import { ModViewer } from './mod-view.tsx'
+import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
+import { folderName, lineOf, panelKey, type ChatView, type State } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
@@ -315,15 +319,51 @@ function StepsSwitch({ chatId }: { chatId: string }) {
   )
 }
 
-type PanelTabId = 'context' | 'permissions' | 'general'
-const TAB_KEY = 'hotrod.panelTab'
-const TAB_LABEL: Record<PanelTabId, string> = { context: 'Context', permissions: 'Permissions', general: 'General' }
+// Hotrod's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
+type PanelTabId = string
+const TAB_LABEL: Record<string, string> = { context: 'Context', permissions: 'Permissions', general: 'General' }
 
 type PanelTabProps = {
   id: PanelTabId
   tab: PanelTabId
   choose: (id: PanelTabId) => void
   children: ReactNode
+}
+
+/** Actions mods add for this chat, listed in the General tab. */
+function ModCommands({ chatId, commands, disabled, send }: {
+  chatId: string
+  commands: CommandInfo[]
+  disabled: boolean
+  send: (m: ClientMessage) => void
+}) {
+  if (!commands.length) return null
+  return (
+    <section className="flex flex-col gap-8" aria-label="Commands">
+      <h3 className="font-semibold">Commands</h3>
+      <div className="flex flex-wrap gap-6">
+        {commands.map((c) => {
+          const button = (
+            <Button
+              key={`${c.mod}/${c.id}`}
+              size="small"
+              disabled={disabled}
+              onClick={() => send({ type: 'mod.command', chatId, mod: c.mod, command: c.id })}
+            >
+              {c.label}
+            </Button>
+          )
+          return c.hint ? (
+            <Hint key={`${c.mod}/${c.id}`} text={c.hint}>
+              {button}
+            </Hint>
+          ) : (
+            button
+          )
+        })}
+      </div>
+    </section>
+  )
 }
 
 function PanelTab(props: PanelTabProps) {
@@ -367,9 +407,12 @@ type ContextPanelProps = {
   connected: boolean
   send: (m: ClientMessage) => void
   hide?: () => void
+  modUi?: State['modUi']
+  panelViews?: State['panelViews']
 }
 
-export function ContextPanel({ chatId, items, chats, workFolder, readOnly, connected, send, hide }: ContextPanelProps) {
+export function ContextPanel(props: ContextPanelProps) {
+  const { chatId, items, chats, workFolder, readOnly, connected, send, hide } = props
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) =>
@@ -379,38 +422,48 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const above = chat ? lineOf(chats, chat).slice(1) : []
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
-  const [tab, setTab] = useState<PanelTabId>(() => {
-    const saved = localStorage.getItem(TAB_KEY)
-    return saved === 'permissions' || saved === 'general' ? saved : 'context'
-  })
-  const chooseTab = (id: PanelTabId) => {
-    localStorage.setItem(TAB_KEY, id)
-    setTab(id)
-  }
-  const shown: PanelTabId = chat ? tab : 'context'
+  const tab = usePanelTab()
+  const modUi = props.modUi?.chatId === chatId ? props.modUi : undefined
+  const modTabs: ModTab[] = chat ? (modUi?.panels ?? []) : []
+  const modTab = modTabs.find((p) => modTabId(p.mod, p.id) === tab)
+  const known = ['permissions', 'general'].includes(tab) || modTab
+  const shown: PanelTabId = chat && known ? tab : 'context'
+  const panelView = modTab && props.panelViews?.[panelKey(chatId, modTab.mod, modTab.id)]
+  useEffect(() => {
+    if (connected && modTab) send({ type: 'mod.panel.get', chatId, mod: modTab.mod, panel: modTab.id })
+  }, [chatId, connected, modTab?.mod, modTab?.id, send])
   const width = usePanelWidth('context')
   return (
     <aside className="relative flex shrink-0 flex-col border-l bg-panel" style={{ width }} aria-label="Context">
       <ResizeHandle panel="context" />
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
-        <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
+        <div role="tablist" aria-label="Panel" className="flex min-w-0 items-center gap-2 overflow-x-auto">
           {chat && (
-            <PanelTab id="general" tab={tab} choose={chooseTab}>
+            <PanelTab id="general" tab={shown} choose={choosePanelTab}>
               General
             </PanelTab>
           )}
-          <PanelTab id="context" tab={tab} choose={chooseTab}>
+          <PanelTab id="context" tab={shown} choose={choosePanelTab}>
             Context
           </PanelTab>
           {chat && (
-            <PanelTab id="permissions" tab={tab} choose={chooseTab}>
+            <PanelTab id="permissions" tab={shown} choose={choosePanelTab}>
               Permissions
             </PanelTab>
           )}
+          {modTabs.map((p) => (
+            <PanelTab key={modTabId(p.mod, p.id)} id={modTabId(p.mod, p.id)} tab={shown} choose={choosePanelTab}>
+              {p.title}
+            </PanelTab>
+          ))}
         </div>
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
-      <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12" role="tabpanel" aria-label={TAB_LABEL[shown]}>
+      <div
+        className="flex flex-1 flex-col gap-18 overflow-y-auto p-12"
+        role="tabpanel"
+        aria-label={modTab?.title ?? TAB_LABEL[shown]}
+      >
         {shown === 'permissions' && chat && (
           <section className="flex flex-col gap-8" aria-label="Permissions">
             <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
@@ -472,6 +525,16 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             )
           })}
         {shown === 'general' && chat && <StepsSwitch chatId={chatId} />}
+        {shown === 'general' && chat && (
+          <ModCommands chatId={chatId} commands={modUi?.commands ?? []} disabled={locked} send={send} />
+        )}
+        {modTab && (
+          <ModViewer
+            view={panelView?.view}
+            error={panelView?.error}
+            act={(action) => send({ type: 'mod.panel.action', chatId, mod: modTab.mod, panel: modTab.id, action })}
+          />
+        )}
       </div>
     </aside>
   )

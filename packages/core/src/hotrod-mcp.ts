@@ -46,14 +46,13 @@ export const SUBAGENTS_MOD: Mod = {
 }
 
 type Hub = {
-  host: ModHost
   chats(): ChatState[]
   seesAll(chatId: string): boolean
   createChat(spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   subagents(): { enabled: boolean; limit: number }
   memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
-  modTools(): { tool: ModTool; values: ModValues }[]
+  modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
 }
 
 const reaches = (hub: Hub, caller: ChatState, chat: ChatState) =>
@@ -188,7 +187,6 @@ export const CORE_TOOL_NAMES = Object.keys(TOOLS)
 
 export function openHotrodMcp(hub: Hub) {
   const callers = new Map<string, string>()
-  const { host } = hub
 
   const offers = (caller: ChatState, tool: Tool) => {
     const spawns = !caller.subagent && hub.subagents().enabled
@@ -228,7 +226,7 @@ export function openHotrodMcp(hub: Hub) {
         }),
       )
     }
-    for (const { tool, values } of modToolsFor(caller)) {
+    for (const { tool, values, host } of modToolsFor(caller)) {
       const inputSchema = fromJsonSchema<Record<string, unknown>>(tool.inputSchema)
       server.registerTool(tool.name, { description: tool.description, inputSchema }, (input) =>
         answer((caller) => tool.run(input, { caller: summaryOf(caller), values, host })),
