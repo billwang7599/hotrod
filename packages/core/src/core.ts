@@ -497,6 +497,7 @@ export function openCore(options: {
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Subagents are workers for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.subagent && chat.status === 'idle') removeChats(familyOf(chat))
+    sweepMergedWorktrees(chainOf(chat)[0]!)
   }
 
   const reportErrors = (run: () => void) => {
@@ -932,13 +933,53 @@ export function openCore(options: {
     }
   }
 
-  const removeWorkDir = async ({ info }: Chat) => {
-    // Only a folder Hotrod made for this space, whatever chat.json says.
-    if (!info.workDir || basename(info.workDir) !== info.id) return
-    for (const [folder, { path }] of Object.entries(info.worktrees ?? {})) {
+  // Only a folder Hotrod made for this space, whatever chat.json says.
+  const ownWorkDirOf = ({ info }: Chat) =>
+    info.workDir && basename(info.workDir) === info.id ? info.workDir : undefined
+
+  const removeWorkDir = async (space: Chat) => {
+    const workDir = ownWorkDirOf(space)
+    if (!workDir) return
+    for (const [folder, { path }] of Object.entries(space.info.worktrees ?? {})) {
       await git(folder, 'worktree', 'remove', '--force', path).catch(() => {})
     }
-    rmSync(info.workDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
+  }
+
+  const sweeps = new Map<string, Promise<void>>()
+  const sweepMergedWorktrees = (space: Chat) => {
+    const idle = () => familyOf(space).every((c) => c.status === 'idle')
+    const workDir = ownWorkDirOf(space)
+    if (!workDir || !idle()) return
+    const own = Object.values(space.info.worktrees ?? {}).map((w) => realPath(w.path))
+    const sweepRepo = async (folder: string) => {
+      await git(folder, 'fetch', '--prune', '--quiet').catch(() => {})
+      const listed = await git(folder, 'worktree', 'list', '--porcelain')
+      for (const entry of listed.split('\n\n')) {
+        const path = entry.match(/^worktree (.+)$/m)?.[1]
+        const branch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]
+        if (!path || !branch || !existsSync(path)) continue
+        if (own.includes(realPath(path)) || !within(realPath(path), realPath(workDir))) continue
+        try {
+          const ref = `refs/heads/${branch}`
+          if ((await git(folder, 'for-each-ref', '--format=%(upstream:track)', ref)) !== '[gone]') continue
+          if (!(await git(folder, 'for-each-ref', '--contains', ref, '--format=%(refname)', 'refs/remotes/'))) continue
+          if (await git(path, 'status', '--porcelain')) continue
+          if (!idle()) return
+          await git(folder, 'worktree', 'remove', path)
+          await git(folder, 'branch', '-D', branch)
+        } catch (error) {
+          console.error(`Couldn't clean up the worktree ${path}: ${messageOf(error)}`)
+        }
+      }
+    }
+    for (const folder of Object.keys(space.info.worktrees ?? {})) {
+      const swept = (sweeps.get(folder) ?? Promise.resolve())
+        .then(() => sweepRepo(folder))
+        .catch((error) => console.error(`Couldn't clean up the worktrees of ${folder}: ${messageOf(error)}`))
+        .finally(() => sweeps.get(folder) === swept && sweeps.delete(folder))
+      sweeps.set(folder, swept)
+    }
   }
 
   // A continuation is a prompt from Hotrod, not the user: it isn't logged, and the turn it starts carries on the last.
