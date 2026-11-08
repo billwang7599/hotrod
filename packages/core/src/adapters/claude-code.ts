@@ -71,12 +71,15 @@ const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 const accountEnv = (accountDir?: string, apiKey?: string): { env?: Record<string, string> } =>
   accountDir ? { env: { CLAUDE_CONFIG_DIR: accountDir, ...(apiKey && { ANTHROPIC_API_KEY: apiKey }) } } : {}
 
-// Claude Code ignores TMPDIR, and needs its shell snapshots for Bash and the keychain to save a refreshed login.
+// Claude Code ignores TMPDIR, and needs its shell snapshots for Bash. A login refresh takes the refresh lock, then
+// the storage lock to save to the keychain; without the second, the new login is lost and the account signed out.
 function jailed(sandbox: Sandbox, accountDir?: string) {
   const configDir = accountDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+  const locks = [join(configDir, '.oauth_refresh.lock*'), join(configDir, '.storage-write.lock')]
   const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const writable = [...sandbox.writable, join(configDir, 'shell-snapshots'), ...locks, keychain]
   return {
-    sandbox: { ...sandbox, writable: [...sandbox.writable, join(configDir, 'shell-snapshots'), keychain] },
+    sandbox: { ...sandbox, writable },
     env: sandbox.tmpDir ? { CLAUDE_CODE_TMPDIR: sandbox.tmpDir } : undefined,
   }
 }

@@ -704,18 +704,32 @@ describe('claudeCode accounts', () => {
 describe('claudeCode in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
   const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const defaultDir = join(homedir(), '.claude')
+  const locks = [join(defaultDir, '.oauth_refresh.lock*'), join(defaultDir, '.storage-write.lock')]
+  const defaultWritable = ['/work/space', join(defaultDir, 'shell-snapshots'), ...locks, keychain]
   const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
   afterEach(() => {
     if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
   })
 
-  it('also lets it write its shell snapshots and the login keychain, with its temp folder in the sandbox', () => {
+  it('also lets it write its shell snapshots, login locks and the keychain, with its temp folder in the sandbox', () => {
     delete process.env.CLAUDE_CONFIG_DIR
     const { fake } = startSession('', { sandbox })
-    const snapshots = join(homedir(), '.claude', 'shell-snapshots')
-    expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', snapshots, keychain], tmpDir: sandbox.tmpDir })
+    expect(fake.spawned[0]?.sandbox).toEqual({ writable: defaultWritable, tmpDir: sandbox.tmpDir })
     expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it('lets it take the locks a login refresh needs, and keeps what can run code read-only', () => {
+    const accountDir = '/garage/accounts/claude-code/work'
+    const writable = startSession('', { sandbox, accountDir }).fake.spawned[0]?.sandbox?.writable ?? []
+    const canWrite = (path: string) =>
+      writable.some((w) => (w.endsWith('*') ? path.startsWith(w.slice(0, -1)) : path === w || path.startsWith(`${w}/`)))
+    const refreshLocks = ['.oauth_refresh.lock', '.oauth_refresh.lock.owner', '.oauth_refresh.lock.owner.tmp.0a1b2c3d']
+    for (const lock of [...refreshLocks, '.storage-write.lock']) expect(canWrite(join(accountDir, lock))).toBe(true)
+    const codeRunning = ['settings.json', 'settings.local.json', 'CLAUDE.md', '.claude.json', 'hooks/a.sh', 'agents/a.md',
+      'commands/a.md', 'output-styles/a.md', 'plugins/installed_plugins.json', 'skills/a/SKILL.md']
+    for (const path of ['', ...codeRunning]) expect(canWrite(join(accountDir, path))).toBe(false)
   })
 
   it("puts the shell snapshots in the config folder it runs with: the account's, else CLAUDE_CONFIG_DIR", () => {
@@ -733,7 +747,7 @@ describe('claudeCode in a sandbox', () => {
     const fake = fakeMachine({ claude: { code: 0, stdout, stderr: '' } })
     const request = { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox }
     await claudeCode.complete!(fake.machine, request)
-    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', join(homedir(), '.claude', 'shell-snapshots'), keychain])
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(defaultWritable)
     expect(fake.ran[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
 })
