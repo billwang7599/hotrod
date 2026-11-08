@@ -17,6 +17,9 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { openCore } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
+
+// The fake engines start no process, so this machine can claim a sandbox on any platform.
+const machine = { ...localMachine, canSandbox: true }
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
@@ -43,7 +46,7 @@ async function start(port = 0) {
     garage,
     adapters: [createFakeAdapter(undefined, 0)],
     defaultEngine: 'fake',
-    machine: localMachine,
+    machine,
   })
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   cleanups.push(() => {
@@ -174,7 +177,7 @@ it('serves the UI folder when given one', async () => {
     garage,
     adapters: [createFakeAdapter(undefined, 0)],
     defaultEngine: 'fake',
-    machine: localMachine,
+    machine,
   })
   const server = await startServer({
     core,
@@ -204,7 +207,7 @@ it('serves the UI folder when given one', async () => {
 
 it("serves a chat's attachments with the token, images and PDFs inline and anything else as a download", async () => {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: localMachine })
+  const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine })
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const server = await startServer({ core, port: 0, uiOrigin: origin, token })
   cleanups.push(() => {
@@ -336,7 +339,6 @@ async function startHeld({ hotrodMcp = true } = {}) {
       }
     },
   }
-  const machine = { ...localMachine, canSandbox: true }
   const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine, mods: [mainMod] })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})

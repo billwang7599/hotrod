@@ -70,7 +70,7 @@ afterEach(() => {
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}) {
+function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, canSandbox = true) {
   const view: ChatView = {
     id: 'c1',
     name: 'demo',
@@ -106,6 +106,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               columnPx={720}
               setColumnPx={() => {}}
               notify={() => {}}
+              canSandbox={canSandbox}
             />
           </Tooltip.Provider>
         </MotionConfig>
@@ -237,4 +238,15 @@ test('queueing a message during a turn scrolls to the bottom once', () => {
   page.scrollHeight += 300
   render({ status: 'running', items: [USER, REPLY, tool('running')] })
   expect(list().scrollTop).toBe(bottom() - 300)
+})
+
+test('the header warns while a chat may edit anywhere, and where nothing is sandboxed', () => {
+  const header = () => container.querySelector('header')!.textContent
+  render({})
+  expect(header()).not.toMatch(/Edits anywhere|Not sandboxed/)
+  render({ editAnywhere: true })
+  expect(header()).toContain('Edits anywhere')
+  render({}, () => {}, false)
+  expect(header()).toContain('Not sandboxed')
+  expect(header()).not.toContain('Edits anywhere')
 })

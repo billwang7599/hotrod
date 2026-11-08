@@ -78,6 +78,13 @@ const TOOL_STATES: Record<string, string> = {
   waiting: 'text-amber',
   error: 'text-red',
 }
+const WARNING_CHIP = 'shrink-0 cursor-help rounded-full bg-warning-bg px-8 py-2 text-xs text-amber'
+const EDITS_ANYWHERE_HINT =
+  'This chat runs without the work folder’s sandbox: its agents may edit files anywhere, asking you first. Turn ' +
+  'it off in the Context panel.'
+const NOT_SANDBOXED_HINT =
+  'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (Context panel), and ' +
+  'its agents can write anywhere.'
 const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
@@ -471,6 +478,7 @@ type ChatProps = {
   columnPx: number
   setColumnPx: (px: number) => void
   notify: (message: string) => void
+  canSandbox: boolean
 }
 
 export function Chat(props: ChatProps) {
@@ -648,6 +656,11 @@ export function Chat(props: ChatProps) {
               </span>
             )}
           </div>
+          {(chat.editAnywhere || !props.canSandbox) && (
+            <Hint text={props.canSandbox ? EDITS_ANYWHERE_HINT : NOT_SANDBOXED_HINT}>
+              <span className={WARNING_CHIP}>{props.canSandbox ? 'Edits anywhere' : 'Not sandboxed'}</span>
+            </Hint>
+          )}
           <Select
             variant="chip"
             label="Engine"

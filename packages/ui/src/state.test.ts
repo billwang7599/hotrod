@@ -70,7 +70,7 @@ const snapshot = (chats: ChatState[]): Action =>
     mods,
     modelLists,
     memory: {},
-    workFolder: { defaultPath: '/g/work' },
+    workFolder: { defaultPath: '/g/work', canSandbox: true },
   })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>

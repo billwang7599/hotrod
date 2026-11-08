@@ -255,6 +255,7 @@ function App() {
                 chat={selected}
                 chats={state.chats}
                 folder={folderOf(state.chats, selected)}
+                canSandbox={state.workFolder.canSandbox}
                 engines={state.engines}
                 accounts={accounts}
                 connected={state.connected}

@@ -143,11 +143,12 @@ export type ChatInfo = {
   thinking?: string
   workDir?: string
   worktrees?: Record<string, Worktree>
+  editAnywhere?: true
 }
 
 export type Worktree = { path: string; branch: string }
 
-export type WorkFolder = { path?: string; defaultPath: string }
+export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean }
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -244,6 +245,7 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
+  | { type: 'chat.setEditAnywhere'; chatId: string; enabled: boolean }
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }

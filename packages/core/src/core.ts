@@ -79,6 +79,8 @@ const BRANCH_SLUG_MAX_CHARS = 40
 const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'FETCH_HEAD']
 // Moving a branch checked out in another worktree would show there as staged changes.
 const PROTECT_CHECKED_OUT_BRANCHES = true
+// Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
+const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
 
 type Checkout = { folder: string; worktree: Worktree; writable: string[]; readOnly: string[] }
 
@@ -193,6 +195,7 @@ export function openCore(options: {
   const workFolder = (): WorkFolder => ({
     ...(settings.workFolder && { path: settings.workFolder }),
     defaultPath: defaultWorkFolder,
+    canSandbox: machine.canSandbox,
   })
   const sandboxIn = (dir: string) => (machine.canSandbox ? { writable: [dir], tmpDir: join(dir, '.tmp') } : undefined)
   const chats = new Map<string, Chat>()
@@ -583,6 +586,11 @@ export function openCore(options: {
     })
   }
 
+  const setEditAnywhere = (chat: Chat, enabled: boolean) => {
+    checkActive(chat)
+    updateChat(chat, { editAnywhere: enabled || undefined })
+  }
+
   const checkActive = (chat: Chat) => {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
@@ -754,6 +762,10 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
+    const { editAnywhere } = chat.info
+    if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
+      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel to run it unsandboxed.")
+    }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text, attachments)
@@ -784,7 +796,7 @@ export function openCore(options: {
     const attachmentsDir = attachmentsDirOf(chat)
     const folders = items.flatMap((item) => (item.section === 'folders' ? [item.path] : []))
     const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
-    const sandbox = sandboxIn(workDir)
+    const sandbox = editAnywhere ? undefined : sandboxIn(workDir)
 
     const start = (checkouts: Checkout[]) => {
       const cwd = checkouts[0]?.worktree.path ?? workDir
@@ -1061,6 +1073,8 @@ export function openCore(options: {
           return setEngine(chatFor(message.chatId), String(message.engine))
         case 'chat.setModel':
           return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
+        case 'chat.setEditAnywhere':
+          return setEditAnywhere(chatFor(message.chatId), message.enabled === true)
         case 'chat.send':
           return sendMessage(chatFor(message.chatId), message.text, message.attachments)
         case 'chat.unqueue': {

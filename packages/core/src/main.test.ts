@@ -124,6 +124,7 @@ async function runCore(engine: string) {
     }
     const hotrod = await startCore({ env, adapters: [engine] })
     closeOnSignals(hotrod.close)
+    hotrod.core.handle({ type: 'chat.setEditAnywhere', chatId: 'main', enabled: true }, () => {})
     hotrod.core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})`
   const core = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
   cleanups.push(() => void core.kill('SIGKILL'))

@@ -42,6 +42,9 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
+const EDIT_ANYWHERE_HINT =
+  'Off: agents in this chat write only in its folder in the work folder, and edits elsewhere are denied. On: no ' +
+  'sandbox, and edits elsewhere ask you first. This chat only, from its next message; its subagents don’t get it.'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -213,6 +216,19 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send, 
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
+        {chat && (
+          <Hint text={EDIT_ANYWHERE_HINT} align="start">
+            <label className="flex items-center justify-between gap-8 rounded-lg border px-10 py-8">
+              <span className={chat.editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
+              <Switch
+                label="Allow edits outside the work folder"
+                checked={chat.editAnywhere === true}
+                disabled={locked}
+                onChange={(enabled) => send({ type: 'chat.setEditAnywhere', chatId, enabled })}
+              />
+            </label>
+          </Hint>
+        )}
         {sections.map((section) => {
           const listed = items?.filter((item) => item.section === section) ?? []
           return (

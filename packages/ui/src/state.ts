@@ -84,7 +84,7 @@ export const initialState: State = {
   instructions: { path: '', text: '' },
   mods: [],
   modelLists: {},
-  workFolder: { defaultPath: '' },
+  workFolder: { defaultPath: '', canSandbox: true },
   toasts: [],
   nextToastId: 1,
 }
