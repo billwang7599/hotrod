@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,13 +10,10 @@ const node = process.execPath
 const TEST_KILL_GRACE_MS = 100
 const fast = createLocalMachine({ killGraceMs: TEST_KILL_GRACE_MS, runTimeoutMs: 300 })
 
+// kill(pid, 0) still succeeds on a process that has exited (Z) or is exiting (E) until its new parent reaps it.
 const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
+  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim()
+  return state !== '' && !/^[ZE]/.test(state)
 }
 
 const waitFor = async (check: () => boolean, timeoutMs = 2000) => {
@@ -182,8 +179,9 @@ describe('localMachine', () => {
 
   it('stopAll returns as soon as engines and the processes they started have exited', async () => {
     const machine = createLocalMachine({ killGraceMs: 5000 })
-    const grandchild = spawnGrandchild('setInterval(() => {}, 1000)', `{ stdio: 'ignore' }`)
-    const parent = `const c = ${grandchild}; setTimeout(() => console.log(c.pid), 200); setInterval(() => {}, 1000)`
+    const slowToStop = `process.on('SIGTERM', () => setTimeout(() => process.exit(), 300)); console.log('ready'); setInterval(() => {}, 1000)`
+    const grandchild = spawnGrandchild(slowToStop, `{ stdio: ['ignore', 'pipe', 'ignore'] }`)
+    const parent = `const c = ${grandchild}; c.stdout.once('data', () => console.log(c.pid)); setInterval(() => {}, 1000)`
     const proc = machine.spawn(node, ['-e', parent], { cwd })
     const pid = await new Promise<number>((resolve) => proc.onStdout((chunk) => resolve(Number(chunk.trim()))))
     leftovers.push(pid)
