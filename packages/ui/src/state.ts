@@ -233,7 +233,8 @@ export function reduce(state: State, action: Action): State {
       return {
         ...state,
         chats: state.chats.some((c) => c.id === action.chat.id) ? state.chats : [...state.chats, toView(action.chat)],
-        selectedId: action.chat.id,
+        // A subagent appears under its space without taking the view from the chat the user is reading.
+        selectedId: action.chat.parentId ? state.selectedId : action.chat.id,
       }
     case 'chat.updated':
       return updateChat(state, action.chat.id, (c) => ({

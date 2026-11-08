@@ -124,6 +124,13 @@ describe('reduce', () => {
     expect(run(snapshot([chat('a')]), { type: 'chat.removed', chatId: 'a' }).selectedId).toBe('')
   })
 
+  it('adds a subagent without switching the view to it', () => {
+    const sub: Action = { type: 'chat.added', chat: chat('s', [], { name: 'Search', parentId: 'c' }) }
+    const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), { type: 'select', chatId: 'c' }, sub)
+    expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'c', 's'])
+    expect(state.selectedId).toBe('c')
+  })
+
   it('adds a chat once and selects it, then follows its name, folders and archive flag', () => {
     const added: Action = { type: 'chat.added', chat: chat('c', [], { name: 'Build' }) }
     const state = run(
