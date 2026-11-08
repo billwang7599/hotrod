@@ -44,6 +44,7 @@ import {
   settingProblem,
   switchedOn,
   type Adapter,
+  type Answers,
   type Attachment,
   type ChatEntry,
   type ChatInfo,
@@ -101,7 +102,7 @@ type Chat = {
   session?: Session
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
-  pendingRequests: Set<string>
+  pendingRequests: Map<string, 'permission' | 'question'>
   mcpToken?: string
   queue: QueuedMessage[]
   summaries: Summaries
@@ -535,7 +536,7 @@ export function openCore(options: {
       entries,
       status: 'idle',
       unsavedText: '',
-      pendingRequests: new Set(),
+      pendingRequests: new Map(),
       queue: [],
       summaries: openSummaries(join(dir, 'summaries.jsonl')),
       turns: 0,
@@ -947,10 +948,14 @@ export function openCore(options: {
         }
         if (event.type === 'text.completed') chat.unsavedText = ''
         append(chat, { at, ...event })
+        if (event.type === 'question.asked') {
+          chat.pendingRequests.set(event.requestId, 'question')
+          return setStatus(chat, 'waiting')
+        }
         if (event.type !== 'permission.requested') return
         const verdict = verdictOf(event)
         if (!verdict) {
-          chat.pendingRequests.add(event.requestId)
+          chat.pendingRequests.set(event.requestId, 'permission')
           return setStatus(chat, 'waiting')
         }
         const { requestId } = event
@@ -1103,13 +1108,31 @@ export function openCore(options: {
     chat.session.interrupt()
   }
 
-  const respond = (chat: Chat, requestId: string, allow: boolean) => {
-    if (!chat.session || !chat.pendingRequests.delete(requestId)) {
-      throw new Error(`No pending permission request "${requestId}"`)
+  const settle = (chat: Chat, entry: Extract<ChatEntry, { type: 'permission.resolved' | 'question.resolved' }>) => {
+    const kind = entry.type === 'question.resolved' ? 'question' : 'permission'
+    if (!chat.session || chat.pendingRequests.get(entry.requestId) !== kind) {
+      throw new Error(`No pending ${kind === 'question' ? kind : 'permission request'} "${entry.requestId}"`)
     }
-    append(chat, { at: new Date().toISOString(), type: 'permission.resolved', requestId, allow })
+    chat.pendingRequests.delete(entry.requestId)
+    append(chat, entry)
     if (chat.pendingRequests.size === 0) setStatus(chat, 'running')
-    chat.session.respond(requestId, allow)
+    return chat.session
+  }
+
+  const respond = (chat: Chat, requestId: string, allow: boolean) => {
+    const entry = { at: new Date().toISOString(), type: 'permission.resolved' as const, requestId, allow }
+    settle(chat, entry).respond(requestId, allow)
+  }
+
+  const answer = (chat: Chat, requestId: string, answers: unknown) => {
+    const valid = (list: unknown) => Array.isArray(list) && list.every((text) => typeof text === 'string')
+    const isObject = typeof answers === 'object' && answers !== null && !Array.isArray(answers)
+    if (answers !== undefined && !(isObject && Object.values(answers).every(valid))) {
+      throw new Error('Answers must give each question a list of choices')
+    }
+    const given = answers as Answers | undefined
+    const entry = { at: new Date().toISOString(), type: 'question.resolved' as const, requestId }
+    settle(chat, { ...entry, ...(given && { answers: given }) }).answer?.(requestId, given)
   }
 
   for (const mod of mods.filter(isOn)) void checkSetup(mod)
@@ -1244,6 +1267,8 @@ export function openCore(options: {
           return setModelList(String(message.engine), message.role, message.models)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
+        case 'question.respond':
+          return answer(chatFor(message.chatId), message.requestId, message.answers)
         case 'account.login':
           return accounts.login(String(message.engine), String(message.name ?? ''))
         case 'account.addApiKey':

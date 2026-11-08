@@ -391,6 +391,35 @@ describe('reduce', () => {
     expect(items(auto)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied', auto: true })
   })
 
+  it("turns a question's tool row into the question, then shows its answers, a skip or a cancel", () => {
+    const questions = [
+      { header: 'Format', question: 'Format?', options: [{ label: 'Summary', description: 'Brief' }], multiSelect: false },
+    ]
+    const asked = run(
+      snapshot([chat('a')]),
+      entry('a', { type: 'user.message', text: 'go' }),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'AskUserQuestion', kind: 'other', summary: '{}', input: {} }),
+      entry('a', { type: 'question.asked', requestId: 'q1', toolId: 't1', questions }),
+    )
+    const question = { kind: 'question', requestId: 'q1', questions, outcome: 'pending' }
+    expect(items(asked)).toEqual([{ kind: 'user', text: 'go' }, question])
+
+    const answers = { 'Format?': ['Summary'] }
+    const done = [
+      entry('a', { type: 'question.resolved', requestId: 'q1', answers }),
+      entry('a', { type: 'tool.completed', toolId: 't1', output: 'answered', isError: false }),
+      entry('a', { type: 'turn.completed' }),
+    ].reduce(reduce, asked)
+    expect(items(done)).toEqual([{ kind: 'user', text: 'go' }, { ...question, outcome: 'answered', answers }])
+
+    const skipped = reduce(asked, entry('a', { type: 'question.resolved', requestId: 'q1' }))
+    expect(items(skipped)[1]).toEqual({ ...question, outcome: 'skipped' })
+    const ended = reduce(asked, entry('a', { type: 'turn.completed', error: 'Interrupted' }))
+    expect(items(ended)[1]).toEqual({ ...question, outcome: 'cancelled' })
+    const alone = run(snapshot([chat('a')]), entry('a', { type: 'question.asked', requestId: 'q2', questions }))
+    expect(items(alone)).toEqual([{ ...question, requestId: 'q2' }])
+  })
+
   it('stops unfinished tools and permissions when the turn ends', () => {
     const state = run(
       snapshot([chat('a')]),

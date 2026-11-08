@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { Adapter, EngineEvent, ToolKind } from '../shared.ts'
+import type { Adapter, EngineEvent, Question, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent
@@ -15,6 +15,7 @@ export type FakeStep =
       input: unknown
       output: string
     }
+  | { type: 'question'; toolId?: string; questions: Question[] }
 
 const demoReply = (text: string): FakeStep[] => [
   ...text.split(/(?<= )/).map((word): FakeStep => ({ type: 'text.delta', text: word })),
@@ -36,6 +37,39 @@ const demoScript: FakeStep[] = [
     summary: 'ls -la',
     input: { command: 'ls -la' },
     output: 'total 16\n-rw-r--r--  1 you  staff  120 README.md\ndrwxr-xr-x  4 you  staff  128 src',
+  },
+  ...demoReply('Before I describe it, two quick questions.'),
+  {
+    type: 'tool.started',
+    toolId: 'demo-ask',
+    name: 'AskUserQuestion',
+    kind: 'other',
+    summary: 'How much detail do you want?',
+    input: {},
+  },
+  {
+    type: 'question',
+    toolId: 'demo-ask',
+    questions: [
+      {
+        header: 'Detail',
+        question: 'How much detail do you want?',
+        options: [
+          { label: 'Brief', description: 'One line per item' },
+          { label: 'Thorough', description: 'What each item is for, with examples' },
+        ],
+        multiSelect: false,
+      },
+      {
+        header: 'Parts',
+        question: 'Which parts should I cover?',
+        options: [
+          { label: 'README.md', description: 'The project overview' },
+          { label: 'src', description: 'The source code' },
+        ],
+        multiSelect: true,
+      },
+    ],
   },
   ...demoThinking('A README and a src directory. I will describe both briefly.'),
   ...demoReply(
@@ -89,7 +123,7 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
     },
     start(_machine, _options, emit) {
       let timer: ReturnType<typeof setTimeout> | undefined
-      let pending: { requestId: string; toolId: string; output: string; rest: FakeStep[] } | undefined
+      let pending: { requestId: string; toolId?: string; output: string; rest: FakeStep[] } | undefined
       let active = false
 
       const stop = () => {
@@ -104,6 +138,12 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
           if (!step) {
             active = false
             return emit({ type: 'turn.completed' })
+          }
+          if (step.type === 'question') {
+            const { type, ...asked } = step
+            const requestId = `ask-${step.toolId ?? randomUUID().slice(0, 8)}`
+            pending = { requestId, toolId: step.toolId, output: '', rest }
+            return emit({ type: 'question.asked', requestId, ...asked })
           }
           if (step.type !== 'permission') {
             emit(step)
@@ -128,8 +168,17 @@ export function createFakeAdapter(script: FakeStep[] = demoScript, delayMs = 40)
           if (!pending || pending.requestId !== requestId) return
           const { toolId, output, rest } = pending
           pending = undefined
-          const result = allow ? output : message
-          emit({ type: 'tool.completed', toolId, output: result, isError: !allow })
+          if (toolId) emit({ type: 'tool.completed', toolId, output: allow ? output : message, isError: !allow })
+          play(rest)
+        },
+        answer(requestId, answers) {
+          if (!pending || pending.requestId !== requestId) return
+          const { toolId, rest } = pending
+          pending = undefined
+          const output = answers
+            ? Object.entries(answers).map(([question, picked]) => `${question} ${picked.join(', ')}`).join('\n')
+            : 'The user declined to answer.'
+          if (toolId) emit({ type: 'tool.completed', toolId, output, isError: !answers })
           play(rest)
         },
         interrupt() {

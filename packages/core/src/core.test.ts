@@ -1269,6 +1269,105 @@ describe('chat', () => {
   })
 })
 
+describe('questions', () => {
+  const format = 'How should I format it?'
+  const questionScript: FakeStep[] = [
+    { type: 'tool.started', toolId: 'q1', name: 'AskUserQuestion', kind: 'other', summary: 'ask', input: {} },
+    {
+      type: 'question',
+      toolId: 'q1',
+      questions: [
+        {
+          header: 'Format',
+          question: format,
+          options: [
+            { label: 'Summary', description: 'Brief' },
+            { label: 'Detailed', description: 'Long' },
+          ],
+          multiSelect: false,
+        },
+      ],
+    },
+    { type: 'text.completed', text: 'Done' },
+  ]
+  const asked = async (t: ReturnType<typeof setup>, chatId = 'main') => {
+    t.handle({ type: 'chat.send', chatId, text: 'go' })
+    await until(() => statusOf(t.core, chatId) === 'waiting')
+    const question = entriesOf(t.core, chatId).findLast((e) => e.type === 'question.asked')
+    if (question?.type !== 'question.asked') throw new Error('no question')
+    return question.requestId
+  }
+
+  it('waits for the answer, even where commands and edits are allowed without asking, then sends it on', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    expect(entriesOf(t.core, 'main').some((e) => e.type === 'permission.resolved')).toBe(false)
+
+    t.handle({ type: 'question.respond', chatId: 'main', requestId, answers: { [format]: ['Detailed'] } })
+    expect(statusOf(t.core, 'main')).not.toBe('waiting')
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const entries = entriesOf(t.core, 'main')
+    expect(entries.find((e) => e.type === 'question.resolved')).toEqual({
+      at: expect.any(String),
+      type: 'question.resolved',
+      requestId,
+      answers: { [format]: ['Detailed'] },
+    })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ isError: false })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ output: expect.stringContaining('Detailed') })
+    const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
+    expect(log).toContain('"question.asked"')
+    expect(log).toContain('"question.resolved"')
+  })
+
+  it('tells the engine the user declined when they skip', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    t.handle({ type: 'question.respond', chatId: 'main', requestId })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    const entries = entriesOf(t.core, 'main')
+    const resolved = entries.find((e) => e.type === 'question.resolved')
+    expect(resolved).toEqual({ at: expect.any(String), type: 'question.resolved', requestId })
+    expect(entries.find((e) => e.type === 'tool.completed')).toMatchObject({ isError: true })
+  })
+
+  it('refuses an answer to anything but a pending question, and answers that are not lists of text', async () => {
+    const t = setup([...permissionScript, ...questionScript])
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'go' })
+    await until(() => statusOf(t.core, 'main') === 'waiting')
+    const permission = entriesOf(t.core, 'main').find((e) => e.type === 'permission.requested')
+    if (permission?.type !== 'permission.requested') throw new Error('no request')
+    const answer = { type: 'question.respond' as const, chatId: 'main', requestId: permission.requestId }
+    expect(() => t.handle(answer)).toThrow('No pending question')
+    t.handle({ type: 'permission.respond', chatId: 'main', requestId: permission.requestId, allow: true })
+
+    await until(() => entriesOf(t.core, 'main').some((e) => e.type === 'question.asked'))
+    const question = entriesOf(t.core, 'main').find((e) => e.type === 'question.asked')
+    if (question?.type !== 'question.asked') throw new Error('no question')
+    const { requestId } = question
+    expect(() => t.handle({ type: 'permission.respond', chatId: 'main', requestId, allow: true })).toThrow()
+    for (const answers of [{ [format]: 'Summary' }, { [format]: [1] }, ['Summary'], 'Summary']) {
+      expect(() => t.handle({ ...answer, requestId, answers } as never)).toThrow('Answers')
+    }
+    expect(statusOf(t.core, 'main')).toBe('waiting')
+    expect(() => t.handle({ ...answer, requestId: 'nope' })).toThrow('No pending question')
+  })
+
+  it('drops a question left open when the turn stops, and keeps it unanswered across a restart', async () => {
+    const t = setup(questionScript)
+    const requestId = await asked(t)
+    t.handle({ type: 'chat.interrupt', chatId: 'main' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(() => t.handle({ type: 'question.respond', chatId: 'main', requestId })).toThrow('No pending question')
+    t.core.close()
+
+    const reopened = setup(questionScript, t.garage)
+    const entries = entriesOf(reopened.core, 'main')
+    expect(types(entries).slice(-2)).toEqual(['question.asked', 'turn.completed'])
+    expect(() => reopened.handle({ type: 'question.respond', chatId: 'main', requestId })).toThrow()
+  })
+})
+
 describe('engines', () => {
   const alphaScript: FakeStep[] = [{ type: 'text.completed', text: 'Alpha reply' }]
   const betaScript: FakeStep[] = [{ type: 'text.completed', text: 'Beta reply' }]

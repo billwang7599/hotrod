@@ -1,6 +1,7 @@
 import { looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
+  Answers,
   Attachment,
   ChatEntry,
   ChatInfo,
@@ -14,6 +15,7 @@ import type {
   ModelLists,
   ModInfo,
   QueuedMessage,
+  Question,
   ToolKind,
   WorkFolder,
 } from '@hotrod/core/shared'
@@ -42,6 +44,13 @@ export type Item =
       permission?: Permission
     }
   | ({ kind: 'permission' } & Permission)
+  | {
+      kind: 'question'
+      requestId: string
+      questions: Question[]
+      outcome: 'pending' | 'answered' | 'skipped' | 'cancelled'
+      answers?: Answers
+    }
   | { kind: 'error'; text: string }
 
 export type ChatView = ChatInfo & {
@@ -90,7 +99,7 @@ export const initialState: State = {
   nextToastId: 1,
 }
 
-const cancel = <P extends Permission>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
+const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
 
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
@@ -141,6 +150,17 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
             : i,
       )
     }
+    case 'question.asked': {
+      const { requestId, questions, toolId } = entry
+      const asked: Item = { kind: 'question', requestId, questions, outcome: 'pending' }
+      const own = items.findIndex((i) => i.kind === 'tool' && i.toolId === toolId)
+      return own < 0 ? [...items, asked] : items.with(own, asked)
+    }
+    case 'question.resolved': {
+      const { requestId, answers } = entry
+      const outcome = answers ? { outcome: 'answered' as const, answers } : { outcome: 'skipped' as const }
+      return items.map((i) => (i.kind === 'question' && i.requestId === requestId ? { ...i, ...outcome } : i))
+    }
     case 'turn.completed':
     case 'session.ended': {
       const settled = items.filter((i) => i.kind !== 'thinking').map((i): Item =>
@@ -150,7 +170,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
               ...((i.state === 'running' || i.state === 'waiting') && { state: 'stopped' }),
               ...(i.permission && { permission: cancel(i.permission) }),
             }
-          : i.kind === 'permission'
+          : i.kind === 'permission' || i.kind === 'question'
             ? cancel(i)
             : i,
       )

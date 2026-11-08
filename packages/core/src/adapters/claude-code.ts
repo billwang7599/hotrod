@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type AccountStatus, type Adapter, type Machine, type Sandbox, type ToolKind } from '../shared.ts'
+import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -51,6 +51,7 @@ const CLEAN_ARGS = [
   '--settings', '{"autoMemoryEnabled":false,"attribution":false}',
 ]
 
+const DECLINED = 'The user declined to answer.'
 const OUTPUT_TAIL_CHARS = 2000
 // Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
 export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024
@@ -84,6 +85,17 @@ async function authStatus(machine: Machine, accountDir?: string): Promise<Accoun
 }
 
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
+
+const questionsOf = (input: any): Question[] =>
+  (input?.questions ?? []).map((q: any) => ({
+    header: String(q.header ?? ''),
+    question: String(q.question ?? ''),
+    options: (q.options ?? []).map((o: any) => ({
+      label: String(o.label ?? ''),
+      description: String(o.description ?? ''),
+    })),
+    multiSelect: q.multiSelect === true,
+  }))
 
 function summarize(kind: ToolKind, input: any): string {
   const picked = SUMMARY_FIELDS[kind]?.map((key) => input?.[key]).find((value) => typeof value === 'string')
@@ -212,7 +224,13 @@ export const claudeCode: Adapter = {
       ...(jail && { sandbox: jail.sandbox }),
     })
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
-    const pendingInputs = new Map<string, unknown>()
+    const pendingInputs = new Map<string, any>()
+    const reply = (requestId: string, decide: (input: any) => object) => {
+      if (!pendingInputs.has(requestId)) return
+      const response = decide(pendingInputs.get(requestId))
+      pendingInputs.delete(requestId)
+      send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+    }
     let buffer = ''
     let interrupted = false
     let closed = false
@@ -257,13 +275,19 @@ export const claudeCode: Adapter = {
             return
           }
           pendingInputs.set(msg.request_id, request.input)
+          const toolId = request.tool_use_id ? { toolId: request.tool_use_id } : {}
+          if (request.tool_name === 'AskUserQuestion') {
+            const questions = questionsOf(request.input)
+            emit({ type: 'question.asked', requestId: msg.request_id, ...toolId, questions })
+            return
+          }
           const kind = kindOf(request.tool_name)
           const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
           const command = kind === 'shell' ? request.input?.command : undefined
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
-            ...(request.tool_use_id ? { toolId: request.tool_use_id } : {}),
+            ...toolId,
             name: request.tool_name,
             kind,
             summary: summarize(kind, request.input),
@@ -320,11 +344,15 @@ export const claudeCode: Adapter = {
         send({ type: 'control_request', request_id: `interrupt-${++interruptCount}`, request: { subtype: 'interrupt' } })
       },
       respond(requestId, allow, message = 'The user denied this tool call.') {
-        if (!pendingInputs.has(requestId)) return
-        const input = pendingInputs.get(requestId)
-        pendingInputs.delete(requestId)
-        const response = allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }
-        send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
+        reply(requestId, (input) => (allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }))
+      },
+      answer(requestId, answers) {
+        const joined = answers && Object.fromEntries(Object.entries(answers).map(([q, picked]) => [q, picked.join(', ')]))
+        reply(requestId, (input) =>
+          joined
+            ? { behavior: 'allow', updatedInput: { questions: input?.questions, answers: joined } }
+            : { behavior: 'deny', message: DECLINED },
+        )
       },
       close() {
         closed = true

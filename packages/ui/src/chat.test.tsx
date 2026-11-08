@@ -497,6 +497,152 @@ test('messages, replies, their code, tool output and permission input each copy 
   ])
 })
 
+const FORMAT = 'How should I format the output?'
+const SECTIONS = 'Which sections should I include?'
+const QUESTIONS = [
+  {
+    header: 'Format',
+    question: FORMAT,
+    options: [
+      { label: 'Summary', description: 'Brief overview' },
+      { label: 'Detailed', description: 'Full explanation' },
+    ],
+    multiSelect: false,
+  },
+  {
+    header: 'Sections',
+    question: SECTIONS,
+    options: [
+      { label: 'Introduction', description: 'Opening context' },
+      { label: 'Body', description: 'The main part' },
+      { label: 'Conclusion', description: 'Final summary' },
+    ],
+    multiSelect: true,
+  },
+]
+type QuestionItem = Extract<Item, { kind: 'question' }>
+const question = (change: Partial<QuestionItem> = {}): Item => ({
+  kind: 'question',
+  requestId: 'q1',
+  questions: QUESTIONS,
+  outcome: 'pending',
+  ...change,
+})
+const card = () => container.querySelector<HTMLElement>('[aria-label="Question"]')
+const press = (key: string, target: Element = document.body) =>
+  act(() => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+  })
+const choices = () => [...card()!.querySelectorAll<HTMLButtonElement>('[role="radio"], [role="checkbox"]')]
+const checked = () => choices().flatMap((c) => (c.getAttribute('aria-checked') === 'true' ? [c.dataset.label] : []))
+const buttonNamed = (name: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === name)!
+
+test('a pending question is a card: a tab per question, option rows, number keys, an Other field, Enter submits', () => {
+  const sent: ClientMessage[] = []
+  render({ status: 'waiting', items: [USER, question()] }, (m) => sent.push(m))
+  const tabs = [...card()!.querySelectorAll('[role="tab"]')]
+  expect(tabs.map((t) => t.textContent)).toEqual(['Format', 'Sections'])
+  expect(card()!.textContent).toContain(FORMAT)
+  expect(choices().map((c) => c.getAttribute('role'))).toEqual(['radio', 'radio', 'radio'])
+  const [summary] = choices()
+  expect(summary!.querySelector('strong')?.textContent).toBe('Summary')
+  expect(summary!.textContent).toContain('Brief overview')
+  expect(choices().at(-1)!.textContent).toContain('Other…')
+
+  press('2')
+  expect(card()!.textContent).toContain(SECTIONS)
+  expect(tabs[1]!.getAttribute('aria-selected')).toBe('true')
+  expect(choices().map((c) => c.getAttribute('role'))).toEqual(Array(4).fill('checkbox'))
+  press('1')
+  press('3')
+  press('2')
+  press('2')
+  expect(checked()).toEqual(['Introduction', 'Conclusion'])
+  press('4')
+  const other = card()!.querySelector<HTMLInputElement>('input[aria-label="Other answer"]')!
+  expect(document.activeElement).toBe(other)
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(other, 'Appendix')
+    other.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  press('1', other)
+  expect(checked()).toEqual(['Introduction', 'Conclusion', 'Other'])
+  press('Enter', other)
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([
+    {
+      type: 'question.respond',
+      chatId: 'c1',
+      requestId: 'q1',
+      answers: { [FORMAT]: ['Detailed'], [SECTIONS]: ['Introduction', 'Conclusion', 'Appendix'] },
+    },
+  ])
+})
+
+test('Submit waits for an answer to every question, Enter shows the first one left, and Skip declines', () => {
+  const sent: ClientMessage[] = []
+  render({ status: 'waiting', items: [USER, question()] }, (m) => sent.push(m))
+  const tabs = () => [...card()!.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+  const tab = (name: string) => tabs().find((t) => t.textContent?.includes(name))!
+  act(() => tab('Sections').click())
+  act(() => choices()[1]!.click())
+  expect(buttonNamed('Submit').disabled).toBe(true)
+  press('Enter')
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([])
+  expect(tab('Format').getAttribute('aria-selected')).toBe('true')
+  act(() => choices()[0]!.click())
+  expect(buttonNamed('Submit').disabled).toBe(false)
+  act(() => buttonNamed('Submit').click())
+  press('Enter')
+  expect(sent.filter((m) => m.type === 'question.respond')).toEqual([
+    { type: 'question.respond', chatId: 'c1', requestId: 'q1', answers: { [FORMAT]: ['Summary'], [SECTIONS]: ['Body'] } },
+  ])
+  expect(buttonNamed('Skip').disabled).toBe(true)
+
+  render({ status: 'waiting', items: [USER, question({ requestId: 'q2' })] }, (m) => sent.push(m))
+  act(() => buttonNamed('Skip').click())
+  expect(sent.at(-1)).toEqual({ type: 'question.respond', chatId: 'c1', requestId: 'q2' })
+})
+
+test('one question shows no tabs, and keys typed elsewhere never pick an option', () => {
+  render({ status: 'waiting', items: [USER, question({ questions: QUESTIONS.slice(0, 1) })] })
+  expect(card()!.querySelector('[role="tab"]')).toBeNull()
+  const composer = container.querySelector('textarea')!
+  composer.focus()
+  press('1', composer)
+  expect(checked()).toEqual([])
+  const placeholder = composer.placeholder || composer.getAttribute('aria-placeholder')
+  expect(placeholder).toBe('Waiting for your answer… Enter queues a message')
+  render({ status: 'stopping', items: [USER, question({ questions: QUESTIONS.slice(0, 1) })] })
+  expect(card()!.textContent).toContain('Stopping…')
+  expect(choices().every((c) => c.disabled)).toBe(true)
+})
+
+test('an answered question shrinks to a row of its answers that folds with the steps', () => {
+  const answers = { [FORMAT]: ['Detailed'], [SECTIONS]: ['Introduction', 'Body'] }
+  const items: Item[] = [USER, tool('done'), question({ outcome: 'answered', answers }), REPLY]
+  render({ status: 'running', items })
+  expect(card()).toBeNull()
+  act(() => foldButton()!.click())
+  const row = rowButtons().find((b) => b.textContent?.includes('Format'))!
+  expect(row.textContent).toContain('Format → Detailed')
+  expect(row.textContent).toContain('Sections → Introduction, Body')
+  act(() => row.click())
+  expect(container.textContent).toContain(SECTIONS)
+  render({ status: 'idle', items })
+  expect(foldButton()?.textContent).toBe('2 steps')
+  render({ status: 'running', items: [USER, question({ outcome: 'skipped' })] })
+  expect(rowButtons()[0]!.querySelector('[data-verdict]')?.textContent).toBe('Skipped')
+})
+
+test('the down button points at a question waiting below', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
+  grow(JUMP_BELOW_PX * 3)
+  render({ status: 'waiting', items: [USER, REPLY, question()] })
+  const asking = container.querySelector<HTMLButtonElement>('[aria-label="Scroll to the question"]')!
+  expect(asking.className).toContain('text-amber')
+})
+
 test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
   const global: ContextItem = { section: 'agents', path: '/g/AGENTS.md', from: GLOBAL_CONTEXT, enabled: true, text: 'OLD' }
   const box = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]') as HTMLTextAreaElement
