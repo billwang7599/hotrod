@@ -15,8 +15,9 @@ import {
   type Mods,
 } from '@hotrod/core/shared'
 import { SECTIONS } from './context-panel.tsx'
-import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Switch, useReturnFocus } from './controls.tsx'
-import { accountLabel, engineProblem, NO_LISTS } from './state.ts'
+import { Button, CHAT_NOUN, confirm, ErrorText, MOTION, NAV_LABEL, Select, Switch, useReturnFocus } from './controls.tsx'
+import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
+import { Appearance } from './themes.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -77,10 +78,18 @@ const PAGES = [
       }),
   },
   {
+    id: 'appearance',
+    group: 'Options',
+    title: 'Appearance',
+    body: () => <Appearance />,
+  },
+  {
     id: 'accounts',
     group: 'Options',
     title: 'Accounts',
-    hint: 'Each engine runs as its account marked In use. Accounts show while their engine is on.',
+    hint:
+      'Each engine runs as its Active account: one saved here, or whoever the engine itself is signed in as. ' +
+      'Accounts show while their engine is on.',
     body: ({ engines, accounts, connected, send }: PageProps) => {
       const shown = engines.flatMap((e) => (e.enabled ? accounts.filter((a) => a.engine === e.id) : []))
       if (!shown.length) return <p className="text-muted">Turn on an engine to manage its accounts.</p>
@@ -168,7 +177,7 @@ function SettingRow({ name, description, children, below }: RowProps) {
         {name}
         {description && <div className="text-sm text-muted">{description}</div>}
       </div>
-      <div className="flex shrink-0 items-center gap-6">{children}</div>
+      <div className="flex max-w-full min-w-0 items-center gap-6">{children}</div>
       {below && <div className="basis-full">{below}</div>}
     </div>
   )
@@ -248,38 +257,26 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
               description={about}
               below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
             >
-              <select
-                className="h-control rounded border bg-bg px-8"
-                aria-label={`Add a ${name} model for ${engine.id}`}
+              <Select
+                label={`Add a ${name} model for ${engine.id}`}
                 value=""
+                placeholder="Add model…"
                 disabled={!connected || !addable.length}
-                onChange={(e) => setList([...list, e.target.value])}
-              >
-                <option value="">Add model…</option>
-                {addable.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+                options={addable.map((m) => ({ value: m.id, label: m.label }))}
+                onChange={(model) => setList([...list, model])}
+              />
             </SettingRow>
           )
         })}
       {offered.length > 0 && engine.defaultThinking && (
         <SettingRow name="Default thinking" description={`For ${CHAT_NOUN.many} that don't pick a level.`}>
-          <select
-            className="h-control rounded border bg-bg px-8"
-            aria-label={`Default thinking for ${engine.id}`}
+          <Select
+            label={`Default thinking for ${engine.id}`}
             value={engine.defaultThinking}
             disabled={!connected}
-            onChange={(e) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking: e.target.value })}
-          >
-            {engine.thinking?.map((level) => (
-              <option key={level} value={level}>
-                {level}
-              </option>
-            ))}
-          </select>
+            options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
+            onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
+          />
         </SettingRow>
       )}
     </section>
@@ -291,6 +288,7 @@ type EngineAccountsProps = { accounts: EngineAccounts; connected: boolean; send:
 function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProps) {
   const id = accounts.engine
   const login = accounts.login
+  const listed = listedAccounts(accounts)
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [keyName, setKeyName] = useState('')
@@ -331,10 +329,17 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   return (
     <section className="flex flex-col not-first:pt-24" aria-label={`${id} accounts`}>
       <h3 className="pb-8 font-mono font-semibold">{id}</h3>
-      {accounts.accounts.map((a) => (
-        <SettingRow key={a.id} name={accountLabel(a)} description={a.id === 'default' && `${id}'s own sign-in`}>
-          {a.id === accounts.active ? (
-            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">In use</span>
+      {listed.accounts.map((a) => (
+        <SettingRow
+          key={a.id}
+          name={accountLabel(a)}
+          description={
+            a.id === 'default' &&
+            (a.signedIn ? `Signed in through ${id} itself, not saved in Hotrod` : `No one is signed in to ${id} itself`)
+          }
+        >
+          {a.id === listed.active ? (
+            <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Active</span>
           ) : (
             <Button
               size="small"
@@ -353,7 +358,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
       ))}
       {!login ? (
         <SettingRow name="Add account" description="Sign in to another account in your browser.">
-          <form className="flex gap-6" onSubmit={startLogin}>
+          <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
             <input
               className="w-160"
               value={name}
@@ -387,7 +392,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
                 </>
               }
             >
-              <form className="flex gap-6" onSubmit={submitCode}>
+              <form className="flex min-w-0 gap-6" onSubmit={submitCode}>
                 <input
                   className="w-120"
                   value={code}
@@ -406,7 +411,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
       )}
       {accounts.apiKeys && (
         <SettingRow name="Add API key" description="Use an API key instead of a sign-in.">
-          <form className="flex gap-6" onSubmit={addKey}>
+          <form className="flex min-w-0 gap-6" onSubmit={addKey}>
             <input
               className="w-120"
               value={keyName}

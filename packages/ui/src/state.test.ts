@@ -13,6 +13,7 @@ import {
   folderOf,
   formatBytes,
   initialState,
+  listedAccounts,
   MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
@@ -173,11 +174,34 @@ describe('reduce', () => {
   it('labels an account with its email or key ending and sign-in state', () => {
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     expect(accountLabel(work)).toBe('Work (me@work.test)')
-    expect(accountLabel({ id: 'default', name: 'Default', kind: 'login' })).toBe('Default')
+    expect(accountLabel({ id: 'default', name: 'Default', kind: 'login', label: 'me@home.test', signedIn: true })).toBe(
+      'me@home.test',
+    )
+    expect(accountLabel({ id: 'default', name: 'Default', kind: 'login' })).toBe('Not signed in')
+    expect(accountLabel({ id: 'default', name: 'Default', kind: 'login', label: 'me@home.test', signedIn: false })).toBe(
+      'Not signed in',
+    )
     expect(accountLabel({ ...work, id: 'old', name: 'Old', signedIn: false })).toBe('Old (signed out)')
     const billing: Account = { id: 'billing', name: 'Billing', kind: 'apiKey', label: 'API key ••••abcd', signedIn: true }
     expect(accountLabel(billing)).toBe('Billing (API key ••••abcd)')
     expect(accountLabel({ ...billing, signedIn: false })).toBe('Billing (key file missing)')
+  })
+
+  it("lists the engine's own login once when a saved account is the same login", () => {
+    const own: Account = { id: 'default', name: 'Default', kind: 'login', label: 'me@work.test', signedIn: true }
+    const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
+    const home: Account = { id: 'home', name: 'Home', kind: 'login', label: 'me@home.test', signedIn: true }
+    const engine = (active: string, accounts: Account[]): EngineAccounts => ({ engine: 'fake', active, apiKeys: false, accounts })
+
+    expect(listedAccounts(engine('default', [own, work, home]))).toEqual({ active: 'work', accounts: [work, home] })
+    expect(listedAccounts(engine('home', [own, work, home]))).toEqual({ active: 'home', accounts: [work, home] })
+    expect(listedAccounts(engine('default', [own, home]))).toEqual({ active: 'default', accounts: [own, home] })
+    const signedOut = { ...work, signedIn: false }
+    expect(listedAccounts(engine('default', [own, signedOut])).accounts).toEqual([own, signedOut])
+    const key: Account = { id: 'key', name: 'Key', kind: 'apiKey', label: 'me@work.test', signedIn: true }
+    expect(listedAccounts(engine('default', [own, key])).accounts).toEqual([own, key])
+    const ownSignedOut: Account = { id: 'default', name: 'Default', kind: 'login' }
+    expect(listedAccounts(engine('default', [ownSignedOut, work])).accounts).toEqual([ownSignedOut, work])
   })
 
   it('shows a tool as waiting while its permission is pending', () => {

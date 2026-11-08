@@ -1,21 +1,6 @@
 @import 'tailwindcss' source('.');
 
 :root {
-  --bg: #111214;
-  --panel: #17181b;
-  --raised: #1f2024;
-  --hover: #26282d;
-  --border: #2b2d32;
-  --text: #e7e7ea;
-  --muted: #9b9ea6;
-  --faint: #6d7079;
-  --accent: #e8743b;
-  --on-accent: #ffffff;
-  --green: #3fb67c;
-  --amber: #e3a33b;
-  --red: #e5534b;
-  --shadow: 0 8px 28px rgb(0 0 0 / 0.45);
-
   --text-xs: 11px;
   --text-sm: 12px;
   --text-ui: 13px;
@@ -25,30 +10,20 @@
   --radius-lg: 8px;
   --control: 28px;
 
-  color-scheme: dark;
+  color-scheme: light dark;
   font: var(--text-ui) / 1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #ffffff;
-    --panel: #f6f6f7;
-    --raised: #ececee;
-    --hover: #e4e4e7;
-    --border: #dfe0e3;
-    --text: #1d1e21;
-    --muted: #5f626a;
-    --faint: #8b8e96;
-    --accent: #c95a22;
-    --green: #1f8a55;
-    --amber: #a76a0c;
-    --red: #c9302c;
-    --shadow: 0 8px 28px rgb(0 0 0 / 0.14);
-    color-scheme: light;
-  }
+:root[data-glass='blur'] :is(.bg-bg, .bg-panel) {
+  backdrop-filter: blur(24px) saturate(1.6);
+}
+
+/* Floating layers all cast a shadow; over a see-through window nothing blurs what's under them, so they go solid. */
+:root[data-glass='vibrancy'] .shadow {
+  background-color: var(--glass-base);
 }
 
 @theme inline reference {
@@ -108,8 +83,11 @@
     scrollbar-color: var(--border) transparent;
   }
 
-  button:not(:disabled),
-  summary {
+  :is(button, select, input[type='range'], input[type='checkbox'], input[type='radio']):not(:disabled),
+  label:has(> :is(input[type='checkbox'], input[type='radio']):not(:disabled)),
+  :is([role='option'], [role='menuitem']):not([data-disabled]),
+  summary,
+  a[href] {
     cursor: pointer;
   }
 

@@ -6,6 +6,7 @@ import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
+import { startAppearance } from './themes.tsx'
 import {
   dockedPanels,
   folderName,
@@ -39,6 +40,8 @@ declare global {
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
+      vibrancy: boolean
+      setAppearance(appearance: { scheme: 'system' | 'light' | 'dark'; vibrancy: boolean; background: string }): void
     }
   }
 }
@@ -285,4 +288,5 @@ function App() {
   )
 }
 
+startAppearance()
 createRoot(document.getElementById('root')!).render(<App />)

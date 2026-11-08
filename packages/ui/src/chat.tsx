@@ -3,7 +3,6 @@ import {
   useLayoutEffect,
   useRef,
   useState,
-  type ComponentProps,
   type CSSProperties,
   type DragEvent,
   type ReactNode,
@@ -26,7 +25,7 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, SidePanel, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, MOTION, Select, SidePanel, useSettled } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
@@ -34,6 +33,7 @@ import {
   columnSlider,
   engineOptions,
   formatBytes,
+  listedAccounts,
   MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   modelMenu,
@@ -50,6 +50,7 @@ const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings goes back to following Settings.'
 const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
+const INTERRUPTED = 'Interrupted'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -69,22 +70,11 @@ const TOOL_STATES: Record<string, string> = {
 const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
-  'h-12 w-96 cursor-pointer appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
+  'h-12 w-96 appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
 const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
 const FILE_ACTION =
   'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
 const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
-const SELECT_ARROW =
-  'bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20fill=%27none%27%20stroke=%27%238b8e96%27%20stroke-width=%271.5%27/%3E%3C/svg%3E)]'
-
-function ChipSelect(props: ComponentProps<'select'>) {
-  return (
-    <select
-      className={`h-26 max-w-220 min-w-0 cursor-pointer appearance-none truncate rounded border border-transparent bg-transparent bg-no-repeat bg-position-[right_8px_center] pr-24 pl-8 text-sm text-muted field-sizing-content enabled:hover:border-border enabled:hover:text-text disabled:cursor-default disabled:text-faint disabled:opacity-70 max-[900px]:max-w-150 [&_option]:bg-panel [&_option]:text-text ${SELECT_ARROW}`}
-      {...props}
-    />
-  )
-}
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
   const [open, setOpen] = useState(false)
@@ -366,7 +356,11 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
     case 'text':
       return <Markdown className={ASSISTANT} text={item.text} />
     case 'error':
-      return <ErrorText>{item.text}</ErrorText>
+      return item.text === INTERRUPTED ? (
+        <div className="text-sm text-muted">{item.text}</div>
+      ) : (
+        <ErrorText>{item.text}</ErrorText>
+      )
     case 'thinking':
       return (
         <Row quiet summary={<span className="italic group-last/item:animate-[blink_1.6s_ease-in-out_infinite]">Thinking…</span>}>
@@ -421,8 +415,11 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             Allow <strong>{item.name}</strong>?
           </div>
           <pre className="rounded border bg-bg px-10 py-8">{item.summary}</pre>
-          <details>
-            <summary className="w-fit text-sm text-muted">Full input</summary>
+          <details className="group">
+            <summary className="flex w-fit list-none items-center gap-6 text-sm text-muted hover:text-text">
+              <Chevron />
+              Full input
+            </summary>
             <pre className={`${BODY} mt-6 rounded border bg-bg pl-10`}>{input}</pre>
           </details>
           {chat.status === 'waiting' ? (
@@ -467,6 +464,7 @@ type ChatProps = {
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings } = props
+  const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
   const pendingRef = useRef(pending)
@@ -509,6 +507,7 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
+  const hint = chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
   const canAttach = canSend || canQueue
@@ -621,36 +620,30 @@ export function Chat(props: ChatProps) {
               </span>
             )}
           </div>
-          <ChipSelect
-            aria-label="Engine"
+          <Select
+            variant="chip"
+            label="Engine"
             value={chat.engine}
             disabled={!canChange}
-            onChange={(e) => send({ type: 'chat.setEngine', chatId: chat.id, engine: e.target.value })}
-          >
-            {engineOptions(engines, chat.engine).map((o) => (
-              <option key={o.id} value={o.id} disabled={o.disabled}>
-                {o.label}
-              </option>
-            ))}
-          </ChipSelect>
-          {accounts && !engineOff && (
-            <ChipSelect
-              aria-label="Account"
-              value={accounts.active}
+            options={engineOptions(engines, chat.engine).map((o) => ({ ...o, value: o.id }))}
+            onChange={(engine) => send({ type: 'chat.setEngine', chatId: chat.id, engine })}
+          />
+          {accounts && listed && !engineOff && (
+            <Select
+              variant="chip"
+              label="Account"
+              value={listed.active}
               disabled={!canSend}
-              onChange={(e) =>
-                e.target.value === MANAGE_ACCOUNTS
+              options={[
+                ...listed.accounts.map((a) => ({ value: a.id, label: accountLabel(a) })),
+                { value: MANAGE_ACCOUNTS, label: 'Manage accounts…' },
+              ]}
+              onChange={(accountId) =>
+                accountId === MANAGE_ACCOUNTS
                   ? openSettings('accounts')
-                  : send({ type: 'account.use', engine: accounts.engine, accountId: e.target.value })
+                  : send({ type: 'account.use', engine: accounts.engine, accountId })
               }
-            >
-              {accounts.accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {accountLabel(a)}
-                </option>
-              ))}
-              <option value={MANAGE_ACCOUNTS}>Manage accounts…</option>
-            </ChipSelect>
+            />
           )}
           <PanelToggle
             side="right"
@@ -807,8 +800,8 @@ export function Chat(props: ChatProps) {
                   else submit()
                 }}
               />
-              <div className="flex flex-wrap items-center justify-end gap-x-8 gap-y-4 pr-6 pb-6 pl-6">
-                <span className="mr-auto flex min-w-0 items-center gap-6">
+              <div className="flex items-center gap-8 px-6 pb-6">
+                <span className="flex min-w-0 flex-1 items-center gap-6">
                   <Button
                     variant="ghost"
                     size="icon"
@@ -830,40 +823,34 @@ export function Chat(props: ChatProps) {
                       e.target.value = ''
                     }}
                   />
-                  <span className="min-w-0 truncate text-sm text-faint @max-[480px]:hidden">
-                    {chat.status === 'stopping' ? FORCE_STOP_HINT : busy ? QUEUE_HINT : SEND_HINT}
+                  <span className="@container min-w-0 flex-1">
+                    <span className="block truncate text-sm text-faint @max-[8rem]:hidden" title={hint}>
+                      {hint}
+                    </span>
                   </span>
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
                   {menu.model && (
-                    <ChipSelect
-                      aria-label="Model"
+                    <Select
+                      variant="chip"
+                      label="Model"
                       title={MODEL_HINT}
                       value={menu.model}
                       disabled={!canChange}
-                      onChange={(e) => setModel(e.target.value, menu.thinking)}
-                    >
-                      {menu.models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </ChipSelect>
+                      options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
+                      onChange={(model) => setModel(model, menu.thinking)}
+                    />
                   )}
                   {menu.thinking && (
-                    <ChipSelect
-                      aria-label="Thinking"
+                    <Select
+                      variant="chip"
+                      label="Thinking"
                       title={THINKING_HINT}
                       value={menu.thinking}
                       disabled={!canChange}
-                      onChange={(e) => setModel(menu.model, e.target.value)}
-                    >
-                      {menu.levels.map((l) => (
-                        <option key={l} value={l}>
-                          {l}
-                        </option>
-                      ))}
-                    </ChipSelect>
+                      options={menu.levels.map((l) => ({ value: l, label: l }))}
+                      onChange={(thinking) => setModel(menu.model, thinking)}
+                    />
                   )}
                   {busy ? (
                     <>

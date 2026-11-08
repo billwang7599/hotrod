@@ -352,7 +352,16 @@ export const previewText = (bytes: Uint8Array) =>
   looksBinary(bytes) ? undefined : new TextDecoder().decode(bytes.subarray(0, MAX_PREVIEW_BYTES), { stream: true })
 
 export function accountLabel(account: Account) {
+  if (account.id === 'default') return (account.signedIn && account.label) || 'Not signed in'
   const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'
   if (account.signedIn === false) return `${account.name} (${missing})`
   return account.label ? `${account.name} (${account.label})` : account.name
+}
+
+export function listedAccounts({ active, accounts }: EngineAccounts) {
+  const own = accounts.find((a) => a.id === 'default')
+  const sameLogin = (a: Account) => a !== own && a.kind === 'login' && a.signedIn && a.label === own?.label
+  const twin = own?.signedIn && own.label && accounts.find(sameLogin)
+  if (!own || !twin) return { active, accounts }
+  return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react'
 import { AnimatePresence, m, type Transition } from 'motion/react'
-import { AlertDialog, Switch as SwitchPrimitive } from 'radix-ui'
+import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive } from 'radix-ui'
 
 const TOAST_MS = 6_000
 const EASE_OUT = [0.2, 0, 0, 1] as const
@@ -68,6 +68,69 @@ type ButtonProps = ComponentProps<'button'> & {
 export function Button({ variant = 'default', size = 'normal', className = '', ...props }: ButtonProps) {
   const classes = `rounded border whitespace-nowrap ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`
   return <button className={classes} {...props} />
+}
+
+const SELECT_TRIGGERS = {
+  field: 'h-control gap-8 rounded border bg-bg px-8 enabled:hover:bg-raised disabled:text-faint',
+  chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text disabled:text-faint max-[900px]:max-w-150',
+}
+
+export type SelectOption = { value: string; label: string; disabled?: boolean }
+
+type SelectProps = {
+  label: string
+  value: string
+  options: SelectOption[]
+  onChange: (value: string) => void
+  placeholder?: string
+  title?: string
+  disabled?: boolean
+  variant?: keyof typeof SELECT_TRIGGERS
+}
+
+export function Select({ label, value, options, onChange, placeholder, title, disabled, variant = 'field' }: SelectProps) {
+  return (
+    <SelectPrimitive.Root value={value} onValueChange={onChange} disabled={disabled}>
+      <SelectPrimitive.Trigger
+        aria-label={label}
+        title={title}
+        className={`flex min-w-0 items-center whitespace-nowrap data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
+      >
+        <span className="min-w-0 truncate">
+          <SelectPrimitive.Value placeholder={placeholder} />
+        </span>
+        <SelectPrimitive.Icon className="shrink-0 text-faint">
+          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" aria-hidden="true">
+            <path d="M1 1l4 4 4-4" strokeWidth="1.5" />
+          </svg>
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content
+          position="popper"
+          sideOffset={4}
+          collisionPadding={8}
+          className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow"
+        >
+          <SelectPrimitive.Viewport className="p-4">
+            {options.map((o) => (
+              <SelectPrimitive.Item
+                key={o.value}
+                value={o.value}
+                disabled={o.disabled}
+                className="flex h-26 items-center gap-8 rounded pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
+              >
+                <span className="w-12 shrink-0 text-accent">
+                  <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
+                </span>
+                <SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  )
 }
 
 type SwitchProps = { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }
