@@ -166,7 +166,12 @@ const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items:
 type Shown = { at: number; item: Item }
 type TranscriptRow = Shown | { at: number; steps: Item[] }
 
-export function foldSteps(items: Item[], running: boolean): TranscriptRow[] {
+const waiting = (item: Item) =>
+  (item.kind === 'permission' && item.outcome === 'pending') ||
+  (item.kind === 'tool' && (item.state === 'waiting' || item.permission?.outcome === 'pending'))
+
+// The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits.
+export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   let turn: Shown[] = []
   const endTurn = (live: boolean) => {
@@ -184,7 +189,7 @@ export function foldSteps(items: Item[], running: boolean): TranscriptRow[] {
       rows.push({ at, item })
     }
   })
-  endTurn(running)
+  endTurn(unfoldLast || turn.some((s) => waiting(s.item)))
   return rows
 }
 

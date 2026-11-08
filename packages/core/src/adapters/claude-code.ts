@@ -178,6 +178,9 @@ export const claudeCode: Adapter = {
       ...CLEAN_ARGS,
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
+      // Claude Code's own subagents run out of sight, where the user can't open or stop them; Hotrod's
+      // spawn_subagent replaces them. `Task` is the tool's name before Claude Code 2.1.
+      '--disallowedTools', 'Agent', 'Task',
     ]
     if (model) args.push('--model', model)
     if (thinking) args.push('--effort', thinking)

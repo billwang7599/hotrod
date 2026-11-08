@@ -479,8 +479,14 @@ describe('foldSteps', () => {
     expect(fold).toEqual({ at: 1, steps: [tool('t1'), text('Installing'), tool('t2')] })
   })
 
-  it('leaves the running turn unfolded and folds the finished ones above it', () => {
+  it('leaves the last turn unfolded when asked and folds the finished ones above it', () => {
     expect(shown(twoTurns, true)).toEqual(['a', '3 steps', 'Done', 'b', 't3', 'Hmm', 't4'])
+  })
+
+  it('folds the running turn as it goes, but not while a permission request in it waits', () => {
+    expect(shown(twoTurns)).toEqual(['a', '3 steps', 'Done', 'b', '3 steps'])
+    const asking = { ...tool('t5'), state: 'waiting' } as Item
+    expect(shown([...twoTurns, asking])).toEqual(['a', '3 steps', 'Done', 'b', 't3', 'Hmm', 't4', 't5'])
   })
 
   it('folds a turn without a reply up to its error line, keeping a reply above the error', () => {
