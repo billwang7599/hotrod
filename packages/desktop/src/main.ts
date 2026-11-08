@@ -7,6 +7,7 @@ const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))
 const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+const VIBRANCY = 'sidebar'
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
 app.setPath('userData', join(app.getPath('appData'), 'Hotrod Desktop'))
@@ -30,9 +31,14 @@ async function start() {
     useContentSize: true,
     title: 'Hotrod',
     icon,
+    show: false,
+    // Only a window created with vibrancy gets a see-through compositor; adding it later paints over stale frames.
+    vibrancy: VIBRANCY,
+    visualEffectState: 'active',
     // Chromium's PDF viewer counts as a plugin, and attachment previews need it.
     webPreferences: { preload, contextIsolation: true, nodeIntegration: false, sandbox: true, plugins: true },
   })
+  window.once('ready-to-show', () => window.show())
 
   let closing: Promise<void> | undefined
   let closed = false
@@ -92,9 +98,10 @@ async function start() {
     return result.canceled ? null : (result.filePaths[0] ?? null)
   }
   ipcMain.handle('pick-folder', pickFolder)
-  ipcMain.on('set-appearance', (_event, appearance: { scheme: string; background: string }) => {
-    const { scheme, background } = appearance
+  ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
+    const { scheme, vibrancy, background } = appearance
     if (scheme === 'system' || scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme
+    if (process.platform === 'darwin') window.setVibrancy(vibrancy ? VIBRANCY : null)
     window.setBackgroundColor(background)
   })
 

@@ -25,6 +25,7 @@ type Theme = {
   dark: Palette
   light: Palette
   backdrop?: { dark: readonly string[]; light: readonly string[] }
+  vibrancy?: { dark: Partial<Palette>; light: Partial<Palette> }
 }
 
 const SHADOW = { dark: '0 8px 28px rgb(0 0 0 / 0.45)', light: '0 8px 28px rgb(0 0 0 / 0.14)' }
@@ -102,6 +103,11 @@ export const THEMES = {
     backdrop: {
       dark: ['#2b1f4a', '#4a1f33', '#123a47', '#0c0d12'],
       light: ['#f9d8c4', '#dcd6fb', '#c9e9ef', '#f1f2f6'],
+    },
+    // Over the OS blur, which already tints: a light tint for the window, and panels only shade it.
+    vibrancy: {
+      dark: { bg: '#0c0d1266', panel: '#ffffff0a' },
+      light: { bg: '#ffffff66', panel: '#0000000a' },
     },
   },
   tokyoNight: {
@@ -417,15 +423,23 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   current = { ...next, dark: next.scheme === 'system' ? matchMedia(DARK_QUERY).matches : next.scheme === 'dark' }
   const theme: Theme = THEMES[current.theme]
   const scheme = current.dark ? 'dark' : 'light'
+  const stops = theme.backdrop?.[scheme]
+  const base = stops?.at(-1)
+  const vibrancy = !!base && !!window.hotrod?.vibrancy
+  const palette = { ...theme[scheme], ...(vibrancy && theme.vibrancy?.[scheme]) }
   const root = document.documentElement
-  for (const token of TOKENS) root.style.setProperty(`--${token}`, theme[scheme][token])
+  for (const token of TOKENS) root.style.setProperty(`--${token}`, palette[token])
   root.style.setProperty('color-scheme', scheme)
-  root.toggleAttribute('data-glass', !!theme.backdrop)
-  if (theme.backdrop) root.style.setProperty('background', backdropOf(theme.backdrop[scheme]))
+  if (stops) root.setAttribute('data-glass', vibrancy ? 'vibrancy' : 'blur')
+  else root.removeAttribute('data-glass')
+  if (stops && !vibrancy) root.style.setProperty('background', backdropOf(stops))
   else root.style.removeProperty('background')
+  if (vibrancy) root.style.setProperty('--glass-base', base)
+  else root.style.removeProperty('--glass-base')
   window.hotrod?.setAppearance({
     scheme: current.scheme,
-    background: theme.backdrop?.[scheme].at(-1) ?? theme[scheme].bg,
+    vibrancy,
+    background: vibrancy ? '#00000000' : (base ?? theme[scheme].bg),
   })
   for (const listener of listeners) listener()
 }

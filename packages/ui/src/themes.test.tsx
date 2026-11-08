@@ -30,17 +30,18 @@ const contrast = (a: string, b: string) => {
   return (hi! + 0.05) / (lo! + 0.05)
 }
 
-function fakePage({ dark = true, desktop = false } = {}) {
+function fakePage({ dark = true, desktop = false, vibrancy = false } = {}) {
   const props = new Map<string, string>()
-  const attrs = new Set<string>()
+  const attrs = new Map<string, string>()
   const store = new Map<string, string>()
   const mediaListeners: (() => void)[] = []
   const media = { matches: dark, addEventListener: (_: string, fn: () => void) => mediaListeners.push(fn) }
-  const bridge = { setAppearance: vi.fn() }
+  const bridge = { vibrancy, setAppearance: vi.fn() }
   vi.stubGlobal('document', {
     documentElement: {
       style: { setProperty: (k: string, v: string) => props.set(k, v), removeProperty: (k: string) => props.delete(k) },
-      toggleAttribute: (name: string, on: boolean) => (on ? attrs.add(name) : attrs.delete(name)),
+      setAttribute: (name: string, value: string) => attrs.set(name, value),
+      removeAttribute: (name: string) => attrs.delete(name),
     },
   })
   vi.stubGlobal('localStorage', {
@@ -79,6 +80,23 @@ describe('theme table', () => {
         expect(Object.keys(theme[scheme]).sort(), `${id} ${scheme}`).toEqual([...TOKENS].sort())
         for (const token of TOKENS) expect(theme[scheme][token], `${id} ${scheme} ${token}`).toMatch(/\S/)
       }
+  })
+
+  it('blurs only in the gradient fallback, since the OS already blurs a see-through window', () => {
+    const blurred = [...css.matchAll(/([^{}]+)\{[^}]*backdrop-filter/g)].map((m) => m[1]!.trim())
+    expect(blurred.length).toBeGreaterThan(0)
+    for (const selector of blurred) expect(selector).toContain(`[data-glass='blur']`)
+  })
+
+  it('tints every surface of the see-through window, and paints floating layers solid', () => {
+    expect(css).toMatch(/:root \{[^}]*\bbackground: var\(--bg\)/)
+    expect(css).toMatch(/:root\[data-glass='vibrancy'\] \.shadow \{[^}]*background-color: var\(--glass-base\)/)
+    for (const scheme of SCHEMES) {
+      const alpha = parseInt(THEMES.glass.vibrancy[scheme].bg.slice(7), 16)
+      expect(alpha, scheme).toBeGreaterThan(0)
+      expect(alpha, scheme).toBeLessThan(255)
+      expect(THEMES.glass.backdrop[scheme].at(-1), scheme).toMatch(/^#[0-9a-f]{6}$/i)
+    }
   })
 
   it('keeps body text readable on every background', () => {
@@ -129,11 +147,11 @@ describe('appearance', () => {
     expect(page.props.get('--bg')).toBe(THEMES.catppuccin.dark.bg)
   })
 
-  it('lays Glass over the same opaque gradient in the browser and the desktop app, with no native vibrancy', () => {
+  it('blurs Glass panels over a gradient where the window cannot see through: the browser, Windows and Linux', () => {
     const browser = fakePage()
     startAppearance()
     chooseAppearance({ theme: 'glass' })
-    expect(browser.attrs.has('data-glass')).toBe(true)
+    expect(browser.attrs.get('data-glass')).toBe('blur')
     expect(browser.props.get('background')).toContain('gradient')
     chooseAppearance({ theme: 'default' })
     expect(browser.attrs.has('data-glass')).toBe(false)
@@ -142,26 +160,49 @@ describe('appearance', () => {
     const desktop = fakePage({ desktop: true })
     startAppearance()
     chooseAppearance({ theme: 'glass', scheme: 'light' })
+    expect(desktop.attrs.get('data-glass')).toBe('blur')
     expect(desktop.props.get('background')).toContain('gradient')
     expect(desktop.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'light',
+      vibrancy: false,
       background: THEMES.glass.backdrop.light.at(-1),
-    })
-    chooseAppearance({ theme: 'gruvbox' })
-    expect(desktop.bridge.setAppearance).toHaveBeenLastCalledWith({
-      scheme: 'light',
-      background: THEMES.gruvbox.light.bg,
     })
   })
 
-  it('paints the window background opaque, so the desktop app never shows through stale frames', () => {
-    const desktop = fakePage({ desktop: true })
+  it('makes the macOS window see-through for Glass, tinting the page instead of blurring it', () => {
+    const mac = fakePage({ desktop: true, vibrancy: true })
+    startAppearance()
+    chooseAppearance({ theme: 'glass', scheme: 'dark' })
+    expect(mac.attrs.get('data-glass')).toBe('vibrancy')
+    expect(mac.bridge.setAppearance).toHaveBeenLastCalledWith({
+      scheme: 'dark',
+      vibrancy: true,
+      background: '#00000000',
+    })
+    expect(mac.props.has('background')).toBe(false)
+    const tinted = { ...THEMES.glass.dark, ...THEMES.glass.vibrancy.dark }
+    for (const token of TOKENS) expect(mac.props.get(`--${token}`)).toBe(tinted[token])
+    expect(mac.props.get('--glass-base')).toBe(THEMES.glass.backdrop.dark.at(-1))
+
+    chooseAppearance({ theme: 'gruvbox' })
+    expect(mac.attrs.has('data-glass')).toBe(false)
+    expect(mac.props.has('--glass-base')).toBe(false)
+    expect(mac.bridge.setAppearance).toHaveBeenLastCalledWith({
+      scheme: 'dark',
+      vibrancy: false,
+      background: THEMES.gruvbox.dark.bg,
+    })
+  })
+
+  it('keeps every other theme in an opaque window, so nothing shows through stale frames', () => {
+    const mac = fakePage({ desktop: true, vibrancy: true })
     startAppearance()
     for (const theme of Object.keys(THEMES) as (keyof typeof THEMES)[])
       for (const scheme of SCHEMES) {
         chooseAppearance({ theme, scheme })
-        const { background } = desktop.bridge.setAppearance.mock.lastCall?.[0]
-        expect(background, `${theme} ${scheme}`).toMatch(/^#[0-9a-f]{6}$/i)
+        const { vibrancy, background } = mac.bridge.setAppearance.mock.lastCall?.[0]
+        expect(vibrancy, `${theme} ${scheme}`).toBe(theme === 'glass')
+        if (theme !== 'glass') expect(background, `${theme} ${scheme}`).toMatch(/^#[0-9a-f]{6}$/i)
       }
   })
 

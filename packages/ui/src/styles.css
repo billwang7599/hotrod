@@ -17,8 +17,13 @@
   -webkit-font-smoothing: antialiased;
 }
 
-:root[data-glass] :is(.bg-bg, .bg-panel) {
+:root[data-glass='blur'] :is(.bg-bg, .bg-panel) {
   backdrop-filter: blur(24px) saturate(1.6);
+}
+
+/* Floating layers all cast a shadow; over a see-through window nothing blurs what's under them, so they go solid. */
+:root[data-glass='vibrancy'] .shadow {
+  background-color: var(--glass-base);
 }
 
 @theme inline reference {
