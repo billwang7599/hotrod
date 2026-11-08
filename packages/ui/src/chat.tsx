@@ -37,6 +37,8 @@ import {
   CHAT_NOUN,
   Chevron,
   confirm,
+  CopyBlock,
+  CopyButton,
   ErrorText,
   Hint,
   MOTION,
@@ -428,14 +430,22 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             </div>
           )}
           {item.text && (
-            <div className="rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
-              {item.text}
+            <div className="flex items-start gap-6">
+              <CopyButton label="Copy message" text={item.text} className="mt-6" />
+              <div className="min-w-0 rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+                {item.text}
+              </div>
             </div>
           )}
         </div>
       )
     case 'text':
-      return <Markdown className={ASSISTANT} text={item.text} />
+      return (
+        <div className="flex flex-col gap-2">
+          <Markdown className={ASSISTANT} text={item.text} />
+          <CopyButton label="Copy reply" text={item.text} className="self-start" />
+        </div>
+      )
     case 'error':
       return item.text === INTERRUPTED ? (
         <div className="text-sm text-muted">{item.text}</div>
@@ -470,16 +480,18 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             </>
           }
         >
-          <pre className={`${BODY} border-t pl-26`}>
-            {item.output ||
-              (item.state === 'running' ? (
-                <Dots label="running" />
-              ) : item.state === 'waiting' ? (
-                'Waiting for approval…'
-              ) : (
-                'No output'
-              ))}
-          </pre>
+          <CopyBlock label="Copy output" text={item.output}>
+            <pre className={`${BODY} border-t pl-26`}>
+              {item.output ||
+                (item.state === 'running' ? (
+                  <Dots label="running" />
+                ) : item.state === 'waiting' ? (
+                  'Waiting for approval…'
+                ) : (
+                  'No output'
+                ))}
+            </pre>
+          </CopyBlock>
         </Row>
       )
       if (item.permission?.outcome !== 'pending') return row
@@ -504,7 +516,9 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
             </>
           }
         >
-          <pre className={`${BODY} border-t pl-26`}>{JSON.stringify(item.input, null, 2)}</pre>
+          <CopyBlock label="Copy input" text={JSON.stringify(item.input, null, 2)}>
+            <pre className={`${BODY} border-t pl-26`}>{JSON.stringify(item.input, null, 2)}</pre>
+          </CopyBlock>
         </Row>
       )
   }

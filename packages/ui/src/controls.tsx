@@ -11,6 +11,7 @@ import { AnimatePresence, m, type Transition } from 'motion/react'
 import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive, Tooltip } from 'radix-ui'
 
 const TOAST_MS = 6_000
+export const COPIED_MS = 1_500
 const EASE_OUT = [0.2, 0, 0, 1] as const
 
 export const TRANSITION: Transition = { duration: 0.18, ease: EASE_OUT }
@@ -63,13 +64,15 @@ type HintProps = Omit<ComponentProps<typeof Tooltip.Trigger>, 'asChild'> & {
   text?: ReactNode
   side?: 'top' | 'right' | 'bottom' | 'left'
   align?: 'start' | 'center' | 'end'
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
   children: ReactElement
 }
 
 // Inside another Radix trigger, nest the Hint in it: wrapped around one, the tooltip's data-state would win.
-export function Hint({ text, side, align, children, onFocus, ...props }: HintProps) {
+export function Hint({ text, side, align, open, onOpenChange, children, onFocus, ...props }: HintProps) {
   return (
-    <Tooltip.Root open={text ? undefined : false}>
+    <Tooltip.Root open={text ? open : false} onOpenChange={onOpenChange}>
       <Tooltip.Trigger
         asChild
         data-hint={text ? '' : undefined}
@@ -125,6 +128,73 @@ export function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProp
         </svg>
       </Button>
     </Hint>
+  )
+}
+
+const COPY_RESULTS = {
+  copied: { text: 'Copied', color: 'text-green' },
+  failed: { text: "Couldn't copy", color: 'text-red' },
+}
+const COPY_REVEAL = 'opacity-0 [:hover>&]:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
+
+type CopyButtonProps = { text: string; label: string; className?: string }
+
+export function CopyButton({ text, label, className = '' }: CopyButtonProps) {
+  const [result, setResult] = useState<keyof typeof COPY_RESULTS>()
+  const [hovered, setHovered] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = async () => {
+    let copied = true
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      copied = false
+    }
+    setResult(copied ? 'copied' : 'failed')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setResult(undefined), COPIED_MS)
+  }
+  return (
+    <Hint text={result ? COPY_RESULTS[result].text : 'Copy'} open={!!result || hovered} onOpenChange={setHovered}>
+      <button
+        className={`grid size-24 shrink-0 place-items-center rounded text-muted transition-[opacity,background-color,color] duration-150 hover:bg-raised hover:text-text ${result ? '' : COPY_REVEAL} ${className}`}
+        aria-label={result ? COPY_RESULTS[result].text : label}
+        onClick={copy}
+      >
+        <svg
+          className={result && COPY_RESULTS[result].color}
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          {result === 'copied' ? (
+            <path d="M3 8.5 6.5 12 13 4.5" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+          ) : (
+            <g strokeWidth="1.4">
+              <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+              <path d="M10.5 5.5V4A1.5 1.5 0 0 0 9 2.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5" />
+            </g>
+          )}
+        </svg>
+      </button>
+    </Hint>
+  )
+}
+
+type CopyBlockProps = { text: string; label: string; className?: string; children: ReactNode }
+
+export function CopyBlock({ text, label, className = '', children }: CopyBlockProps) {
+  return (
+    <div className={`relative ${className}`}>
+      {text && (
+        <CopyButton text={text} label={label} className="absolute top-6 right-6 border bg-panel shadow-floating" />
+      )}
+      {children}
+    </div>
   )
 }
 

@@ -80,6 +80,7 @@ afterEach(() => {
   act(() => root.unmount())
   container.remove()
   vi.unstubAllGlobals()
+  delete (navigator as unknown as Record<string, unknown>).clipboard
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
@@ -458,6 +459,36 @@ test('a permission without a tool row keeps a row of its own, with the same badg
   const [row] = rowButtons()
   expect(row!.textContent).toContain('Write')
   expect(row!.querySelector('[data-verdict]')?.textContent).toBe('Denied')
+})
+
+test('messages, replies, their code, tool output and permission input each copy their own text', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined)
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+  const reply = 'Ran **it**:\n\n```sh\nls -a\n```'
+  const input = { path: '/x.ts' }
+  const items: Item[] = [
+    { kind: 'user', text: 'Copy *me*' },
+    tool('done', 'a.txt'),
+    { kind: 'permission', requestId: 'r1', name: 'Write', toolKind: 'edit', summary: '/x.ts', input, outcome: 'denied' },
+    { kind: 'text', text: reply },
+    tool('running', '', { toolId: 't2' }),
+  ]
+  render({ status: 'running', items, draft: 'Streaming' })
+  act(() => foldButton()!.click())
+  act(() => rowButtons().filter((b) => b !== foldButton()).forEach((b) => b.click()))
+  const copies: [string | null, string][] = []
+  for (const button of list().querySelectorAll<HTMLButtonElement>('button[aria-label^="Copy"]')) {
+    const label = button.getAttribute('aria-label')
+    await act(async () => button.click())
+    copies.push([label, writeText.mock.lastCall![0]])
+  }
+  expect(copies).toEqual([
+    ['Copy message', 'Copy *me*'],
+    ['Copy output', 'a.txt'],
+    ['Copy input', JSON.stringify(input, null, 2)],
+    ['Copy code', 'ls -a'],
+    ['Copy reply', reply],
+  ])
 })
 
 test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
