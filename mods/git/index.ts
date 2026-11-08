@@ -1,9 +1,12 @@
+import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import type { ChatDetail, Checkout, Mod, ModHost, ModListItem, ModTone, ModView } from '@hotrod/mod-api'
+import type { ChatDetail, Checkout, Mod, ModHost, ModListItem, ModTone, ModValues, ModView } from '@hotrod/mod-api'
+import { cleanupCheckout } from './cleanup.ts'
 
-// Read-only: the Changes tab shows each git folder of a space as its agents left it, and a note follows a turn that
+// The Changes tab shows each git folder of a space as its agents left it, and a note follows a turn that
 // changed files. Agents already use git and gh through their shell, so this adds no tools and no buttons that change
-// anything. Every git and gh call goes through the Machine (host.run).
+// anything. The one change it makes is its cleanup: a checkout whose branch is merged goes (cleanup.ts). Every git and
+// gh call goes through the Machine (host.run).
 
 export const PANEL = 'changes'
 const GIT_TIMEOUT_MS = 30_000
@@ -73,9 +76,13 @@ export function checksOf(rollup: unknown): PrStatus['checks'] {
 export function targetsOf(host: ModHost, chatId: string): Target[] {
   const space = host.space(chatId)
   if (!space) return []
-  const checkouts = space.checkouts.map((checkout) => ({ folder: checkout.folder, path: checkout.path, checkout }))
+  // A checkout the cleanup removed stays in the space's record until its next message makes a new one. The Machine is
+  // this computer for now, so the file system can tell.
+  const checkouts = space.checkouts
+    .filter((c) => existsSync(c.path))
+    .map((checkout) => ({ folder: checkout.folder, path: checkout.path, checkout }))
   const waiting = space.folders
-    .filter((f) => f.git && !space.checkouts.some((c) => c.folder === f.path))
+    .filter((f) => f.git && !checkouts.some((c) => c.folder === f.path))
     .map((f) => ({ folder: f.path, path: f.path }))
   return [...checkouts, ...waiting]
 }
@@ -272,6 +279,31 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       for (const key of prs.keys()) if (key.startsWith(`${target.path}\n`)) prs.delete(key)
     }
   }
+  // Removes the space's checkouts whose branch is merged, once nothing in the space runs.
+  const sweeping = new Set<string>()
+  const sweep = async (host: ModHost, chat: ChatDetail) => {
+    const space = host.space(chat.id) ?? (chat.parentId === undefined ? undefined : host.space(chat.parentId))
+    if (!space || sweeping.has(space.id)) return
+    const idle = () => host.chats().every((c) => (c.id !== space.id && c.parentId !== space.id) || c.status === 'idle')
+    if (!idle()) return
+    sweeping.add(space.id)
+    try {
+      for (const checkout of space.checkouts) {
+        if (!existsSync(checkout.path)) continue
+        const result = await cleanupCheckout(host.run, checkout, space.workDir, idle)
+        if (!result.removed) continue
+        const where = space.checkouts.length > 1 ? ` in ${basename(checkout.folder)}` : ''
+        const text = `Removed the checkout of ${result.branch}${where}: ${result.reason}`
+        if (host.chat(space.id)) host.note(space.id, text, { panel: PANEL })
+        forget(host, space.id)
+        host.refresh(space.id)
+      }
+    } finally {
+      sweeping.delete(space.id)
+    }
+  }
+  const cleansUp = (values: ModValues) => values.cleanup === true
+
   // A turn of the space or one of its subagents shows in the space's tab and its own.
   const refreshAround = (host: ModHost, chat: ChatDetail) => {
     host.refresh(chat.id)
@@ -285,6 +317,18 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       'A Changes tab for spaces with git folders: each checkout’s branch, how far it is from its upstream, the files ' +
       'changed with their diffs, and its pull request if gh is signed in. Read-only.',
     enabledByDefault: false,
+    settings: [
+      {
+        key: 'cleanup',
+        label: 'Remove merged checkouts',
+        description:
+          'After a turn, a space’s checkout goes, with its local branch, once the branch’s pull request is merged or ' +
+          'the branch is merged into the default branch and deleted on the remote. Never your own checkout, one with ' +
+          'uncommitted changes, or one in use by a running chat. The next message makes a fresh checkout.',
+        type: 'boolean',
+        default: true,
+      },
+    ],
     panels: [
       {
         id: PANEL,
@@ -315,8 +359,12 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
             ],
           }
         },
-        onAction(action, chat, { host }) {
-          if (action.name === 'refresh') return forget(host, chat.id)
+        async onAction(action, chat, { host, values }) {
+          if (action.name === 'refresh') {
+            forget(host, chat.id)
+            if (cleansUp(values)) await sweep(host, chat)
+            return
+          }
           if (action.name !== 'open') return
           const value = action.value as { path?: unknown; group?: unknown; file?: unknown } | null
           const { path, group, file } = value ?? {}
@@ -335,7 +383,7 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       for (const target of targetsOf(host, chat.id)) shots.set(target.path, await snapshot(host.run, target.path))
       before.set(chat.id, shots)
     },
-    async onTurnCompleted({ chat }, { host }) {
+    async onTurnCompleted({ chat }, { host, values }) {
       if (chat.mod) return
       const shots = before.get(chat.id)
       before.delete(chat.id)
@@ -356,6 +404,7 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       }
       if (host.chat(chat.id)) refreshAround(host, chat)
       else if (chat.parentId && host.chat(chat.parentId)) host.refresh(chat.parentId)
+      if (cleansUp(values)) await sweep(host, chat)
     },
     onChatRemoved(chat) {
       selected.delete(chat.id)
