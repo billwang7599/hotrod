@@ -116,6 +116,7 @@ export function openCore(options: {
   defaultEngine: string
   machine: Machine
   mods?: Mod[]
+  brokenMods?: { id: string; loadError: string }[]
   stopGraceMs?: number
   compactDebounceMs?: number
 }) {
@@ -157,10 +158,12 @@ export function openCore(options: {
     folders: settings.context?.folders ?? true,
     files: settings.context?.files ?? true,
   })
+  const brokenMods = options.brokenMods ?? []
   const modFor = (id: string) => {
     const mod = mods.find((m) => m.id === id)
-    if (!mod) throw new Error(`Unknown mod "${id}"`)
-    return mod
+    if (mod) return mod
+    const broken = brokenMods.find((m) => m.id === id)
+    throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
   }
   const isOn = (mod: Mod) => {
     const saved = settings.mods?.[mod.id]?.enabled
@@ -1106,7 +1109,18 @@ export function openCore(options: {
     },
     setEngineEnabled,
     contextDefaults,
-    mods: () => mods.map(modInfo),
+    mods: (): ModInfo[] => [
+      ...mods.map(modInfo),
+      ...brokenMods.map(({ id, loadError }) => ({
+        id,
+        name: id,
+        description: '',
+        enabled: false,
+        settings: [],
+        values: {},
+        loadError,
+      })),
+    ],
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     memory: () => settings.memory ?? {},
     chats: () => shownChats().map(state),

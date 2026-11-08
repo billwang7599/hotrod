@@ -23,7 +23,7 @@ function modsDir(files: Record<string, string>) {
 const declare = (id: string, extra = '') =>
   `export default { id: '${id}', name: 'Mod ${id}', description: '', enabledByDefault: true${extra} }`
 
-it("loads each folder's index.ts in name order, skipping a broken mod and reporting why", async () => {
+it("loads each folder's index.ts in name order, listing a broken mod under its folder with why", async () => {
   const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
   const dir = modsDir({
     beta: declare('beta'),
@@ -36,7 +36,14 @@ it("loads each folder's index.ts in name order, skipping a broken mod and report
   mkdirSync(join(dir, 'empty'))
   writeFileSync(join(dir, 'tsconfig.json'), '{}')
 
-  expect((await loadMods(dir)).map((mod) => mod.id)).toEqual(['alpha', 'beta'])
+  const { mods, brokenMods } = await loadMods(dir)
+  expect(mods.map((mod) => mod.id)).toEqual(['alpha', 'beta'])
+  expect(brokenMods).toEqual([
+    { id: 'no-default', loadError: 'it has no default export' },
+    { id: 'renamed', loadError: `its id "other" is not its folder's name` },
+    { id: 'reserved', loadError: '"enabled" is not a setting key' },
+    { id: 'throws', loadError: 'boom' },
+  ])
   const reported = errors.mock.calls.map(([message]) => String(message))
   expect(reported).toHaveLength(4)
   for (const id of ['throws', 'no-default', 'renamed', 'reserved']) {
@@ -45,6 +52,19 @@ it("loads each folder's index.ts in name order, skipping a broken mod and report
   expect(reported.find((message) => message.includes('throws'))).toContain('boom')
 })
 
+it('says which package a mod is missing and how to install it', async () => {
+  vi.spyOn(console, 'error').mockImplementation(() => {})
+  const dir = modsDir({
+    imports: `import '@hotrod-test/absent-package'\n${declare('imports')}`,
+    resolves: `import { createRequire } from 'node:module'\ncreateRequire(import.meta.url).resolve('absent-package/package.json')\n${declare('resolves')}`,
+  })
+  const install = 'Run npm install in the Hotrod folder, then restart Hotrod.'
+  expect((await loadMods(dir)).brokenMods).toEqual([
+    { id: 'imports', loadError: `@hotrod-test/absent-package isn't installed. ${install}` },
+    { id: 'resolves', loadError: `absent-package isn't installed. ${install}` },
+  ])
+})
+
 it('finds no mods in a missing folder', async () => {
-  expect(await loadMods(join(tmpdir(), 'hotrod-no-such-mods'))).toEqual([])
+  expect(await loadMods(join(tmpdir(), 'hotrod-no-such-mods'))).toEqual({ mods: [], brokenMods: [] })
 })

@@ -25,14 +25,14 @@ export async function startCore(
   } = {},
 ) {
   const { env = process.env, uiDir, adapters = registered, machine = localMachine } = options
-  const mods = options.mods ?? (await loadMods(STOCK_MODS_DIR))
+  const { mods, brokenMods } = options.mods ? { mods: options.mods, brokenMods: [] } : await loadMods(STOCK_MODS_DIR)
   const garage = env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
   const port = Number(env.HOTROD_PORT ?? 4317)
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
   const token = env.HOTROD_TOKEN || randomBytes(32).toString('base64url')
 
   const defaultEngine = env.HOTROD_ENGINE ?? adapters[0]?.id ?? ''
-  const core = openCore({ garage, adapters, defaultEngine, machine, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine, mods, brokenMods })
   if (env.HOTROD_ENGINE) core.setEngineEnabled(env.HOTROD_ENGINE, true)
   if (env.HOTROD_WORK) core.setWorkFolder(env.HOTROD_WORK)
   await core.refreshEngines()

@@ -2874,6 +2874,28 @@ describe('mods', () => {
     ])
   })
 
+  it("lists a mod that didn't load, off with why, and won't turn it on or change its saved switch", () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { browser: { enabled: true } } }))
+    const loadError = "@playwright/mcp isn't installed."
+    const core = openCore({
+      garage,
+      adapters: [createFakeAdapter()],
+      defaultEngine: 'fake',
+      machine: sandboxingMachine,
+      mods: [tester],
+      brokenMods: [{ id: 'browser', loadError }],
+    })
+    cores.push(core)
+    expect(core.mods()).toEqual([
+      infoOf(tester, true),
+      infoOf(SUBAGENTS_MOD, true),
+      { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError },
+    ])
+    expect(() => core.handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true }, () => {})).toThrow(loadError)
+    expect(savedMods(garage)).toEqual({ browser: { enabled: true } })
+  })
+
   it('refuses two mods with one id', () => {
     expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester, { ...tester, name: 'Again' }])).toThrow(
       'Two mods have the id "tester"',

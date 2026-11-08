@@ -196,6 +196,7 @@ export type ModInfo = {
   settings: ModSetting[]
   values: ModValues
   setup?: SetupState
+  loadError?: string
 }
 
 export type SetupState = {
