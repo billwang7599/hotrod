@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { type EngineEvent, type LoginEvent, type SessionOptions } from '../shared.ts'
 import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
@@ -322,13 +324,38 @@ describe('claudeCode adapter', () => {
     ])
   })
 
-  it('summarizes a permission request', () => {
+  it('summarizes a permission request, with the path an edit writes', () => {
     const { fake, events } = startSession()
     const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
-    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'r1', request }) + '\n')
+    const notebook = { subtype: 'can_use_tool', tool_name: 'NotebookEdit', input: { notebook_path: '/n.ipynb' } }
+    const shell = { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls /c.ts' } }
+    for (const [id, req] of [['r1', request], ['r2', notebook], ['r3', shell]] as const) {
+      fake.stdout(JSON.stringify({ type: 'control_request', request_id: id, request: req }) + '\n')
+    }
     expect(events).toEqual([
-      { type: 'permission.requested', requestId: 'r1', name: 'Write', kind: 'edit', summary: '/c.ts', input: request.input },
+      { type: 'permission.requested', requestId: 'r1', name: 'Write', kind: 'edit', summary: '/c.ts', path: '/c.ts', input: request.input },
+      {
+        type: 'permission.requested',
+        requestId: 'r2',
+        name: 'NotebookEdit',
+        kind: 'edit',
+        summary: '/n.ipynb',
+        path: '/n.ipynb',
+        input: notebook.input,
+      },
+      { type: 'permission.requested', requestId: 'r3', name: 'Bash', kind: 'shell', summary: 'ls /c.ts', input: shell.input },
     ])
+  })
+
+  it("tells Claude Code why a call was denied when given a reason", () => {
+    const { fake, session } = startSession()
+    const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
+    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'r1', request }) + '\n')
+    session.respond('r1', false, 'Edit only inside /work.')
+    expect(fake.sent().at(-1)).toEqual({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'r1', response: { behavior: 'deny', message: 'Edit only inside /work.' } },
+    })
   })
 
   it('closes stdin and kills the process', () => {
@@ -515,5 +542,42 @@ describe('claudeCode accounts', () => {
     const fake = fakeMachine({ 'claude auth logout': { code: 0, stdout: '', stderr: '' } })
     await claudeCode.accounts!.logout(fake.machine, dir)
     expect(fake.ran).toEqual([{ command: 'claude', args: ['auth', 'logout'], env: { CLAUDE_CONFIG_DIR: dir } }])
+  })
+})
+
+describe('claudeCode in a sandbox', () => {
+  const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
+  const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
+  afterEach(() => {
+    if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
+  })
+
+  it('also lets it write its shell snapshots and the login keychain, with its temp folder in the sandbox', () => {
+    delete process.env.CLAUDE_CONFIG_DIR
+    const { fake } = startSession('', { sandbox })
+    const snapshots = join(homedir(), '.claude', 'shell-snapshots')
+    expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', snapshots, keychain], tmpDir: sandbox.tmpDir })
+    expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it("puts the shell snapshots in the config folder it runs with: the account's, else CLAUDE_CONFIG_DIR", () => {
+    process.env.CLAUDE_CONFIG_DIR = '/cfg'
+    expect(startSession('', { sandbox }).fake.spawned[0]?.sandbox?.writable).toContain('/cfg/shell-snapshots')
+    const accountDir = '/garage/accounts/claude-code/work'
+    const inAccount = startSession('', { sandbox, accountDir }).fake.spawned[0]
+    expect(inAccount?.sandbox?.writable).toContain(`${accountDir}/shell-snapshots`)
+    expect(inAccount?.env).toEqual({ CLAUDE_CONFIG_DIR: accountDir, CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it('sandboxes a one-shot completion the same way', async () => {
+    delete process.env.CLAUDE_CONFIG_DIR
+    const stdout = JSON.stringify({ type: 'result', is_error: false, result: 'ok' })
+    const fake = fakeMachine({ claude: { code: 0, stdout, stderr: '' } })
+    const request = { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox }
+    await claudeCode.complete!(fake.machine, request)
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', join(homedir(), '.claude', 'shell-snapshots'), keychain])
+    expect(fake.ran[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
 })

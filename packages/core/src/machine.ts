@@ -1,7 +1,7 @@
-import { spawn } from 'node:child_process'
-import type { EngineProcess, Machine } from './shared.ts'
-
-type SpawnOptions = { cwd: string; env?: Record<string, string> }
+import { execFileSync, spawn } from 'node:child_process'
+import { mkdirSync, realpathSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import type { EngineProcess, Machine, Sandbox, SpawnOptions } from './shared.ts'
 
 export const KILL_GRACE_MS = 5000
 export const RUN_TIMEOUT_MS = 10000
@@ -31,19 +31,89 @@ function signal(pgid: number, name: NodeJS.Signals | 0) {
   }
 }
 
+// Shells, Node and ptys write these devices; none of them is a file on disk.
+const DEVICE_RULES = [
+  '(literal "/dev/null")',
+  '(literal "/dev/zero")',
+  '(literal "/dev/tty")',
+  '(literal "/dev/dtracehelper")',
+  '(literal "/dev/stdout")',
+  '(literal "/dev/stderr")',
+  '(regex #"^/dev/fd/")',
+  '(literal "/dev/ptmx")',
+  '(regex #"^/dev/ttys")',
+]
+
+// The sandbox matches real paths (/tmp is /private/tmp), and a writable path may not exist yet.
+export function realPath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    const parent = dirname(path)
+    return parent === path ? path : join(realPath(parent), basename(path))
+  }
+}
+
+// BSD mktemp and Cocoa tools use the per-user temp folder whatever TMPDIR says; allowing it exposes others' temp files.
+export const USER_TEMP_WRITABLE = true
+let userTempDir: string | undefined
+const userTemp = () =>
+  (userTempDir ??= execFileSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim())
+
+// zsh puts here-documents at TMPPREFIX, not TMPDIR; the caches keep tools off the user's shared ones.
+const tempEnv = (tmpDir: string): Record<string, string> => ({
+  TMPDIR: tmpDir,
+  TMPPREFIX: join(tmpDir, 'zsh'),
+  XDG_CACHE_HOME: join(tmpDir, 'cache'),
+  npm_config_cache: join(tmpDir, 'cache', 'npm'),
+  PIP_CACHE_DIR: join(tmpDir, 'cache', 'pip'),
+  GOCACHE: join(tmpDir, 'cache', 'go-build'),
+  GOMODCACHE: join(tmpDir, 'cache', 'go-mod'),
+})
+
+function sandboxed(command: string, args: string[], sandbox: Sandbox, platform: NodeJS.Platform) {
+  if (platform !== 'darwin') {
+    throw new Error(`Hotrod can't sandbox engines on ${platform} yet, so it won't start one that should be sandboxed`)
+  }
+  const { tmpDir } = sandbox
+  if (tmpDir) mkdirSync(tmpDir, { recursive: true })
+  const temp = tmpDir ? [tmpDir, ...(USER_TEMP_WRITABLE ? [userTemp()] : [])] : []
+  const writable = [...sandbox.writable, ...temp]
+  // Paths go in as parameters, so no path can break out of the profile's quoting.
+  const filters = (paths: string[], key: string) => ({
+    rules: paths.map((path, i) => `(${path.endsWith('*') ? 'prefix' : 'subpath'} (param "${key}${i}"))`).join(' '),
+    params: paths.flatMap((path, i) => ['-D', `${key}${i}=${realPath(path.replace(/\*$/, ''))}`]),
+  })
+  const allowed = filters(writable, 'W')
+  const kept = filters(sandbox.readOnly ?? [], 'R')
+  // The last matching rule wins, so read-only paths come after the writable ones.
+  const profile =
+    `(version 1)(allow default)(deny file-write* (subpath "/"))` +
+    `(allow file-write* ${DEVICE_RULES.join(' ')} ${allowed.rules})` +
+    (kept.rules ? `(deny file-write* ${kept.rules})` : '')
+  const params = [...allowed.params, ...kept.params]
+  const env = tmpDir ? tempEnv(tmpDir) : {}
+  return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, ...params, command, ...args], env }
+}
+
 function engineEnv(extra: Record<string, string> = {}) {
   const env: Record<string, string | undefined> = { ...process.env }
   for (const key of STRIPPED_ENV_KEYS) delete env[key]
   return { ...env, ...extra }
 }
 
-export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs = RUN_TIMEOUT_MS } = {}): Machine {
+export function createLocalMachine({
+  killGraceMs = KILL_GRACE_MS,
+  runTimeoutMs = RUN_TIMEOUT_MS,
+  platform = process.platform,
+} = {}) {
   const running = new Set<{ kill(): void; settled: Promise<void> }>()
 
   function spawnProcess(command: string, args: string[], options: SpawnOptions): EngineProcess {
-    const child = spawn(command, args, {
+    const jailed = options.sandbox && sandboxed(command, args, options.sandbox, platform)
+    const child = spawn(jailed ? jailed.command : command, jailed ? jailed.args : args, {
       cwd: options.cwd,
-      env: engineEnv(options.env),
+      env: engineEnv({ ...jailed?.env, ...options.env }),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     })
@@ -130,7 +200,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     await Promise.all(stopping.map((proc) => proc.settled))
   }
 
-  return { spawn: spawnProcess, run, stopAll }
+  return { canSandbox: platform === 'darwin', spawn: spawnProcess, run, stopAll } satisfies Machine
 }
 
 export const localMachine = createLocalMachine()

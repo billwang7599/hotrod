@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
+import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
-import { SettingsDialog, type SettingsPage } from './settings.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
+import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
 import {
@@ -12,7 +13,6 @@ import {
   folderName,
   folderOf,
   initialState,
-  MAIN_CHAT_ID,
   MIN_WINDOW_PX,
   PANEL_PX,
   reduce,
@@ -25,6 +25,7 @@ const SELECTED_KEY = 'hotrod.selectedChat'
 const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
 const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
 const COLUMN_KEY = 'hotrod.columnWidth'
+const HINT_DELAY_MS = 400
 
 type Overlay = 'sidebar' | 'context' | null
 
@@ -36,7 +37,7 @@ const subscribeResize = (listener: () => void) => {
 declare global {
   interface Window {
     hotrod?: {
-      pickFolder(): Promise<string | null>
+      pickFolder(title?: string): Promise<string | null>
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
@@ -62,7 +63,7 @@ function Banner({ tone, children, action }: { tone: keyof typeof BANNER_TONES; c
 function App() {
   const [state, dispatch] = useReducer(reduce, initialState, (s) => ({
     ...s,
-    selectedId: localStorage.getItem(SELECTED_KEY) ?? MAIN_CHAT_ID,
+    selectedId: localStorage.getItem(SELECTED_KEY) ?? '',
   }))
   const send = useCore(dispatch)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
@@ -72,6 +73,9 @@ function App() {
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
+  const [changingWorkFolder, setChangingWorkFolder] = useState(false)
+  useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
     setSettingsOpen(true)
@@ -89,6 +93,7 @@ function App() {
   }
   const sidebarDocks = docked !== 'none'
   const contextDocks = docked === 'both'
+  const sidebarShown = sidebarDocks ? sidebarOpen : overlay === 'sidebar'
   const flipOverlay = (panel: Overlay) => setOverlay((open) => (open === panel ? null : panel))
   const toggleSidebar = useCallback(
     () => (sidebarDocks ? setSidebarOpen((open) => !open) : flipOverlay('sidebar')),
@@ -150,21 +155,25 @@ function App() {
             )}
           </AnimatePresence>
           <AnimatePresence initial={false}>
-            {(sidebarDocks ? sidebarOpen : overlay === 'sidebar') && (
+            {sidebarShown && (
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
                 <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
-                  <div className="flex h-44 items-center justify-between pr-8 pl-16">
-                    <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label={`New ${CHAT_NOUN.one}`}
-                      title={`New ${CHAT_NOUN.one}`}
-                      disabled={!connected}
-                      onClick={() => setNameRequest({ kind: 'new' })}
-                    >
-                      +
-                    </Button>
+                  <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
+                    {!sidebarDocks && (
+                      <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
+                    )}
+                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Hotrod</span>
+                    <Hint text={`New ${CHAT_NOUN.one}`}>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`New ${CHAT_NOUN.one}`}
+                        disabled={!connected}
+                        onClick={() => setNameRequest({ kind: 'new' })}
+                      >
+                        +
+                      </Button>
+                    </Hint>
                   </div>
                   <ChatNav
                     chats={state.chats}
@@ -175,15 +184,21 @@ function App() {
                     askName={setNameRequest}
                   />
                   {window.hotrod && (
-                    <div className="flex items-center gap-6 border-t px-8 py-10">
-                      <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
-                        New {CHAT_NOUN.one} from folder…
-                      </Button>
-                      <span className="text-sm text-faint">⌘O</span>
+                    <div className="flex border-t px-8 py-10">
+                      <Hint text="⌘O">
+                        <Button className="flex-1" disabled={!connected} onClick={() => void newChatFromFolder()}>
+                          New {CHAT_NOUN.one} from folder…
+                        </Button>
+                      </Hint>
                     </div>
                   )}
                   <div className="px-8 pb-10">
-                    <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
+                    <Button
+                      variant="ghost"
+                      size="none"
+                      className="flex h-control w-full items-center gap-8 px-8"
+                      onClick={() => openSettings()}
+                    >
                       <span aria-hidden="true">⚙</span>
                       Settings
                     </Button>
@@ -229,6 +244,8 @@ function App() {
               contextDefaults={state.contextDefaults}
               mods={state.mods}
               modelLists={state.modelLists}
+              workFolder={state.workFolder}
+              chooseWorkFolder={() => setChangingWorkFolder(true)}
               connected={connected}
               send={send}
               page={settingsPage}
@@ -242,12 +259,13 @@ function App() {
                 chat={selected}
                 chats={state.chats}
                 folder={folderOf(state.chats, selected)}
+                workFolder={state.workFolder}
                 engines={state.engines}
                 accounts={accounts}
                 connected={state.connected}
                 send={send}
                 openSettings={openSettings}
-                sidebarOpen={sidebarDocks ? sidebarOpen : overlay === 'sidebar'}
+                sidebarOpen={sidebarShown}
                 toggleSidebar={toggleSidebar}
                 contextOpen={contextDocks ? contextOpen : overlay === 'context'}
                 contextOverlay={!contextDocks}
@@ -260,11 +278,27 @@ function App() {
                 modelLists={state.modelLists[selected.engine]}
               />
             ) : (
-              <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                <strong className="text-body font-semibold text-text">
-                  {state.connected ? 'Loading…' : 'Connecting to the core…'}
-                </strong>
-              </div>
+              <>
+                <header className="flex h-44 shrink-0 items-center border-b px-12">
+                  <PanelToggle side="left" label="Sidebar" noun="sidebar" open={sidebarShown} toggle={toggleSidebar} />
+                </header>
+                <div className="m-auto flex max-w-420 flex-col items-center gap-12 p-24 text-center text-muted">
+                  <strong className="text-body font-semibold text-text">
+                    {state.loaded
+                      ? `No ${CHAT_NOUN.one} open`
+                      : state.connected
+                        ? 'Loading…'
+                        : 'Connecting to the core…'}
+                  </strong>
+                  {state.loaded && (
+                    <Hint text={`A ${CHAT_NOUN.one} is a chat with its own folders, files and AGENTS.md`}>
+                      <Button variant="primary" disabled={!connected} onClick={() => setNameRequest({ kind: 'new' })}>
+                        New {CHAT_NOUN.one}…
+                      </Button>
+                    </Hint>
+                  )}
+                </div>
+              </>
             )}
           </div>
           <div className="fixed right-16 bottom-120 z-30 flex max-w-360 flex-col">
@@ -281,6 +315,15 @@ function App() {
             pickFolder={window.hotrod?.pickFolder}
             close={() => setNameRequest(null)}
           />
+          <WorkFolderDialog
+            open={firstRun || changingWorkFolder}
+            workFolder={state.workFolder}
+            connected={connected}
+            send={send}
+            toasts={state.toasts}
+            pickFolder={window.hotrod?.pickFolder}
+            close={firstRun ? undefined : () => setChangingWorkFolder(false)}
+          />
           <ConfirmDialog />
         </div>
       </MotionConfig>
@@ -289,4 +332,8 @@ function App() {
 }
 
 startAppearance()
-createRoot(document.getElementById('root')!).render(<App />)
+createRoot(document.getElementById('root')!).render(
+  <Tooltip.Provider delayDuration={HINT_DELAY_MS}>
+    <App />
+  </Tooltip.Provider>,
+)

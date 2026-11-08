@@ -385,16 +385,18 @@ describe('openCompactor', () => {
       text?: (key: string) => string
     } = {},
   ) {
-    const requests: (CompletionRequest & { atMs: number })[] = []
+    const requests: (CompletionRequest & { atMs: number; settled: boolean })[] = []
     let active = 0
     let maxActive = 0
     let failures = options.failures ?? 0
     const complete = async (request: CompletionRequest) => {
-      requests.push({ ...request, atMs: Date.now() })
+      const sent = { ...request, atMs: Date.now(), settled: false }
+      requests.push(sent)
       active++
       maxActive = Math.max(maxActive, active)
       await new Promise((resolve) => setTimeout(resolve, 1))
       active--
+      sent.settled = true
       if (failures-- > 0 || options.fail?.(request)) throw new Error('rate limited')
       if (options.reply !== undefined) return options.reply
       const keys = keysOf(request).filter((key) => !options.omit?.includes(key))
@@ -568,7 +570,8 @@ describe('openCompactor', () => {
       retryBaseMs: 1,
       retryMaxMs: 2,
     })
-    const aloneAfter = (start: number) => model.requests.slice(start).some((r) => keysOf(r).join() === '3+1')
+    const triedAloneAfter = (start: number) =>
+      model.requests.slice(start).some((r) => r.settled && keysOf(r).join() === '3+1')
     compactor.touch('a')
     for (let round = 0; round <= ITEM_MAX_ATTEMPTS && !summaries.get(3, 1); round++) {
       if (round > 0) {
@@ -578,9 +581,9 @@ describe('openCompactor', () => {
         await until(() => summaries.get(id, 1) !== undefined)
       }
       const start = model.requests.length
-      await until(() => aloneAfter(start) || summaries.get(3, 1) !== undefined)
-      await new Promise((resolve) => setTimeout(resolve, 10))
+      await until(() => triedAloneAfter(start) || summaries.get(3, 1) !== undefined)
     }
+    await until(() => pendingOf(messages, summaries).length === 0)
     compactor.close()
     expect(summaries.get(3, 1)?.text).toBe(
       `${messages[3]!.kind}: ${messages[3]!.text}`.slice(0, LINE_MAX_CHARS - 1) + '…',

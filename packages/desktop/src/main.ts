@@ -90,14 +90,11 @@ async function start() {
   }
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, onSignal)
 
-  const pickFolder = async () => {
-    const result = await dialog.showOpenDialog(window, {
-      title: 'New space from folder',
-      properties: ['openDirectory', 'createDirectory'],
-    })
+  const pickFolder = async (title = 'New space from folder') => {
+    const result = await dialog.showOpenDialog(window, { title, properties: ['openDirectory', 'createDirectory'] })
     return result.canceled ? null : (result.filePaths[0] ?? null)
   }
-  ipcMain.handle('pick-folder', pickFolder)
+  ipcMain.handle('pick-folder', (_event, title?: string) => pickFolder(title))
   ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
     const { scheme, vibrancy, background } = appearance
     if (scheme === 'system' || scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme

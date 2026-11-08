@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage } from '@hotrod/core/shared'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo } from '@hotrod/core/shared'
 import type { Account, EngineAccounts } from '@hotrod/core/shared'
 import {
   accountLabel,
@@ -14,7 +14,6 @@ import {
   formatBytes,
   initialState,
   listedAccounts,
-  MAIN_CHAT_ID,
   MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
   modelMenu,
@@ -29,12 +28,13 @@ import {
   type State,
 } from './state.ts'
 
+const MAIN_CHAT_ID = 'main'
 const at = '2026-11-06T00:00:00.000Z'
 const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
 const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> = {}): ChatState => ({
   id,
   name: id,
-  ...(id !== MAIN_CHAT_ID && { parentId: MAIN_CHAT_ID }),
+  ...(id === MAIN_CHAT_ID && { mod: 'home' }),
   folders: [],
   files: [],
   engine: 'fake',
@@ -47,11 +47,29 @@ const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> 
   ...change,
 })
 const contextDefaults = { agents: true, folders: true, files: true }
-const mods = { subagents: { enabled: false, limit: 4 } }
+const modInfo = (id: string, enabled = false): ModInfo => ({
+  id,
+  name: id,
+  description: '',
+  enabled,
+  settings: [{ key: 'limit', label: 'Limit', type: 'number', default: 4 }],
+  values: { limit: 4 },
+})
+const mods = [modInfo('subagents'), modInfo('other')]
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
 const snapshot = (chats: ChatState[]): Action =>
-  ({ type: 'snapshot', engines, accounts: [], chats, contextDefaults, mods, modelLists, memory: {} })
+  ({
+    type: 'snapshot',
+    engines,
+    accounts: [],
+    chats,
+    contextDefaults,
+    mods,
+    modelLists,
+    memory: {},
+    workFolder: { defaultPath: '/g/work', canSandbox: true },
+  })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>
   ({ type: 'chat.entry', chatId, entry: { at, ...e } as ChatEntry })
@@ -75,6 +93,8 @@ describe('reduce', () => {
       ]),
     )
     expect(state.engines).toEqual(engines)
+    expect(state.loaded).toBe(true)
+    expect(initialState.loaded).toBe(false)
     expect(state.selectedId).toBe(MAIN_CHAT_ID)
     expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'a', 'b'])
     expect(items(state)).toEqual([
@@ -91,6 +111,15 @@ describe('reduce', () => {
     expect(state.selectedId).toBe('b')
     expect(reduce(state, snapshot([chat(MAIN_CHAT_ID), chat('a')])).selectedId).toBe(MAIN_CHAT_ID)
     expect(run({ type: 'select', chatId: 'gone' }, snapshot([chat(MAIN_CHAT_ID)])).selectedId).toBe(MAIN_CHAT_ID)
+  })
+
+  it('falls back to the newest space without a pinned chat, and selects nothing without spaces', () => {
+    const later = '2026-11-07T00:00:00.000Z'
+    const spaces = [chat('a'), chat('b', [], { createdAt: later }), chat('c', [], { createdAt: later, archived: true })]
+    expect(run({ type: 'select', chatId: MAIN_CHAT_ID }, snapshot(spaces)).selectedId).toBe('b')
+    expect(run({ type: 'select', chatId: 'a' }, snapshot(spaces)).selectedId).toBe('a')
+    expect(run(snapshot([chat('c', [], { archived: true })])).selectedId).toBe('')
+    expect(run(snapshot([chat('a')]), { type: 'chat.removed', chatId: 'a' }).selectedId).toBe('')
   })
 
   it('adds a chat once and selects it, then follows its name, folders and archive flag', () => {
@@ -122,7 +151,7 @@ describe('reduce', () => {
     expect(cleared.chats[1]?.thinking).toBe('high')
   })
 
-  it('removes a chat and selects the Workshop if the selection went with it', () => {
+  it('removes a chat and selects the pinned chat if the selection went with it', () => {
     const state = run(snapshot([chat(MAIN_CHAT_ID), chat('s'), chat('c')]), { type: 'select', chatId: 's' })
     expect(reduce(state, { type: 'chat.removed', chatId: 'c' }).selectedId).toBe('s')
     const removed = reduce(state, { type: 'chat.removed', chatId: 's' })
@@ -148,7 +177,7 @@ describe('reduce', () => {
 
   it('replaces an engine when it is turned on or off', () => {
     const state = run(
-      { type: 'snapshot', engines, accounts: [], chats: [], contextDefaults, mods, modelLists, memory: {} },
+      snapshot([]),
       { type: 'engine.updated', engine: { ...engines[0]!, enabled: false } },
     )
     expect(state.engines).toEqual([{ id: 'fake', enabled: false, installed: true, signedIn: true }])
@@ -160,7 +189,7 @@ describe('reduce', () => {
     const other: EngineAccounts = { ...fake, engine: 'other' }
     const work: Account = { id: 'work', name: 'Work', kind: 'login', label: 'me@work.test', signedIn: true }
     const state = run(
-      { type: 'snapshot', engines, accounts: [fake, other], chats: [], contextDefaults, mods, modelLists, memory: {} },
+      { ...(snapshot([]) as Extract<Action, { type: 'snapshot' }>), accounts: [fake, other] },
       { type: 'accounts.updated', accounts: { ...fake, active: 'work', accounts: [...fake.accounts, work] } },
       { type: 'accounts.updated', accounts: { ...fake, engine: 'new' } },
     )
@@ -311,6 +340,9 @@ describe('reduce', () => {
     expect(items(denied)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied' })
     const allowed = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: true }))
     expect(items(allowed)[0]).toMatchObject({ requestId: 'r1', outcome: 'allowed' })
+    expect(items(allowed)[0]).not.toHaveProperty('auto')
+    const auto = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false, auto: true }))
+    expect(items(auto)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied', auto: true })
   })
 
   it('stops unfinished tools and permissions when the turn ends', () => {
@@ -371,11 +403,11 @@ describe('reduce', () => {
     expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
   })
 
-  it('loads the mods from the snapshot and follows their updates', () => {
+  it('loads the mods from the snapshot and replaces only the one that changed', () => {
     const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
     expect(loaded.mods).toEqual(mods)
-    const on = { subagents: { enabled: true, limit: -1 } }
-    expect(reduce(loaded, { type: 'mods.updated', mods: on }).mods).toEqual(on)
+    const on = { ...modInfo('subagents', true), values: { limit: -1 } }
+    expect(reduce(loaded, { type: 'mod.updated', mod: on }).mods).toEqual([on, mods[1]])
   })
 
   it('loads the model lists from the snapshot and replaces one engine on update', () => {
@@ -401,8 +433,10 @@ describe('chat tree', () => {
     view('orphan', { parentId: 'nope' }, '2026-11-06T12:00:00.000Z'),
   ]
 
-  it("shows the Workshop first, then each chat's subagents and named chats below it, newest first", () => {
-    expect(rows(chatTree(chats).active)).toEqual(['0 main', '1 s0', '1 new', '1 orphan', '1 old', '2 s1'])
+  it("shows a mod's chat first, then the spaces newest first, each with its subagents below it", () => {
+    expect(rows(chatTree(chats).active)).toEqual(['0 main', '1 s0', '0 new', '0 orphan', '0 old', '1 s1'])
+    const spaces = chats.filter((c) => c.id !== MAIN_CHAT_ID && c.parentId !== MAIN_CHAT_ID)
+    expect(rows(chatTree(spaces).active)).toEqual(['0 new', '0 orphan', '0 old', '1 s1'])
   })
 
   it('lists archived chats apart, each with the archived chats below it', () => {
@@ -411,9 +445,7 @@ describe('chat tree', () => {
 
   it('finds a chat with every chat below it', () => {
     expect(familyOf(chats, 'old').map((c) => c.id)).toEqual(['old', 's1'])
-    expect(familyOf(chats, MAIN_CHAT_ID).map((c) => c.id).sort()).toEqual(
-      chats.filter((c) => c.parentId !== 'nope').map((c) => c.id).sort(),
-    )
+    expect(familyOf(chats, MAIN_CHAT_ID).map((c) => c.id)).toEqual([MAIN_CHAT_ID, 's0'])
   })
 
   it("names a chat's working folder: its own first folder, else the nearest one above it", () => {

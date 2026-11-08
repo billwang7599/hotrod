@@ -1,3 +1,5 @@
+import type { ModSetting, ModValues } from '@hotrod/mod-api'
+
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
 export type EngineEvent =
@@ -14,6 +16,7 @@ export type EngineEvent =
       name: string
       kind: ToolKind
       summary: string
+      path?: string
       input: unknown
     }
   | { type: 'turn.completed'; error?: string }
@@ -27,12 +30,18 @@ export interface EngineProcess {
   onExit(listener: (code: number | null, stderrTail: string) => void): void
 }
 
+// Each path covers everything under it; one ending in * is a prefix (`auth.json.lock*`). readOnly wins over writable.
+export type Sandbox = { writable: string[]; readOnly?: string[]; tmpDir?: string }
+
+export type SpawnOptions = { cwd: string; env?: Record<string, string>; sandbox?: Sandbox }
+
 export interface Machine {
-  spawn(command: string, args: string[], options: { cwd: string; env?: Record<string, string> }): EngineProcess
+  canSandbox: boolean
+  spawn(command: string, args: string[], options: SpawnOptions): EngineProcess
   run(
     command: string,
     args: string[],
-    options: { cwd: string; env?: Record<string, string>; input?: string; timeoutMs?: number },
+    options: SpawnOptions & { input?: string; timeoutMs?: number },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -61,18 +70,25 @@ export type SessionOptions = {
   readFiles?: string[]
   model?: string
   thinking?: string
+  sandbox?: Sandbox
 }
 
 export type ImageInput = { mimeType: string; base64: string }
 
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
-export type CompleteOptions = CompletionRequest & { cwd: string; model: string; accountDir?: string; apiKey?: string }
+export type CompleteOptions = CompletionRequest & {
+  cwd: string
+  model: string
+  accountDir?: string
+  apiKey?: string
+  sandbox?: Sandbox
+}
 
 export interface Session {
   prompt(text: string, images?: ImageInput[]): void
   interrupt(): void
-  respond(requestId: string, allow: boolean): void
+  respond(requestId: string, allow: boolean, message?: string): void
   close(): void
 }
 
@@ -110,12 +126,10 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const WORKSHOP_ID = 'main'
-export const WORKSHOP_NAME = 'Home'
-
 export type ChatInfo = {
   id: string
   name: string
+  mod?: string
   parentId?: string
   subagent?: boolean
   parentMessages?: number
@@ -127,7 +141,17 @@ export type ChatInfo = {
   role?: ModelRole
   model?: string
   thinking?: string
+  workDir?: string
+  worktrees?: Record<string, Worktree>
+  editAnywhere?: true
 }
+
+export type Worktree = { path: string; branch: string }
+
+export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean; editAnywhere?: true }
+
+export const editsAnywhere = (chat: Pick<ChatInfo, 'editAnywhere'>, workFolder: Pick<WorkFolder, 'editAnywhere'>) =>
+  chat.editAnywhere === true || workFolder.editAnywhere === true
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -145,15 +169,34 @@ export function pickModel(engine: EngineInfo | undefined, lists: ModelLists, cha
 export const pickThinking = (engine: EngineInfo | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
   chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
 
-export type Mods = { subagents: { enabled: boolean; limit: number } }
+export type ModInfo = {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  settings: ModSetting[]
+  values: ModValues
+}
+
+export function settingProblem(setting: ModSetting, value: unknown) {
+  if (setting.type === 'select') {
+    if (setting.options.some((option) => option.value === value)) return undefined
+    return `must be one of: ${setting.options.map((option) => option.label).join(', ')}`
+  }
+  if (setting.type === 'boolean') return typeof value === 'boolean' ? undefined : 'must be on or off'
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'must be a number'
+  if (setting.integer && !Number.isInteger(value)) return 'must be a whole number'
+  if (setting.min !== undefined && value < setting.min) return `must be at least ${setting.min}`
+  if (setting.max !== undefined && value > setting.max) return `must be at most ${setting.max}`
+}
 
 export type MemorySettings = { engine?: string; model?: string }
-
-export const DEFAULT_SUBAGENT_LIMIT = 4
 
 export const CONTEXT_SECTIONS = ['agents', 'folders', 'files'] as const
 
 export type ContextSection = (typeof CONTEXT_SECTIONS)[number]
+
+export const GLOBAL_CONTEXT = 'global'
 
 export type ContextItem = {
   section: ContextSection
@@ -168,13 +211,13 @@ const BINARY_SNIFF_BYTES = 8192
 
 export const looksBinary = (bytes: Uint8Array) => bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)
 
-export type NewChat = { parentId?: string; name: string; engine?: string; folders?: string[]; files?: string[] }
+export type NewChat = { name: string; engine?: string; folders?: string[]; files?: string[] }
 
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string; attachments?: Attachment[] }
-  | { type: 'permission.resolved'; requestId: string; allow: boolean }
+  | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
@@ -205,6 +248,7 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
+  | { type: 'chat.setEditAnywhere'; chatId: string; enabled: boolean }
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
@@ -215,7 +259,11 @@ export type ClientMessage =
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
-  | { type: 'subagents.set'; enabled: boolean; limit: number }
+  | { type: 'instructions.write'; text: string }
+  | { type: 'workFolder.set'; path: string }
+  | { type: 'workFolder.setEditAnywhere'; enabled: boolean }
+  | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
+  | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
@@ -234,9 +282,10 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
-      mods: Mods
+      mods: ModInfo[]
       modelLists: Record<string, ModelLists>
       memory: MemorySettings
+      workFolder: WorkFolder
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -251,7 +300,8 @@ export type CoreMessage =
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
-  | { type: 'mods.updated'; mods: Mods }
+  | { type: 'mod.updated'; mod: ModInfo }
   | { type: 'models.updated'; engine: string; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
+  | { type: 'workFolder.updated'; workFolder: WorkFolder }
   | { type: 'error'; message: string }

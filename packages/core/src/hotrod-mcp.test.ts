@@ -1,12 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { ModTool, ModValues } from '@hotrod/mod-api'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
 import { messagesOf, openSummaries, zoom } from './memory.ts'
-import { WORKSHOP_NAME, type ChatEntry, type ChatState } from './shared.ts'
+import type { ChatEntry, ChatState } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -18,8 +19,7 @@ const at = '2026-11-07T00:00:00.000Z'
 function chat(id: string, change: Partial<ChatState> = {}): ChatState {
   return {
     id,
-    name: id === 'main' ? WORKSHOP_NAME : `Chat ${id}`,
-    ...(id !== 'main' && { parentId: 'main' }),
+    name: `Chat ${id}`,
     folders: [],
     files: [],
     engine: 'fake',
@@ -43,13 +43,14 @@ async function start(subagents = { enabled: false, limit: 4 }) {
     chat('main', { entries: said('hello', 'hi there') }),
     chat('aaaa0001', { folders: ['/tmp/app'], entries: said('build it', 'on it', 'and test it', 'done') }),
     chat('bbbb0001'),
-    chat('cccc0001', { parentId: 'aaaa0001' }),
+    chat('cccc0001'),
   ]
-  const nestable = new Set(['main', 'aaaa0001'])
   const calls: unknown[][] = []
+  const modTools: { tool: ModTool; values: ModValues }[] = []
   const mcp = openHotrodMcp({
     chats: () => chats,
-    canNest: (chatId) => nestable.has(chatId),
+    seesAll: (chatId) => chatId === 'main',
+    modTools: () => modTools,
     createChat(spec) {
       calls.push(['createChat', spec])
       const created = chat('dddd0001', { parentId: spec.parentId, ...(spec.subagent && { subagent: true }) })
@@ -103,7 +104,7 @@ async function start(subagents = { enabled: false, limit: 4 }) {
   }
   const names = async (chatId: string) =>
     (await rpc(grant(chatId), 'tools/list')).body.result.tools.map((t: { name: string }) => t.name).sort()
-  return { mcp, chats, calls, rpc, tool, json, grant, names, subagents }
+  return { mcp, chats, calls, modTools, rpc, tool, json, grant, names, subagents }
 }
 
 describe('Hotrod MCP server', () => {
@@ -117,21 +118,19 @@ describe('Hotrod MCP server', () => {
     expect((await rpc(token, 'tools/list')).status).toBe(401)
   })
 
-  it('gives a chat that can neither nest chats nor spawn subagents only zoom and date', async () => {
+  it('gives a chat that neither sees every chat nor spawns subagents only zoom and date', async () => {
     const { mcp, names } = await start()
     expect(await names('bbbb0001')).toEqual(['date', 'zoom'])
     expect(await names('cccc0001')).toEqual(['date', 'zoom'])
     expect(mcp.grant('nope')).toBeUndefined()
   })
 
-  it('offers the chat tools to every chat that may nest chats', async () => {
+  it('offers the chat tools to a chat that sees every chat', async () => {
     const { names } = await start()
-    const tools = ['create_chat', 'date', 'list_chats', 'read_chat', 'send_message', 'zoom']
-    expect(await names('main')).toEqual(tools)
-    expect(await names('aaaa0001')).toEqual(tools)
+    expect(await names('main')).toEqual(['date', 'list_chats', 'read_chat', 'send_message', 'zoom'])
   })
 
-  it('lists every chat below the caller, nested ones included', async () => {
+  it('lists every other chat to a chat that sees every chat', async () => {
     const { json, grant } = await start()
     const listed = await json(grant('main'), 'list_chats')
     expect(listed.map((c: { id: string }) => c.id)).toEqual(['aaaa0001', 'bbbb0001', 'cccc0001'])
@@ -143,7 +142,6 @@ describe('Hotrod MCP server', () => {
       engine: 'fake',
       archived: false,
     })
-    expect((await json(grant('aaaa0001'), 'list_chats')).map((c: { id: string }) => c.id)).toEqual(['cccc0001'])
   })
 
   it('reads a chat as messages, with tool calls as their summary', async () => {
@@ -157,7 +155,7 @@ describe('Hotrod MCP server', () => {
       { at, type: 'turn.completed', error: 'Interrupted' },
     ]
     chats.find((c) => c.id === 'cccc0001')!.entries = entries
-    const token = grant('aaaa0001')
+    const token = grant('main')
     expect(await tool(token, 'read_chat', { chatId: 'cccc0001' })).toEqual({
       isError: false,
       text: 'User: List the files\n\nTool Bash: ls -la\n\nAssistant: Two files.\n\n[Turn ended early: Interrupted]',
@@ -167,18 +165,19 @@ describe('Hotrod MCP server', () => {
     )
   })
 
-  it('refuses to read or message a chat outside the caller’s subtree', async () => {
-    const { calls, tool, grant } = await start()
+  it('refuses to read or message a chat the caller cannot reach', async () => {
+    const { calls, tool, grant } = await start({ enabled: true, limit: 4 })
     const token = grant('aaaa0001')
     for (const chatId of ['main', 'aaaa0001', 'bbbb0001', 'nope']) {
-      const refused = { isError: true, text: `No chat "${chatId}" below this one` }
+      const refused = { isError: true, text: `No chat "${chatId}" this chat can reach` }
       expect(await tool(token, 'read_chat', { chatId })).toEqual(refused)
       expect((await tool(token, 'send_message', { chatId, text: 'hi' })).isError).toBe(true)
     }
+    expect(await tool(grant('main'), 'read_chat', { chatId: 'main' })).toMatchObject({ isError: true })
     expect(calls).toEqual([])
   })
 
-  it('sends a message to an idle descendant and refuses a busy one', async () => {
+  it('sends a message to an idle chat it can reach and refuses a busy one', async () => {
     const { chats, calls, tool, grant } = await start()
     const token = grant('main')
     expect(await tool(token, 'send_message', { chatId: 'cccc0001', text: 'Go on' })).toMatchObject({ isError: false })
@@ -191,35 +190,54 @@ describe('Hotrod MCP server', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('creates a named chat under the caller, making missing folders, and starts it only on a prompt', async () => {
-    const { calls, json, tool, grant } = await start()
-    const root = mkdtempSync(join(tmpdir(), 'hotrod-mcp-'))
-    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
-    const existing = join(root, 'existing')
-    mkdirSync(existing)
-    writeFileSync(join(existing, 'keep.txt'), 'keep')
-    const fresh = join(root, 'deep', 'fresh')
-    const token = grant('main')
+  describe('mod tools', () => {
+    const make: ModTool = {
+      name: 'make',
+      description: 'Make a chat',
+      inputSchema: { type: 'object', properties: { name: { type: 'string', minLength: 1 } }, required: ['name'] },
+      offered: (caller) => caller.id !== 'bbbb0001',
+      async run(input, { caller, values, host }) {
+        if (input.name === 'fail') throw new Error('No such luck')
+        const made = host.createChat({ name: String(input.name), folders: ['/tmp/x'], parentId: 'aaaa0001' } as never)
+        host.send(made.id, 'Go')
+        return { caller: caller.id, subagent: caller.subagent ?? false, values, chatId: made.id }
+      },
+    }
 
-    expect(await json(token, 'create_chat', { name: 'Research', prompt: 'Research X' })).toEqual({ chatId: 'dddd0001' })
-    const app = { name: 'App', folders: [existing, fresh], files: ['/tmp/notes.md'], engine: 'pi' }
-    expect(await json(token, 'create_chat', app)).toEqual({ chatId: 'dddd0001' })
-    expect(await json(grant('aaaa0001'), 'create_chat', { name: 'Nested' })).toEqual({ chatId: 'dddd0001' })
-    expect(readdirSync(existing)).toEqual(['keep.txt'])
-    expect(existsSync(fresh)).toBe(true)
-    expect(calls).toEqual([
-      ['createChat', { parentId: 'main', name: 'Research' }],
-      ['send', 'dddd0001', 'Research X'],
-      ['createChat', { parentId: 'main', ...app }],
-      ['createChat', { parentId: 'aaaa0001', name: 'Nested' }],
-    ])
-
-    expect(await tool(token, 'create_chat', { name: 'Bad', folders: ['relative/dir'] })).toEqual({
-      isError: true,
-      text: 'The path must be absolute: relative/dir',
+    it('offers a mod tool to the callers it picks, with a token for a chat that has nothing else', async () => {
+      const { modTools, names, mcp } = await start()
+      modTools.push({ tool: make, values: { size: 2 } })
+      expect(await names('main')).toContain('make')
+      expect(await names('aaaa0001')).toEqual(['date', 'make', 'zoom'])
+      expect(await names('bbbb0001')).toEqual(['date', 'zoom'])
+      modTools.splice(0)
+      expect(await names('aaaa0001')).toEqual(['date', 'zoom'])
+      expect(mcp.grant('aaaa0001')).toBeDefined()
     })
-    expect((await tool(token, 'create_chat', { prompt: 'No name' })).isError).toBe(true)
-    expect(calls).toHaveLength(4)
+
+    it('runs it with the caller, its values and a host that makes top-level chats and starts them', async () => {
+      const { modTools, calls, json, grant } = await start()
+      modTools.push({ tool: make, values: { size: 2 } })
+      expect(await json(grant('aaaa0001'), 'make', { name: 'Docs' })).toEqual({
+        caller: 'aaaa0001',
+        subagent: false,
+        values: { size: 2 },
+        chatId: 'dddd0001',
+      })
+      expect(calls).toEqual([
+        ['createChat', { name: 'Docs', folders: ['/tmp/x'] }],
+        ['send', 'dddd0001', 'Go'],
+      ])
+    })
+
+    it('answers a thrown error or input its schema rules out as a tool error', async () => {
+      const { modTools, calls, tool, grant } = await start()
+      modTools.push({ tool: make, values: {} })
+      expect(await tool(grant('main'), 'make', { name: 'fail' })).toEqual({ isError: true, text: 'No such luck' })
+      expect((await tool(grant('main'), 'make', { name: '' })).isError).toBe(true)
+      expect((await tool(grant('main'), 'make', {})).isError).toBe(true)
+      expect(calls).toEqual([])
+    })
   })
 
   describe('subagents', () => {
@@ -232,8 +250,8 @@ describe('Hotrod MCP server', () => {
 
       const { names, mcp, chats } = await on()
       expect(await names('main')).toContain('spawn_subagent')
-      expect(await names('aaaa0001')).toContain('spawn_subagent')
       const tools = ['date', 'list_chats', 'read_chat', 'send_message', 'spawn_subagent', 'zoom']
+      expect(await names('aaaa0001')).toEqual(tools)
       expect(await names('bbbb0001')).toEqual(tools)
       chats.push(chat('eeee0001', { parentId: 'bbbb0001', subagent: true }))
       expect(await names('eeee0001')).toEqual(['date', 'zoom'])
@@ -293,7 +311,7 @@ describe('Hotrod MCP server', () => {
 
     it('never limits when the limit is -1', async () => {
       const { chats, tool, grant } = await on(-1)
-      for (let i = 0; i < 20; i++) chats.push(chat(`s${i}`, { subagent: true, status: 'running' }))
+      for (let i = 0; i < 20; i++) chats.push(chat(`s${i}`, { parentId: 'main', subagent: true, status: 'running' }))
       expect(await tool(grant('main'), 'spawn_subagent', { task: 'Go' })).toMatchObject({ isError: false })
     })
 
@@ -302,15 +320,15 @@ describe('Hotrod MCP server', () => {
       chats.push(
         chat('s1', { parentId: 'aaaa0001', subagent: true }),
         chat('s2', { parentId: 'bbbb0001', subagent: true }),
-        chat('s3', { subagent: true }),
+        chat('s3', { parentId: 'main', subagent: true }),
       )
       const ids = async (chatId: string) => (await json(grant(chatId), 'list_chats')).map((c: { id: string }) => c.id)
       expect(await ids('main')).toEqual(['aaaa0001', 'bbbb0001', 'cccc0001', 's3'])
-      expect(await ids('aaaa0001')).toEqual(['cccc0001', 's1'])
+      expect(await ids('aaaa0001')).toEqual(['s1'])
       expect(await ids('bbbb0001')).toEqual(['s2'])
       expect(await tool(grant('bbbb0001'), 'read_chat', { chatId: 'aaaa0001' })).toEqual({
         isError: true,
-        text: 'No chat "aaaa0001" below this one',
+        text: 'No chat "aaaa0001" this chat can reach',
       })
       expect((await tool(grant('main'), 'send_message', { chatId: 's1', text: 'hi' })).isError).toBe(true)
       expect(await tool(grant('bbbb0001'), 'send_message', { chatId: 's2', text: 'hi' })).toMatchObject({

@@ -1,0 +1,50 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, expect, it, vi } from 'vitest'
+import { loadMods } from './mods.ts'
+
+const dirs: string[] = []
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+function modsDir(files: Record<string, string>) {
+  const dir = mkdtempSync(join(tmpdir(), 'hotrod-mods-'))
+  dirs.push(dir)
+  for (const [id, source] of Object.entries(files)) {
+    mkdirSync(join(dir, id))
+    writeFileSync(join(dir, id, 'index.ts'), source)
+  }
+  return dir
+}
+
+const declare = (id: string, extra = '') =>
+  `export default { id: '${id}', name: 'Mod ${id}', description: '', enabledByDefault: true${extra} }`
+
+it("loads each folder's index.ts in name order, skipping a broken mod and reporting why", async () => {
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const dir = modsDir({
+    beta: declare('beta'),
+    alpha: `import type { Mod } from '@hotrod/mod-api'\nconst mod: Mod = ${declare('alpha').slice(15)}\nexport default mod`,
+    throws: `throw new Error('boom')`,
+    'no-default': `export const mod = 1`,
+    renamed: declare('other'),
+    reserved: declare('reserved', `, settings: [{ key: 'enabled', label: 'On', type: 'boolean', default: true }]`),
+  })
+  mkdirSync(join(dir, 'empty'))
+  writeFileSync(join(dir, 'tsconfig.json'), '{}')
+
+  expect((await loadMods(dir)).map((mod) => mod.id)).toEqual(['alpha', 'beta'])
+  const reported = errors.mock.calls.map(([message]) => String(message))
+  expect(reported).toHaveLength(4)
+  for (const id of ['throws', 'no-default', 'renamed', 'reserved']) {
+    expect(reported.some((message) => message.includes(join(dir, id)))).toBe(true)
+  }
+  expect(reported.find((message) => message.includes('throws'))).toContain('boom')
+})
+
+it('finds no mods in a missing folder', async () => {
+  expect(await loadMods(join(tmpdir(), 'hotrod-no-such-mods'))).toEqual([])
+})

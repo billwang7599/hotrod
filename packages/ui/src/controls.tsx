@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from 'react'
 import { AnimatePresence, m, type Transition } from 'motion/react'
-import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive } from 'radix-ui'
+import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive, Tooltip } from 'radix-ui'
 
 const TOAST_MS = 6_000
 const EASE_OUT = [0.2, 0, 0, 1] as const
@@ -21,7 +29,7 @@ export const MOTION = {
 } as const
 
 export function SidePanel({ side, overlay, children }: { side: 'left' | 'right'; overlay: boolean; children: ReactNode }) {
-  const position = overlay ? `absolute inset-y-0 z-20 shadow ${side === 'left' ? 'left-0' : 'right-0'}` : 'shrink-0'
+  const position = overlay ? `absolute inset-y-0 z-20 shadow-overlay ${side === 'left' ? 'left-0' : 'right-0'}` : 'shrink-0'
   return (
     <m.div
       className={`flex overflow-hidden ${position}`}
@@ -44,14 +52,93 @@ export function useSettled(ready = true) {
 
 export const CHAT_NOUN = { one: 'space', many: 'spaces' }
 
+// Radix Select hands focus back as :focus-visible even after a click, so hints track the last input instead.
+let typing = false
+if (typeof document !== 'undefined') {
+  document.addEventListener('keydown', () => (typing = true), true)
+  document.addEventListener('pointerdown', () => (typing = false), true)
+}
+
+type HintProps = Omit<ComponentProps<typeof Tooltip.Trigger>, 'asChild'> & {
+  text?: ReactNode
+  side?: 'top' | 'right' | 'bottom' | 'left'
+  align?: 'start' | 'center' | 'end'
+  children: ReactElement
+}
+
+// Inside another Radix trigger, nest the Hint in it: wrapped around one, the tooltip's data-state would win.
+export function Hint({ text, side, align, children, onFocus, ...props }: HintProps) {
+  return (
+    <Tooltip.Root open={text ? undefined : false}>
+      <Tooltip.Trigger
+        asChild
+        data-hint={text ? '' : undefined}
+        {...props}
+        onFocus={(e) => {
+          onFocus?.(e)
+          if (!typing) e.preventDefault()
+        }}
+      >
+        {children}
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content asChild side={side} align={align} sideOffset={6} collisionPadding={8}>
+          <m.div
+            className="z-50 max-w-280 rounded border bg-panel px-8 py-4 text-sm leading-[1.4] text-text shadow-floating"
+            initial={MOTION.menu.initial}
+            animate={MOTION.menu.animate}
+            transition={MOTION.menu.transition}
+          >
+            {text}
+          </m.div>
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  )
+}
+
+type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
+
+export function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
+  return (
+    <Hint text={`${open ? 'Hide' : 'Show'} ${noun}`}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="grid place-items-center aria-pressed:text-text"
+        aria-label={label}
+        aria-pressed={open}
+        onClick={toggle}
+      >
+        <svg
+          className={side === 'left' ? '-scale-x-100' : ''}
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+          <path d="M10 2.5v11" />
+          {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
+        </svg>
+      </Button>
+    </Hint>
+  )
+}
+
+export const GROUP = 'flex flex-col rounded-lg border bg-panel px-14 shadow-raised'
+
 export const NAV_LABEL =
   'mx-8 mt-14 mb-4 flex items-center gap-6 text-xs font-semibold tracking-[0.04em] text-faint uppercase'
 
+const PRESSABLE = 'enabled:shadow-raised enabled:active:shadow-sunken disabled:text-faint'
 const BUTTON_VARIANTS = {
-  default: 'enabled:bg-raised enabled:hover:bg-hover disabled:text-faint',
-  primary: 'enabled:border-accent enabled:bg-accent enabled:text-on-accent enabled:hover:bg-accent-hover disabled:text-faint',
-  danger: 'enabled:text-red enabled:hover:border-red enabled:hover:bg-red/10 disabled:text-faint',
-  ghost: 'border-transparent text-muted enabled:hover:bg-raised enabled:hover:text-text',
+  default: `enabled:bg-raised enabled:hover:bg-hover ${PRESSABLE}`,
+  primary: `enabled:border-accent enabled:bg-accent enabled:text-on-accent enabled:hover:bg-accent-hover ${PRESSABLE}`,
+  danger: `enabled:text-red enabled:hover:border-red enabled:hover:bg-red/10 ${PRESSABLE}`,
+  ghost: 'border-transparent text-muted enabled:hover:bg-raised enabled:hover:text-text enabled:active:bg-hover',
 }
 const BUTTON_SIZES = {
   normal: 'h-control px-12',
@@ -66,13 +153,13 @@ type ButtonProps = ComponentProps<'button'> & {
 }
 
 export function Button({ variant = 'default', size = 'normal', className = '', ...props }: ButtonProps) {
-  const classes = `rounded border whitespace-nowrap ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`
+  const classes = `rounded border whitespace-nowrap transition-[background-color,border-color,color,box-shadow] ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`
   return <button className={classes} {...props} />
 }
 
 const SELECT_TRIGGERS = {
-  field: 'h-control gap-8 rounded border bg-bg px-8 enabled:hover:bg-raised disabled:text-faint',
-  chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text disabled:text-faint max-[900px]:max-w-150',
+  field: `h-control gap-8 rounded border bg-bg px-8 enabled:hover:bg-raised ${PRESSABLE}`,
+  chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text enabled:hover:shadow-raised disabled:text-faint data-[state=open]:border-border data-[state=open]:text-text max-[900px]:max-w-150',
 }
 
 export type SelectOption = { value: string; label: string; disabled?: boolean }
@@ -83,34 +170,37 @@ type SelectProps = {
   options: SelectOption[]
   onChange: (value: string) => void
   placeholder?: string
-  title?: string
+  hint?: string
   disabled?: boolean
   variant?: keyof typeof SELECT_TRIGGERS
 }
 
-export function Select({ label, value, options, onChange, placeholder, title, disabled, variant = 'field' }: SelectProps) {
+export function Select({ label, value, options, onChange, placeholder, hint, disabled, variant = 'field' }: SelectProps) {
+  const [open, setOpen] = useState(false)
   return (
-    <SelectPrimitive.Root value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectPrimitive.Trigger
-        aria-label={label}
-        title={title}
-        className={`flex min-w-0 items-center whitespace-nowrap data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
-      >
-        <span className="min-w-0 truncate">
-          <SelectPrimitive.Value placeholder={placeholder} />
-        </span>
-        <SelectPrimitive.Icon className="shrink-0 text-faint">
-          <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" aria-hidden="true">
-            <path d="M1 1l4 4 4-4" strokeWidth="1.5" />
-          </svg>
-        </SelectPrimitive.Icon>
+    <SelectPrimitive.Root value={value} onValueChange={onChange} disabled={disabled} open={open} onOpenChange={setOpen}>
+      <SelectPrimitive.Trigger asChild aria-label={label}>
+        <Hint text={!open && hint}>
+          <button
+            className={`flex min-w-0 items-center whitespace-nowrap transition-[background-color,border-color,color,box-shadow] data-placeholder:text-muted ${SELECT_TRIGGERS[variant]}`}
+          >
+            <span className="min-w-0 truncate">
+              <SelectPrimitive.Value placeholder={placeholder} />
+            </span>
+            <SelectPrimitive.Icon className="shrink-0 text-faint">
+              <svg width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" aria-hidden="true">
+                <path d="M1 1l4 4 4-4" strokeWidth="1.5" />
+              </svg>
+            </SelectPrimitive.Icon>
+          </button>
+        </Hint>
       </SelectPrimitive.Trigger>
       <SelectPrimitive.Portal>
         <SelectPrimitive.Content
           position="popper"
           sideOffset={4}
           collisionPadding={8}
-          className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow"
+          className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow-floating"
         >
           <SelectPrimitive.Viewport className="p-4">
             {options.map((o) => (
@@ -118,7 +208,7 @@ export function Select({ label, value, options, onChange, placeholder, title, di
                 key={o.value}
                 value={o.value}
                 disabled={o.disabled}
-                className="flex h-26 items-center gap-8 rounded pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
+                className="flex h-26 items-center gap-8 rounded-sm pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
               >
                 <span className="w-12 shrink-0 text-accent">
                   <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
@@ -138,14 +228,13 @@ type SwitchProps = { label: string; checked: boolean; disabled?: boolean; onChan
 export function Switch({ label, checked, disabled, onChange }: SwitchProps) {
   return (
     <SwitchPrimitive.Root
-      title={label}
       aria-label={label}
       checked={checked}
       disabled={disabled}
       onCheckedChange={onChange}
-      className="relative h-20 w-34 shrink-0 rounded-full border bg-hover transition-[background-color] duration-150 focus-visible:outline-offset-2 disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent"
+      className="relative h-20 w-34 shrink-0 rounded-full border bg-hover shadow-sunken transition-[background-color] duration-150 focus-visible:outline-offset-2 disabled:opacity-50 data-[state=checked]:border-accent data-[state=checked]:bg-accent"
     >
-      <SwitchPrimitive.Thumb className="absolute top-2 left-2 size-14 rounded-full bg-muted transition-transform duration-150 data-[state=checked]:translate-x-14 data-[state=checked]:bg-on-accent" />
+      <SwitchPrimitive.Thumb className="absolute top-2 left-2 size-14 rounded-full bg-muted shadow-raised transition-transform duration-150 data-[state=checked]:translate-x-14 data-[state=checked]:bg-on-accent" />
     </SwitchPrimitive.Root>
   )
 }
@@ -172,7 +261,7 @@ export function Toast({ id, message, dismiss }: { id: number; message: string; d
   return (
     <m.div {...MOTION.collapse}>
       <div
-        className="mb-8 flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow"
+        className="mb-8 flex items-start gap-8 rounded-lg border border-l-3 border-l-red bg-panel py-8 pr-6 pl-12 shadow-floating"
         role="status"
       >
         <span className="flex-1 pt-3 [word-break:break-word]">{message}</span>
@@ -243,7 +332,7 @@ export function ConfirmDialog() {
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-[10px] border bg-panel px-16 pt-14 pb-16 text-text shadow"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <AlertDialog.Title className="text-body leading-[1.5]">{text}</AlertDialog.Title>

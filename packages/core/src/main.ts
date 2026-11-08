@@ -1,28 +1,40 @@
 import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { Mod } from '@hotrod/mod-api'
 import { claudeCode } from './adapters/claude-code.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { localMachine } from './machine.ts'
+import { loadMods } from './mods.ts'
 import { startServer } from './server.ts'
-import type { Adapter } from './shared.ts'
+import type { Adapter, Machine } from './shared.ts'
 
 const registered: Adapter[] = [claudeCode, pi, createFakeAdapter()]
+const STOCK_MODS_DIR = fileURLToPath(new URL('../../../mods/', import.meta.url))
 
 export async function startCore(
-  options: { env?: Record<string, string | undefined>; uiDir?: string; adapters?: Adapter[] } = {},
+  options: {
+    env?: Record<string, string | undefined>
+    uiDir?: string
+    adapters?: Adapter[]
+    mods?: Mod[]
+    machine?: Machine
+  } = {},
 ) {
-  const { env = process.env, uiDir, adapters = registered } = options
+  const { env = process.env, uiDir, adapters = registered, machine = localMachine } = options
+  const mods = options.mods ?? (await loadMods(STOCK_MODS_DIR))
   const garage = env.HOTROD_GARAGE ?? join(homedir(), 'Library', 'Application Support', 'Hotrod')
   const port = Number(env.HOTROD_PORT ?? 4317)
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (env.HOTROD_UI_ORIGIN ?? 'http://localhost:4318')
   const token = env.HOTROD_TOKEN || randomBytes(32).toString('base64url')
 
   const defaultEngine = env.HOTROD_ENGINE ?? adapters[0]?.id ?? ''
-  const core = openCore({ garage, adapters, defaultEngine, machine: localMachine })
+  const core = openCore({ garage, adapters, defaultEngine, machine, mods })
   if (env.HOTROD_ENGINE) core.setEngineEnabled(env.HOTROD_ENGINE, true)
+  if (env.HOTROD_WORK) core.setWorkFolder(env.HOTROD_WORK)
   await core.refreshEngines()
   const server = await startServer({ core, port, uiOrigin: uiUrl, token, uiDir })
   return {
