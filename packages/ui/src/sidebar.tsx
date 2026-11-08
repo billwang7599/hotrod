@@ -3,7 +3,7 @@ import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
-import { chatTree, familyOf, folderName, folderOf, type ChatView, type TreeRow } from './state.ts'
+import { chatTree, familyOf, folderOf, type ChatView, type TreeRow } from './state.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
 const DOTS: Record<ChatStatus, string> = {
@@ -179,32 +179,23 @@ type NameDialogProps = {
   request: NameRequest | null
   connected: boolean
   send: (m: ClientMessage) => void
-  pickFolder?: () => Promise<string | null>
   close: () => void
 }
 
-export function NameDialog({ request, connected, send, pickFolder, close }: NameDialogProps) {
+export function NameDialog({ request, connected, send, close }: NameDialogProps) {
   const [shown, setShown] = useState<NameRequest | null>(null)
   const [name, setName] = useState('')
-  const [folder, setFolder] = useState('')
   if (request && request !== shown) {
     setShown(request)
     setName(request.kind === 'rename' ? request.name : '')
-    setFolder('')
   }
   const focus = useReturnFocus()
   const isNew = shown?.kind === 'new'
-  const choose = async () => {
-    const picked = await pickFolder?.()
-    if (!picked) return
-    setFolder(picked)
-    if (!name.trim()) setName(folderName(picked))
-  }
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!request || !connected || !name.trim()) return
     if (request.kind === 'rename') send({ type: 'chat.rename', chatId: request.chatId, name })
-    else send({ type: 'chat.create', name, ...(folder.trim() && { folders: [folder.trim()] }) })
+    else send({ type: 'chat.create', name })
     close()
   }
   return (
@@ -238,32 +229,6 @@ export function NameDialog({ request, connected, send, pickFolder, close }: Name
                     onChange={(e) => setName(e.target.value)}
                   />
                 </label>
-                {isNew && (
-                  <label className="flex flex-col gap-4">
-                    <Hint
-                      text={`Its agents read this folder; a git folder is checked out in the work folder for them`}
-                      side="right"
-                    >
-                      <span className="w-fit text-muted">
-                        Folder <span className="text-faint">(optional)</span>
-                      </span>
-                    </Hint>
-                    <span className="flex gap-6">
-                      <input
-                        className="flex-1 font-mono text-sm"
-                        value={folder}
-                        placeholder="/path/to/folder"
-                        spellCheck={false}
-                        onChange={(e) => setFolder(e.target.value)}
-                      />
-                      {pickFolder && (
-                        <Button type="button" onClick={() => void choose()}>
-                          Choose…
-                        </Button>
-                      )}
-                    </span>
-                  </label>
-                )}
                 <div className="flex justify-end gap-8">
                   <Dialog.Close asChild>
                     <Button type="button">Cancel</Button>
