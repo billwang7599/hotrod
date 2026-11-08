@@ -16,7 +16,8 @@ import {
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
 import { showStepsIn, useStepsChoice, useStepsDefault } from './steps.ts'
-import { folderName, PANEL_PX, type ChatView } from './state.ts'
+import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
+import { folderName, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
@@ -384,8 +385,10 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
     setTab(id)
   }
   const shown: PanelTabId = chat ? tab : 'context'
+  const width = usePanelWidth('context')
   return (
-    <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
+    <aside className="relative flex shrink-0 flex-col border-l bg-panel" style={{ width }} aria-label="Context">
+      <ResizeHandle panel="context" />
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
           {chat && (

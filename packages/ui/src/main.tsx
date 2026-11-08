@@ -6,6 +6,7 @@ import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
+import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
 import {
@@ -14,7 +15,6 @@ import {
   folderOf,
   initialState,
   MIN_WINDOW_PX,
-  PANEL_PX,
   reduce,
   storedColumn,
   storedFlag,
@@ -84,7 +84,8 @@ function App() {
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
   useEffect(() => localStorage.setItem(SIDEBAR_OPEN_KEY, String(sidebarOpen)), [sidebarOpen])
-  const docked = useSyncExternalStore(subscribeResize, () => dockedPanels(innerWidth))
+  const widths = usePanelWidths()
+  const docked = useSyncExternalStore(subscribeResize, () => dockedPanels(innerWidth, widths))
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [dockedBefore, setDockedBefore] = useState(docked)
   if (docked !== dockedBefore) {
@@ -157,7 +158,8 @@ function App() {
           <AnimatePresence initial={false}>
             {sidebarShown && (
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
-                <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
+                <aside className="relative flex shrink-0 flex-col border-r bg-panel" style={{ width: widths.sidebar }}>
+                  <ResizeHandle panel="sidebar" />
                   <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
                     {!sidebarDocks && (
                       <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />

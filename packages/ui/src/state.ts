@@ -337,9 +337,9 @@ export const PANEL_PX = { sidebar: 232, context: 320 }
 const PANE_PADDING_PX = 24
 export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, default: 760 }
 
-export function dockedPanels(windowPx: number) {
-  const sidebar = PANEL_PX.sidebar + MIN_WINDOW_PX.width
-  if (windowPx >= sidebar + PANEL_PX.context) return 'both'
+export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
+  const sidebar = widths.sidebar + MIN_WINDOW_PX.width
+  if (windowPx >= sidebar + widths.context) return 'both'
   return windowPx >= sidebar ? 'sidebar' : 'none'
 }
 

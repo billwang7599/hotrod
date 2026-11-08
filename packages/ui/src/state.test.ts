@@ -635,6 +635,12 @@ describe('dockedPanels', () => {
     expect(dockedPanels(both - 1)).toBe('sidebar')
     expect(dockedPanels(both)).toBe('both')
   })
+
+  it('counts the widths the panels were resized to', () => {
+    const widths = { sidebar: 400, context: 500 }
+    expect(dockedPanels(400 + MIN_WINDOW_PX.width + 499, widths)).toBe('sidebar')
+    expect(dockedPanels(400 + MIN_WINDOW_PX.width + 500, widths)).toBe('both')
+  })
 })
 
 describe('formatBytes', () => {
