@@ -296,7 +296,6 @@ function StepsSwitch({ chatId }: { chatId: string }) {
   const word = (on: boolean) => (on ? 'Unfolded' : 'Folded')
   return (
     <section className="flex flex-col" aria-label="View">
-      <h3 className="mb-8 font-semibold">View</h3>
       <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
         <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
         <Select
@@ -314,9 +313,9 @@ function StepsSwitch({ chatId }: { chatId: string }) {
   )
 }
 
-type PanelTabId = 'context' | 'permissions'
+type PanelTabId = 'context' | 'permissions' | 'general'
 const TAB_KEY = 'hotrod.panelTab'
-const TAB_LABEL: Record<PanelTabId, string> = { context: 'Context', permissions: 'Permissions' }
+const TAB_LABEL: Record<PanelTabId, string> = { context: 'Context', permissions: 'Permissions', general: 'General' }
 
 type PanelTabProps = {
   id: PanelTabId
@@ -376,9 +375,10 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
   const chat = chats.find((c) => c.id === chatId)
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
-  const [tab, setTab] = useState<PanelTabId>(() =>
-    localStorage.getItem(TAB_KEY) === 'permissions' ? 'permissions' : 'context',
-  )
+  const [tab, setTab] = useState<PanelTabId>(() => {
+    const saved = localStorage.getItem(TAB_KEY)
+    return saved === 'permissions' || saved === 'general' ? saved : 'context'
+  })
   const chooseTab = (id: PanelTabId) => {
     localStorage.setItem(TAB_KEY, id)
     setTab(id)
@@ -394,6 +394,11 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
           {chat && (
             <PanelTab id="permissions" tab={tab} choose={chooseTab}>
               Permissions
+            </PanelTab>
+          )}
+          {chat && (
+            <PanelTab id="general" tab={tab} choose={chooseTab}>
+              General
             </PanelTab>
           )}
         </div>
@@ -468,7 +473,7 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
               </section>
             )
           })}
-        {shown === 'context' && chat && <StepsSwitch chatId={chatId} />}
+        {shown === 'general' && chat && <StepsSwitch chatId={chatId} />}
       </div>
     </aside>
   )
