@@ -342,6 +342,9 @@ describe('reduce', () => {
     expect(items(denied)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied' })
     const allowed = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: true }))
     expect(items(allowed)[0]).toMatchObject({ requestId: 'r1', outcome: 'allowed' })
+    expect(items(allowed)[0]).not.toHaveProperty('auto')
+    const auto = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false, auto: true }))
+    expect(items(auto)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied', auto: true })
   })
 
   it('stops unfinished tools and permissions when the turn ends', () => {

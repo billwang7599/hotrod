@@ -677,6 +677,62 @@ describe('worktrees', () => {
   })
 })
 
+describe('edits', () => {
+  const editScript = (...paths: string[]): FakeStep[] => [
+    ...paths.flatMap((path, i): FakeStep[] => {
+      const call = { toolId: `e${i}`, name: 'Write', kind: 'edit' as const, summary: path, input: { file_path: path } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, path, output: 'written' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+  const run = async (garage: string, paths: string[]) => {
+    const t = setup(editScript(...paths), garage)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'edit' })
+    await until(() => statusOf(t.core, 'main') !== 'running')
+    return t
+  }
+  const resolved = (t: { core: Core }) =>
+    entriesOf(t.core, 'main').flatMap((e) => (e.type === 'permission.resolved' ? [e] : []))
+  const outputs = (t: { core: Core }) =>
+    entriesOf(t.core, 'main').flatMap((e) => (e.type === 'tool.completed' ? [e.output] : []))
+
+  it('allows an edit inside the work folder at once, logged as automatic, relative paths too', async () => {
+    const garage = tempDir()
+    const home = join(garage, 'work', 'home')
+    const t = await run(garage, [join(home, 'src', 'a.ts'), 'notes.md'])
+    expect(statusOf(t.core, 'main')).toBe('idle')
+    expect(resolved(t).map((e) => [e.allow, e.auto])).toEqual([[true, true], [true, true]])
+    expect(outputs(t)).toEqual(['written', 'written'])
+    expect(t.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting')).toBe(false)
+  })
+
+  it('denies an edit outside the work folder, through .. or a symlink too, and tells the engine why', async () => {
+    const garage = tempDir()
+    const home = join(garage, 'work', 'home')
+    const outside = tempDir()
+    mkdirSync(home, { recursive: true })
+    symlinkSync(outside, join(home, 'link'))
+    const t = await run(garage, [join(outside, 'a.ts'), join(home, '..', 'b.ts'), join(home, 'link', 'c.ts')])
+    expect(statusOf(t.core, 'main')).toBe('idle')
+    expect(resolved(t).map((e) => [e.allow, e.auto])).toEqual([[false, true], [false, true], [false, true]])
+    for (const output of outputs(t)) expect(output).toContain(`Hotrod lets this chat edit only inside ${home}`)
+  })
+
+  it('still asks about an edit outside when the chat runs without a sandbox', async () => {
+    const garage = tempDir()
+    const t = setup(editScript(join(tempDir(), 'a.ts')), garage)
+    t.core.close()
+    const { adapter } = recording(createFakeAdapter(editScript(join(tempDir(), 'a.ts')), 0))
+    const machine = { ...localMachine, canSandbox: false }
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'chat.send', chatId: 'main', text: 'edit' }, () => {})
+    await until(() => statusOf(core, 'main') === 'waiting')
+    expect(resolved({ core })).toEqual([])
+  })
+})
+
 describe('chat', () => {
   it('streams a turn, saves it without deltas and closes the session', async () => {
     const t = setup(textScript)

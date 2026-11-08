@@ -45,7 +45,7 @@ const DEVICE_RULES = [
 ]
 
 // The sandbox matches real paths (/tmp is /private/tmp), and a writable path may not exist yet.
-function realPath(path: string): string {
+export function realPath(path: string): string {
   try {
     return realpathSync(path)
   } catch {

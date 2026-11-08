@@ -63,6 +63,7 @@ const MODEL_HINT = 'Model, from the next message. Choosing the one from Settings
 const THINKING_HINT = 'Thinking level, from the next message. Choosing the Settings default goes back to following it.'
 const INTERRUPTED = 'Interrupted'
 const OUTCOMES = { allowed: '✓ Allowed', denied: '✕ Denied', cancelled: '– Cancelled' }
+const AUTO_OUTCOMES = { allowed: '✓ Allowed automatically', denied: '✕ Denied: outside the work folder' }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -405,7 +406,9 @@ function ItemView({ item, chat, contextItems, connected, send }: ItemProps) {
           <Row
             summary={
               <>
-                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>{OUTCOMES[item.outcome]}</span>
+                <span className={`shrink-0 text-sm ${OUTCOME_COLORS[item.outcome]}`}>
+                  {item.auto && item.outcome !== 'cancelled' ? AUTO_OUTCOMES[item.outcome] : OUTCOMES[item.outcome]}
+                </span>
                 <span className={TOOL_NAME}>{item.name}</span>
                 <span className={TOOL_INPUT}>{item.summary}</span>
               </>

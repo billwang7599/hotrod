@@ -26,6 +26,7 @@ import {
   ZOOM_INSTRUCTIONS,
   type Summaries,
 } from './memory.ts'
+import { realPath } from './machine.ts'
 import { valuesOf } from './mods.ts'
 import {
   CONTEXT_SECTIONS,
@@ -68,6 +69,7 @@ export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
+const OUTSIDE_EDIT_ADVICE = 'Work there, or ask the user to allow edits outside the work folder for this chat.'
 export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
@@ -784,28 +786,6 @@ export function openCore(options: {
     const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
     const sandbox = sandboxIn(workDir)
 
-    let session: Session | undefined
-    const emit = (event: EngineEvent) => {
-      if (chat.session !== session) return
-      const at = new Date().toISOString()
-      if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
-      if (event.type === 'text.delta') {
-        chat.unsavedText += event.text
-        broadcast({ type: 'chat.delta', chatId: chat.info.id, text: event.text })
-        return
-      }
-      if (event.type === 'thinking.delta') {
-        broadcast({ type: 'chat.thinking', chatId: chat.info.id, text: event.text })
-        return
-      }
-      if (event.type === 'text.completed') chat.unsavedText = ''
-      append(chat, { at, ...event })
-      if (event.type === 'permission.requested') {
-        chat.pendingRequests.add(event.requestId)
-        setStatus(chat, 'waiting')
-      }
-    }
-
     const start = (checkouts: Checkout[]) => {
       const cwd = checkouts[0]?.worktree.path ?? workDir
       const rules = [
@@ -830,6 +810,41 @@ export function openCore(options: {
         writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
         ...(readOnly.length && { readOnly }),
       }
+      // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
+      const editVerdict = (path: string) => {
+        if (within(realPath(resolve(cwd, path)), workDir)) return { allow: true }
+        if (!jail) return undefined
+        const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
+        return { allow: false, message }
+      }
+
+      let session: Session | undefined
+      const emit = (event: EngineEvent) => {
+        if (chat.session !== session) return
+        const at = new Date().toISOString()
+        if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
+        if (event.type === 'text.delta') {
+          chat.unsavedText += event.text
+          broadcast({ type: 'chat.delta', chatId: chat.info.id, text: event.text })
+          return
+        }
+        if (event.type === 'thinking.delta') {
+          broadcast({ type: 'chat.thinking', chatId: chat.info.id, text: event.text })
+          return
+        }
+        if (event.type === 'text.completed') chat.unsavedText = ''
+        append(chat, { at, ...event })
+        if (event.type !== 'permission.requested') return
+        const verdict = event.kind === 'edit' && event.path !== undefined ? editVerdict(event.path) : undefined
+        if (!verdict) {
+          chat.pendingRequests.add(event.requestId)
+          return setStatus(chat, 'waiting')
+        }
+        const { requestId } = event
+        append(chat, { at, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
+        session?.respond(requestId, verdict.allow, verdict.message)
+      }
+
       try {
         chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
         const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined

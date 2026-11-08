@@ -247,6 +247,7 @@ export const claudeCode: Adapter = {
           }
           pendingInputs.set(msg.request_id, request.input)
           const kind = kindOf(request.tool_name)
+          const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
@@ -254,6 +255,7 @@ export const claudeCode: Adapter = {
             name: request.tool_name,
             kind,
             summary: summarize(kind, request.input),
+            ...(typeof path === 'string' && { path }),
             input: request.input,
           })
           return
@@ -304,13 +306,11 @@ export const claudeCode: Adapter = {
         interrupted = true
         send({ type: 'control_request', request_id: `interrupt-${++interruptCount}`, request: { subtype: 'interrupt' } })
       },
-      respond(requestId, allow) {
+      respond(requestId, allow, message = 'The user denied this tool call.') {
         if (!pendingInputs.has(requestId)) return
         const input = pendingInputs.get(requestId)
         pendingInputs.delete(requestId)
-        const response = allow
-          ? { behavior: 'allow', updatedInput: input }
-          : { behavior: 'deny', message: 'The user denied this tool call.' }
+        const response = allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }
         send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
       },
       close() {

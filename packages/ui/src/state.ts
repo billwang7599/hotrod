@@ -37,6 +37,7 @@ export type Item =
       summary: string
       input: unknown
       outcome: 'pending' | 'allowed' | 'denied' | 'cancelled'
+      auto?: true
     }
   | { kind: 'error'; text: string }
 
@@ -138,7 +139,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       const toolId = request?.kind === 'permission' ? request.toolId : undefined
       return setToolState(items, toolId, 'running').map((i) =>
         i.kind === 'permission' && i.requestId === entry.requestId
-          ? { ...i, outcome: entry.allow ? 'allowed' : 'denied' }
+          ? { ...i, outcome: entry.allow ? 'allowed' : 'denied', ...(entry.auto && { auto: true }) }
           : i,
       )
     }

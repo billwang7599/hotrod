@@ -16,6 +16,7 @@ export type EngineEvent =
       name: string
       kind: ToolKind
       summary: string
+      path?: string
       input: unknown
     }
   | { type: 'turn.completed'; error?: string }
@@ -87,7 +88,7 @@ export type CompleteOptions = CompletionRequest & {
 export interface Session {
   prompt(text: string, images?: ImageInput[]): void
   interrupt(): void
-  respond(requestId: string, allow: boolean): void
+  respond(requestId: string, allow: boolean, message?: string): void
   close(): void
 }
 
@@ -212,7 +213,7 @@ export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string; attachments?: Attachment[] }
-  | { type: 'permission.resolved'; requestId: string; allow: boolean }
+  | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 

@@ -324,13 +324,38 @@ describe('claudeCode adapter', () => {
     ])
   })
 
-  it('summarizes a permission request', () => {
+  it('summarizes a permission request, with the path an edit writes', () => {
     const { fake, events } = startSession()
     const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
-    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'r1', request }) + '\n')
+    const notebook = { subtype: 'can_use_tool', tool_name: 'NotebookEdit', input: { notebook_path: '/n.ipynb' } }
+    const shell = { subtype: 'can_use_tool', tool_name: 'Bash', input: { command: 'ls /c.ts' } }
+    for (const [id, req] of [['r1', request], ['r2', notebook], ['r3', shell]] as const) {
+      fake.stdout(JSON.stringify({ type: 'control_request', request_id: id, request: req }) + '\n')
+    }
     expect(events).toEqual([
-      { type: 'permission.requested', requestId: 'r1', name: 'Write', kind: 'edit', summary: '/c.ts', input: request.input },
+      { type: 'permission.requested', requestId: 'r1', name: 'Write', kind: 'edit', summary: '/c.ts', path: '/c.ts', input: request.input },
+      {
+        type: 'permission.requested',
+        requestId: 'r2',
+        name: 'NotebookEdit',
+        kind: 'edit',
+        summary: '/n.ipynb',
+        path: '/n.ipynb',
+        input: notebook.input,
+      },
+      { type: 'permission.requested', requestId: 'r3', name: 'Bash', kind: 'shell', summary: 'ls /c.ts', input: shell.input },
     ])
+  })
+
+  it("tells Claude Code why a call was denied when given a reason", () => {
+    const { fake, session } = startSession()
+    const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
+    fake.stdout(JSON.stringify({ type: 'control_request', request_id: 'r1', request }) + '\n')
+    session.respond('r1', false, 'Edit only inside /work.')
+    expect(fake.sent().at(-1)).toEqual({
+      type: 'control_response',
+      response: { subtype: 'success', request_id: 'r1', response: { behavior: 'deny', message: 'Edit only inside /work.' } },
+    })
   })
 
   it('closes stdin and kills the process', () => {
