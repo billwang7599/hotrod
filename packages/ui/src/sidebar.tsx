@@ -82,12 +82,21 @@ function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, s
         onClick={select}
       >
         <span className={`size-7 shrink-0 rounded-full ${DOTS[chat.status]}`} />
+        {chat.mod === 'home' && <HouseIcon />}
         <span className="min-w-0 flex-1 truncate">{chat.name}</span>
         {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
         {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
       {menu && <RowMenu label={chat.name} items={menu} />}
     </m.div>
+  )
+}
+
+function HouseIcon() {
+  return (
+    <svg className="size-14 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+      <path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3v-3.5h2V13h3V6.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
   )
 }
 
@@ -106,6 +115,9 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
+  // Mod chats (Home) sort first; they sit above the spaces, apart from them.
+  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.mod)
+  const split = firstSpace < 0 ? tree.active.length : firstSpace
   const mixedEngines = new Set(chats.map((c) => c.engine)).size > 1
 
   const chatMenu = (chat: ChatView): MenuItem[] => {
@@ -151,7 +163,13 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
 
   return (
     <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pb-8">
-      <AnimatePresence>{tree.active.map(row)}</AnimatePresence>
+      <AnimatePresence>{tree.active.slice(0, split).map(row)}</AnimatePresence>
+      <h2 id="spaces-label" className={NAV_LABEL}>
+        {CHAT_NOUN.many}
+      </h2>
+      <div role="group" aria-labelledby="spaces-label" className="flex flex-col gap-1">
+        <AnimatePresence>{tree.active.slice(split).map(row)}</AnimatePresence>
+      </div>
       <Button
         variant="ghost"
         size="small"
