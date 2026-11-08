@@ -31,6 +31,7 @@ import {
 } from './memory.ts'
 import {
   ASK_FIRST_COMMANDS,
+  bySpaceOrder,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -384,6 +385,39 @@ describe('chats', () => {
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).name).toBe('New name')
     expect(() => t.handle({ type: 'chat.rename', chatId: chat.id, name: ' ' })).toThrow(/name/i)
     expect(chatOf(t.core, chat.id)?.name).toBe('New name')
+  })
+
+  it('moves and pins spaces, and keeps their places across a restart', () => {
+    const t = setup(textScript)
+    const [a, b, c] = ['A', 'B', 'C'].map((name) => createChat(t, { name })) as [ChatState, ChatState, ChatState]
+    const places = (core: Core) =>
+      core
+        .chats()
+        .filter((x) => !x.mod && !x.parentId)
+        .sort(bySpaceOrder)
+        .map((x) => (x.pinned ? `${x.name}*` : x.name))
+    t.handle({ type: 'chat.move', chatId: a.id, pinned: false, index: 0 })
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: false, index: 1 })
+    t.handle({ type: 'chat.move', chatId: c.id, pinned: false, index: 2 })
+    expect(places(t.core)).toEqual(['A', 'B', 'C'])
+    t.handle({ type: 'chat.move', chatId: c.id, pinned: false, index: 0 })
+    expect(places(t.core)).toEqual(['C', 'A', 'B'])
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: true, index: 0 })
+    expect(places(t.core)).toEqual(['B*', 'C', 'A'])
+    expect(JSON.parse(readFileSync(chatFile(t, b.id), 'utf8'))).toMatchObject({ pinned: true, order: 0 })
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: false, index: 0 })
+    expect(places(t.core)).toEqual(['B', 'C', 'A'])
+    expect(JSON.parse(readFileSync(chatFile(t, b.id), 'utf8'))).not.toHaveProperty('pinned')
+    t.handle({ type: 'chat.move', chatId: a.id, pinned: true, index: 5 })
+    expect(places(t.core)).toEqual(['A*', 'B', 'C'])
+    expect(() => t.handle({ type: 'chat.move', chatId: 'main', pinned: true, index: 0 })).toThrow(/spaces/)
+    expect(() => t.handle({ type: 'chat.move', chatId: a.id, pinned: true, index: 0.5 })).toThrow(/number/)
+    t.core.close()
+
+    const reopened = setup(textScript, t.garage)
+    expect(places(reopened.core)).toEqual(['A*', 'B', 'C'])
+    createChat(reopened, { name: 'D' })
+    expect(places(reopened.core)).toEqual(['A*', 'D', 'B', 'C'])
   })
 
   it('archives a chat, keeping its log, and refuses to run it until unarchived', async () => {

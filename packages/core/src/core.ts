@@ -31,6 +31,7 @@ import { realPath } from './machine.ts'
 import { valuesOf } from './mods.ts'
 import {
   ASK_FIRST_COMMANDS,
+  bySpaceOrder,
   CONTEXT_SECTIONS,
   editsAnywhere,
   GLOBAL_CONTEXT,
@@ -637,6 +638,21 @@ export function openCore(options: {
     family.forEach((c) => updateChat(c, { archived }))
   }
 
+  const moveChat = (chat: Chat, pinned: boolean, index: unknown) => {
+    if (chat.info.mod || chat.info.parentId) throw new Error('Only spaces can be moved or pinned')
+    if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
+    if (typeof index !== 'number' || !Number.isInteger(index)) throw new Error('The place to move to must be a number')
+    const group = [...chats.values()]
+      .map((c) => c.info)
+      .filter((c) => !c.mod && !c.parentId && !c.archived && !!c.pinned === pinned && c.id !== chat.info.id)
+      .sort(bySpaceOrder)
+    group.splice(Math.max(0, Math.min(index, group.length)), 0, chat.info)
+    group.forEach((info, order) => {
+      const c = chats.get(info.id)!
+      if (c.info.order !== order || !!c.info.pinned !== pinned) updateChat(c, { order, pinned: pinned || undefined })
+    })
+  }
+
   const deleteChat = (chat: Chat) => {
     const family = familyOf(chat)
     family.forEach(checkRemovable)
@@ -1208,6 +1224,8 @@ export function openCore(options: {
           return renameChat(chatFor(message.chatId), message.name)
         case 'chat.archive':
           return archiveChat(chatFor(message.chatId), message.archived === true)
+        case 'chat.move':
+          return moveChat(chatFor(message.chatId), message.pinned === true, message.index)
         case 'chat.delete':
           return deleteChat(chatFor(message.chatId))
         case 'chat.setEngine':

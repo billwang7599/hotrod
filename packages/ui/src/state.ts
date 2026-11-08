@@ -1,4 +1,4 @@
-import { looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
+import { bySpaceOrder, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
   Answers,
@@ -358,7 +358,7 @@ export function chatTree(chats: ChatView[]) {
   const archivedRoots = chats.filter((c) => c.archived && !chats.find((p) => p.id === c.parentId)?.archived)
   return {
     active: activeRoots
-      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || newestFirst(a, b))
+      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || bySpaceOrder(a, b))
       .flatMap((c) => walk(c, 0, false)),
     archived: archivedRoots.sort(newestFirst).flatMap((c) => walk(c, 0, true)),
   }

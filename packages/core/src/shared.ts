@@ -169,6 +169,10 @@ export type ChatInfo = PermissionSwitches & {
   files: string[]
   engine: string
   archived: boolean
+  // Spaces only: pinned ones sit in their own group at the top; `order` is the place within its group, set when the
+  // user moves or pins one. A space without it (a new one) sits above the ordered ones, newest first.
+  pinned?: boolean
+  order?: number
   createdAt: string
   role?: ModelRole
   model?: string
@@ -178,6 +182,13 @@ export type ChatInfo = PermissionSwitches & {
 }
 
 export type Worktree = { path: string; branch: string }
+
+/** How spaces sort in the sidebar: pinned first, then unordered (newest first), then by `order`. */
+export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>, b: typeof a): number {
+  if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
+  if ((a.order === undefined) !== (b.order === undefined)) return a.order === undefined ? -1 : 1
+  return (a.order ?? 0) - (b.order ?? 0) || b.createdAt.localeCompare(a.createdAt)
+}
 
 export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
@@ -293,6 +304,8 @@ export type ClientMessage =
   | ({ type: 'chat.create' } & NewChat)
   | { type: 'chat.rename'; chatId: string; name: string }
   | { type: 'chat.archive'; chatId: string; archived: boolean }
+  // Moves a space to `index` among the active spaces that are (un)pinned like `pinned`, pinning or unpinning it.
+  | { type: 'chat.move'; chatId: string; pinned: boolean; index: number }
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
