@@ -80,10 +80,18 @@ function sandboxed(command: string, args: string[], sandbox: Sandbox, platform: 
   const temp = tmpDir ? [tmpDir, ...(USER_TEMP_WRITABLE ? [userTemp()] : [])] : []
   const writable = [...sandbox.writable, ...temp]
   // Paths go in as parameters, so no path can break out of the profile's quoting.
-  const rules = writable.map((path, i) => `(${path.endsWith('*') ? 'prefix' : 'subpath'} (param "W${i}"))`)
-  const params = writable.flatMap((path, i) => ['-D', `W${i}=${realPath(path.replace(/\*$/, ''))}`])
-  const allowed = [...DEVICE_RULES, ...rules].join(' ')
-  const profile = `(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* ${allowed})`
+  const filters = (paths: string[], key: string) => ({
+    rules: paths.map((path, i) => `(${path.endsWith('*') ? 'prefix' : 'subpath'} (param "${key}${i}"))`).join(' '),
+    params: paths.flatMap((path, i) => ['-D', `${key}${i}=${realPath(path.replace(/\*$/, ''))}`]),
+  })
+  const allowed = filters(writable, 'W')
+  const kept = filters(sandbox.readOnly ?? [], 'R')
+  // The last matching rule wins, so read-only paths come after the writable ones.
+  const profile =
+    `(version 1)(allow default)(deny file-write* (subpath "/"))` +
+    `(allow file-write* ${DEVICE_RULES.join(' ')} ${allowed.rules})` +
+    (kept.rules ? `(deny file-write* ${kept.rules})` : '')
+  const params = [...allowed.params, ...kept.params]
   const env = tmpDir ? tempEnv(tmpDir) : {}
   return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, ...params, command, ...args], env }
 }

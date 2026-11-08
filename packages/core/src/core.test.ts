@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
@@ -15,7 +16,7 @@ import { basename, dirname, join } from 'node:path'
 import type { Mod, ModChat } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { openCore, SUMMARY_MODELS, WRITE_RULES, type Core } from './core.ts'
+import { CHECKOUT_RULES, openCore, SUMMARY_MODELS, WRITE_RULES, type Core } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -38,6 +39,7 @@ import {
   type CompleteOptions,
   type CoreMessage,
   type EngineEvent,
+  type Machine,
   type SessionOptions,
 } from './shared.ts'
 
@@ -520,6 +522,158 @@ describe('work folder', () => {
     expect(calls[0]?.options.cwd).toBe(join(workOf(t), 'home'))
     expect(calls[0]?.options).not.toHaveProperty('sandbox')
     expect(calls[0]?.options.instructions).not.toContain(WRITE_RULES)
+  })
+})
+
+describe('worktrees', () => {
+  const git = (dir: string, ...args: string[]) =>
+    execFileSync('git', ['-C', dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], {
+      encoding: 'utf8',
+    }).trim()
+  const gitRepo = (dir = tempDir()) => {
+    mkdirSync(dir, { recursive: true })
+    git(dir, 'init', '-q', '-b', 'main')
+    writeFileSync(join(dir, 'README.md'), 'committed\n')
+    git(dir, 'add', '-A')
+    git(dir, 'commit', '-q', '-m', 'first')
+    return dir
+  }
+  const branchesOf = (repo: string) => git(repo, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/').split('\n')
+  const sessionOf = async (t: ReturnType<typeof setup>, chatId: string) => {
+    const before = t.calls.length
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+    return t.calls.slice(before).at(-1)?.options
+  }
+
+  it('checks each git folder out in the space folder on a new branch from its last commit, and works there', async () => {
+    const t = setup(textScript)
+    const repo = gitRepo()
+    writeFileSync(join(repo, 'README.md'), 'not committed\n')
+    const chat = createChat(t, { name: 'Fix the Login!', folders: [repo] })
+    const dir = join(t.garage, 'work', chat.id)
+    const tree = join(dir, basename(repo))
+    const branch = 'hotrod/fix-the-login'
+
+    const options = await sessionOf(t, chat.id)
+    expect(options).toMatchObject({ cwd: tree, extraDirs: [dir] })
+    expect(readFileSync(join(tree, 'README.md'), 'utf8')).toBe('committed\n')
+    expect(git(tree, 'branch', '--show-current')).toBe(branch)
+    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [repo]: { path: tree, branch } })
+    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).worktrees).toEqual({ [repo]: { path: tree, branch } })
+    expect(options?.instructions).toContain(`${CHECKOUT_RULES}\n- ${repo}: ${tree} (branch ${branch})`)
+
+    await sessionOf(t, chat.id)
+    expect(branchesOf(repo)).toEqual(['hotrod/fix-the-login', 'main'])
+    rmSync(tree, { recursive: true })
+    expect((await sessionOf(t, chat.id))?.cwd).toBe(tree)
+    expect(git(tree, 'branch', '--show-current')).toBe(branch)
+  })
+
+  it("lets the session write its repo's objects and refs, but not hooks, config or a branch checked out elsewhere", async () => {
+    const t = setup(textScript)
+    const repo = gitRepo()
+    const chat = createChat(t, { name: 'App', folders: [repo] })
+    const dir = join(t.garage, 'work', chat.id)
+    const gitDir = join(repo, '.git')
+    expect((await sessionOf(t, chat.id))?.sandbox).toEqual({
+      writable: [dir, ...['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'FETCH_HEAD'].map((p) => join(gitDir, p))],
+      readOnly: [join(gitDir, 'refs', 'heads', 'main'), join(gitDir, 'refs', 'heads', 'main.lock')],
+      tmpDir: join(dir, '.tmp'),
+    })
+  })
+
+  it.skipIf(process.platform !== 'darwin')(
+    "lets an agent commit in its checkout but not touch the user's checkout, its branch or git hooks",
+    async () => {
+      const t = setup(textScript)
+      // Outside the per-user temp folder, which a sandbox leaves writable.
+      const repo = gitRepo(realpathSync(mkdtempSync('/tmp/hotrod-test-')))
+      dirs.push(repo)
+      const chat = createChat(t, { name: 'App', folders: [repo] })
+      const options = (await sessionOf(t, chat.id))!
+      const run = (command: string) =>
+        localMachine.run('/bin/sh', ['-c', command], { cwd: options.cwd, sandbox: options.sandbox })
+      const identity = '-c user.name=Agent -c user.email=agent@example.com'
+      expect(await run(`echo change > README.md && git ${identity} commit -qam work`)).toMatchObject({ code: 0 })
+      expect(git(repo, 'log', '-1', '--format=%s', 'hotrod/app')).toBe('work')
+      for (const escape of [
+        `git update-ref refs/heads/main HEAD`,
+        `git -C ${JSON.stringify(repo)} checkout -q -b other`,
+        `echo x > ${JSON.stringify(join(repo, 'README.md'))}`,
+        `echo x > ${JSON.stringify(join(repo, '.git', 'hooks', 'post-checkout'))}`,
+        `git config core.fsmonitor true`,
+      ]) {
+        expect((await run(escape)).code, escape).not.toBe(0)
+      }
+      expect(git(repo, 'log', '-1', '--format=%s', 'main')).toBe('first')
+      expect(git(repo, 'status', '--porcelain')).toBe('')
+    },
+  )
+
+  it('picks a free branch and a free folder name', async () => {
+    const t = setup(textScript)
+    const repo = gitRepo()
+    const twin = gitRepo(join(tempDir(), basename(repo)))
+    const first = createChat(t, { name: 'App', folders: [repo] })
+    const second = createChat(t, { name: 'App', folders: [repo, twin] })
+    await sessionOf(t, first.id)
+    await sessionOf(t, second.id)
+    const dir = join(t.garage, 'work', second.id)
+    expect(chatOf(t.core, second.id)?.worktrees).toEqual({
+      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2' },
+      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app' },
+    })
+  })
+
+  it("ends the turn with git's error when a folder can't be checked out", async () => {
+    const t = setup(textScript)
+    const empty = tempDir()
+    git(empty, 'init', '-q')
+    const chat = createChat(t, { name: 'App', folders: [empty] })
+    expect(await sessionOf(t, chat.id)).toBeUndefined()
+    const end = entriesOf(t.core, chat.id).at(-1)
+    expect(end).toMatchObject({ type: 'turn.completed', error: expect.stringContaining(`Couldn't check out ${empty}`) })
+  })
+
+  it('ends the turn at once on Stop while a checkout is being made, and starts no engine', async () => {
+    const slow: Machine = {
+      ...sandboxing,
+      run: async (command, args, options) => {
+        if (args.includes('add')) await new Promise((resolve) => setTimeout(resolve, 100))
+        return localMachine.run(command, args, options)
+      },
+    }
+    const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
+    const garage = tempDir()
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: slow, mods: [] })
+    cores.push(core)
+    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
+    const t = { core, garage, messages: [] as CoreMessage[], replies: [] as CoreMessage[], handle }
+    core.onMessage((m) => t.messages.push(m))
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
+    const chat = createChat(t, { name: 'App', folders: [gitRepo()] })
+    core.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' }, () => {})
+    expect(statusOf(core, chat.id)).toBe('running')
+    core.handle({ type: 'chat.interrupt', chatId: chat.id }, () => {})
+    expect(statusOf(core, chat.id)).toBe('idle')
+    expect(entriesOf(core, chat.id).at(-1)).toMatchObject({ type: 'turn.completed', error: 'Interrupted' })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(calls).toHaveLength(0)
+    expect(statusOf(core, chat.id)).toBe('idle')
+  })
+
+  it('removes the checkouts and the space folder when the space is deleted, keeping the branch', async () => {
+    const t = setup(textScript)
+    const repo = gitRepo()
+    const chat = createChat(t, { name: 'App', folders: [repo] })
+    await sessionOf(t, chat.id)
+    const dir = join(t.garage, 'work', chat.id)
+    t.handle({ type: 'chat.delete', chatId: chat.id })
+    await until(() => !existsSync(dir))
+    expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(dir)
+    expect(branchesOf(repo)).toEqual(['hotrod/app', 'main'])
   })
 })
 

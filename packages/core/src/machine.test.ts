@@ -270,6 +270,18 @@ describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
     expect(await writes([`${file}*`], paths)).toEqual(['ok', 'ok', 'EPERM', 'EPERM'])
   })
 
+  it('keeps read-only paths inside a writable folder read-only, a file or a whole folder', async () => {
+    const dir = newDir()
+    const [ref, locked] = [join(dir, 'main'), join(dir, 'locked')]
+    mkdirSync(locked)
+    const paths = [ref, `${ref}.lock`, join(locked, 'a'), join(dir, 'other')]
+    const { stdout } = await fast.run(node, ['-e', tryWrites(paths)], {
+      cwd,
+      sandbox: { writable: [dir], readOnly: [ref, `${ref}.lock`, locked] },
+    })
+    expect(JSON.parse(stdout)).toEqual(['EPERM', 'EPERM', 'EPERM', 'ok'])
+  })
+
   it('takes any path as it is, quotes and newlines included', async () => {
     const odd = join(newDir(), 'we"ird\\ (dir)\n")(allow file-write*)')
     mkdirSync(odd)

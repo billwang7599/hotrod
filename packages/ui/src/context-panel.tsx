@@ -6,6 +6,7 @@ import {
   type ClientMessage,
   type ContextItem,
   type ContextSection,
+  type Worktree,
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Switch, useSettled } from './controls.tsx'
 import { folderName, PANEL_PX, type ChatView } from './state.ts'
@@ -19,8 +20,8 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   folders: {
     label: 'Folders',
     about:
-      'Where it works; each folder’s AGENTS.md is read in. With none, it runs in the nearest folder above, or a ' +
-      'scratch folder',
+      'Each folder’s AGENTS.md is read in. Agents read folders but don’t write them: a git folder is checked out ' +
+      'in the work folder on a branch of its own, and they work there',
     inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
@@ -38,6 +39,9 @@ const GLOBAL_SOURCE = 'Global'
 const GLOBAL_HINT = 'Every chat gets it. Edit it in Settings → Instructions.'
 const CHAT_INTRO = 'Each message gets the items that are on, the global AGENTS.md first.'
 const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text-muted'
+const CHECKOUT_HINT =
+  'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
+  'and commit there; the branch stays when the space is deleted.'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -88,7 +92,7 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   )
 }
 
-function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
+function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps & { worktree?: Worktree }) {
   const own = item.from === chatId
   const section = item.section === 'folders' ? 'folders' : 'files'
   const preview = item.section === 'folders' ? 'AGENTS.md' : 'Contents'
@@ -121,6 +125,14 @@ function PathCard({ item, chatId, source, readOnly, send }: ItemProps) {
       <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
         {item.path}
       </span>
+      {worktree && (
+        <Hint text={CHECKOUT_HINT} align="start">
+          <span className="w-fit text-xs leading-[normal] wrap-anywhere text-muted">
+            Checked out at <span className="font-mono">{worktree.path}</span> on{' '}
+            <span className="font-mono">{worktree.branch}</span>
+          </span>
+        </Hint>
+      )}
       <div className="flex items-start gap-6 text-xs text-faint">
         <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
         {item.section === 'files' && (
@@ -214,7 +226,14 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send, 
                     {section === 'agents' ? (
                       <AgentsCard item={item} chatId={chatId} source={sourceOf(item)} readOnly={locked} send={send} />
                     ) : (
-                      <PathCard item={item} chatId={chatId} source={sourceOf(item)} readOnly={locked} send={send} />
+                      <PathCard
+                        item={item}
+                        chatId={chatId}
+                        source={sourceOf(item)}
+                        readOnly={locked}
+                        send={send}
+                        worktree={chats.find((c) => c.id === item.from)?.worktrees?.[item.path]}
+                      />
                     )}
                   </m.div>
                 ))}

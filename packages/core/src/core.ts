@@ -61,12 +61,24 @@ import {
   type Session,
   type Upload,
   type WorkFolder,
+  type Worktree,
 } from './shared.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
+export const CHECKOUT_RULES =
+  'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
+  "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
+const GIT_TIMEOUT_MS = 120_000
+const BRANCH_SLUG_MAX_CHARS = 40
+// Enough of a repo's .git to commit, fetch and rebase in a worktree; hooks and config stay read-only.
+const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'FETCH_HEAD']
+// Moving a branch checked out in another worktree would show there as staged changes.
+const PROTECT_CHECKED_OUT_BRANCHES = true
+
+type Checkout = { folder: string; worktree: Worktree; writable: string[]; readOnly: string[] }
 
 type Chat = {
   info: ChatInfo
@@ -81,6 +93,7 @@ type Chat = {
   mcpToken?: string
   queue: QueuedMessage[]
   summaries: Summaries
+  turns: number
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -240,7 +253,6 @@ export function openCore(options: {
   }
   // A work folder holding the garage would let an agent write chat.json, settings and accounts.
   const checkWorkFolder = (path: string) => {
-    const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
     const reachesGarage = within(garage, path) || (within(path, garage) && path !== defaultWorkFolder)
     if (reachesGarage || [homedir(), realpathSync(homedir())].includes(path)) {
       throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Hotrod's`)
@@ -431,6 +443,7 @@ export function openCore(options: {
       pendingRequests: new Set(),
       queue: [],
       summaries: openSummaries(join(dir, 'summaries.jsonl')),
+      turns: 0,
     }
     if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
     chats.set(info.id, chat)
@@ -522,6 +535,7 @@ export function openCore(options: {
       chats.delete(c.info.id)
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
+      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
     }
   }
 
@@ -666,6 +680,69 @@ export function openCore(options: {
     return space.info.workDir!
   }
 
+  const git = async (folder: string, ...args: string[]) => {
+    const options = { cwd: folder, timeoutMs: GIT_TIMEOUT_MS }
+    const { code, stdout, stderr } = await machine.run('git', ['-C', folder, ...args], options)
+    if (code !== 0) throw new Error(stderr.trim() || `git ${args[0]} exited with code ${code}`)
+    return stdout.trim()
+  }
+
+  const makeWorktree = async (space: Chat, folder: string, workDir: string): Promise<Worktree> => {
+    const saved = space.info.worktrees?.[folder]
+    const branches = (await git(folder, 'for-each-ref', '--format=%(refname:short)', 'refs/heads/')).split('\n')
+    let worktree: Worktree
+    if (saved && branches.includes(saved.branch)) {
+      await git(folder, 'worktree', 'prune')
+      await git(folder, 'worktree', 'add', saved.path, saved.branch)
+      worktree = saved
+    } else {
+      const slug = space.info.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, BRANCH_SLUG_MAX_CHARS)
+      const branch = freeName(`hotrod/${slug.replace(/^-|-$/g, '') || 'space'}`, (b) => branches.includes(b))
+      const taken = Object.values(space.info.worktrees ?? {}).map((w) => w.path)
+      const path = freeName(join(workDir, basename(folder)), (p) => taken.includes(p) || existsSync(p))
+      await git(folder, 'worktree', 'add', '--no-track', '-b', branch, path, 'HEAD')
+      worktree = { path, branch }
+    }
+    updateChat(space, { worktrees: { ...space.info.worktrees, [folder]: worktree } })
+    return worktree
+  }
+
+  const making = new Map<string, Promise<Worktree>>()
+  const worktreeOf = (space: Chat, folder: string, workDir: string) => {
+    const saved = space.info.worktrees?.[folder]
+    if (saved && existsSync(saved.path)) return saved
+    const key = `${space.info.id}\n${folder}`
+    const made = making.get(key) ?? makeWorktree(space, folder, workDir).finally(() => making.delete(key))
+    making.set(key, made)
+    return made
+  }
+
+  const checkoutOf = async (space: Chat, folder: string, workDir: string, sandboxed: boolean): Promise<Checkout> => {
+    try {
+      const worktree = await worktreeOf(space, folder, workDir)
+      if (!sandboxed) return { folder, worktree, writable: [], readOnly: [] }
+      const gitDir = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+      const listed = PROTECT_CHECKED_OUT_BRANCHES ? await git(folder, 'worktree', 'list', '--porcelain') : ''
+      const readOnly = listed.split('\n\n').flatMap((entry) => {
+        const path = entry.match(/^worktree (.+)$/m)?.[1]
+        const ref = entry.match(/^branch (.+)$/m)?.[1]
+        return path && ref && !within(path, workDir) ? [join(gitDir, ref), `${join(gitDir, ref)}.lock`] : []
+      })
+      return { folder, worktree, writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
+    } catch (error) {
+      throw new Error(`Couldn't check out ${folder} in the work folder: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+
+  const removeWorkDir = async ({ info }: Chat) => {
+    // Only a folder Hotrod made for this space, whatever chat.json says.
+    if (!info.workDir || basename(info.workDir) !== info.id) return
+    for (const [folder, { path }] of Object.entries(info.worktrees ?? {})) {
+      await git(folder, 'worktree', 'remove', '--force', path).catch(() => {})
+    }
+    rmSync(info.workDir, { recursive: true, force: true })
+  }
+
   const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
@@ -702,14 +779,10 @@ export function openCore(options: {
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
     ]
-    const sandbox = sandboxIn(workDir)
-    const rules = sandbox ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []
-    const instructions = [...(role ? [role] : []), ...rules, ...memory, ...contextText].join('\n\n')
     const attachmentsDir = attachmentsDirOf(chat)
-    const extraDirs = [
-      ...items.flatMap((item) => (item.section === 'folders' ? [item.path] : [])),
-      ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
-    ]
+    const folders = items.flatMap((item) => (item.section === 'folders' ? [item.path] : []))
+    const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
+    const sandbox = sandboxIn(workDir)
 
     let session: Session | undefined
     const emit = (event: EngineEvent) => {
@@ -733,36 +806,79 @@ export function openCore(options: {
       }
     }
 
-    try {
-      chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
-      const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
-      const engine = engineInfo(adapter.id)
-      const model = pickModel(engine, listsOf(adapter.id), chat.info)
-      const thinking = pickThinking(engine, chat.info)
-      const images = adapter.imageInput
-        ? attachments
-            .filter((a) => IMAGE_TYPES.includes(a.mimeType))
-            .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
-        : []
-      const options = {
-        cwd: workDir,
-        instructions,
-        ...(extraDirs.length && { extraDirs }),
-        ...(readFiles.length && { readFiles }),
-        ...accounts.sessionFor(adapter.id),
-        ...(hotrodMcp && { hotrodMcp }),
-        ...(model && { model }),
-        ...(thinking && { thinking }),
-        ...(sandbox && { sandbox }),
+    const start = (checkouts: Checkout[]) => {
+      const cwd = checkouts[0]?.worktree.path ?? workDir
+      const rules = [
+        ...(sandbox ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []),
+        ...(checkouts.length
+          ? [
+              [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.worktree.path} (branch ${c.worktree.branch})`)]
+                .join('\n'),
+            ]
+          : []),
+      ]
+      const instructions = [...(role ? [role] : []), ...rules, ...memory, ...contextText].join('\n\n')
+      const extraDirs = [
+        ...(cwd === workDir ? [] : [workDir]),
+        ...checkouts.slice(1).map((c) => c.worktree.path),
+        ...folders.filter((folder) => !repos.includes(folder)),
+        ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
+      ]
+      const readOnly = checkouts.flatMap((c) => c.readOnly)
+      const jail = sandbox && {
+        ...sandbox,
+        writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
+        ...(readOnly.length && { readOnly }),
       }
-      session = adapter.start(machine, options, emit)
-      if (chat.status === 'idle') return session.close()
-      chat.session = session
-      session.prompt(prompt, images)
-    } catch (error) {
-      if (chat.status === 'idle') return
-      endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
+      try {
+        chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
+        const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
+        const engine = engineInfo(adapter.id)
+        const model = pickModel(engine, listsOf(adapter.id), chat.info)
+        const thinking = pickThinking(engine, chat.info)
+        const images = adapter.imageInput
+          ? attachments
+              .filter((a) => IMAGE_TYPES.includes(a.mimeType))
+              .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
+          : []
+        const options = {
+          cwd,
+          instructions,
+          ...(extraDirs.length && { extraDirs }),
+          ...(readFiles.length && { readFiles }),
+          ...accounts.sessionFor(adapter.id),
+          ...(hotrodMcp && { hotrodMcp }),
+          ...(model && { model }),
+          ...(thinking && { thinking }),
+          ...(jail && { sandbox: jail }),
+        }
+        session = adapter.start(machine, options, emit)
+        if (chat.status === 'idle') return session.close()
+        chat.session = session
+        session.prompt(prompt, images)
+      } catch (error) {
+        if (chat.status === 'idle') return
+        endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
+      }
     }
+
+    const turn = ++chat.turns
+    if (!repos.length) return start([])
+    const space = chainOf(chat)[0]!
+    const stillStarting = () => chat.turns === turn && chat.status === 'running' && !chat.session && !quitting
+    const checkOut = async () => {
+      const checkouts: Checkout[] = []
+      for (const folder of repos) checkouts.push(await checkoutOf(space, folder, workDir, sandbox !== undefined))
+      return checkouts
+    }
+    checkOut().then(
+      (checkouts) => stillStarting() && start(checkouts),
+      (error) => {
+        if (!stillStarting()) return
+        const reason = error instanceof Error ? error.message : String(error)
+        endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: reason })
+      },
+    )
   }
 
   const setQueue = (chat: Chat, queue: QueuedMessage[]) => {
@@ -849,6 +965,7 @@ export function openCore(options: {
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
+    if (!chat.session && chat.status === 'running') return forceStop(chat)
     if (!chat.session) return
     if (force) return forceStop(chat)
     if (chat.status === 'stopping') return
@@ -1039,6 +1156,14 @@ function nameModels({ models, defaultModel, ...status }: EngineStatus): Omit<Eng
     .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
   const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
   return { ...status, models: named.map(({ id, label }) => ({ id, label })), ...(shown && { defaultModel: shown }) }
+}
+
+const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
+
+const freeName = (base: string, taken: (name: string) => boolean) => {
+  let name = base
+  for (let copy = 2; taken(name); copy++) name = `${base}-${copy}`
+  return name
 }
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)

@@ -113,7 +113,9 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
     const disabledReason = offline ?? (family.some((c) => c.status !== 'idle') ? CHAT_BUSY : undefined)
     const remove = async () => {
       const below = family.length > 1 ? ' and everything below it' : ''
-      const text = `Delete “${chat.name}”${below}? Messages are deleted from Hotrod; folders and files stay on disk.`
+      const work = chat.workDir ? ` Its work folder goes too (${chat.workDir}); its git branches stay.` : ''
+      const text =
+        `Delete “${chat.name}”${below}? Messages are deleted from Hotrod; your folders and files stay on disk.` + work
       if (await confirm(text)) send({ type: 'chat.delete', chatId: chat.id })
     }
     return [

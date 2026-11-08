@@ -29,8 +29,8 @@ export interface EngineProcess {
   onExit(listener: (code: number | null, stderrTail: string) => void): void
 }
 
-// Each writable path is writable with everything under it; one ending in * is a prefix (`auth.json.lock*`).
-export type Sandbox = { writable: string[]; tmpDir?: string }
+// Each path covers everything under it; one ending in * is a prefix (`auth.json.lock*`). readOnly wins over writable.
+export type Sandbox = { writable: string[]; readOnly?: string[]; tmpDir?: string }
 
 export type SpawnOptions = { cwd: string; env?: Record<string, string>; sandbox?: Sandbox }
 
@@ -141,7 +141,10 @@ export type ChatInfo = {
   model?: string
   thinking?: string
   workDir?: string
+  worktrees?: Record<string, Worktree>
 }
+
+export type Worktree = { path: string; branch: string }
 
 export type WorkFolder = { path?: string; defaultPath: string }
 
