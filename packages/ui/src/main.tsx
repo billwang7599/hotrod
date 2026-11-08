@@ -4,6 +4,7 @@ import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedM
 import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
+import { pruneDrafts } from './drafts.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
@@ -70,6 +71,9 @@ function App() {
   const notify = useCallback((message: string) => dispatch({ type: 'error', message }), [])
 
   useEffect(() => localStorage.setItem(SELECTED_KEY, state.selectedId), [state.selectedId])
+  useEffect(() => {
+    if (state.loaded) pruneDrafts(state.chats.map((c) => c.id))
+  }, [state.loaded, state.chats])
   const [nameRequest, setNameRequest] = useState<NameRequest | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')

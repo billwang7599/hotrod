@@ -31,6 +31,7 @@ import {
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { usePathsShown } from './paths.ts'
+import { draftOf, saveDraft } from './drafts.ts'
 import { useSmoothText } from './smooth.ts'
 import { StepsOpen, useStepsShown } from './steps.ts'
 import {
@@ -846,7 +847,11 @@ export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const paths = usePathsShown()
   const listed = accounts && listedAccounts(accounts)
-  const [text, setText] = useState('')
+  const [text, setTyped] = useState(() => draftOf(props.chat.id))
+  const setText = (typed: string) => {
+    setTyped(typed)
+    saveDraft(chat.id, typed)
+  }
   const [pending, setPending] = useState<Pending[]>([])
   const pendingRef = useRef(pending)
   pendingRef.current = pending
@@ -1345,9 +1350,9 @@ export function Chat(props: ChatProps) {
                   </span>
                 )}
                 <textarea
-                  className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
+                  className="block max-h-[calc(12lh+16px)] min-h-[calc(1lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
                   value={text}
-                  rows={2}
+                  rows={1}
                   placeholder={working ? undefined : archived ? 'Archived' : placeholder}
                   aria-placeholder={working ? placeholder : undefined}
                   disabled={!(canSend || canQueue)}

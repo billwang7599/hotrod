@@ -925,3 +925,56 @@ test("labels a queued subagent report as the subagent's", () => {
   const queued = container.querySelector('[aria-label="Queued messages"]')!
   expect(queued.textContent).toContain('Subagent Docs reported:Found it')
 })
+
+test('the empty composer starts one line high', () => {
+  render({})
+  const box = container.querySelector('textarea')!
+  expect(box.rows).toBe(1)
+  expect(box.className).toContain('min-h-[calc(1lh+16px)]')
+  expect(box.className).not.toContain('min-h-[calc(2lh')
+})
+
+test('an unsent message stays in its chat across a switch and a reload, and is cleared once sent', () => {
+  localStorage.clear()
+  const box = () => container.querySelector('textarea')!
+  const write = (text: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), text)
+      box().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  const reopen = (id: string, send?: (m: ClientMessage) => void) => {
+    act(() => root.render(<></>))
+    render({ id }, send)
+  }
+  render({ id: 'c1' })
+  write('half a thought')
+  reopen('c2')
+  expect(box().value).toBe('')
+  write('other chat')
+  reopen('c1')
+  expect(box().value).toBe('half a thought')
+  expect(JSON.parse(localStorage.getItem('hotrod.drafts')!)).toEqual({ c1: 'half a thought', c2: 'other chat' })
+  const sent: ClientMessage[] = []
+  reopen('c1', (m) => sent.push(m))
+  act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent.filter((m) => m.type === 'chat.send')).toEqual([{ type: 'chat.send', chatId: 'c1', text: 'half a thought' }])
+  expect(box().value).toBe('')
+  reopen('c1')
+  expect(box().value).toBe('')
+  reopen('c2')
+  expect(box().value).toBe('other chat')
+  localStorage.clear()
+})
+
+test('a message queued during a turn clears its draft too', () => {
+  localStorage.clear()
+  const box = () => container.querySelector('textarea')!
+  render({ status: 'running' })
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'later')
+    box().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(localStorage.getItem('hotrod.drafts')).toContain('later')
+  act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+})
