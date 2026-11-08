@@ -34,6 +34,7 @@ import {
 } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
+import { showStepsByDefault, useStepsDefault } from './steps.ts'
 import { Appearance } from './themes.tsx'
 
 type PageProps = {
@@ -151,6 +152,7 @@ const PAGES = [
       <>
         <Appearance />
         <ShownPaths />
+        <ShownSteps />
       </>
     ),
   },
@@ -402,6 +404,23 @@ function ShownPaths() {
         </SettingRow>
         <SettingRow name="In the Context panel" hint="Show each AGENTS.md, folder and file's full path on its card">
           <Switch label="Show paths in the Context panel" checked={paths.context} onChange={(on) => showPaths('context', on)} />
+        </SettingRow>
+      </div>
+    </>
+  )
+}
+
+function ShownSteps() {
+  const shown = useStepsDefault()
+  return (
+    <>
+      <div className="pt-24 pb-8 font-semibold">Thinking and tool calls</div>
+      <div className={GROUP}>
+        <SettingRow
+          name="Show unfolded"
+          hint={`List each finished turn's thinking and tool calls open instead of folding them into "N steps". Each ${CHAT_NOUN.one} can override this in its Context panel.`}
+        >
+          <Switch label="Show thinking and tool calls unfolded" checked={shown} onChange={showStepsByDefault} />
         </SettingRow>
       </div>
     </>
