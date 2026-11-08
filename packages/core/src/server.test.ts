@@ -315,9 +315,14 @@ const mainMod: Mod = {
   ],
 }
 
-async function startHeld({ hotrodMcp = true } = {}) {
+async function startHeld({ hotrodMcp = true, mods = [mainMod] } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
-  const sessions: { options: SessionOptions; prompt?: string; end: (reply?: string, error?: string) => void }[] = []
+  const sessions: {
+    options: SessionOptions
+    prompt?: string
+    end: (reply?: string, error?: string) => void
+    emit: (event: EngineEvent) => void
+  }[] = []
   const held: Adapter = {
     id: 'held',
     hotrodMcp,
@@ -327,7 +332,7 @@ async function startHeld({ hotrodMcp = true } = {}) {
         if (reply !== undefined) emit({ type: 'text.completed', text: reply })
         emit({ type: 'turn.completed', ...(error && { error }) })
       }
-      const session: (typeof sessions)[number] = { options, end }
+      const session: (typeof sessions)[number] = { options, end, emit }
       sessions.push(session)
       return {
         prompt: (text) => {
@@ -345,7 +350,7 @@ async function startHeld({ hotrodMcp = true } = {}) {
     adapters: [held],
     defaultEngine: 'held',
     machine: sandboxingMachine,
-    mods: [mainMod],
+    mods,
   })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -535,25 +540,84 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   expect(existsSync(join(garage, 'chats', chatId))).toBe(true)
 
   sessionOf(chatId).end('Found it')
-  const report = `[subagent "Search the docs" (${chatId})] Found it`
-  expect(chatIn(core, 'main').queue.map((q) => q.text)).toEqual([report])
+  const report = { chatId, name: 'Search the docs' }
+  expect(chatIn(core, 'main').queue).toMatchObject([{ text: 'Found it', report }])
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
   expect(await tool(token, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: true })
   expect(await tool(token, 'read_chat', { chatId })).toMatchObject({ isError: true })
+  core.handle({ type: 'chat.send', chatId: 'main', text: 'Also check the FAQ' }, () => {})
   parent.end('Waiting')
-  expect(sessionOf('main').prompt?.endsWith(report)).toBe(true)
+  const prompt = sessionOf('main').prompt!
+  expect(prompt).toContain(`Report from subagent "Search the docs" (${chatId}):\n\nFound it`)
+  expect(prompt.endsWith('New message from the user:\n\nAlso check the FAQ')).toBe(true)
   expect(chatIn(core, 'main').status).toBe('running')
+  // The report is its own entry, apart from the user's words, so neither the UI nor memory takes it as theirs.
+  const logged = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
+  expect(logged.slice(-2)).toMatchObject([
+    { type: 'subagent.report', text: 'Found it', ...report },
+    { type: 'user.message', text: 'Also check the FAQ' },
+  ])
   const lead = sessionOf('main')
 
   const stopped = (await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
   lead.end('Thanks')
   sessionOf(stopped).end(undefined, 'Interrupted')
-  const failed = `[subagent "Look again" (${stopped})] (No reply) (The turn ended early: Interrupted)`
+  const failed = `Report from subagent "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
   expect(sessionOf('main').prompt?.endsWith(failed)).toBe(true)
+  expect(sessionOf('main').prompt).not.toContain('New message from the user')
+  expect(chatIn(core, 'main').entries.at(-2)).toMatchObject({ type: 'subagent.report', text: '', error: 'Interrupted' })
   expect(sessionsOf('main')).toHaveLength(3)
   expect(core.chats().some((c) => c.id === stopped)).toBe(false)
   expect(existsSync(join(garage, 'chats', stopped))).toBe(false)
+})
+
+it("sends a limited turn again whole, a lead's reports included, and keeps a subagent sent again", async () => {
+  const retried: string[] = []
+  const retrier: Mod = {
+    id: 'retrier',
+    name: 'Retrier',
+    description: '',
+    enabledByDefault: true,
+    onLimitReached({ chat }, { host }) {
+      retried.push(chat.id)
+      host.retry(chat.id)
+    },
+  }
+  const { core, sessionOf, sessionsOf, json, send } = await startHeld({ mods: [mainMod, retrier] })
+  subagentsOn(core, -1)
+  const lead = send('main', 'Plan it')
+  const { chatId } = await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Search' })
+  const limit = (chat: string) => {
+    sessionOf(chat).emit({ type: 'limit.reached', message: 'Out of usage' })
+    sessionOf(chat).end(undefined, 'Out of usage')
+  }
+
+  limit(chatId)
+  expect(retried).toEqual([chatId])
+  expect(chatIn(core, chatId).status).toBe('running')
+  expect(sessionsOf(chatId)).toHaveLength(2)
+  expect(sessionOf(chatId).prompt).toContain('Search')
+  expect(chatIn(core, 'main').queue).toEqual([])
+
+  // The report and the user's message wait for the lead together, so one turn starts with both.
+  sessionOf(chatId).end('Found it')
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  core.handle({ type: 'chat.send', chatId: 'main', text: 'Also the FAQ' }, () => {})
+  lead.end('Waiting')
+  limit('main')
+  expect(retried).toEqual([chatId, 'main'])
+  expect(sessionsOf('main')).toHaveLength(3)
+  const again = sessionOf('main').prompt!
+  expect(again).toContain(`Report from subagent "Search" (${chatId}):\n\nFound it`)
+  expect(again.endsWith('New message from the user:\n\nAlso the FAQ')).toBe(true)
+  const inputs = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
+  expect(inputs.slice(-4).map((e) => e.type)).toEqual([
+    'subagent.report',
+    'user.message',
+    'subagent.report',
+    'user.message',
+  ])
 })
 
 it("gives a subagent its parent's items plus its own while it works", async () => {

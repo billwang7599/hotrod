@@ -160,6 +160,23 @@ describe('pi adapter', () => {
     expect(events.at(-1)).toEqual({ type: 'turn.completed' })
   })
 
+  it('reports a limit when the turn ends on a rate or usage limit error, not while pi retries', () => {
+    const { fake, events } = startSession()
+    const failed = (errorMessage: string) =>
+      line({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage } })
+    const limited = '429 {"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}'
+    fake.stdout(failed(limited))
+    expect(events).toEqual([])
+    fake.stdout(line({ type: 'agent_settled', aborted: false }))
+    expect(events).toEqual([
+      { type: 'limit.reached', message: limited },
+      { type: 'turn.completed', error: limited },
+    ])
+    fake.stdout(failed('529 overloaded'))
+    fake.stdout(line({ type: 'agent_settled', aborted: false }))
+    expect(events.at(-2)?.type).toBe('turn.completed')
+  })
+
   it('sends abort and reports the turn as interrupted, even mid tool call', () => {
     const { fake, events, session } = startSession()
     session.prompt('Run the bash command: sleep 30. Then reply with one word.')

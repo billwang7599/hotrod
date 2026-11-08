@@ -149,6 +149,7 @@ export function openAccounts(options: {
 
   return {
     list: () => [...engines.values()].map((engine) => engine.state),
+    activeOf: (engine: string) => engines.get(engine)?.state.active,
     sessionFor(engine: string): { accountDir?: string; apiKey?: string } {
       const state = engines.get(engine)?.state
       const account = state?.accounts.find((a) => a.id === state.active)
@@ -183,11 +184,12 @@ export function openAccounts(options: {
     },
     addApiKey: (engine: string, name: string, key: string) => addApiKey(engineFor(engine), name, key),
     cancelLogin: (engine: string) => cancelLogin(engineFor(engine)),
-    use(engineId: string, id: string) {
+    // whileBusy: turns already running keep the account they started on.
+    use(engineId: string, id: string, whileBusy = false) {
       const engine = engineFor(engineId)
       accountFor(engine, id)
       if (engine.state.active === id) return
-      checkIdle(engine)
+      if (!whileBusy) checkIdle(engine)
       update(engine, { active: id }, true)
     },
     remove: (engine: string, id: string, reply: (message: CoreMessage) => void) => remove(engineFor(engine), id, reply),

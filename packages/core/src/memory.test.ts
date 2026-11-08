@@ -111,6 +111,8 @@ describe('messagesOf', () => {
       { at: at(10), type: 'turn.completed', error: 'Interrupted' },
       { at: at(11), type: 'session.ended' },
       { at: at(12), type: 'session.ended', error: 'Claude Code exited with code 1' },
+      { at: at(13), type: 'subagent.report', chatId: 'ef56ab78', name: 'Docs', text: 'Found it' },
+      { at: at(14), type: 'subagent.report', chatId: 'ef56ab79', name: 'Lint', text: '', error: 'Interrupted' },
     ]
     expect(messagesOf(entries)).toEqual([
       { id: 0, kind: 'user', at: at(0), text: 'list the folder\n\nAttached files:\n- /g/a.png (image/png)' },
@@ -121,6 +123,13 @@ describe('messagesOf', () => {
       { id: 5, kind: 'work', at: at(9), text: '[subagent "Tests" (ab12cd34)] All green' },
       { id: 6, kind: 'note', at: at(10), text: 'Turn ended early: Interrupted' },
       { id: 7, kind: 'note', at: at(12), text: 'Turn ended early: Claude Code exited with code 1' },
+      { id: 8, kind: 'work', at: at(13), text: 'Report from subagent "Docs" (ef56ab78):\n\nFound it' },
+      {
+        id: 9,
+        kind: 'work',
+        at: at(14),
+        text: 'Report from subagent "Lint" (ef56ab79):\n\n(No reply)\n\n(The turn ended early: Interrupted)',
+      },
     ])
   })
 })
@@ -192,6 +201,15 @@ describe('lines', () => {
 describe('memoryPrompt', () => {
   it('sends the message alone in a new chat', () => {
     expect(memoryPrompt([], store(), 'hi', { zoom: true })).toBe('hi')
+  })
+
+  it("frames subagents' reports as theirs, before any words from the user", () => {
+    const report = { text: 'Found it', report: { chatId: 'ef56ab78', name: 'Docs' } }
+    const found = 'Report from subagent "Docs" (ef56ab78):\n\nFound it'
+    expect(memoryPrompt([], store(), '', { zoom: true }, [report])).toBe(found)
+    const prompt = memoryPrompt(chat(2), store(), 'and the FAQ?', { zoom: true }, [report])
+    expect(prompt.endsWith(`</message>\n\n${found}\n\nNew message from the user:\n\nand the FAQ?`)).toBe(true)
+    expect(memoryPrompt(chat(2), store(), '', { zoom: true }, [report]).endsWith(`</message>\n\n${found}`)).toBe(true)
   })
 
   it('renders a short chat in full, then the new message', () => {

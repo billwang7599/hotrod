@@ -33,6 +33,9 @@ const CLEAN_ARGS = [
 
 const RPC_ARGS = ['--mode', 'rpc', ...CLEAN_ARGS]
 
+// The provider's error once pi has stopped retrying: a usage cap, a rate limit or an exhausted quota.
+const LIMIT_ERROR = /usage limit|rate[_ ]limit|\b429\b|too many requests|quota|resource[_ ]exhausted/i
+
 // pi reads MCP servers only from <agent dir>/mcp.json, so each session gets its own agent dir with only pi's login
 // and model lists linked in. The launched process makes it, so it is on the machine that runs pi.
 const LAUNCH = `dir=$(mktemp -d "\${TMPDIR:-/tmp}/hotrod-pi.XXXXXX") || exit
@@ -140,6 +143,7 @@ export const pi: Adapter = {
 
     const endTurn = (error?: string) => {
       turnError = undefined
+      if (error && error !== 'Interrupted' && LIMIT_ERROR.test(error)) emit({ type: 'limit.reached', message: error })
       emit({ type: 'turn.completed', ...(error && { error }) })
     }
 

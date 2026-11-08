@@ -1,0 +1,9 @@
+{
+  "name": "@hotrod/mod-account-rotation",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@hotrod/core": "*",
+    "@hotrod/mod-api": "*"
+  }
+}

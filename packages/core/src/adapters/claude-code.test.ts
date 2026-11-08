@@ -333,7 +333,7 @@ describe('claudeCode adapter', () => {
     expect(fake.sent().at(-1).response.response.updatedInput.answers).toEqual({ 'Color?': 'Purple with green stripes' })
   })
 
-  it('reports an error result and a nonzero exit with the stderr tail', () => {
+  it('reports an API error once, as the error and not as reply text, and a nonzero exit with the stderr tail', () => {
     const { fake, events, session } = startSession()
     session.prompt('hi')
     fake.stdout(fixture('error-result'))
@@ -341,14 +341,56 @@ describe('claudeCode adapter', () => {
     const message =
       "There's an issue with the selected model (claude-nonexistent-9). It may not exist or you may not have access " +
       'to it. Run --model to pick a different model.'
-    expect(events.slice(-3)).toEqual([
-      { type: 'text.completed', text: message },
+    expect(events).toEqual([
+      { type: 'turn.started' },
       { type: 'turn.completed', error: message },
       {
         type: 'session.ended',
         error: 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}',
       },
     ])
+  })
+
+  describe('usage limits', () => {
+    const rateLimit = (info: Record<string, unknown>) =>
+      JSON.stringify({ type: 'rate_limit_event', rate_limit_info: info }) + '\n'
+    const result = (text: string) =>
+      JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: text }) + '\n'
+
+    it('reports a rejected rate limit once a turn, named and with its reset, and ignores the rest', () => {
+      const { fake, events, session } = startSession()
+      session.prompt('hi')
+      fake.stdout(rateLimit({ status: 'allowed_warning', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' }))
+      fake.stdout(rateLimit({ status: 'rejected', rateLimitType: 'seven_day', isUsingOverage: true }))
+      fake.stdout(rateLimit({ status: 'rejected', resetsAt: 1_900_000_000, rateLimitType: 'five_hour' }))
+      fake.stdout(result("You've hit your 5-hour limit · resets 3pm"))
+      const limit = {
+        type: 'limit.reached',
+        message: "The account's 5-hour usage limit is reached",
+        resetsAt: '2030-03-17T17:46:40.000Z',
+      }
+      const ended = { type: 'turn.completed', error: "You've hit your 5-hour limit · resets 3pm" }
+      expect(events.slice(1)).toEqual([limit, ended])
+
+      session.prompt('again')
+      fake.stdout(rateLimit({ status: 'rejected' }))
+      expect(events.at(-1)).toEqual({ type: 'limit.reached', message: "The account's usage limit is reached" })
+    })
+
+    it('reads a limit from the error result alone, with the reset older versions add after a bar', () => {
+      const { fake, events, session } = startSession()
+      session.prompt('hi')
+      fake.stdout(result('Claude AI usage limit reached|1900000000'))
+      expect(events.slice(1, 2)).toEqual([
+        { type: 'limit.reached', message: 'Claude AI usage limit reached', resetsAt: '2030-03-17T17:46:40.000Z' },
+      ])
+      session.prompt('hi')
+      fake.stdout(result('API Error: 429 {"type":"error","error":{"type":"rate_limit_error"}}'))
+      expect(events.at(-2)).toMatchObject({ type: 'limit.reached' })
+      session.prompt('hi')
+      fake.stdout(result('Something else broke'))
+      expect(events.at(-2)).toEqual({ type: 'turn.started' })
+    })
   })
 
   it('ends the session cleanly on exit 0', () => {
@@ -662,18 +704,32 @@ describe('claudeCode accounts', () => {
 describe('claudeCode in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
   const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const defaultDir = join(homedir(), '.claude')
+  const locks = [join(defaultDir, '.oauth_refresh.lock*'), join(defaultDir, '.storage-write.lock')]
+  const defaultWritable = ['/work/space', join(defaultDir, 'shell-snapshots'), ...locks, keychain]
   const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
   afterEach(() => {
     if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
     else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
   })
 
-  it('also lets it write its shell snapshots and the login keychain, with its temp folder in the sandbox', () => {
+  it('also lets it write its shell snapshots, login locks and the keychain, with its temp folder in the sandbox', () => {
     delete process.env.CLAUDE_CONFIG_DIR
     const { fake } = startSession('', { sandbox })
-    const snapshots = join(homedir(), '.claude', 'shell-snapshots')
-    expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', snapshots, keychain], tmpDir: sandbox.tmpDir })
+    expect(fake.spawned[0]?.sandbox).toEqual({ writable: defaultWritable, tmpDir: sandbox.tmpDir })
     expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it('lets it take the locks a login refresh needs, and keeps what can run code read-only', () => {
+    const accountDir = '/garage/accounts/claude-code/work'
+    const writable = startSession('', { sandbox, accountDir }).fake.spawned[0]?.sandbox?.writable ?? []
+    const canWrite = (path: string) =>
+      writable.some((w) => (w.endsWith('*') ? path.startsWith(w.slice(0, -1)) : path === w || path.startsWith(`${w}/`)))
+    const refreshLocks = ['.oauth_refresh.lock', '.oauth_refresh.lock.owner', '.oauth_refresh.lock.owner.tmp.0a1b2c3d']
+    for (const lock of [...refreshLocks, '.storage-write.lock']) expect(canWrite(join(accountDir, lock))).toBe(true)
+    const codeRunning = ['settings.json', 'settings.local.json', 'CLAUDE.md', '.claude.json', 'hooks/a.sh', 'agents/a.md',
+      'commands/a.md', 'output-styles/a.md', 'plugins/installed_plugins.json', 'skills/a/SKILL.md']
+    for (const path of ['', ...codeRunning]) expect(canWrite(join(accountDir, path))).toBe(false)
   })
 
   it("puts the shell snapshots in the config folder it runs with: the account's, else CLAUDE_CONFIG_DIR", () => {
@@ -691,7 +747,7 @@ describe('claudeCode in a sandbox', () => {
     const fake = fakeMachine({ claude: { code: 0, stdout, stderr: '' } })
     const request = { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox }
     await claudeCode.complete!(fake.machine, request)
-    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', join(homedir(), '.claude', 'shell-snapshots'), keychain])
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(defaultWritable)
     expect(fake.ran[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
 })

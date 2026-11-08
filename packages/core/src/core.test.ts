@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { Mod, ModChat, ModSession } from '@hotrod/mod-api'
+import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
@@ -31,6 +31,7 @@ import {
 } from './memory.ts'
 import {
   ASK_FIRST_COMMANDS,
+  bySpaceOrder,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -386,6 +387,39 @@ describe('chats', () => {
     expect(chatOf(t.core, chat.id)?.name).toBe('New name')
   })
 
+  it('moves and pins spaces, and keeps their places across a restart', () => {
+    const t = setup(textScript)
+    const [a, b, c] = ['A', 'B', 'C'].map((name) => createChat(t, { name })) as [ChatState, ChatState, ChatState]
+    const places = (core: Core) =>
+      core
+        .chats()
+        .filter((x) => !x.mod && !x.parentId)
+        .sort(bySpaceOrder)
+        .map((x) => (x.pinned ? `${x.name}*` : x.name))
+    t.handle({ type: 'chat.move', chatId: a.id, pinned: false, index: 0 })
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: false, index: 1 })
+    t.handle({ type: 'chat.move', chatId: c.id, pinned: false, index: 2 })
+    expect(places(t.core)).toEqual(['A', 'B', 'C'])
+    t.handle({ type: 'chat.move', chatId: c.id, pinned: false, index: 0 })
+    expect(places(t.core)).toEqual(['C', 'A', 'B'])
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: true, index: 0 })
+    expect(places(t.core)).toEqual(['B*', 'C', 'A'])
+    expect(JSON.parse(readFileSync(chatFile(t, b.id), 'utf8'))).toMatchObject({ pinned: true, order: 0 })
+    t.handle({ type: 'chat.move', chatId: b.id, pinned: false, index: 0 })
+    expect(places(t.core)).toEqual(['B', 'C', 'A'])
+    expect(JSON.parse(readFileSync(chatFile(t, b.id), 'utf8'))).not.toHaveProperty('pinned')
+    t.handle({ type: 'chat.move', chatId: a.id, pinned: true, index: 5 })
+    expect(places(t.core)).toEqual(['A*', 'B', 'C'])
+    expect(() => t.handle({ type: 'chat.move', chatId: 'main', pinned: true, index: 0 })).toThrow(/spaces/)
+    expect(() => t.handle({ type: 'chat.move', chatId: a.id, pinned: true, index: 0.5 })).toThrow(/number/)
+    t.core.close()
+
+    const reopened = setup(textScript, t.garage)
+    expect(places(reopened.core)).toEqual(['A*', 'B', 'C'])
+    createChat(reopened, { name: 'D' })
+    expect(places(reopened.core)).toEqual(['A*', 'D', 'B', 'C'])
+  })
+
   it('archives a chat, keeping its log, and refuses to run it until unarchived', async () => {
     const t = setup(textScript)
     const chat = createChat(t)
@@ -709,6 +743,160 @@ describe('worktrees', () => {
     await until(() => !existsSync(dir))
     expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(dir)
     expect(branchesOf(repo)).toEqual(['hotrod/app', 'main'])
+  })
+
+  describe('cleanup', () => {
+    // A sweep runs git back to back, so a quiet spell means the one that started has finished.
+    const quietMachine = (base = sandboxingMachine) => {
+      let running = 0
+      let lastEndMs = 0
+      const machine: Machine = {
+        ...base,
+        run: async (command, args, options) => {
+          running++
+          try {
+            return await base.run(command, args, options)
+          } finally {
+            running--
+            lastEndMs = Date.now()
+          }
+        },
+      }
+      const quiet = async () => {
+        while (running || Date.now() - lastEndMs < 200) await new Promise((r) => setTimeout(r, 20))
+      }
+      return { machine, quiet }
+    }
+    const repoWithOrigin = () => {
+      const origin = tempDir()
+      git(origin, 'init', '-q', '--bare', '-b', 'main')
+      const repo = gitRepo()
+      git(repo, 'remote', 'add', 'origin', origin)
+      git(repo, 'push', '-q', '-u', 'origin', 'main')
+      return { origin, repo }
+    }
+    const branchIn = (
+      { origin, repo }: { origin: string; repo: string },
+      path: string,
+      branch: string,
+      { push = true, merge = true, gone = true } = {},
+    ) => {
+      if (!existsSync(path)) git(repo, 'worktree', 'add', '-q', '-b', branch, path, 'main')
+      writeFileSync(join(path, `${branch.replace('/', '-')}.txt`), 'work\n')
+      git(path, 'add', '-A')
+      git(path, 'commit', '-q', '-m', branch)
+      if (push) git(path, 'push', '-q', '-u', 'origin', branch)
+      if (merge) {
+        git(repo, 'merge', '-q', '--no-ff', '-m', `Merge ${branch}`, branch)
+        git(repo, 'push', '-q', 'origin', 'main')
+      }
+      if (push && gone) git(origin, 'update-ref', '-d', `refs/heads/${branch}`)
+      return path
+    }
+
+    it("removes an agent's worktree in the space folder once its branch is merged and gone upstream", async () => {
+      const { machine, quiet } = quietMachine()
+      const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
+      const opened = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainMod], machine)
+      const t = { ...opened, calls }
+      const remote = repoWithOrigin()
+      const { repo } = remote
+      const chat = createChat(t, { name: 'App', folders: [repo] })
+      await sessionOf(t, chat.id)
+      await quiet()
+      const dir = join(t.garage, 'work', chat.id)
+
+      const own = branchIn(remote, join(dir, basename(repo)), 'hotrod/app')
+      const merged = branchIn(remote, join(dir, 'merged'), 'merged')
+      const dirty = branchIn(remote, join(dir, 'dirty'), 'dirty')
+      writeFileSync(join(dirty, 'notes.txt'), 'not committed\n')
+      const unmerged = branchIn(remote, join(dir, 'unmerged'), 'unmerged', { merge: false })
+      const local = branchIn(remote, join(dir, 'local'), 'local', { push: false })
+      const outside = branchIn(remote, join(tempDir(), 'outside'), 'outside')
+      expect(git(repo, 'branch', '-r')).toContain('origin/merged')
+
+      await sessionOf(t, chat.id)
+      await quiet()
+      expect(existsSync(merged)).toBe(false)
+      expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(merged)
+      expect(branchesOf(repo)).toEqual(['dirty', 'hotrod/app', 'local', 'main', 'outside', 'unmerged'])
+      for (const kept of [own, dirty, unmerged, local, outside]) expect(existsSync(kept), kept).toBe(true)
+      expect(git(repo, 'branch', '-r')).not.toContain('origin/merged')
+    })
+
+    const stubSpace = async (baseMachine?: Machine) => {
+      const { machine, quiet } = quietMachine(baseMachine)
+      const emits: ((event: EngineEvent) => void)[] = []
+      const adapter = stubAdapter((_machine, _options, emit) => {
+        emits.push(emit)
+        return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+      })
+      const garage = tempDir()
+      const remote = repoWithOrigin()
+      const base = { engine: adapter.id, archived: false, createdAt: at, folders: [], files: [] }
+      for (const info of [
+        { id: 'aaaa0001', name: 'App', ...base, folders: [remote.repo] },
+        { id: 'sub', name: 'Sub', parentId: 'aaaa0001', subagent: true, ...base },
+      ]) {
+        mkdirSync(join(garage, 'chats', info.id), { recursive: true })
+        writeFileSync(join(garage, 'chats', info.id, 'chat.json'), JSON.stringify(info))
+      }
+      const t = open(garage, [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainMod], machine)
+      const turn = async (chatId: string) => {
+        const before = emits.length
+        t.handle({ type: 'chat.send', chatId, text: 'go' })
+        await until(() => emits.length > before)
+        return emits.at(-1)!
+      }
+      const end = async (emit: (event: EngineEvent) => void, chatId: string) => {
+        emit({ type: 'turn.completed' })
+        await until(() => settled(t.core, chatId))
+        await quiet()
+      }
+      await end(await turn('aaaa0001'), 'aaaa0001')
+      const merged = branchIn(remote, join(garage, 'work', 'aaaa0001', 'merged'), 'merged')
+      return { t, emits, turn, end, merged, quiet }
+    }
+
+    it('waits until no chat in the space is running, subagents included', async () => {
+      const { t, emits, turn, end, merged } = await stubSpace()
+      const sub = await turn('sub')
+      await end(await turn('aaaa0001'), 'aaaa0001')
+      expect(existsSync(merged)).toBe(true)
+
+      const before = emits.length
+      sub({ type: 'turn.completed' })
+      await until(() => emits.length > before)
+      await end(emits.at(-1)!, 'aaaa0001')
+      expect(chatOf(t.core, 'sub')).toBeUndefined()
+      expect(existsSync(merged)).toBe(false)
+    })
+
+    it('keeps a worktree when a turn starts while the sweep is checking it', async () => {
+      let checking = false
+      let check = () => {}
+      const checked = new Promise<void>((resolve) => (check = resolve))
+      const slow: Machine = {
+        ...sandboxingMachine,
+        run: async (command, args, options) => {
+          if (args.includes('status')) {
+            checking = true
+            await checked
+          }
+          return sandboxingMachine.run(command, args, options)
+        },
+      }
+      const { turn, end, merged, quiet } = await stubSpace(slow)
+      const first = await turn('aaaa0001')
+      first({ type: 'turn.completed' })
+      await until(() => checking)
+      const second = await turn('aaaa0001')
+      check()
+      await quiet()
+      expect(existsSync(merged)).toBe(true)
+      await end(second, 'aaaa0001')
+      expect(existsSync(merged)).toBe(false)
+    })
   })
 })
 
@@ -3232,5 +3420,179 @@ describe('mods', () => {
       expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
       expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
     })
+  })
+})
+
+describe('usage limits', () => {
+  const limitedScript: FakeStep[] = [
+    { type: 'text.delta', text: 'Work' },
+    { type: 'limit.reached', message: 'Out of usage', resetsAt: at },
+    { type: 'text.completed', text: 'Working on it anyway' },
+  ]
+  type Seen = { limit: LimitReached; status?: string; host: ModHost }
+
+  // Chats whose work folder is listed wait on a permission; the rest run out of usage on every account but `spare`.
+  const asking = new Set<string>()
+  const byAccount = (options: SessionOptions) =>
+    asking.has(basename(options.cwd))
+      ? permissionScript
+      : basename(options.accountDir ?? '') === 'spare'
+        ? textScript
+        : limitedScript
+
+  function setupLimits(onLimit?: (seen: Seen, t: ReturnType<typeof setup>) => void) {
+    const seen: Seen[] = []
+    const watcher: Mod = {
+      id: 'watcher',
+      name: 'Watcher',
+      description: '',
+      enabledByDefault: true,
+      onLimitReached(limit, { host }) {
+        const entry = { limit, status: statusOf(t.core, limit.chat.id), host }
+        seen.push(entry)
+        onLimit?.(entry, t)
+      },
+    }
+    const t = setup(createFakeAdapter(byAccount, 0), tempDir(), TEST_STOP_GRACE_MS, [watcher])
+    return { ...t, seen }
+  }
+
+  it('logs the limit and lets the turn run its course while no mod watches for limits', async () => {
+    const t = setup(limitedScript, tempDir(), TEST_STOP_GRACE_MS, [])
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(types(entriesOf(t.core, chat.id))).toEqual([
+      'user.message',
+      'turn.started',
+      'limit.reached',
+      'text.completed',
+      'turn.completed',
+    ])
+    expect(t.calls[0]!.interrupted).toBeUndefined()
+  })
+
+  it('stops the turn and tells each mod that watches, with the chat idle and the account it ran on', async () => {
+    const t = setupLimits()
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => t.seen.length > 0)
+    expect(t.calls[0]!.interrupted).toBe(true)
+    expect(t.seen).toEqual([
+      {
+        limit: {
+          chat: { id: chat.id, name: 'Chat', engine: 'fake' },
+          engine: 'fake',
+          account: 'default',
+          message: 'Out of usage',
+          resetsAt: at,
+          output: true,
+        },
+        status: 'idle',
+        host: expect.anything(),
+      },
+    ])
+    const end = entriesOf(t.core, chat.id).at(-1)
+    expect(end).toMatchObject({ type: 'turn.completed', error: 'Out of usage' })
+    expect(entriesOf(t.core, chat.id).filter((e) => e.type === 'text.completed')).toEqual([
+      { at: expect.any(String), type: 'text.completed', text: 'Work' },
+    ])
+  })
+
+  it("lets a mod list accounts, switch while other chats run, note it and send the message again", async () => {
+    const t = setupLimits(({ limit, host }) => {
+      const { accounts } = host.accounts('fake')!
+      const next = accounts.find((a) => a.id !== limit.account)!
+      host.useAccount('fake', next.id)
+      host.note(limit.chat.id, `Switched to ${next.name}`)
+      host.retry(limit.chat.id)
+    })
+    t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Spare', key: 'sk-spare' })
+    const busy = createChat(t, { name: 'Busy' })
+    const chat = createChat(t)
+    asking.add(busy.id)
+    t.handle({ type: 'chat.send', chatId: busy.id, text: 'Ask first' })
+    // Busy waits on a permission it never gets, so it runs throughout.
+    await until(() => statusOf(t.core, busy.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'And then this' })
+    const done = () => statusOf(t.core, chat.id) === 'idle' && !chatOf(t.core, chat.id)?.queue.length
+    await until(() => t.seen.length > 0 && done())
+
+    expect(t.seen[0]!.host.accounts('fake')).toEqual({
+      engine: 'fake',
+      active: 'spare',
+      accounts: [
+        { id: 'default', name: 'Default', signedIn: true },
+        { id: 'spare', name: 'Spare', signedIn: true },
+      ],
+    })
+    expect(t.seen[0]!.host.accounts('nope')).toBeUndefined()
+    const entries = entriesOf(t.core, chat.id)
+    const shown = entries.flatMap((e) =>
+      e.type === 'user.message' || e.type === 'mod.note' ? [`${e.type}: ${e.text}`] : [],
+    )
+    expect(shown).toEqual([
+      'user.message: Go',
+      'mod.note: Switched to Spare',
+      'user.message: Go\n\nAnd then this',
+    ])
+    expect(entries.at(-1)).toEqual({ at: expect.any(String), type: 'turn.completed' })
+    expect(basename(t.calls.at(-1)!.options.accountDir!)).toBe('spare')
+    expect(statusOf(t.core, busy.id)).toBe('waiting')
+    expect(t.calls[0]!.options.accountDir).toBeUndefined()
+  })
+
+  it('says whether the engine had done anything since the last message, counting continued turns', async () => {
+    const outputs: boolean[] = []
+    // The first session runs out at once, the second after a tool call, the third (a continuation) at once.
+    const scripts: FakeStep[][] = [
+      [],
+      [{ type: 'tool.started', toolId: 't', name: 'Bash', kind: 'shell', summary: 'ls', input: {} }],
+      [],
+    ]
+    let sessions = 0
+    const limited = (): FakeStep[] => [...(scripts[sessions++] ?? []), { type: 'limit.reached', message: 'Out' }]
+    const watcher: Mod = {
+      id: 'w',
+      name: 'W',
+      description: '',
+      enabledByDefault: true,
+      onLimitReached({ chat, output }, { host }) {
+        outputs.push(output)
+        if (outputs.length === 2) host.continue(chat.id, 'Carry on')
+      },
+    }
+    const t = setup(createFakeAdapter(limited, 0), tempDir(), TEST_STOP_GRACE_MS, [watcher])
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    await until(() => outputs.length === 1 && statusOf(t.core, chat.id) === 'idle')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go again' })
+    await until(() => outputs.length === 3 && statusOf(t.core, chat.id) === 'idle')
+    expect(outputs).toEqual([false, true, true])
+  })
+
+  it('lets a mod continue a stopped turn as a turn of its own, ahead of queued messages', async () => {
+    let continued = false
+    const t = setupLimits(({ limit, host }) => {
+      host.useAccount('fake', 'spare')
+      expect(() => host.continue(limit.chat.id, ' ')).toThrow('A continuation needs a prompt')
+      continued = true
+      host.continue(limit.chat.id, 'Carry on')
+    })
+    t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Spare', key: 'sk-spare' })
+    t.handle({ type: 'account.use', engine: 'fake', accountId: 'default' })
+    const chat = createChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'And then this' })
+    await until(() => continued && t.calls.length === 3 && statusOf(t.core, chat.id) === 'idle')
+
+    const entries = entriesOf(t.core, chat.id)
+    expect(entries.flatMap((e) => (e.type === 'user.message' ? [e.text] : []))).toEqual(['Go', 'And then this'])
+    // The partial reply is kept, then the continued turn's, then the queued message's.
+    expect(entries.flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))).toEqual(['Work', 'Hello', 'Hello'])
+    expect(t.calls[1]!.prompt).toMatch(/Work[\s\S]*From Hotrod:\n\nCarry on$/)
+    expect(t.calls[1]!.prompt).not.toContain('New message from the user')
+    expect(t.calls[2]!.prompt).toContain('New message from the user:\n\nAnd then this')
   })
 })

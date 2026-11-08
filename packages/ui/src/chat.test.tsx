@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
+import { resetReveals } from './smooth.ts'
 import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
 import { ChatNav } from './sidebar.tsx'
 import {
@@ -56,6 +57,7 @@ let container: HTMLElement
 
 beforeEach(() => {
   page.scrollHeight = 2000
+  resetReveals()
   resizeCallbacks = []
   Object.defineProperties(HTMLElement.prototype, sizes)
   HTMLElement.prototype.scrollTo = vi.fn()
@@ -145,6 +147,62 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
 }
 
 const working = () => container.querySelector('[aria-label="Working"]')
+
+/** Takes over animation frames and the clock; returns a function that runs `times` frames of 16ms. */
+function driveFrames() {
+  let now = 0
+  const frames = new Map<number, FrameRequestCallback>()
+  let next = 1
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => (frames.set(next, callback), next++))
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+  return (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      now += 16
+      const due = [...frames.values()]
+      frames.clear()
+      act(() => due.forEach((callback) => callback(now)))
+    }
+  }
+}
+const replyText = () => [...container.querySelectorAll('.markdown')].at(-1)?.textContent ?? ''
+const LONG_REPLY = 'Here is what I found after reading the code, in a few short sentences.'
+
+test('a streamed reply types out, and carries on from there when it becomes the finished reply', () => {
+  const frame = driveFrames()
+  render({ status: 'running', items: [USER] })
+  render({ status: 'running', items: [USER], draft: LONG_REPLY.slice(0, 40) })
+  expect(replyText()).toBe('')
+  frame(5)
+  const typed = replyText().length
+  expect(typed).toBeGreaterThan(0)
+  expect(typed).toBeLessThan(40)
+  render({ status: 'idle', items: [USER, { kind: 'text', text: LONG_REPLY }] })
+  expect(replyText().length).toBe(typed)
+  frame(200)
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
+
+test('a reply that arrives whole while the chat is open types out too, but history shows at once', () => {
+  const frame = driveFrames()
+  render({ status: 'idle', items: [USER, { kind: 'text', text: 'Earlier reply' }] })
+  expect(replyText()).toBe('Earlier reply')
+  const before: Item[] = [USER, { kind: 'text', text: 'Earlier reply' }, tool('done', 'a.txt')]
+  render({ status: 'running', items: before })
+  render({ status: 'running', items: [...before, { kind: 'text', text: LONG_REPLY }] })
+  expect(replyText().length).toBeLessThan(LONG_REPLY.length)
+  frame(200)
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
+
+test('a reply already streaming when the chat opens shows what has arrived at once', () => {
+  driveFrames()
+  render({ status: 'running', items: [USER], draft: LONG_REPLY })
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
 
 test('shows typing dots where the reply will appear while a turn runs and nothing streams yet', () => {
   render({ status: 'running', items: [USER] })
@@ -894,4 +952,87 @@ test("the sidebar shows a space as waiting while a subagent below it waits for a
   expect(dot('Fix tests')).toBe('waiting')
   nav([SPACE, subagent({ status: 'running', items: [USER, pendingTool('allowed')] })])
   expect(dot('Space')).toBe('idle')
+})
+
+test("shows a subagent's report as a report card, not as the user's message", () => {
+  const selected: string[] = []
+  const report = (chatId: string, name: string, text: string, error?: string) =>
+    ({ kind: 'report', chatId, name, text, ...(error && { error }) }) as const
+  render(
+    { items: [USER, report('s1', 'Docs', 'Found **it**'), report('s2', 'Lint', '', 'Interrupted')] },
+    () => {},
+    { chats: [viewOf({ id: 's1', name: 'Docs', subagent: true, parentId: 'c1' })], select: (id) => selected.push(id) },
+  )
+  const docs = container.querySelector('[aria-label="Report from subagent Docs"]')!
+  expect(docs.textContent).toContain('Subagent Docs reported')
+  expect(docs.querySelector('strong')?.textContent).toBe('it')
+  expect(docs.closest('.self-end')).toBeNull()
+  act(() => docs.querySelector('button')!.click())
+  expect(selected).toEqual(['s1'])
+
+  // A removed subagent's name is plain text; a report with no reply says so.
+  const lint = container.querySelector('[aria-label="Report from subagent Lint"]')!
+  expect(lint.querySelector('button')).toBeNull()
+  expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
+  expect(lint.textContent).toContain('No reply')
+})
+
+test("labels a queued subagent report as the subagent's", () => {
+  const queue = [{ id: 'q1', text: 'Found it', report: { chatId: 's1', name: 'Docs' } }]
+  render({ status: 'running', items: [USER], queue })
+  const queued = container.querySelector('[aria-label="Queued messages"]')!
+  expect(queued.textContent).toContain('Subagent Docs reported:Found it')
+})
+
+test('the empty composer starts one line high', () => {
+  render({})
+  const box = container.querySelector('textarea')!
+  expect(box.rows).toBe(1)
+  expect(box.className).toContain('min-h-[calc(1lh+16px)]')
+  expect(box.className).not.toContain('min-h-[calc(2lh')
+})
+
+test('an unsent message stays in its chat across a switch and a reload, and is cleared once sent', () => {
+  localStorage.clear()
+  const box = () => container.querySelector('textarea')!
+  const write = (text: string) =>
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), text)
+      box().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  const reopen = (id: string, send?: (m: ClientMessage) => void) => {
+    act(() => root.render(<></>))
+    render({ id }, send)
+  }
+  render({ id: 'c1' })
+  write('half a thought')
+  reopen('c2')
+  expect(box().value).toBe('')
+  write('other chat')
+  reopen('c1')
+  expect(box().value).toBe('half a thought')
+  expect(JSON.parse(localStorage.getItem('hotrod.drafts')!)).toEqual({ c1: 'half a thought', c2: 'other chat' })
+  const sent: ClientMessage[] = []
+  reopen('c1', (m) => sent.push(m))
+  act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent.filter((m) => m.type === 'chat.send')).toEqual([{ type: 'chat.send', chatId: 'c1', text: 'half a thought' }])
+  expect(box().value).toBe('')
+  reopen('c1')
+  expect(box().value).toBe('')
+  reopen('c2')
+  expect(box().value).toBe('other chat')
+  localStorage.clear()
+})
+
+test('a message queued during a turn clears its draft too', () => {
+  localStorage.clear()
+  const box = () => container.querySelector('textarea')!
+  render({ status: 'running' })
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'later')
+    box().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  expect(localStorage.getItem('hotrod.drafts')).toContain('later')
+  act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
 })

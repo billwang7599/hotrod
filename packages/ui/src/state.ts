@@ -1,4 +1,4 @@
-import { looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
+import { bySpaceOrder, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
   Answers,
@@ -32,6 +32,7 @@ export type Permission = {
 
 export type Item =
   | { kind: 'user'; text: string; attachments?: Attachment[] }
+  | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | {
@@ -52,6 +53,7 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
+  | { kind: 'note'; text: string }
 
 export type ChatView = ChatInfo & {
   status: ChatStatus
@@ -101,11 +103,25 @@ export const initialState: State = {
 
 const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
 
+// Logs from before reports had their own entry carry them as user messages in this form.
+const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
+const NO_REPLY = '(No reply)'
+
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
     case 'user.message': {
       const { text, attachments } = entry
+      const old = attachments ? null : OLD_REPORT.exec(text)
+      if (old) {
+        const [, name, chatId, reply, error] = old as unknown as string[]
+        const replyText = reply === NO_REPLY ? '' : reply!
+        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
+      }
       return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+    }
+    case 'subagent.report': {
+      const { chatId, name, text, error } = entry
+      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
     }
     case 'text.completed':
       return [...items, { kind: 'text', text: entry.text }]
@@ -176,6 +192,10 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       )
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
+    case 'mod.note':
+      return [...items, { kind: 'note', text: entry.text }]
+    // The turn's error or a mod's note says it.
+    case 'limit.reached':
     case 'turn.started':
       return items
   }
@@ -196,14 +216,14 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   let turn: Shown[] = []
   const endTurn = (live: boolean) => {
     let end = turn.length
-    while (turn[end - 1]?.item.kind === 'error') end--
+    while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
     if (live || end < 2) rows.push(...turn)
     else rows.push({ at: turn[0]!.at, steps: turn.slice(0, end).map((s) => s.item) }, ...turn.slice(end))
     turn = []
   }
   items.forEach((item, at) => {
-    if (item.kind !== 'user') turn.push({ at, item })
+    if (item.kind !== 'user' && item.kind !== 'report') turn.push({ at, item })
     else {
       endTurn(false)
       rows.push({ at, item })
@@ -343,7 +363,7 @@ export function chatTree(chats: ChatView[]) {
   const archivedRoots = chats.filter((c) => c.archived && !chats.find((p) => p.id === c.parentId)?.archived)
   return {
     active: activeRoots
-      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || newestFirst(a, b))
+      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || bySpaceOrder(a, b))
       .flatMap((c) => walk(c, 0, false)),
     archived: archivedRoots.sort(newestFirst).flatMap((c) => walk(c, 0, true)),
   }

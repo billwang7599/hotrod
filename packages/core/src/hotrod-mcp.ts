@@ -46,6 +46,7 @@ export const SUBAGENTS_MOD: Mod = {
 }
 
 type Hub = {
+  host: ModHost
   chats(): ChatState[]
   seesAll(chatId: string): boolean
   createChat(spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }): ChatInfo
@@ -74,6 +75,7 @@ const subagentName = (task: string) => {
 function messages(chat: ChatState) {
   return chat.entries.flatMap((entry) => {
     if (entry.type === 'user.message') return [`User: ${entry.text}`]
+    if (entry.type === 'subagent.report') return [`Subagent "${entry.name}" reported: ${entry.text || '(No reply)'}`]
     if (entry.type === 'text.completed') return [`Assistant: ${entry.text}`]
     if (entry.type === 'tool.started') return [`Tool ${entry.name}: ${entry.summary}`]
     if (entry.type === 'turn.completed' && entry.error) return [`[Turn ended early: ${entry.error}]`]
@@ -186,10 +188,7 @@ export const CORE_TOOL_NAMES = Object.keys(TOOLS)
 
 export function openHotrodMcp(hub: Hub) {
   const callers = new Map<string, string>()
-  const host: ModHost = {
-    createChat: ({ name, folders, files, engine }) => hub.createChat({ name, folders, files, engine }),
-    send: (chatId, text) => hub.send(chatId, text),
-  }
+  const { host } = hub
 
   const offers = (caller: ChatState, tool: Tool) => {
     const spawns = !caller.subagent && hub.subagents().enabled

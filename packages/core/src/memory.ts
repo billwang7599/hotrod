@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import type { Attachment, ChatEntry, CompletionRequest } from './shared.ts'
+import type { Attachment, ChatEntry, CompletionRequest, SubagentReport } from './shared.ts'
 
 export const LINE_MAX_CHARS = 280
 export const LINE_CHARS_PER_LEVEL = 40
@@ -78,6 +78,14 @@ export type Summaries = ReturnType<typeof openSummaries>
 type Block = { id: number; n: number }
 type LineOf = (id: number, n: number) => string | undefined
 
+export type Report = { text: string; report: SubagentReport }
+
+// How a subagent's report reads to its lead, in memory and in the prompt that delivers it.
+export function reportText({ text, report: { chatId, name, error } }: Report) {
+  const early = error ? `\n\n(The turn ended early: ${error})` : ''
+  return `Report from subagent "${name}" (${chatId}):\n\n${text || '(No reply)'}${early}`
+}
+
 export function withAttachments(text: string, attachments: Attachment[] = []) {
   if (!attachments.length) return text
   const list = ['Attached files:', ...attachments.map((a) => `- ${a.path} (${a.mimeType})`)].join('\n')
@@ -91,6 +99,10 @@ export function messagesOf(entries: ChatEntry[]): MemoryMessage[] {
     if (entry.type === 'user.message') {
       const kind = entry.text.startsWith('[subagent "') ? 'work' : 'user'
       add(kind, entry.at, withAttachments(entry.text, entry.attachments))
+    }
+    if (entry.type === 'subagent.report') {
+      const { text, chatId, name, error } = entry
+      add('work', entry.at, reportText({ text, report: { chatId, name, ...(error && { error }) } }))
     }
     if (entry.type === 'text.completed') add('talk', entry.at, entry.text)
     if (entry.type === 'tool.started') add('tool', entry.at, `${entry.name} ${JSON.stringify(entry.input) ?? ''}`.trim())
@@ -210,10 +222,19 @@ export function memoryPrompt(
   summaries: Summaries,
   message: string,
   options: { zoom: boolean },
+  reports: Report[] = [],
 ) {
-  if (!messages.length) return message
-  const view = memoryView(messages, summaries, options)
-  return `This is the conversation so far:\n\n${view}\n\nNew message from the user:\n\n${message}`
+  if (!reports.length && !messages.length) return message
+  const fromUser = message || !reports.length ? [`New message from the user:\n\n${message}`] : []
+  const incoming = [...reports.map(reportText), ...fromUser].join('\n\n')
+  if (!messages.length) return incoming
+  return `This is the conversation so far:\n\n${memoryView(messages, summaries, options)}\n\n${incoming}`
+}
+
+// A prompt from Hotrod that carries on the chat's last turn; the view shows how far that turn got.
+export function continuationPrompt(messages: MemoryMessage[], summaries: Summaries, text: string, options: { zoom: boolean }) {
+  if (!messages.length) return text
+  return `This is the conversation so far:\n\n${memoryView(messages, summaries, options)}\n\nFrom Hotrod:\n\n${text}`
 }
 
 export function memoryView(messages: MemoryMessage[], summaries: Summaries, { zoom: zoomable }: { zoom: boolean }) {

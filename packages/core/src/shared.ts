@@ -31,6 +31,8 @@ export type EngineEvent =
       input: unknown
     }
   | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
+  // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
+  | { type: 'limit.reached'; message: string; resetsAt?: string }
   | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 
@@ -169,6 +171,10 @@ export type ChatInfo = PermissionSwitches & {
   files: string[]
   engine: string
   archived: boolean
+  // Spaces only: pinned ones sit in their own group at the top; `order` is the place within its group, set when the
+  // user moves or pins one. A space without it (a new one) sits above the ordered ones, newest first.
+  pinned?: boolean
+  order?: number
   createdAt: string
   role?: ModelRole
   model?: string
@@ -178,6 +184,13 @@ export type ChatInfo = PermissionSwitches & {
 }
 
 export type Worktree = { path: string; branch: string }
+
+/** How spaces sort in the sidebar: pinned first, then unordered (newest first), then by `order`. */
+export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>, b: typeof a): number {
+  if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
+  if ((a.order === undefined) !== (b.order === undefined)) return a.order === undefined ? -1 : 1
+  return (a.order ?? 0) - (b.order ?? 0) || b.createdAt.localeCompare(a.createdAt)
+}
 
 export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
@@ -260,8 +273,10 @@ export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string; attachments?: Attachment[] }
+  | ({ type: 'subagent.report'; text: string } & SubagentReport)
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
+  | { type: 'mod.note'; text: string }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
 )
 
@@ -274,7 +289,10 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
-export type QueuedMessage = { id: string; text: string; attachments?: Attachment[] }
+// A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
+export type SubagentReport = { chatId: string; name: string; error?: string }
+
+export type QueuedMessage = { id: string; text: string; attachments?: Attachment[]; report?: SubagentReport }
 
 export type ChatState = ChatInfo & {
   status: ChatStatus
@@ -289,6 +307,8 @@ export type ClientMessage =
   | ({ type: 'chat.create' } & NewChat)
   | { type: 'chat.rename'; chatId: string; name: string }
   | { type: 'chat.archive'; chatId: string; archived: boolean }
+  // Moves a space to `index` among the active spaces that are (un)pinned like `pinned`, pinning or unpinning it.
+  | { type: 'chat.move'; chatId: string; pinned: boolean; index: number }
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }

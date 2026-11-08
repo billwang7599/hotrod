@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { ModTool, ModValues } from '@hotrod/mod-api'
 import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
 import { messagesOf, openSummaries, zoom } from './memory.ts'
-import type { ChatEntry, ChatState } from './shared.ts'
+import type { ChatEntry, ChatState, NewChat } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -46,17 +46,27 @@ async function start(subagents = { enabled: false, limit: 4 }) {
     chat('cccc0001'),
   ]
   const calls: unknown[][] = []
+  const created = (spec: NewChat & { parentId?: string; subagent?: boolean }) => {
+    calls.push(['createChat', spec])
+    const made = chat('dddd0001', { parentId: spec.parentId, ...(spec.subagent && { subagent: true }) })
+    chats.push(made)
+    return made
+  }
   const modTools: { tool: ModTool; values: ModValues }[] = []
   const mcp = openHotrodMcp({
+    host: {
+      createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
+      send: (chatId, text) => void calls.push(['send', chatId, text]),
+      accounts: () => undefined,
+      useAccount() {},
+      retry() {},
+      continue() {},
+      note() {},
+    },
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
     modTools: () => modTools,
-    createChat(spec) {
-      calls.push(['createChat', spec])
-      const created = chat('dddd0001', { parentId: spec.parentId, ...(spec.subagent && { subagent: true }) })
-      chats.push(created)
-      return created
-    },
+    createChat: (spec) => created(spec),
     subagents: () => subagents,
     memory(chatId) {
       const found = chats.find((c) => c.id === chatId)

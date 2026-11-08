@@ -53,7 +53,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
       'anywhere on, or on a system Hotrod can’t sandbox, every command asks.',
   },
   askNetworkCommands: {
-    label: 'Still ask before commands that publish or reach the network',
+    label: 'Ask before commands that publish or reach the network',
     about:
       `Commands that mention ${ASK_FIRST_COMMANDS.join(', ')} ask you first, even while commands run without ` +
       'asking.',

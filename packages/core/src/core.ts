@@ -12,17 +12,19 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { Mod, ModRun } from '@hotrod/mod-api'
+import type { Mod, ModHost, ModRun } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
+  continuationPrompt,
   memoryPrompt,
   memoryView,
   messagesOf,
   openCompactor,
   openSummaries,
   withAttachments,
+  type Report,
   ZOOM_INSTRUCTIONS,
   type Summaries,
 } from './memory.ts'
@@ -30,6 +32,7 @@ import { realPath } from './machine.ts'
 import { valuesOf } from './mods.ts'
 import {
   ASK_FIRST_COMMANDS,
+  bySpaceOrder,
   CONTEXT_SECTIONS,
   editsAnywhere,
   GLOBAL_CONTEXT,
@@ -107,6 +110,11 @@ type Chat = {
   queue: QueuedMessage[]
   summaries: Summaries
   turns: number
+  // The account the running turn started on, and the limit it ran into, if any.
+  account?: string
+  limit?: { message: string; resetsAt?: string }
+  // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
+  produced?: boolean
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -467,7 +475,11 @@ export function openCore(options: {
 
   const allStopped = () => [...chats.values()].every((chat) => !chat.session)
 
-  const endTurn = (chat: Chat, end: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
+  const endTurn = (chat: Chat, ended: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
+    const { limit, account } = chat
+    chat.limit = undefined
+    // A turn the core stopped for its limit shows the limit, not "Interrupted".
+    const end = limit && ended.error ? { ...ended, error: limit.message } : ended
     if (chat.unsavedText) append(chat, { at: end.at, type: 'text.completed', text: chat.unsavedText })
     chat.unsavedText = ''
     append(chat, end)
@@ -477,11 +489,15 @@ export function openCore(options: {
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
+    if (limit) reportLimit(chat, account, limit)
+    // A mod sent the message again, so the turn goes on.
+    if (chat.status !== 'idle') return
     const parent = chat.info.subagent ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Subagents are workers for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.subagent && chat.status === 'idle') removeChats(familyOf(chat))
+    sweepMergedWorktrees(chainOf(chat)[0]!)
   }
 
   const reportErrors = (run: () => void) => {
@@ -495,9 +511,72 @@ export function openCore(options: {
   const reportOf = (chat: Chat, error?: string) => {
     const asked = chat.entries.findLastIndex((e) => e.type === 'user.message')
     const reply = chat.entries.slice(asked + 1).findLast((e) => e.type === 'text.completed')
-    const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
-    const early = error ? ` (The turn ended early: ${error})` : ''
-    return `[subagent "${chat.info.name}" (${chat.info.id})] ${text}${early}`
+    const text = reply?.type === 'text.completed' ? reply.text : ''
+    return { text, report: { chatId: chat.info.id, name: chat.info.name, ...(error && { error }) } }
+  }
+
+  const limitWatchers = () => mods.filter((mod) => isOn(mod) && mod.onLimitReached)
+
+  const reportLimit = (chat: Chat, account: string | undefined, { message, resetsAt }: NonNullable<Chat['limit']>) => {
+    const { engine } = chat.info
+    const limit = {
+      chat: summaryOf(chat.info),
+      engine,
+      ...(account !== undefined && { account }),
+      message,
+      output: chat.produced === true,
+      ...(resetsAt && { resetsAt }),
+    }
+    for (const mod of limitWatchers()) {
+      reportErrors(() => mod.onLimitReached!(limit, { values: modValues(mod), host: modHost }))
+    }
+  }
+
+  // A turn's input is the subagent reports and the message it started with, logged together at its start.
+  const retry = (chat: Chat) => {
+    const isInput = (e: ChatEntry) => e.type === 'user.message' || e.type === 'subagent.report'
+    const end = chat.entries.findLastIndex(isInput)
+    if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
+    const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
+    let start = end
+    while (together(chat.entries[start - 1])) start--
+    const again = chat.entries.slice(start, end + 1).map((e): QueuedMessage => {
+      const id = randomBytes(4).toString('hex')
+      if (e.type === 'subagent.report') {
+        const { chatId, name, error } = e
+        return { id, text: e.text, report: { chatId, name, ...(error !== undefined && { error }) } }
+      }
+      const { text, attachments } = e as Extract<ChatEntry, { type: 'user.message' }>
+      return { id, text, ...(attachments && { attachments }) }
+    })
+    setQueue(chat, [...again, ...chat.queue])
+    if (chat.status === 'idle') sendQueue(chat)
+  }
+
+  // Carries on a turn that stopped part way, as a turn of its own; queued messages wait for it.
+  const continueTurn = (chat: Chat, text: string) => {
+    if (!text.trim()) throw new Error('A continuation needs a prompt')
+    if (chat.status !== 'idle') throw new Error(`${chat.info.name} is still running`)
+    send(chat, '', [], [], text)
+  }
+
+  const modHost: ModHost = {
+    createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
+    send: (chatId, text) => send(chatFor(chatId), text),
+    accounts(engine) {
+      const found = accounts.list().find((state) => state.engine === engine)
+      if (!found) return undefined
+      const list = found.accounts.map(({ id, name, signedIn }) => ({
+        id,
+        name,
+        ...(signedIn !== undefined && { signedIn }),
+      }))
+      return { engine, active: found.active, accounts: list }
+    },
+    useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
+    retry: (chatId) => retry(chatFor(chatId)),
+    continue: (chatId, text) => continueTurn(chatFor(chatId), text),
+    note: (chatId, text) => append(chatFor(chatId), { at: new Date().toISOString(), type: 'mod.note', text }),
   }
 
   const removeChats = (family: Chat[]) => {
@@ -544,7 +623,8 @@ export function openCore(options: {
     if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
-    if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
+    const lastType = entries.at(-1)?.type
+    if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'subagent.report') {
       append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Hotrod quit during this turn' })
     }
     return chat
@@ -634,6 +714,21 @@ export function openCore(options: {
     const family = familyOf(chat)
     family.forEach(checkRemovable)
     family.forEach((c) => updateChat(c, { archived }))
+  }
+
+  const moveChat = (chat: Chat, pinned: boolean, index: unknown) => {
+    if (chat.info.mod || chat.info.parentId) throw new Error('Only spaces can be moved or pinned')
+    if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
+    if (typeof index !== 'number' || !Number.isInteger(index)) throw new Error('The place to move to must be a number')
+    const group = [...chats.values()]
+      .map((c) => c.info)
+      .filter((c) => !c.mod && !c.parentId && !c.archived && !!c.pinned === pinned && c.id !== chat.info.id)
+      .sort(bySpaceOrder)
+    group.splice(Math.max(0, Math.min(index, group.length)), 0, chat.info)
+    group.forEach((info, order) => {
+      const c = chats.get(info.id)!
+      if (c.info.order !== order || !!c.info.pinned !== pinned) updateChat(c, { order, pinned: pinned || undefined })
+    })
   }
 
   const deleteChat = (chat: Chat) => {
@@ -838,16 +933,63 @@ export function openCore(options: {
     }
   }
 
-  const removeWorkDir = async ({ info }: Chat) => {
-    // Only a folder Hotrod made for this space, whatever chat.json says.
-    if (!info.workDir || basename(info.workDir) !== info.id) return
-    for (const [folder, { path }] of Object.entries(info.worktrees ?? {})) {
+  // Only a folder Hotrod made for this space, whatever chat.json says.
+  const ownWorkDirOf = ({ info }: Chat) =>
+    info.workDir && basename(info.workDir) === info.id ? info.workDir : undefined
+
+  const removeWorkDir = async (space: Chat) => {
+    const workDir = ownWorkDirOf(space)
+    if (!workDir) return
+    for (const [folder, { path }] of Object.entries(space.info.worktrees ?? {})) {
       await git(folder, 'worktree', 'remove', '--force', path).catch(() => {})
     }
-    rmSync(info.workDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
   }
 
-  const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
+  const sweeps = new Map<string, Promise<void>>()
+  const sweepMergedWorktrees = (space: Chat) => {
+    const idle = () => familyOf(space).every((c) => c.status === 'idle')
+    const workDir = ownWorkDirOf(space)
+    if (!workDir || !idle()) return
+    const own = Object.values(space.info.worktrees ?? {}).map((w) => realPath(w.path))
+    const sweepRepo = async (folder: string) => {
+      await git(folder, 'fetch', '--prune', '--quiet').catch(() => {})
+      const listed = await git(folder, 'worktree', 'list', '--porcelain')
+      for (const entry of listed.split('\n\n')) {
+        const path = entry.match(/^worktree (.+)$/m)?.[1]
+        const branch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]
+        if (!path || !branch || !existsSync(path)) continue
+        if (own.includes(realPath(path)) || !within(realPath(path), realPath(workDir))) continue
+        try {
+          const ref = `refs/heads/${branch}`
+          if ((await git(folder, 'for-each-ref', '--format=%(upstream:track)', ref)) !== '[gone]') continue
+          if (!(await git(folder, 'for-each-ref', '--contains', ref, '--format=%(refname)', 'refs/remotes/'))) continue
+          if (await git(path, 'status', '--porcelain')) continue
+          if (!idle()) return
+          await git(folder, 'worktree', 'remove', path)
+          await git(folder, 'branch', '-D', branch)
+        } catch (error) {
+          console.error(`Couldn't clean up the worktree ${path}: ${messageOf(error)}`)
+        }
+      }
+    }
+    for (const folder of Object.keys(space.info.worktrees ?? {})) {
+      const swept = (sweeps.get(folder) ?? Promise.resolve())
+        .then(() => sweepRepo(folder))
+        .catch((error) => console.error(`Couldn't clean up the worktrees of ${folder}: ${messageOf(error)}`))
+        .finally(() => sweeps.get(folder) === swept && sweeps.delete(folder))
+      sweeps.set(folder, swept)
+    }
+  }
+
+  // A continuation is a prompt from Hotrod, not the user: it isn't logged, and the turn it starts carries on the last.
+  const send = (
+    chat: Chat,
+    text: string,
+    attachments: Attachment[] = [],
+    reports: Report[] = [],
+    continuation?: string,
+  ) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
@@ -864,9 +1006,17 @@ export function openCore(options: {
     mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text, attachments)
     const zoomable = takesMcp(adapter.id)
-    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable })
-    const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
-    append(chat, { at: new Date().toISOString(), ...sent })
+    const prompt = continuation
+      ? continuationPrompt(messagesOf(chat.entries), chat.summaries, continuation, { zoom: zoomable })
+      : memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable }, reports)
+    const at = new Date().toISOString()
+    if (!continuation) {
+      chat.produced = false
+      for (const { text, report } of reports) append(chat, { at, type: 'subagent.report', text, ...report })
+      if (text || attachments.length || !reports.length) {
+        append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
+      }
+    }
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
@@ -937,6 +1087,7 @@ export function openCore(options: {
         if (chat.session !== session) return
         const at = new Date().toISOString()
         if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
+        if (['text.delta', 'text.completed', 'thinking.delta', 'tool.started'].includes(event.type)) chat.produced = true
         if (event.type === 'text.delta') {
           chat.unsavedText += event.text
           broadcast({ type: 'chat.delta', chatId: chat.info.id, text: event.text })
@@ -948,6 +1099,13 @@ export function openCore(options: {
         }
         if (event.type === 'text.completed') chat.unsavedText = ''
         append(chat, { at, ...event })
+        if (event.type === 'limit.reached') {
+          const { message, resetsAt } = event
+          chat.limit ??= { message, ...(resetsAt && { resetsAt }) }
+          // An engine may wait out the limit; a mod that reacts to it gets the chat idle.
+          if (limitWatchers().length) interrupt(chat, false)
+          return
+        }
         if (event.type === 'question.asked') {
           chat.pendingRequests.set(event.requestId, 'question')
           return setStatus(chat, 'waiting')
@@ -987,6 +1145,7 @@ export function openCore(options: {
           ...(thinking && { thinking }),
           ...(jail && { sandbox: jail }),
         }
+        chat.account = accounts.activeOf(adapter.id)
         session = adapter.start(machine, options, emit)
         if (chat.status === 'idle') return session.close()
         chat.session = session
@@ -1024,19 +1183,20 @@ export function openCore(options: {
     const queue = chat.queue
     if (queue.length) setQueue(chat, [])
     const parts = message ? [...queue, message] : queue
+    const reports = parts.flatMap(({ text, report }) => (report ? [{ text, report }] : []))
+    const typed = parts.filter((part) => !part.report)
     try {
-      const text = parts.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
-      send(chat, text, parts.flatMap((part) => part.attachments ?? []))
+      const text = typed.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
+      send(chat, text, typed.flatMap((part) => part.attachments ?? []), reports)
     } catch (error) {
       if (queue.length) setQueue(chat, queue)
       throw error
     }
   }
 
-  const enqueue = (chat: Chat, text: string, attachments: Attachment[] = []) => {
+  const enqueue = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
     if (quitting) throw new Error('Hotrod is quitting')
     checkActive(chat)
-    const message = { text, ...(attachments.length && { attachments }) }
     if (chat.status === 'idle') return sendQueue(chat, message)
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
   }
@@ -1077,7 +1237,7 @@ export function openCore(options: {
       }
     })
     try {
-      enqueue(chat, text, attachments)
+      enqueue(chat, { text, ...(attachments.length && { attachments }) })
     } catch (error) {
       for (const { path } of attachments) rmSync(path, { force: true })
       throw error
@@ -1085,6 +1245,7 @@ export function openCore(options: {
   }
 
   const mcp = openHotrodMcp({
+    host: modHost,
     chats: () => shownChats().map(state),
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,
@@ -1203,6 +1364,8 @@ export function openCore(options: {
           return renameChat(chatFor(message.chatId), message.name)
         case 'chat.archive':
           return archiveChat(chatFor(message.chatId), message.archived === true)
+        case 'chat.move':
+          return moveChat(chatFor(message.chatId), message.pinned === true, message.index)
         case 'chat.delete':
           return deleteChat(chatFor(message.chatId))
         case 'chat.setEngine':
