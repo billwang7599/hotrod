@@ -30,6 +30,7 @@ import { realPath } from './machine.ts'
 import { valuesOf } from './mods.ts'
 import {
   CONTEXT_SECTIONS,
+  editsAnywhere,
   GLOBAL_CONTEXT,
   IMAGE_TYPES,
   looksBinary,
@@ -142,6 +143,7 @@ export function openCore(options: {
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
     workFolder?: string
+    editAnywhere?: true
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -196,6 +198,7 @@ export function openCore(options: {
     ...(settings.workFolder && { path: settings.workFolder }),
     defaultPath: defaultWorkFolder,
     canSandbox: machine.canSandbox,
+    ...(settings.editAnywhere && { editAnywhere: true }),
   })
   const sandboxIn = (dir: string) => (machine.canSandbox ? { writable: [dir], tmpDir: join(dir, '.tmp') } : undefined)
   const chats = new Map<string, Chat>()
@@ -762,9 +765,9 @@ export function openCore(options: {
       throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
     }
     checkEnabled(adapter.id)
-    const { editAnywhere } = chat.info
+    const editAnywhere = editsAnywhere(chat.info, settings)
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
-      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel to run it unsandboxed.")
+      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or for every chat in Settings → Work folder, to run it unsandboxed.")
     }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
@@ -1104,6 +1107,10 @@ export function openCore(options: {
           return writeAgentsFile(globalAgentsFile, message.text)
         case 'workFolder.set':
           return setWorkFolder(message.path)
+        case 'workFolder.setEditAnywhere':
+          settings.editAnywhere = message.enabled === true || undefined
+          saveSettings()
+          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
         case 'context.setDefault':
           if (!CONTEXT_SECTIONS.includes(message.section)) {
             throw new Error(`Unknown context section "${message.section}"`)

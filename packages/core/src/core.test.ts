@@ -766,6 +766,52 @@ describe('edits', () => {
     expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
     expect(() => t.handle({ type: 'chat.setEditAnywhere', chatId: 'nope', enabled: true })).toThrow('Unknown chat')
   })
+
+  it('with edits anywhere on for every chat, runs Home, spaces and subagents unsandboxed, their own switches off', async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.handle({ type: 'workFolder.setEditAnywhere', enabled: true })
+    expect(first.core.workFolder()).toMatchObject({ editAnywhere: true })
+    expect(first.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: first.core.workFolder() })
+    expect(JSON.parse(readFileSync(join(first.garage, 'settings.json'), 'utf8')).editAnywhere).toBe(true)
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+
+    const t = setup(editScript(join(tempDir(), 'a.ts')), first.garage)
+    expect(t.core.workFolder().editAnywhere).toBe(true)
+    for (const chatId of ['main', space.id, 'sub']) {
+      expect(chatOf(t.core, chatId)).not.toHaveProperty('editAnywhere')
+      t.handle({ type: 'chat.send', chatId, text: 'edit' })
+      await until(() => statusOf(t.core, chatId) === 'waiting')
+      expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+      expect(t.calls.at(-1)?.options.instructions).not.toContain(WRITE_RULES)
+      t.handle({ type: 'chat.interrupt', chatId, force: true })
+      await until(() => statusOf(t.core, chatId) === 'idle')
+    }
+
+    t.handle({ type: 'workFolder.setEditAnywhere', enabled: false })
+    expect(t.core.workFolder()).not.toHaveProperty('editAnywhere')
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8'))).not.toHaveProperty('editAnywhere')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'edit' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls.at(-1)?.options.sandbox).toBeDefined()
+  })
+
+  it('with edits anywhere on for every chat, runs a chat where the machine cannot sandbox', async () => {
+    const t = setup(textScript)
+    t.handle({ type: 'workFolder.setEditAnywhere', enabled: true })
+    t.core.close()
+    const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
+    const machine = { ...localMachine, canSandbox: false }
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
+    await until(() => statusOf(core, 'main') === 'idle')
+    expect(calls[0]?.options).not.toHaveProperty('sandbox')
+  })
 })
 
 describe('chat', () => {

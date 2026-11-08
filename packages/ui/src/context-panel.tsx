@@ -2,10 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   CONTEXT_SECTIONS,
+  editsAnywhere,
   GLOBAL_CONTEXT,
   type ClientMessage,
   type ContextItem,
   type ContextSection,
+  type WorkFolder,
   type Worktree,
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Switch, useSettled } from './controls.tsx'
@@ -44,7 +46,11 @@ const CHECKOUT_HINT =
   'and commit there; the branch stays when the space is deleted.'
 const EDIT_ANYWHERE_HINT =
   'Off: agents in this chat write only in its folder in the work folder, and edits elsewhere are denied. On: no ' +
-  'sandbox, and edits elsewhere ask you first. This chat only, from its next message; its subagents don’t get it.'
+  'sandbox, and edits elsewhere ask you first. This chat only, from its next message; its subagents don’t get it. ' +
+  'Settings → Work folder turns it on for every chat.'
+const EDIT_ANYWHERE_ALL_HINT =
+  'On for every chat in Settings → Work folder: no sandbox, and edits outside the work folder ask you first. Turn ' +
+  'it off there to choose per chat.'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -193,18 +199,20 @@ type ContextPanelProps = {
   chatId: string
   items?: ContextItem[]
   chats: ChatView[]
+  workFolder: WorkFolder
   readOnly: boolean
   connected: boolean
   send: (m: ClientMessage) => void
   hide?: () => void
 }
 
-export function ContextPanel({ chatId, items, chats, readOnly, connected, send, hide }: ContextPanelProps) {
+export function ContextPanel({ chatId, items, chats, workFolder, readOnly, connected, send, hide }: ContextPanelProps) {
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
+  const editAnywhere = chat !== undefined && editsAnywhere(chat, workFolder)
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   return (
@@ -217,13 +225,13 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send, 
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
         {chat && (
-          <Hint text={EDIT_ANYWHERE_HINT} align="start">
+          <Hint text={workFolder.editAnywhere ? EDIT_ANYWHERE_ALL_HINT : EDIT_ANYWHERE_HINT} align="start">
             <label className="flex items-center justify-between gap-8 rounded-lg border px-10 py-8">
-              <span className={chat.editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
+              <span className={editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>
               <Switch
                 label="Allow edits outside the work folder"
-                checked={chat.editAnywhere === true}
-                disabled={locked}
+                checked={editAnywhere}
+                disabled={locked || workFolder.editAnywhere === true}
                 onChange={(enabled) => send({ type: 'chat.setEditAnywhere', chatId, enabled })}
               />
             </label>

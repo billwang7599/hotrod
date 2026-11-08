@@ -5,7 +5,7 @@ import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, JUMP_BELOW_PX } from './chat.tsx'
-import type { ClientMessage } from '@hotrod/core/shared'
+import type { ClientMessage, WorkFolder } from '@hotrod/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -70,7 +70,9 @@ afterEach(() => {
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, canSandbox = true) {
+type RenderOptions = { workFolder?: Partial<WorkFolder>; contextOpen?: boolean }
+
+function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
   const view: ChatView = {
     id: 'c1',
     name: 'demo',
@@ -89,7 +91,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
     root.render(
       <LazyMotion features={domAnimation} strict>
         <MotionConfig transition={{ duration: 0 }}>
-          <Tooltip.Provider>
+          <Tooltip.Provider delayDuration={0}>
             <Chat
               chat={view}
               chats={[view]}
@@ -99,14 +101,14 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               openSettings={() => {}}
               sidebarOpen
               toggleSidebar={() => {}}
-              contextOpen={false}
+              contextOpen={options.contextOpen ?? false}
               contextOverlay={false}
               toggleContext={() => {}}
               contextDefaults={{ agents: true, folders: true, files: true }}
               columnPx={720}
               setColumnPx={() => {}}
               notify={() => {}}
-              canSandbox={canSandbox}
+              workFolder={{ defaultPath: '/work', canSandbox: true, ...options.workFolder }}
             />
           </Tooltip.Provider>
         </MotionConfig>
@@ -246,9 +248,35 @@ test('the header warns while a chat may edit anywhere, and where nothing is sand
   expect(header()).not.toMatch(/Edits anywhere|Not sandboxed/)
   render({ editAnywhere: true })
   expect(header()).toContain('Edits anywhere')
-  render({}, () => {}, false)
+  render({}, () => {}, { workFolder: { editAnywhere: true } })
+  expect(header()).toContain('Edits anywhere')
+  render({}, () => {}, { workFolder: { canSandbox: false } })
   expect(header()).toContain('Not sandboxed')
   expect(header()).not.toContain('Edits anywhere')
+})
+
+const hintOf = async (element: Element) => {
+  await act(async () => {
+    element.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  return document.querySelector('[role="tooltip"]')?.textContent
+}
+
+test("a chat's edits anywhere switch shows on and locked while Settings turns it on for every chat", async () => {
+  const sent: ClientMessage[] = []
+  const editSwitch = () =>
+    container.querySelector('[aria-label="Allow edits outside the work folder"]') as HTMLButtonElement
+  render({}, (m) => sent.push(m), { contextOpen: true })
+  expect(editSwitch().getAttribute('aria-checked')).toBe('false')
+  expect(editSwitch().disabled).toBe(false)
+  act(() => editSwitch().click())
+  expect(sent.at(-1)).toEqual({ type: 'chat.setEditAnywhere', chatId: 'c1', enabled: true })
+
+  render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
+  expect(editSwitch().getAttribute('aria-checked')).toBe('true')
+  expect(editSwitch().disabled).toBe(true)
+  expect(await hintOf(editSwitch().closest('label')!)).toContain('every chat in Settings')
 })
 
 test('says when Hotrod answered an edit itself', () => {

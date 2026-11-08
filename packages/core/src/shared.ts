@@ -148,7 +148,10 @@ export type ChatInfo = {
 
 export type Worktree = { path: string; branch: string }
 
-export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean }
+export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean; editAnywhere?: true }
+
+export const editsAnywhere = (chat: Pick<ChatInfo, 'editAnywhere'>, workFolder: Pick<WorkFolder, 'editAnywhere'>) =>
+  chat.editAnywhere === true || workFolder.editAnywhere === true
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -258,6 +261,7 @@ export type ClientMessage =
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
   | { type: 'workFolder.set'; path: string }
+  | { type: 'workFolder.setEditAnywhere'; enabled: boolean }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }

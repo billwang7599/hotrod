@@ -58,8 +58,12 @@ const NAV_GROUPS = ['Options', 'Mods'] as const
 
 const WORK_FOLDER_TITLE = 'Choose a work folder'
 const WORK_FOLDER_HINT =
-  'Agents and subagents do all their work here, and can write nowhere else unless you allow it for a chat. ' +
+  'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
+
+const EDIT_ANYWHERE_ALL_HINT =
+  `Every chat: Home, ${CHAT_NOUN.many} and subagents. On: no sandbox, and edits outside the work folder ask you ` +
+  'first, from each chat’s next message. Off: each chat’s own switch in its Context panel decides.'
 
 const ROLES: Record<ModelRole, { name: string; about: string }> = {
   chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
@@ -106,7 +110,7 @@ const PAGES = [
     group: 'Options',
     title: 'Work folder',
     hint: WORK_FOLDER_HINT,
-    body: ({ workFolder, chooseWorkFolder, connected }: PageProps) => (
+    body: ({ workFolder, chooseWorkFolder, connected, send }: PageProps) => (
       <div className={GROUP}>
         <SettingRow
           name="Work folder"
@@ -116,6 +120,17 @@ const PAGES = [
           <Button disabled={!connected} onClick={chooseWorkFolder}>
             Change…
           </Button>
+        </SettingRow>
+        <SettingRow
+          name={<span className={workFolder.editAnywhere ? 'text-amber' : ''}>Allow edits outside the work folder</span>}
+          hint={EDIT_ANYWHERE_ALL_HINT}
+        >
+          <Switch
+            label="Allow edits outside the work folder"
+            checked={workFolder.editAnywhere === true}
+            disabled={!connected}
+            onChange={(enabled) => send({ type: 'workFolder.setEditAnywhere', enabled })}
+          />
         </SettingRow>
       </div>
     ),

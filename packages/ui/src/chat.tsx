@@ -10,6 +10,7 @@ import {
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import {
+  editsAnywhere,
   IMAGE_TYPES,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
@@ -22,6 +23,7 @@ import {
   type EngineInfo,
   type ModelLists,
   type Upload,
+  type WorkFolder,
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
@@ -82,9 +84,12 @@ const WARNING_CHIP = 'shrink-0 cursor-help rounded-full bg-warning-bg px-8 py-2 
 const EDITS_ANYWHERE_HINT =
   'This chat runs without the work folder’s sandbox: its agents may edit files anywhere, asking you first. Turn ' +
   'it off in the Context panel.'
+const EDITS_ANYWHERE_ALL_HINT =
+  'Every chat runs without the work folder’s sandbox: agents may edit files anywhere, asking you first. Turn it ' +
+  'off in Settings → Work folder.'
 const NOT_SANDBOXED_HINT =
-  'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (Context panel), and ' +
-  'its agents can write anywhere.'
+  'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (in its Context ' +
+  'panel, or for every chat in Settings → Work folder), and its agents can write anywhere.'
 const OUTCOME_COLORS = { allowed: 'text-green', denied: 'text-red', cancelled: 'text-muted' }
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
@@ -478,11 +483,11 @@ type ChatProps = {
   columnPx: number
   setColumnPx: (px: number) => void
   notify: (message: string) => void
-  canSandbox: boolean
+  workFolder: WorkFolder
 }
 
 export function Chat(props: ChatProps) {
-  const { chat, folder, engines, accounts, connected, send, openSettings } = props
+  const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
@@ -656,9 +661,17 @@ export function Chat(props: ChatProps) {
               </span>
             )}
           </div>
-          {(chat.editAnywhere || !props.canSandbox) && (
-            <Hint text={props.canSandbox ? EDITS_ANYWHERE_HINT : NOT_SANDBOXED_HINT}>
-              <span className={WARNING_CHIP}>{props.canSandbox ? 'Edits anywhere' : 'Not sandboxed'}</span>
+          {(editsAnywhere(chat, workFolder) || !workFolder.canSandbox) && (
+            <Hint
+              text={
+                !workFolder.canSandbox
+                  ? NOT_SANDBOXED_HINT
+                  : workFolder.editAnywhere
+                    ? EDITS_ANYWHERE_ALL_HINT
+                    : EDITS_ANYWHERE_HINT
+              }
+            >
+              <span className={WARNING_CHIP}>{workFolder.canSandbox ? 'Edits anywhere' : 'Not sandboxed'}</span>
             </Hint>
           )}
           <Select
@@ -975,6 +988,7 @@ export function Chat(props: ChatProps) {
               chatId={chat.id}
               items={props.contextItems}
               chats={props.chats}
+              workFolder={workFolder}
               readOnly={archived}
               connected={connected}
               send={send}
