@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, afterEach, describe, expect, it } from 'vitest'
 import { createLocalMachine, RUN_TIMEOUT_MS, STDERR_TAIL_CHARS, STRIPPED_ENV_KEYS } from './machine.ts'
 
 const cwd = process.cwd()
@@ -188,6 +191,107 @@ describe('localMachine', () => {
     await machine.stopAll()
     expect(alive(pid)).toBe(false)
     expect(performance.now() - start).toBeLessThan(1000)
+  })
+
+  it('refuses to start a sandboxed process where it has no sandbox, rather than run it unsandboxed', async () => {
+    const linux = createLocalMachine({ platform: 'linux' })
+    const options = { cwd, sandbox: { writable: [cwd] } }
+    expect(() => linux.spawn(node, ['-e', ''], options)).toThrow(/can't sandbox engines on linux/)
+    await expect(linux.run(node, ['-e', ''], options)).rejects.toThrow(/can't sandbox engines on linux/)
+  })
+})
+
+describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
+  const root = mkdtempSync(join(tmpdir(), 'hotrod-sandbox-'))
+  afterAll(() => rmSync(root, { recursive: true, force: true }))
+  let dirs = 0
+  const newDir = () => {
+    const dir = join(root, `dir-${++dirs}`)
+    mkdirSync(dir)
+    return dir
+  }
+  const tryWrites = (paths: string[]) => `
+    const fs = require('node:fs')
+    console.log(JSON.stringify(${JSON.stringify(paths)}.map((path) => {
+      try {
+        fs.writeFileSync(path, 'x')
+        return 'ok'
+      } catch (error) {
+        return error.code
+      }
+    })))`
+  const writes = async (writable: string[], paths: string[]) => {
+    const { stdout, stderr } = await fast.run(node, ['-e', tryWrites(paths)], { cwd, sandbox: { writable } })
+    if (!stdout) throw new Error(stderr)
+    return JSON.parse(stdout)
+  }
+
+  it('writes only inside its writable folders', async () => {
+    const [inside, outside] = [newDir(), newDir()]
+    const paths = [join(inside, 'a'), join(outside, 'b'), join(root, 'c')]
+    expect(await writes([inside], paths)).toEqual(['ok', 'EPERM', 'EPERM'])
+  })
+
+  it('passes the limit on to every process it starts', async () => {
+    const [inside, outside] = [newDir(), newDir()]
+    const write = (path: string) => JSON.stringify(`require('node:fs').writeFileSync(${JSON.stringify(path)}, 'x')`)
+    const child = (path: string) =>
+      `console.log(require('node:child_process').spawnSync(process.execPath, ['-e', ${write(path)}], { stdio: 'inherit' }).status)`
+    const run = (path: string) => fast.run(node, ['-e', child(path)], { cwd, sandbox: { writable: [inside] } })
+    expect((await run(join(inside, 'a'))).stdout.trim()).toBe('0')
+    const denied = await run(join(outside, 'b'))
+    expect(denied.stdout.trim()).toBe('1')
+    expect(denied.stderr).toMatch(/EPERM/)
+  })
+
+  it('matches folders by their real path, so a symlinked one stays writable', async () => {
+    const real = newDir()
+    const link = join(root, `link-${dirs}`)
+    symlinkSync(real, link)
+    expect(await writes([link], [join(link, 'a'), join(real, 'b'), join(root, 'c')])).toEqual(['ok', 'ok', 'EPERM'])
+  })
+
+  it('allows a writable folder that does not exist yet', async () => {
+    const later = join(newDir(), 'later')
+    const script = `require('node:fs').mkdirSync(${JSON.stringify(later)}); ${tryWrites([join(later, 'a'), join(root, 'b')])}`
+    const { stdout } = await fast.run(node, ['-e', script], { cwd, sandbox: { writable: [later] } })
+    expect(JSON.parse(stdout)).toEqual(['ok', 'EPERM'])
+  })
+
+  it('treats a writable path ending in * as a prefix, for lock and temp files next to a file', async () => {
+    const dir = newDir()
+    const file = join(dir, 'login.keychain-db')
+    const paths = [file, `${file}.sb-123`, join(dir, 'login.keychain'), join(dir, 'other')]
+    expect(await writes([`${file}*`], paths)).toEqual(['ok', 'ok', 'EPERM', 'EPERM'])
+  })
+
+  it('takes any path as it is, quotes and newlines included', async () => {
+    const odd = join(newDir(), 'we"ird\\ (dir)\n")(allow file-write*)')
+    mkdirSync(odd)
+    expect(await writes([odd], [join(odd, 'a'), join(root, 'escaped')])).toEqual(['ok', 'EPERM'])
+  })
+
+  it('can still use /dev/null, its own output and a terminal', async () => {
+    const script = `
+      const fs = require('node:fs')
+      fs.writeFileSync('/dev/null', 'x')
+      fs.writeFileSync('/dev/stdout', 'out ')
+      fs.writeFileSync('/dev/fd/1', 'fd ')
+      fs.closeSync(fs.openSync('/dev/ptmx', 'r+'))
+      console.log('pty')`
+    const { stdout, stderr } = await fast.run(node, ['-e', script], { cwd, sandbox: { writable: [] } })
+    expect(stderr).toBe('')
+    expect(stdout).toBe('out fd pty\n')
+  })
+
+  it('is still stopped with the processes it started', async () => {
+    const grandchild = spawnGrandchild('setInterval(() => {}, 1000)')
+    const parent = `const c = ${grandchild}; console.log(c.pid); setInterval(() => {}, 1000)`
+    const proc = fast.spawn(node, ['-e', parent], { cwd, sandbox: { writable: [] } })
+    const pid = await new Promise<number>((resolve) => proc.onStdout((chunk) => resolve(Number(chunk.trim()))))
+    leftovers.push(pid)
+    proc.kill()
+    await waitFor(() => !alive(pid))
   })
 })
 

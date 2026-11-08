@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process'
+import { realpathSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
 import type { EngineProcess, Machine } from './shared.ts'
 
-type SpawnOptions = { cwd: string; env?: Record<string, string> }
+// Each path is writable with everything under it; one ending in * is a prefix (`auth.json.lock*`).
+type Sandbox = { writable: string[] }
+type SpawnOptions = { cwd: string; env?: Record<string, string>; sandbox?: Sandbox }
 
 export const KILL_GRACE_MS = 5000
 export const RUN_TIMEOUT_MS = 10000
@@ -31,16 +35,56 @@ function signal(pgid: number, name: NodeJS.Signals | 0) {
   }
 }
 
+// Shells, Node and ptys write these devices; none of them is a file on disk.
+const DEVICE_RULES = [
+  '(literal "/dev/null")',
+  '(literal "/dev/zero")',
+  '(literal "/dev/tty")',
+  '(literal "/dev/dtracehelper")',
+  '(literal "/dev/stdout")',
+  '(literal "/dev/stderr")',
+  '(regex #"^/dev/fd/")',
+  '(literal "/dev/ptmx")',
+  '(regex #"^/dev/ttys")',
+]
+
+// The sandbox matches real paths (/tmp is /private/tmp), and a writable path may not exist yet.
+function realPath(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    const parent = dirname(path)
+    return parent === path ? path : join(realPath(parent), basename(path))
+  }
+}
+
+function sandboxed(command: string, args: string[], { writable }: Sandbox, platform: NodeJS.Platform) {
+  if (platform !== 'darwin') {
+    throw new Error(`Hotrod can't sandbox engines on ${platform} yet, so it won't start one that should be sandboxed`)
+  }
+  // Paths go in as parameters, so no path can break out of the profile's quoting.
+  const rules = writable.map((path, i) => `(${path.endsWith('*') ? 'prefix' : 'subpath'} (param "W${i}"))`)
+  const params = writable.flatMap((path, i) => ['-D', `W${i}=${realPath(path.replace(/\*$/, ''))}`])
+  const allowed = [...DEVICE_RULES, ...rules].join(' ')
+  const profile = `(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* ${allowed})`
+  return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, ...params, command, ...args] }
+}
+
 function engineEnv(extra: Record<string, string> = {}) {
   const env: Record<string, string | undefined> = { ...process.env }
   for (const key of STRIPPED_ENV_KEYS) delete env[key]
   return { ...env, ...extra }
 }
 
-export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs = RUN_TIMEOUT_MS } = {}): Machine {
+export function createLocalMachine({
+  killGraceMs = KILL_GRACE_MS,
+  runTimeoutMs = RUN_TIMEOUT_MS,
+  platform = process.platform,
+} = {}) {
   const running = new Set<{ kill(): void; settled: Promise<void> }>()
 
   function spawnProcess(command: string, args: string[], options: SpawnOptions): EngineProcess {
+    if (options.sandbox) ({ command, args } = sandboxed(command, args, options.sandbox, platform))
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: engineEnv(options.env),
@@ -130,7 +174,7 @@ export function createLocalMachine({ killGraceMs = KILL_GRACE_MS, runTimeoutMs =
     await Promise.all(stopping.map((proc) => proc.settled))
   }
 
-  return { spawn: spawnProcess, run, stopAll }
+  return { spawn: spawnProcess, run, stopAll } satisfies Machine
 }
 
 export const localMachine = createLocalMachine()
