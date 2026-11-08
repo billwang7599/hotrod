@@ -48,7 +48,7 @@ const CLEAN_ARGS = [
   '--setting-sources', '',
   '--strict-mcp-config',
   '--disable-slash-commands',
-  '--settings', '{"autoMemoryEnabled":false}',
+  '--settings', '{"autoMemoryEnabled":false,"attribution":false}',
 ]
 
 const OUTPUT_TAIL_CHARS = 2000
