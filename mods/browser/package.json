@@ -1,0 +1,12 @@
+{
+  "name": "@hotrod/mod-browser",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@playwright/mcp": "0.0.84"
+  },
+  "devDependencies": {
+    "@hotrod/core": "*",
+    "@hotrod/mod-api": "*"
+  }
+}
