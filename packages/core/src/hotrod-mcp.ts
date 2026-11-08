@@ -10,6 +10,13 @@ import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
 export const READ_CHAT_DEFAULT_LAST = 20
 export const SUBAGENT_NAME_MAX_CHARS = 40
 
+export const SUBAGENT_INSTRUCTIONS =
+  'Hand work to subagents with spawn_subagent, as many as the work needs, so you stay free to keep talking with ' +
+  'the user while they run. Give each one a whole task it can finish on its own, independent of the others: ' +
+  "never two on the same files. Use spawn_subagent, not your engine's own subagent or task tool. Each " +
+  "subagent's final reply comes back to you as a message, so don't wait for it or poll it. Answer quick " +
+  'questions and make small changes yourself.'
+
 export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
   name: 'Subagents',
@@ -25,15 +32,16 @@ export const SUBAGENTS_MOD: Mod = {
       min: -1,
       integer: true,
     },
+    {
+      key: 'instructions',
+      label: 'Instructions',
+      description: 'What every chat that can spawn subagents is told about them.',
+      type: 'text',
+      default: SUBAGENT_INSTRUCTIONS,
+      rows: 6,
+    },
   ],
 }
-
-export const SUBAGENT_INSTRUCTIONS =
-  'Hand work to subagents with spawn_subagent, as many as the work needs, so you stay free to keep talking with ' +
-  'the user while they run. Give each one a whole task it can finish on its own, independent of the others: ' +
-  "never two on the same files. Use spawn_subagent, not your engine's own subagent or task tool. Each " +
-  "subagent's final reply comes back to you as a message, so don't wait for it or poll it. Answer quick " +
-  'questions and make small changes yourself.'
 
 type Hub = {
   chats(): ChatState[]

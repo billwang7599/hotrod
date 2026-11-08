@@ -27,6 +27,7 @@ export const valuesOf = (mod: Mod, saved: Record<string, unknown> = {}): ModValu
   Object.fromEntries(
     (mod.settings ?? []).map((setting) => {
       const value = saved[setting.key]
-      return [setting.key, settingProblem(setting, value) ? setting.default : (value as ModValues[string])]
+      const blank = setting.type === 'text' && !String(value).trim()
+      return [setting.key, blank || settingProblem(setting, value) ? setting.default : (value as ModValues[string])]
     }),
   )
