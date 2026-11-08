@@ -100,6 +100,34 @@
   }
 }
 
+/* The composer's "Working…" text: a highlight sweeps across it while the chat is busy. */
+.shimmer {
+  --shimmer: var(--text);
+  color: var(--faint);
+}
+
+.shimmer[data-status='waiting'] {
+  --shimmer: var(--amber);
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .shimmer {
+    background: linear-gradient(90deg, var(--faint) 40%, var(--shimmer) 50%, var(--faint) 60%) 0 0 / 300% 100%;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 2.4s linear infinite;
+  }
+}
+
 @layer base {
   *,
   ::before,

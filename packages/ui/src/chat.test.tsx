@@ -218,6 +218,15 @@ test('a down button shows once more than the threshold of output is below the vi
   await vi.waitFor(() => expect(jumpButton()).toBeNull())
 })
 
+test('the down button turns amber while a permission request waits below', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  grow(JUMP_BELOW_PX * 3)
+  expect(jumpButton()!.className).not.toContain('text-amber')
+  render({ status: 'waiting', items: [USER, REPLY] })
+  const asking = container.querySelector<HTMLButtonElement>('[aria-label="Scroll to the permission request"]')!
+  expect(asking.className).toContain('text-amber')
+})
+
 test('the down button smooth-scrolls to the bottom once and hides there', async () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
   grow(JUMP_BELOW_PX * 3)
@@ -397,6 +406,20 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   }
   const pill = [...container.querySelectorAll('aside[aria-label="Context"] span')].find((s) => s.textContent === 'Every chat')!
   expect(await hintOf(pill)).toContain('changes it everywhere')
+})
+
+test('while busy, the empty composer shows its status as a sweeping highlight instead of a plain placeholder', () => {
+  const box = () => container.querySelector('textarea')!
+  const shimmer = () => container.querySelector('.shimmer')
+  render({ status: 'idle' })
+  expect(shimmer()).toBeNull()
+  expect(box().placeholder).toBe('Message')
+  render({ status: 'running' })
+  expect(shimmer()!.textContent).toBe('Working… Enter queues a message')
+  expect(box().getAttribute('placeholder')).toBeNull()
+  expect(box().getAttribute('aria-placeholder')).toBe('Working… Enter queues a message')
+  render({ status: 'waiting' })
+  expect(shimmer()!.getAttribute('data-status')).toBe('waiting')
 })
 
 test('the right panel shows context and permissions as two tabs, remembering the last one', () => {
