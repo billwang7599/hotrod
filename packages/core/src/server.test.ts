@@ -126,7 +126,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
     memory: {},
-    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: true, values: { limit: expect.any(Number) } })],
+    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: true, values: { limit: expect.any(Number), instructions: SUBAGENT_INSTRUCTIONS } })],
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -483,6 +483,21 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   sessions.at(-1)!.end('Done')
   expect((await json(lead, 'spawn_subagent', { task: 'More' })).chatId).not.toBe(chatId)
   expect((await json(workshop, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([subchat.id])
+})
+
+it('tells a chat that can spawn subagents the saved subagent instructions, or the default when blank', async () => {
+  const { core, sessions, send } = await startHeld()
+  subagentsOn(core)
+  const setInstructions = (value: string) =>
+    handleOn(core)({ type: 'mod.setValue', modId: SUBAGENTS_MOD.id, key: 'instructions', value })
+  setInstructions('Spawn one subagent per failing test.')
+  const custom = send('main', 'hi').options.instructions
+  expect(custom).toContain('Spawn one subagent per failing test.')
+  expect(custom).not.toContain(SUBAGENT_INSTRUCTIONS)
+  sessions.at(-1)!.end()
+
+  setInstructions('  \n')
+  expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
 })
 
 it("starts a subagent on its role's list, keeping only its parent's thinking level", async () => {

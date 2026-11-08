@@ -243,3 +243,51 @@ test("a mod's page shows its setup, with Install while it is missing, even when 
   expect(dialog().textContent).toContain('Browser installed')
   expect([...dialog().querySelectorAll('button')].some((b) => b.textContent === 'Install')).toBe(false)
 })
+
+test("a mod's text setting saves on blur and resets to its default while it differs", () => {
+  const notes = { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 } satisfies ModSetting
+  const notesMod = (value: string): ModInfo => ({
+    id: 'tester',
+    name: 'Tester',
+    description: 'For tests.',
+    enabled: true,
+    settings: [notes],
+    values: { notes: value },
+  })
+  const area = () => dialog().querySelector('textarea[aria-label="Notes"]') as HTMLTextAreaElement
+  const reset = () => button('Reset to default')
+  const edit = (value: string) => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    act(() => {
+      setter.call(area(), value)
+      area().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  }
+  const blur = () => act(() => area().dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+
+  const sent = renderMods([notesMod(notes.default)], 'mod:tester')
+  expect(area().value).toBe(notes.default)
+  expect(area().rows).toBe(notes.rows)
+  expect(reset()).toBeUndefined()
+  blur()
+  expect(sent).toEqual([])
+
+  edit('Be thorough.\nCite files.')
+  expect(sent).toEqual([])
+  expect(reset()).toBeDefined()
+  blur()
+  expect(sent).toEqual([{ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' }])
+
+  renderMods([notesMod('Be thorough.\nCite files.')], 'mod:tester', sent)
+  act(() => reset()!.click())
+  expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
+  expect(area().value).toBe(notes.default)
+  renderMods([notesMod(notes.default)], 'mod:tester', sent)
+  expect(area().value).toBe(notes.default)
+  expect(reset()).toBeUndefined()
+
+  edit('  ')
+  blur()
+  expect(area().value).toBe(notes.default)
+  expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
+})
