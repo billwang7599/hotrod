@@ -303,7 +303,6 @@ function App() {
             request={nameRequest}
             connected={connected}
             send={send}
-            pickFolder={window.hotrod?.pickFolder}
             close={() => setNameRequest(null)}
           />
           <WorkFolderDialog
