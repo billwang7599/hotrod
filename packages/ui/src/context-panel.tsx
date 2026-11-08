@@ -388,17 +388,17 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
+          {chat && (
+            <PanelTab id="general" tab={tab} choose={chooseTab}>
+              General
+            </PanelTab>
+          )}
           <PanelTab id="context" tab={tab} choose={chooseTab}>
             Context
           </PanelTab>
           {chat && (
             <PanelTab id="permissions" tab={tab} choose={chooseTab}>
               Permissions
-            </PanelTab>
-          )}
-          {chat && (
-            <PanelTab id="general" tab={tab} choose={chooseTab}>
-              General
             </PanelTab>
           )}
         </div>
