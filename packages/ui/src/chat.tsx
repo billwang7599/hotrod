@@ -798,7 +798,7 @@ export function Chat(props: ChatProps) {
                   </span>
                 </div>
               )}
-              {foldSteps(chat.items, busy || stepsShown).map((row) => {
+              {foldSteps(chat.items, stepsShown).map((row) => {
                 const kind = 'item' in row ? row.item.kind : 'steps'
                 return (
                   <m.div

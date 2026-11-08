@@ -322,12 +322,11 @@ const rowButtons = () => [...list().querySelectorAll<HTMLButtonElement>('button[
 const foldButton = () => rowButtons().find((b) => /^\d+ steps$/.test(b.textContent ?? ''))
 const before = (a: Node, b: Node) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
 
-test('a finished turn folds its steps into one row above the reply, which opens and closes in place', async () => {
+test('a turn folds its steps, while running too, into one row above the reply, which opens and closes in place', async () => {
   const steps: Item[] = [tool('done', 'a.txt'), { kind: 'text', text: 'Installing them.' }, tool('done', '', { toolId: 't2' })]
   const items: Item[] = [USER, ...steps, { kind: 'text', text: 'All set' }]
   render({ status: 'running', items })
-  expect(foldButton()).toBeUndefined()
-  expect(container.textContent).toContain('Installing them.')
+  expect(foldButton()?.textContent).toBe('3 steps')
 
   render({ status: 'idle', items })
   const fold = foldButton()!
@@ -414,6 +413,7 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
     withVerdict('t2', 'allowed', true),
     withVerdict('t3', 'denied', true, 'edit'),
   ]
+  act(() => showStepsByDefault(true))
   render({ status: 'running', items: [USER, ...verdicts, withVerdict('t4', 'denied')] })
   const rows = rowButtons()
   expect(rows).toHaveLength(4)
@@ -421,6 +421,9 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   expect(badges).toEqual(['Allowed', 'Allowed automatically', 'Denied', 'Denied'])
   expect(container.textContent).not.toContain('Approve')
   expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the work folder')
+  act(() => showStepsByDefault(false))
+  localStorage.clear()
+  reloadSteps()
 })
 
 test('says why Hotrod allowed a command or an edit without asking', async () => {

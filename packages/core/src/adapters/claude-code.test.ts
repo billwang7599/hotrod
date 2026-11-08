@@ -41,6 +41,7 @@ describe('claudeCode adapter', () => {
           '--disable-slash-commands',
           '--settings', '{"autoMemoryEnabled":false,"attribution":false}',
           '--thinking-display', 'summarized',
+          '--disallowedTools', 'Agent', 'Task',
         ],
       },
     ])
