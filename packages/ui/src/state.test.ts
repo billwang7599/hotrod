@@ -124,6 +124,25 @@ describe('reduce', () => {
     expect(run(snapshot([chat('a')]), { type: 'chat.removed', chatId: 'a' }).selectedId).toBe('')
   })
 
+  it("shows a subagent's report as a report, also when an old log saved it as a user message", () => {
+    const state = run(
+      snapshot([
+        chat('a', [
+          { at, type: 'user.message', text: '[subagent "Docs" (ab12cd34)] Found **it**\n\nin the FAQ' },
+          { at, type: 'user.message', text: '[subagent "Lint" (ab12cd35)] (No reply) (The turn ended early: Interrupted)' },
+          { at, type: 'user.message', text: '[subagent: not a report' },
+        ]),
+      ]),
+      entry('a', { type: 'subagent.report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' }),
+    )
+    expect(items(state)).toEqual([
+      { kind: 'report', chatId: 'ab12cd34', name: 'Docs', text: 'Found **it**\n\nin the FAQ' },
+      { kind: 'report', chatId: 'ab12cd35', name: 'Lint', text: '', error: 'Interrupted' },
+      { kind: 'user', text: '[subagent: not a report' },
+      { kind: 'report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' },
+    ])
+  })
+
   it('adds a subagent without switching the view to it', () => {
     const sub: Action = { type: 'chat.added', chat: chat('s', [], { name: 'Search', parentId: 'c' }) }
     const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), { type: 'select', chatId: 'c' }, sub)
@@ -522,6 +541,12 @@ describe('foldSteps', () => {
     expect(shown([...twoTurns, text('Ok')])).toEqual(['a', '3 steps', 'Done', 'b', '3 steps', 'Ok'])
     const [, fold] = foldSteps(twoTurns, false)
     expect(fold).toEqual({ at: 1, steps: [tool('t1'), text('Installing'), tool('t2')] })
+  })
+
+  it("starts a new turn at a subagent's report, like at a message from the user", () => {
+    const report: Item = { kind: 'report', chatId: 's1', name: 'Docs', text: 'Found it' }
+    expect(shown([user('a'), tool('t1'), text('Waiting'), report, tool('t2'), text('Done')]))
+      .toEqual(['a', 't1', 'Waiting', 'Found it', 't2', 'Done'])
   })
 
   it('leaves the last turn unfolded when asked and folds the finished ones above it', () => {

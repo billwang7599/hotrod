@@ -32,6 +32,7 @@ export type Permission = {
 
 export type Item =
   | { kind: 'user'; text: string; attachments?: Attachment[] }
+  | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
   | {
@@ -101,11 +102,25 @@ export const initialState: State = {
 
 const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pending' ? { ...p, outcome: 'cancelled' } : p)
 
+// Logs from before reports had their own entry carry them as user messages in this form.
+const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
+const NO_REPLY = '(No reply)'
+
 function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   switch (entry.type) {
     case 'user.message': {
       const { text, attachments } = entry
+      const old = attachments ? null : OLD_REPORT.exec(text)
+      if (old) {
+        const [, name, chatId, reply, error] = old as unknown as string[]
+        const replyText = reply === NO_REPLY ? '' : reply!
+        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
+      }
       return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+    }
+    case 'subagent.report': {
+      const { chatId, name, text, error } = entry
+      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
     }
     case 'text.completed':
       return [...items, { kind: 'text', text: entry.text }]
@@ -203,7 +218,7 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
     turn = []
   }
   items.forEach((item, at) => {
-    if (item.kind !== 'user') turn.push({ at, item })
+    if (item.kind !== 'user' && item.kind !== 'report') turn.push({ at, item })
     else {
       endTurn(false)
       rows.push({ at, item })

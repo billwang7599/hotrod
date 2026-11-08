@@ -535,22 +535,33 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   expect(existsSync(join(garage, 'chats', chatId))).toBe(true)
 
   sessionOf(chatId).end('Found it')
-  const report = `[subagent "Search the docs" (${chatId})] Found it`
-  expect(chatIn(core, 'main').queue.map((q) => q.text)).toEqual([report])
+  const report = { chatId, name: 'Search the docs' }
+  expect(chatIn(core, 'main').queue).toMatchObject([{ text: 'Found it', report }])
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
   expect(await tool(token, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: true })
   expect(await tool(token, 'read_chat', { chatId })).toMatchObject({ isError: true })
+  core.handle({ type: 'chat.send', chatId: 'main', text: 'Also check the FAQ' }, () => {})
   parent.end('Waiting')
-  expect(sessionOf('main').prompt?.endsWith(report)).toBe(true)
+  const prompt = sessionOf('main').prompt!
+  expect(prompt).toContain(`Report from subagent "Search the docs" (${chatId}):\n\nFound it`)
+  expect(prompt.endsWith('New message from the user:\n\nAlso check the FAQ')).toBe(true)
   expect(chatIn(core, 'main').status).toBe('running')
+  // The report is its own entry, apart from the user's words, so neither the UI nor memory takes it as theirs.
+  const logged = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
+  expect(logged.slice(-2)).toMatchObject([
+    { type: 'subagent.report', text: 'Found it', ...report },
+    { type: 'user.message', text: 'Also check the FAQ' },
+  ])
   const lead = sessionOf('main')
 
   const stopped = (await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
   lead.end('Thanks')
   sessionOf(stopped).end(undefined, 'Interrupted')
-  const failed = `[subagent "Look again" (${stopped})] (No reply) (The turn ended early: Interrupted)`
+  const failed = `Report from subagent "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
   expect(sessionOf('main').prompt?.endsWith(failed)).toBe(true)
+  expect(sessionOf('main').prompt).not.toContain('New message from the user')
+  expect(chatIn(core, 'main').entries.at(-2)).toMatchObject({ type: 'subagent.report', text: '', error: 'Interrupted' })
   expect(sessionsOf('main')).toHaveLength(3)
   expect(core.chats().some((c) => c.id === stopped)).toBe(false)
   expect(existsSync(join(garage, 'chats', stopped))).toBe(false)

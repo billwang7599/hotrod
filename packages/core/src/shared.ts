@@ -260,6 +260,7 @@ export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
 export type ChatEntry = { at: string } & (
   | { type: 'user.message'; text: string; attachments?: Attachment[] }
+  | ({ type: 'subagent.report'; text: string } & SubagentReport)
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
@@ -274,7 +275,10 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
-export type QueuedMessage = { id: string; text: string; attachments?: Attachment[] }
+// A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
+export type SubagentReport = { chatId: string; name: string; error?: string }
+
+export type QueuedMessage = { id: string; text: string; attachments?: Attachment[]; report?: SubagentReport }
 
 export type ChatState = ChatInfo & {
   status: ChatStatus

@@ -634,11 +634,36 @@ type ItemProps = {
   send: (m: ClientMessage) => void
   space?: ChatView
   select?: (chatId: string) => void
+  // Opens a chat that still exists, for a subagent's report.
+  openChat?: (chatId: string) => (() => void) | undefined
 }
 
-function ItemView({ item, chat, contextItems, connected, send, space, select }: ItemProps) {
+function ItemView({ item, chat, contextItems, connected, send, space, select, openChat }: ItemProps) {
   const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
+    case 'report': {
+      const open = openChat?.(item.chatId)
+      const name = open ? (
+        <button type="button" className="font-medium text-text hover:underline" onClick={open}>
+          {item.name}
+        </button>
+      ) : (
+        <span className="font-medium text-text">{item.name}</span>
+      )
+      return (
+        <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
+          <div className="text-sm text-muted">
+            Subagent {name} reported
+            {item.error && <span> · ended early: {item.error}</span>}
+          </div>
+          {item.text ? (
+            <Markdown className={ASSISTANT} text={item.text} />
+          ) : (
+            <div className="text-sm text-muted">No reply</div>
+          )}
+        </section>
+      )
+    }
     case 'user':
       return (
         <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
@@ -974,6 +999,10 @@ export function Chat(props: ChatProps) {
     connected,
     send,
     ...(viewOnly && space !== chat && { space, select: props.select }),
+    openChat: (chatId: string) => {
+      const select = props.select
+      return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
+    },
   }
 
   return (
@@ -1099,7 +1128,7 @@ export function Chat(props: ChatProps) {
                 return (
                   <m.div
                     key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                    className={`group/item flex flex-col ${kind === 'user' ? 'mt-14 first:mt-0' : ''}`}
+                    className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
                     initial={kind !== 'text' && enter}
                     animate={MOTION.rise.animate}
                   >
@@ -1210,6 +1239,7 @@ export function Chat(props: ChatProps) {
                       <m.li key={q.id} {...MOTION.collapse}>
                         <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
                           <span className="flex min-w-0 flex-1 items-center gap-6" title={q.text}>
+                            {q.report && <span className="shrink-0 text-faint">Subagent {q.report.name} reported:</span>}
                             {q.text && <span className="truncate">{q.text}</span>}
                             {q.attachments && (
                               <span className="flex min-w-0 shrink-0 items-center gap-4 text-faint last:shrink">

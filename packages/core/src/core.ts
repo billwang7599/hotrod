@@ -23,6 +23,7 @@ import {
   openCompactor,
   openSummaries,
   withAttachments,
+  type Report,
   ZOOM_INSTRUCTIONS,
   type Summaries,
 } from './memory.ts'
@@ -495,9 +496,8 @@ export function openCore(options: {
   const reportOf = (chat: Chat, error?: string) => {
     const asked = chat.entries.findLastIndex((e) => e.type === 'user.message')
     const reply = chat.entries.slice(asked + 1).findLast((e) => e.type === 'text.completed')
-    const text = reply?.type === 'text.completed' ? reply.text : '(No reply)'
-    const early = error ? ` (The turn ended early: ${error})` : ''
-    return `[subagent "${chat.info.name}" (${chat.info.id})] ${text}${early}`
+    const text = reply?.type === 'text.completed' ? reply.text : ''
+    return { text, report: { chatId: chat.info.id, name: chat.info.name, ...(error && { error }) } }
   }
 
   const removeChats = (family: Chat[]) => {
@@ -544,7 +544,8 @@ export function openCore(options: {
     if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
-    if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
+    const lastType = entries.at(-1)?.type
+    if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'subagent.report') {
       append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Hotrod quit during this turn' })
     }
     return chat
@@ -847,7 +848,7 @@ export function openCore(options: {
     rmSync(info.workDir, { recursive: true, force: true })
   }
 
-  const send = (chat: Chat, text: string, attachments: Attachment[] = []) => {
+  const send = (chat: Chat, text: string, attachments: Attachment[] = [], reports: Report[] = []) => {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
@@ -864,9 +865,12 @@ export function openCore(options: {
     mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text, attachments)
     const zoomable = takesMcp(adapter.id)
-    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable })
-    const sent = { type: 'user.message' as const, text, ...(attachments.length && { attachments }) }
-    append(chat, { at: new Date().toISOString(), ...sent })
+    const prompt = memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable }, reports)
+    const at = new Date().toISOString()
+    for (const { text, report } of reports) append(chat, { at, type: 'subagent.report', text, ...report })
+    if (text || attachments.length || !reports.length) {
+      append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
+    }
     setStatus(chat, 'running')
 
     const items = contextItems(chat).filter((item) => item.enabled)
@@ -1024,19 +1028,20 @@ export function openCore(options: {
     const queue = chat.queue
     if (queue.length) setQueue(chat, [])
     const parts = message ? [...queue, message] : queue
+    const reports = parts.flatMap(({ text, report }) => (report ? [{ text, report }] : []))
+    const typed = parts.filter((part) => !part.report)
     try {
-      const text = parts.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
-      send(chat, text, parts.flatMap((part) => part.attachments ?? []))
+      const text = typed.flatMap((part) => (part.text ? [part.text] : [])).join('\n\n')
+      send(chat, text, typed.flatMap((part) => part.attachments ?? []), reports)
     } catch (error) {
       if (queue.length) setQueue(chat, queue)
       throw error
     }
   }
 
-  const enqueue = (chat: Chat, text: string, attachments: Attachment[] = []) => {
+  const enqueue = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
     if (quitting) throw new Error('Hotrod is quitting')
     checkActive(chat)
-    const message = { text, ...(attachments.length && { attachments }) }
     if (chat.status === 'idle') return sendQueue(chat, message)
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
   }
@@ -1077,7 +1082,7 @@ export function openCore(options: {
       }
     })
     try {
-      enqueue(chat, text, attachments)
+      enqueue(chat, { text, ...(attachments.length && { attachments }) })
     } catch (error) {
       for (const { path } of attachments) rmSync(path, { force: true })
       throw error

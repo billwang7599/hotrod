@@ -895,3 +895,33 @@ test("the sidebar shows a space as waiting while a subagent below it waits for a
   nav([SPACE, subagent({ status: 'running', items: [USER, pendingTool('allowed')] })])
   expect(dot('Space')).toBe('idle')
 })
+
+test("shows a subagent's report as a report card, not as the user's message", () => {
+  const selected: string[] = []
+  const report = (chatId: string, name: string, text: string, error?: string) =>
+    ({ kind: 'report', chatId, name, text, ...(error && { error }) }) as const
+  render(
+    { items: [USER, report('s1', 'Docs', 'Found **it**'), report('s2', 'Lint', '', 'Interrupted')] },
+    () => {},
+    { chats: [viewOf({ id: 's1', name: 'Docs', subagent: true, parentId: 'c1' })], select: (id) => selected.push(id) },
+  )
+  const docs = container.querySelector('[aria-label="Report from subagent Docs"]')!
+  expect(docs.textContent).toContain('Subagent Docs reported')
+  expect(docs.querySelector('strong')?.textContent).toBe('it')
+  expect(docs.closest('.self-end')).toBeNull()
+  act(() => docs.querySelector('button')!.click())
+  expect(selected).toEqual(['s1'])
+
+  // A removed subagent's name is plain text; a report with no reply says so.
+  const lint = container.querySelector('[aria-label="Report from subagent Lint"]')!
+  expect(lint.querySelector('button')).toBeNull()
+  expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
+  expect(lint.textContent).toContain('No reply')
+})
+
+test("labels a queued subagent report as the subagent's", () => {
+  const queue = [{ id: 'q1', text: 'Found it', report: { chatId: 's1', name: 'Docs' } }]
+  render({ status: 'running', items: [USER], queue })
+  const queued = container.querySelector('[aria-label="Queued messages"]')!
+  expect(queued.textContent).toContain('Subagent Docs reported:Found it')
+})

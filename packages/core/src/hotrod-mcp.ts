@@ -74,6 +74,7 @@ const subagentName = (task: string) => {
 function messages(chat: ChatState) {
   return chat.entries.flatMap((entry) => {
     if (entry.type === 'user.message') return [`User: ${entry.text}`]
+    if (entry.type === 'subagent.report') return [`Subagent "${entry.name}" reported: ${entry.text || '(No reply)'}`]
     if (entry.type === 'text.completed') return [`Assistant: ${entry.text}`]
     if (entry.type === 'tool.started') return [`Tool ${entry.name}: ${entry.summary}`]
     if (entry.type === 'turn.completed' && entry.error) return [`[Turn ended early: ${entry.error}]`]
