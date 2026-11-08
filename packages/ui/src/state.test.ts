@@ -249,7 +249,14 @@ describe('reduce', () => {
         summary: 'ls',
         state: 'waiting',
         output: '',
-        permission: { requestId: 'r1', name: 'Bash', summary: 'ls', input: { command: 'ls' }, outcome: 'pending' },
+        permission: {
+          requestId: 'r1',
+          name: 'Bash',
+          toolKind: 'shell',
+          summary: 'ls',
+          input: { command: 'ls' },
+          outcome: 'pending',
+        },
       },
     ])
     const allowed = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: true }))
@@ -349,7 +356,15 @@ describe('reduce', () => {
       entry('a', { type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'rm x', input: { command: 'rm x' } }),
     )
     expect(items(requested)).toEqual([
-      { kind: 'permission', requestId: 'r1', name: 'Bash', summary: 'rm x', input: { command: 'rm x' }, outcome: 'pending' },
+      {
+        kind: 'permission',
+        requestId: 'r1',
+        name: 'Bash',
+        toolKind: 'shell',
+        summary: 'rm x',
+        input: { command: 'rm x' },
+        outcome: 'pending',
+      },
     ])
     const denied = reduce(requested, entry('a', { type: 'permission.resolved', requestId: 'r1', allow: false }))
     expect(items(denied)[0]).toMatchObject({ requestId: 'r1', outcome: 'denied' })

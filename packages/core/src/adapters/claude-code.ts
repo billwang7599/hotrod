@@ -165,8 +165,9 @@ export const claudeCode: Adapter = {
   },
 
   start(machine, options, emit) {
-    const { cwd, instructions, accountDir, apiKey, hotrodMcp, extraDirs = [], readFiles = [], model, thinking, sandbox } =
+    const { cwd, instructions, accountDir, apiKey, hotrodMcp, mcpServers = [], extraDirs = [], readFiles = [] } =
       options
+    const { model, thinking, sandbox } = options
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -183,16 +184,23 @@ export const claudeCode: Adapter = {
     for (const dir of extraDirs) args.push('--add-dir', dir)
     const jail = sandbox && jailed(sandbox, accountDir)
     const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
-    // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
-    const allowed = readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`)
+    const servers: Record<string, object> = {}
     if (hotrodMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
       const headers = { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }
-      const config = { mcpServers: { hotrod: { type: 'http', url: hotrodMcp.url, headers } } }
-      args.push('--mcp-config', JSON.stringify(config))
-      allowed.unshift('mcp__hotrod__*')
+      servers.hotrod = { type: 'http', url: hotrodMcp.url, headers }
       env.HOTROD_MCP_TOKEN = hotrodMcp.token
     }
+    for (const server of mcpServers) {
+      servers[server.name] = { type: 'stdio', command: server.command, args: server.args ?? [], env: server.env ?? {} }
+    }
+    if (Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: servers }))
+    const allowed = [
+      ...(hotrodMcp ? ['mcp__hotrod__*'] : []),
+      ...mcpServers.flatMap((server) => (server.allowTools ? [`mcp__${server.name}__*`] : [])),
+      // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
+      ...readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`),
+    ]
     if (allowed.length) args.push('--allowedTools', ...allowed)
     if (instructions) args.push('--append-system-prompt', instructions)
     const proc = machine.spawn('claude', args, {
@@ -248,6 +256,7 @@ export const claudeCode: Adapter = {
           pendingInputs.set(msg.request_id, request.input)
           const kind = kindOf(request.tool_name)
           const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
+          const command = kind === 'shell' ? request.input?.command : undefined
           emit({
             type: 'permission.requested',
             requestId: msg.request_id,
@@ -256,6 +265,7 @@ export const claudeCode: Adapter = {
             kind,
             summary: summarize(kind, request.input),
             ...(typeof path === 'string' && { path }),
+            ...(typeof command === 'string' && { command }),
             input: request.input,
           })
           return
