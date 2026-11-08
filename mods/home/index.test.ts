@@ -74,7 +74,15 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   expect(session.options.cwd).toBe(join(garage, 'work', 'home'))
   expect(session.options.instructions.startsWith(homeChat.instructions)).toBe(true)
   const token = session.options.hotrodMcp!.token
-  expect(await names(token)).toEqual(['create_chat', 'date', 'list_chats', 'read_chat', 'send_message', 'zoom'])
+  expect(await names(token)).toEqual([
+    'create_chat',
+    'date',
+    'list_chats',
+    'read_chat',
+    'send_message',
+    'spawn_subagent',
+    'zoom',
+  ])
 
   expect(await tool(token, 'create_chat', { name: 'Bad', folders: ['relative/dir'] })).toEqual({
     isError: true,
@@ -96,7 +104,14 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   const options = { cwd: join(garage, 'work', chatId), extraDirs: [realpathSync(folder)] }
   expect(sessions.at(-1)).toMatchObject({ prompt: 'Look around', options })
   expect(JSON.parse((await tool(token, 'list_chats')).text).map((c: { id: string }) => c.id)).toEqual([chatId])
-  expect(await names(sessions.at(-1)!.options.hotrodMcp!.token)).toEqual(['date', 'zoom'])
+  expect(await names(sessions.at(-1)!.options.hotrodMcp!.token)).toEqual([
+    'date',
+    'list_chats',
+    'read_chat',
+    'send_message',
+    'spawn_subagent',
+    'zoom',
+  ])
 })
 
 it('hides Home while it is off, keeping its history, and shows it again once it is on', async () => {

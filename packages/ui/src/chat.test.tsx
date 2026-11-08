@@ -408,6 +408,19 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   expect(await hintOf(pill)).toContain('changes it everywhere')
 })
 
+test('a subagent is view only: no composer, just a Stop button while it runs', () => {
+  const sent: ClientMessage[] = []
+  render({ subagent: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))
+  expect(container.querySelector('textarea')).toBeNull()
+  const bar = container.querySelector('[aria-label="Subagent"]')!
+  expect(bar.textContent).toContain('view only')
+  const stop = [...bar.querySelectorAll('button')].find((b) => b.textContent === 'Stop')!
+  act(() => stop.click())
+  expect(sent.at(-1)).toEqual({ type: 'chat.interrupt', chatId: 'c1' })
+  render({ subagent: true, parentId: 'p1', status: 'idle' })
+  expect(container.querySelector('[aria-label="Subagent"] button')).toBeNull()
+})
+
 test('while busy, the empty composer shows its status as a sweeping highlight instead of a plain placeholder', () => {
   const box = () => container.querySelector('textarea')!
   const shimmer = () => container.querySelector('.shimmer')

@@ -78,6 +78,8 @@ const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, 
   },
   denied: { edit: 'An edit outside the work folder, so Hotrod denied it without asking' },
 }
+const SUBAGENT_HINT =
+  'Its chat started it and sends it messages; you can watch it, answer its permission requests, or stop it'
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
   idle: 'Message',
@@ -589,7 +591,8 @@ export function Chat(props: ChatProps) {
   const working = busy && !archived && !text
   const asking = chat.status === 'waiting'
   const canQueue = connected && busy && !archived
-  const showEngineNote = engineOff && !archived && chat.status === 'idle'
+  const viewOnly = !!chat.subagent
+  const showEngineNote = engineOff && !archived && chat.status === 'idle' && !viewOnly
   const last = chat.items.at(-1)
   const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
@@ -894,7 +897,32 @@ export function Chat(props: ChatProps) {
               </m.div>
             )}
           </AnimatePresence>
-          {!showEngineNote && (
+          {viewOnly && !archived && (
+            <div
+              className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-10 text-muted"
+              aria-label="Subagent"
+            >
+              <Hint text={SUBAGENT_HINT}>
+                <span className="min-w-0 flex-1 truncate">
+                  Subagent of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
+                </span>
+              </Hint>
+              {busy && (
+                <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                  <Button
+                    variant="danger"
+                    size="small"
+                    className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                    disabled={!connected}
+                    onClick={stop}
+                  >
+                    {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                  </Button>
+                </Hint>
+              )}
+            </div>
+          )}
+          {!showEngineNote && !viewOnly && (
             <div
               className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
             >
