@@ -16,6 +16,7 @@ import { basename, dirname, join } from 'node:path'
 import type { Mod, ModChat } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
+import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, SUMMARY_MODELS, WRITE_RULES, type Core } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
@@ -107,8 +108,6 @@ function recording(adapter: Adapter) {
 
 let dirs: string[] = []
 let cores: Core[] = []
-// The fake engine never starts a process, so this machine can claim a sandbox on any platform.
-const sandboxing = { ...localMachine, canSandbox: true }
 
 function tempDir() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
@@ -134,7 +133,7 @@ function open(
   enabled = adapters.map((a) => a.id),
   mods: Mod[] = [mainMod],
 ) {
-  const core = openCore({ garage, adapters, defaultEngine, machine: sandboxing, stopGraceMs, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine: sandboxingMachine, stopGraceMs, mods })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -439,7 +438,13 @@ describe('work folder', () => {
   it('refuses to run any chat until a work folder is chosen', () => {
     const garage = tempDir()
     const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
-    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxing, mods: [mainMod] })
+    const core = openCore({
+      garage,
+      adapters: [adapter],
+      defaultEngine: 'fake',
+      machine: sandboxingMachine,
+      mods: [mainMod],
+    })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
     expect(core.workFolder()).toEqual({ defaultPath: join(garage, 'work'), canSandbox: true })
@@ -643,7 +648,7 @@ describe('worktrees', () => {
 
   it('ends the turn at once on Stop while a checkout is being made, and starts no engine', async () => {
     const slow: Machine = {
-      ...sandboxing,
+      ...sandboxingMachine,
       run: async (command, args, options) => {
         if (args.includes('add')) await new Promise((resolve) => setTimeout(resolve, 100))
         return localMachine.run(command, args, options)
@@ -1719,7 +1724,7 @@ describe('memory', () => {
       garage,
       adapters,
       defaultEngine: 'fake',
-      machine: sandboxing,
+      machine: sandboxingMachine,
       mods: [mainMod],
       compactDebounceMs: 0,
     })

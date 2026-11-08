@@ -1,4 +1,8 @@
+import { localMachine } from '../machine.ts'
 import type { EngineProcess, Machine, Sandbox } from '../shared.ts'
+
+// Fake engines start no process, so this machine can claim a sandbox on any platform.
+export const sandboxingMachine: Machine = { ...localMachine, canSandbox: true }
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
   const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string>; sandbox?: Sandbox }[] =

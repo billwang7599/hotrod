@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { startCore } from '@hotrod/core/main'
-import type { Adapter, Machine, SessionOptions } from '@hotrod/core/shared'
+import type { Adapter, SessionOptions } from '@hotrod/core/shared'
+import { sandboxingMachine } from '@hotrod/core/test-machine'
 import home from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -12,15 +13,6 @@ afterEach(async () => {
 })
 
 const homeChat = home.chats![0]!
-// The held engine starts no process, so this machine can claim a sandbox on any platform.
-const machine: Machine = {
-  canSandbox: true,
-  spawn: () => {
-    throw new Error('No processes in this test')
-  },
-  run: async () => ({ code: null, stdout: '', stderr: 'No processes in this test' }),
-  stopAll: async () => {},
-}
 
 async function start() {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-home-')))
@@ -44,7 +36,7 @@ async function start() {
     },
   }
   const env = { HOTROD_ENGINE: 'held', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
-  const hotrod = await startCore({ env, adapters: [held], mods: [home], machine })
+  const hotrod = await startCore({ env, adapters: [held], mods: [home], machine: sandboxingMachine })
   cleanups.push(async () => {
     await hotrod.close(true)
     rmSync(garage, { recursive: true, force: true })

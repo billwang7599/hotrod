@@ -14,12 +14,9 @@ import type { Mod } from '@hotrod/mod-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
+import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
-import { localMachine } from './machine.ts'
-
-// The fake engines start no process, so this machine can claim a sandbox on any platform.
-const machine = { ...localMachine, canSandbox: true }
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
@@ -46,7 +43,7 @@ async function start(port = 0) {
     garage,
     adapters: [createFakeAdapter(undefined, 0)],
     defaultEngine: 'fake',
-    machine,
+    machine: sandboxingMachine,
   })
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   cleanups.push(() => {
@@ -177,7 +174,7 @@ it('serves the UI folder when given one', async () => {
     garage,
     adapters: [createFakeAdapter(undefined, 0)],
     defaultEngine: 'fake',
-    machine,
+    machine: sandboxingMachine,
   })
   const server = await startServer({
     core,
@@ -207,7 +204,12 @@ it('serves the UI folder when given one', async () => {
 
 it("serves a chat's attachments with the token, images and PDFs inline and anything else as a download", async () => {
   const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine })
+  const core = openCore({
+    garage,
+    adapters: [createFakeAdapter([], 0)],
+    defaultEngine: 'fake',
+    machine: sandboxingMachine,
+  })
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const server = await startServer({ core, port: 0, uiOrigin: origin, token })
   cleanups.push(() => {
@@ -339,7 +341,13 @@ async function startHeld({ hotrodMcp = true } = {}) {
       }
     },
   }
-  const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine, mods: [mainMod] })
+  const core = openCore({
+    garage,
+    adapters: [held],
+    defaultEngine: 'held',
+    machine: sandboxingMachine,
+    mods: [mainMod],
+  })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
   const messages: CoreMessage[] = []
