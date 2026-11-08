@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import type { Mod } from '@hotrod/mod-api'
 
@@ -25,7 +25,7 @@ const home: Mod = {
     {
       name: 'create_chat',
       description:
-        'Make a space: a named chat whose folders (absolute paths; missing ones are made) and files go into its ' +
+        'Make a space: a named chat whose folders (absolute paths of existing folders) and files go into its ' +
         'context. It runs in its first folder. Give a prompt to start it. Returns its id.',
       inputSchema: {
         type: 'object',
@@ -42,7 +42,10 @@ const home: Mod = {
       run({ prompt, ...spec }: NewSpace, { host }) {
         const relative = spec.folders?.find((folder) => !isAbsolute(folder))
         if (relative !== undefined) throw new Error(`The path must be absolute: ${relative}`)
-        for (const folder of spec.folders ?? []) mkdirSync(folder, { recursive: true })
+        const missing = spec.folders?.find((folder) => !existsSync(folder))
+        if (missing !== undefined) {
+          throw new Error(`No such folder: ${missing}; create_chat attaches existing folders only`)
+        }
         const chat = host.createChat(spec)
         if (prompt) host.send(chat.id, prompt)
         return { chatId: chat.id }

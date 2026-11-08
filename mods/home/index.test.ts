@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
@@ -81,9 +81,15 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
     text: 'The path must be absolute: relative/dir',
   })
   const folder = join(garage, 'made', 'app')
+  expect(await tool(token, 'create_chat', { name: 'App', folders: [folder] })).toEqual({
+    isError: true,
+    text: `No such folder: ${folder}; create_chat attaches existing folders only`,
+  })
+  expect(existsSync(join(garage, 'made'))).toBe(false)
+  expect(core.chats()).toHaveLength(1)
+  mkdirSync(folder, { recursive: true })
   const made = await tool(token, 'create_chat', { name: 'App', prompt: 'Look around', folders: [folder] })
   const { chatId } = JSON.parse(made.text)
-  expect(existsSync(folder)).toBe(true)
   const space = core.chats().find((c) => c.id === chatId)
   expect(space).toMatchObject({ name: 'App', folders: [realpathSync(folder)], status: 'running' })
   expect(space).not.toHaveProperty('parentId')
