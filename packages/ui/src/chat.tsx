@@ -28,6 +28,7 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { usePathsShown } from './paths.ts'
 import { useSmoothText } from './smooth.ts'
 import {
   Button,
@@ -527,6 +528,7 @@ type ChatProps = {
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
+  const paths = usePathsShown()
   const listed = accounts && listedAccounts(accounts)
   const [text, setText] = useState('')
   const [pending, setPending] = useState<Pending[]>([])
@@ -694,8 +696,10 @@ export function Chat(props: ChatProps) {
             toggle={props.toggleSidebar}
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
-            <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
-            {!chat.mod && (
+            <Hint text={!chat.mod && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
+              <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
+            </Hint>
+            {!chat.mod && paths.header && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>

@@ -6,6 +6,7 @@ import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
+import { showPaths } from './paths.ts'
 import {
   GLOBAL_CONTEXT,
   PERMISSION_DEFAULTS,
@@ -81,7 +82,12 @@ afterEach(() => {
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-type RenderOptions = { workFolder?: Partial<WorkFolder>; contextOpen?: boolean; contextItems?: ContextItem[] }
+type RenderOptions = {
+  workFolder?: Partial<WorkFolder>
+  contextOpen?: boolean
+  contextItems?: ContextItem[]
+  folder?: string
+}
 
 function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
   const view: ChatView = {
@@ -105,6 +111,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
           <Tooltip.Provider delayDuration={0}>
             <Chat
               chat={view}
+              folder={options.folder}
               chats={[view]}
               engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
               connected
@@ -392,8 +399,43 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   expect(await hintOf(pill)).toContain('changes it everywhere')
 })
 
+test('the right panel shows context and permissions as two tabs, remembering the last one', () => {
+  localStorage.clear()
+  const tab = (name: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')].find((t) => t.textContent === name)!
+  const permission = () => container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)
+  render({}, () => {}, { contextOpen: true })
+  expect(tab('Context').getAttribute('aria-selected')).toBe('true')
+  expect(permission()).toBeNull()
+  expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).not.toBeNull()
+  act(() => tab('Permissions').click())
+  expect(permission()).not.toBeNull()
+  expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).toBeNull()
+  act(() => root.render(<></>))
+  render({}, () => {}, { contextOpen: true })
+  expect(tab('Permissions').getAttribute('aria-selected')).toBe('true')
+  localStorage.clear()
+})
+
+test('file paths stay hidden at the top of a space and in the Context panel until Settings shows them', () => {
+  const item: ContextItem = { section: 'folders', path: '/repo/app', from: 'c1', enabled: true, text: '' }
+  const shows = (path: string) => [...container.querySelectorAll('span')].some((s) => s.textContent === path)
+  render({}, () => {}, { contextOpen: true, contextItems: [item], folder: '/repo/app' })
+  expect(shows('/repo/app')).toBe(false)
+  act(() => showPaths('header', true))
+  expect(container.querySelector('header')!.textContent).toContain('/repo/app')
+  expect(container.querySelector('aside')!.textContent).not.toContain('/repo/app')
+  act(() => showPaths('context', true))
+  expect(container.querySelector('aside')!.textContent).toContain('/repo/app')
+  act(() => {
+    showPaths('header', false)
+    showPaths('context', false)
+  })
+})
+
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
+  localStorage.setItem('hotrod.panelTab', 'permissions')
   const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
     act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
@@ -420,12 +462,14 @@ test('every chat, Home too, overrides each permission default in its Context pan
     choose(select(), (text) => text.includes('Default'))
     expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
   }
+  localStorage.clear()
 })
 
 test('a chat turns edits anywhere off while Settings turns it on by default, its label amber only while on', () => {
   const { label } = PERMISSIONS.editAnywhere
   const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
+  localStorage.setItem('hotrod.panelTab', 'permissions')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('Default (On)')
   expect(amber()).toContain('text-amber')
@@ -433,6 +477,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   expect(select().textContent).toBe('Off')
   expect(select().disabled).toBe(false)
   expect(amber()).not.toContain('text-amber')
+  localStorage.clear()
 })
 
 test('each context card collapses to its header, its switch still working, and stays so after a remount', async () => {
@@ -445,6 +490,7 @@ test('each context card collapses to its header, its switch still working, and s
     container.querySelector<HTMLButtonElement>(`aside button[aria-expanded][aria-label$=" ${name}"]`)!
   const globalBox = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]')
   const folderPath = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === folder.path)
+  showPaths('context', true)
   show()
   expect(toggle('Global').getAttribute('aria-expanded')).toBe('true')
   act(() => toggle('Global').click())
@@ -464,5 +510,6 @@ test('each context card collapses to its header, its switch still working, and s
   expect(folderPath()).toBeUndefined()
   act(() => toggle('Global').click())
   await vi.waitFor(() => expect(globalBox()).not.toBeNull())
+  showPaths('context', false)
   localStorage.clear()
 })
