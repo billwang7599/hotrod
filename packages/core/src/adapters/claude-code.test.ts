@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
-import { describe, expect, it } from 'vitest'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { type EngineEvent, type LoginEvent, type SessionOptions } from '../shared.ts'
 import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
@@ -515,5 +517,42 @@ describe('claudeCode accounts', () => {
     const fake = fakeMachine({ 'claude auth logout': { code: 0, stdout: '', stderr: '' } })
     await claudeCode.accounts!.logout(fake.machine, dir)
     expect(fake.ran).toEqual([{ command: 'claude', args: ['auth', 'logout'], env: { CLAUDE_CONFIG_DIR: dir } }])
+  })
+})
+
+describe('claudeCode in a sandbox', () => {
+  const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
+  const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
+  afterEach(() => {
+    if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
+  })
+
+  it('also lets it write its shell snapshots and the login keychain, with its temp folder in the sandbox', () => {
+    delete process.env.CLAUDE_CONFIG_DIR
+    const { fake } = startSession('', { sandbox })
+    const snapshots = join(homedir(), '.claude', 'shell-snapshots')
+    expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', snapshots, keychain], tmpDir: sandbox.tmpDir })
+    expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it("puts the shell snapshots in the config folder it runs with: the account's, else CLAUDE_CONFIG_DIR", () => {
+    process.env.CLAUDE_CONFIG_DIR = '/cfg'
+    expect(startSession('', { sandbox }).fake.spawned[0]?.sandbox?.writable).toContain('/cfg/shell-snapshots')
+    const accountDir = '/garage/accounts/claude-code/work'
+    const inAccount = startSession('', { sandbox, accountDir }).fake.spawned[0]
+    expect(inAccount?.sandbox?.writable).toContain(`${accountDir}/shell-snapshots`)
+    expect(inAccount?.env).toEqual({ CLAUDE_CONFIG_DIR: accountDir, CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
+  })
+
+  it('sandboxes a one-shot completion the same way', async () => {
+    delete process.env.CLAUDE_CONFIG_DIR
+    const stdout = JSON.stringify({ type: 'result', is_error: false, result: 'ok' })
+    const fake = fakeMachine({ claude: { code: 0, stdout, stderr: '' } })
+    const request = { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox }
+    await claudeCode.complete!(fake.machine, request)
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', join(homedir(), '.claude', 'shell-snapshots'), keychain])
+    expect(fake.ran[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
 })

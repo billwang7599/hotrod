@@ -193,6 +193,11 @@ describe('localMachine', () => {
     expect(performance.now() - start).toBeLessThan(1000)
   })
 
+  it('says whether it can sandbox: only on macOS so far', () => {
+    expect(createLocalMachine({ platform: 'darwin' }).canSandbox).toBe(true)
+    expect(createLocalMachine({ platform: 'linux' }).canSandbox).toBe(false)
+  })
+
   it('refuses to start a sandboxed process where it has no sandbox, rather than run it unsandboxed', async () => {
     const linux = createLocalMachine({ platform: 'linux' })
     const options = { cwd, sandbox: { writable: [cwd] } }
@@ -282,6 +287,30 @@ describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
     const { stdout, stderr } = await fast.run(node, ['-e', script], { cwd, sandbox: { writable: [] } })
     expect(stderr).toBe('')
     expect(stdout).toBe('out fd pty\n')
+  })
+
+  it('points temp files and caches into its temp folder, made if missing, which it can write', async () => {
+    const tmpDir = join(newDir(), '.tmp')
+    const script = `${tryWrites([join(tmpDir, 'a')])}; console.log(JSON.stringify(process.env))`
+    const { stdout, stderr } = await fast.run(node, ['-e', script], { cwd, sandbox: { writable: [], tmpDir } })
+    const [writes, env] = stdout.trim().split('\n').map((line) => JSON.parse(line))
+    expect(stderr).toBe('')
+    expect(writes).toEqual(['ok'])
+    expect(env).toMatchObject({
+      TMPDIR: tmpDir,
+      TMPPREFIX: join(tmpDir, 'zsh'),
+      XDG_CACHE_HOME: join(tmpDir, 'cache'),
+      npm_config_cache: join(tmpDir, 'cache', 'npm'),
+    })
+  })
+
+  it('lets zsh here-documents and mktemp work in a process with a temp folder', async () => {
+    const sandbox = { writable: [], tmpDir: join(newDir(), '.tmp') }
+    const heredoc = await fast.run('/bin/zsh', ['-c', 'cat <<EOF\nhere\nEOF'], { cwd, sandbox })
+    expect(heredoc).toMatchObject({ code: 0, stdout: 'here\n' })
+    const mktemp = await fast.run('/usr/bin/mktemp', ['-t', 'hotrod'], { cwd, sandbox })
+    expect(mktemp.stderr).toBe('')
+    rmSync(mktemp.stdout.trim(), { force: true })
   })
 
   it('is still stopped with the processes it started', async () => {

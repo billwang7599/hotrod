@@ -1,11 +1,7 @@
-import { spawn } from 'node:child_process'
-import { realpathSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
-import type { EngineProcess, Machine } from './shared.ts'
-
-// Each path is writable with everything under it; one ending in * is a prefix (`auth.json.lock*`).
-type Sandbox = { writable: string[] }
-type SpawnOptions = { cwd: string; env?: Record<string, string>; sandbox?: Sandbox }
+import type { EngineProcess, Machine, Sandbox, SpawnOptions } from './shared.ts'
 
 export const KILL_GRACE_MS = 5000
 export const RUN_TIMEOUT_MS = 10000
@@ -58,16 +54,38 @@ function realPath(path: string): string {
   }
 }
 
-function sandboxed(command: string, args: string[], { writable }: Sandbox, platform: NodeJS.Platform) {
+// BSD mktemp and Cocoa tools use the per-user temp folder whatever TMPDIR says; allowing it exposes others' temp files.
+export const USER_TEMP_WRITABLE = true
+let userTempDir: string | undefined
+const userTemp = () =>
+  (userTempDir ??= execFileSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8' }).trim())
+
+// zsh puts here-documents at TMPPREFIX, not TMPDIR; the caches keep tools off the user's shared ones.
+const tempEnv = (tmpDir: string): Record<string, string> => ({
+  TMPDIR: tmpDir,
+  TMPPREFIX: join(tmpDir, 'zsh'),
+  XDG_CACHE_HOME: join(tmpDir, 'cache'),
+  npm_config_cache: join(tmpDir, 'cache', 'npm'),
+  PIP_CACHE_DIR: join(tmpDir, 'cache', 'pip'),
+  GOCACHE: join(tmpDir, 'cache', 'go-build'),
+  GOMODCACHE: join(tmpDir, 'cache', 'go-mod'),
+})
+
+function sandboxed(command: string, args: string[], sandbox: Sandbox, platform: NodeJS.Platform) {
   if (platform !== 'darwin') {
     throw new Error(`Hotrod can't sandbox engines on ${platform} yet, so it won't start one that should be sandboxed`)
   }
+  const { tmpDir } = sandbox
+  if (tmpDir) mkdirSync(tmpDir, { recursive: true })
+  const temp = tmpDir ? [tmpDir, ...(USER_TEMP_WRITABLE ? [userTemp()] : [])] : []
+  const writable = [...sandbox.writable, ...temp]
   // Paths go in as parameters, so no path can break out of the profile's quoting.
   const rules = writable.map((path, i) => `(${path.endsWith('*') ? 'prefix' : 'subpath'} (param "W${i}"))`)
   const params = writable.flatMap((path, i) => ['-D', `W${i}=${realPath(path.replace(/\*$/, ''))}`])
   const allowed = [...DEVICE_RULES, ...rules].join(' ')
   const profile = `(version 1)(allow default)(deny file-write* (subpath "/"))(allow file-write* ${allowed})`
-  return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, ...params, command, ...args] }
+  const env = tmpDir ? tempEnv(tmpDir) : {}
+  return { command: '/usr/bin/sandbox-exec', args: ['-p', profile, ...params, command, ...args], env }
 }
 
 function engineEnv(extra: Record<string, string> = {}) {
@@ -84,10 +102,10 @@ export function createLocalMachine({
   const running = new Set<{ kill(): void; settled: Promise<void> }>()
 
   function spawnProcess(command: string, args: string[], options: SpawnOptions): EngineProcess {
-    if (options.sandbox) ({ command, args } = sandboxed(command, args, options.sandbox, platform))
-    const child = spawn(command, args, {
+    const jailed = options.sandbox && sandboxed(command, args, options.sandbox, platform)
+    const child = spawn(jailed ? jailed.command : command, jailed ? jailed.args : args, {
       cwd: options.cwd,
-      env: engineEnv(options.env),
+      env: engineEnv({ ...jailed?.env, ...options.env }),
       stdio: ['pipe', 'pipe', 'pipe'],
       detached: true,
     })
@@ -174,7 +192,7 @@ export function createLocalMachine({
     await Promise.all(stopping.map((proc) => proc.settled))
   }
 
-  return { spawn: spawnProcess, run, stopAll } satisfies Machine
+  return { canSandbox: platform === 'darwin', spawn: spawnProcess, run, stopAll } satisfies Machine
 }
 
 export const localMachine = createLocalMachine()

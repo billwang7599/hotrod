@@ -1,13 +1,15 @@
-import type { EngineProcess, Machine } from '../shared.ts'
+import type { EngineProcess, Machine, Sandbox } from '../shared.ts'
 
 export function fakeMachine(runResults: Record<string, { code: number | null; stdout: string; stderr: string }> = {}) {
-  const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string> }[] = []
+  const spawned: { command: string; args: string[]; cwd: string; env?: Record<string, string>; sandbox?: Sandbox }[] =
+    []
   const ran: {
     command: string
     args: string[]
     env?: Record<string, string>
     input?: string
     timeoutMs?: number
+    sandbox?: Sandbox
   }[] = []
   const written: string[] = []
   const state = { stdinClosed: false, killed: false }
@@ -21,13 +23,21 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
     onExit: (l) => (exit = l),
   }
   const machine: Machine = {
-    spawn(command, args, options) {
-      spawned.push({ command, args, cwd: options.cwd, ...(options.env && { env: options.env }) })
+    canSandbox: true,
+    spawn(command, args, { cwd, env, sandbox }) {
+      spawned.push({ command, args, cwd, ...(env && { env }), ...(sandbox && { sandbox }) })
       return proc
     },
     async run(command, args, options) {
-      const { env, input, timeoutMs } = options
-      ran.push({ command, args, ...(env && { env }), ...(input && { input }), ...(timeoutMs && { timeoutMs }) })
+      const { env, input, timeoutMs, sandbox } = options
+      ran.push({
+        command,
+        args,
+        ...(env && { env }),
+        ...(input && { input }),
+        ...(timeoutMs && { timeoutMs }),
+        ...(sandbox && { sandbox }),
+      })
       const result = runResults[[command, ...args].join(' ')] ?? runResults[command]
       return result ?? { code: 127, stdout: '', stderr: 'not found' }
     },

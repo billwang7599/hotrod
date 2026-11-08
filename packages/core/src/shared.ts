@@ -29,12 +29,18 @@ export interface EngineProcess {
   onExit(listener: (code: number | null, stderrTail: string) => void): void
 }
 
+// Each writable path is writable with everything under it; one ending in * is a prefix (`auth.json.lock*`).
+export type Sandbox = { writable: string[]; tmpDir?: string }
+
+export type SpawnOptions = { cwd: string; env?: Record<string, string>; sandbox?: Sandbox }
+
 export interface Machine {
-  spawn(command: string, args: string[], options: { cwd: string; env?: Record<string, string> }): EngineProcess
+  canSandbox: boolean
+  spawn(command: string, args: string[], options: SpawnOptions): EngineProcess
   run(
     command: string,
     args: string[],
-    options: { cwd: string; env?: Record<string, string>; input?: string; timeoutMs?: number },
+    options: SpawnOptions & { input?: string; timeoutMs?: number },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -63,13 +69,20 @@ export type SessionOptions = {
   readFiles?: string[]
   model?: string
   thinking?: string
+  sandbox?: Sandbox
 }
 
 export type ImageInput = { mimeType: string; base64: string }
 
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
-export type CompleteOptions = CompletionRequest & { cwd: string; model: string; accountDir?: string; apiKey?: string }
+export type CompleteOptions = CompletionRequest & {
+  cwd: string
+  model: string
+  accountDir?: string
+  apiKey?: string
+  sandbox?: Sandbox
+}
 
 export interface Session {
   prompt(text: string, images?: ImageInput[]): void
