@@ -28,6 +28,7 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { useSmoothText } from './smooth.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -788,7 +789,7 @@ export function Chat(props: ChatProps) {
             })}
             {chat.draft && (
               <m.div initial={enter} animate={MOTION.rise.animate}>
-                <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
+                <StreamingText text={chat.draft} smooth={!reduceMotion} />
               </m.div>
             )}
             {awaitingOutput && (
@@ -1051,4 +1052,10 @@ export function Chat(props: ChatProps) {
       </AnimatePresence>
     </div>
   )
+}
+
+/** The reply as it streams in, revealed smoothly rather than in the bursts the engine sends. */
+function StreamingText(props: { text: string; smooth: boolean }) {
+  const text = useSmoothText(props.text, props.smooth)
+  return <Markdown className={`streaming ${ASSISTANT}`} text={text} />
 }
