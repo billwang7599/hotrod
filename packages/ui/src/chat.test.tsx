@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { Chat, JUMP_BELOW_PX } from './chat.tsx'
+import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
 import {
@@ -199,18 +199,37 @@ test('a chat opens scrolled to the bottom', () => {
   expect(list().scrollTop).toBe(bottom())
 })
 
-test('streamed output never drags the view down', () => {
+test('streamed output keeps the view at the bottom while the user is there', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  page.scrollHeight += 800
+  render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
+  expect(list().scrollTop).toBe(bottom())
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
+  scrollTo(bottom() - FOLLOW_PX)
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
+})
+
+test('streamed output never drags the view once the user scrolls up', () => {
+  render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(bottom() - FOLLOW_PX - 1)
   const top = list().scrollTop
   page.scrollHeight += 800
   render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
   render({ status: 'running', items: [USER, REPLY, { kind: 'text', text: 'More and more' }, tool('running')] })
+  grow(300)
   expect(list().scrollTop).toBe(top)
+  expect(jumpButton()).not.toBeNull()
+  scrollTo(bottom())
+  grow(300)
+  expect(list().scrollTop).toBe(bottom())
 })
 
 test('a down button shows once more than the threshold of output is below the view', async () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
-  grow(JUMP_BELOW_PX)
+  scrollTo(bottom() - FOLLOW_PX - 1)
+  grow(JUMP_BELOW_PX - FOLLOW_PX - 1)
   expect(jumpButton()).toBeNull()
   grow(1)
   expect(jumpButton()).not.toBeNull()
@@ -220,6 +239,7 @@ test('a down button shows once more than the threshold of output is below the vi
 
 test('the down button turns amber while a permission request waits below', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
   grow(JUMP_BELOW_PX * 3)
   expect(jumpButton()!.className).not.toContain('text-amber')
   render({ status: 'waiting', items: [USER, REPLY] })
@@ -227,19 +247,21 @@ test('the down button turns amber while a permission request waits below', () =>
   expect(asking.className).toContain('text-amber')
 })
 
-test('the down button smooth-scrolls to the bottom once and hides there', async () => {
+test('the down button smooth-scrolls to the bottom, hides there and follows output again', async () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
+  scrollTo(0)
   grow(JUMP_BELOW_PX * 3)
   act(() => jumpButton()!.click())
   expect(list().scrollTo).toHaveBeenCalledWith({ top: page.scrollHeight, behavior: 'smooth' })
+  scrollTo(400)
   scrollTo(bottom())
   await vi.waitFor(() => expect(jumpButton()).toBeNull())
   page.scrollHeight += 800
   render({ status: 'running', items: [USER, REPLY], draft: 'More and more' })
-  expect(list().scrollTop).toBe(bottom() - 800)
+  expect(list().scrollTop).toBe(bottom())
 })
 
-test('sending scrolls to the bottom and keeps it there until the reply starts', () => {
+test('sending scrolls to the bottom and follows the reply until the user scrolls up', () => {
   const send = vi.fn()
   render({ items: [USER, REPLY] }, send)
   scrollTo(0)
@@ -257,17 +279,21 @@ test('sending scrolls to the bottom and keeps it there until the reply starts', 
   expect(list().scrollTop).toBe(bottom())
   page.scrollHeight += 600
   render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }], draft: 'A long reply' })
-  expect(list().scrollTop).toBe(bottom() - 600)
+  expect(list().scrollTop).toBe(bottom())
+  scrollTo(0)
+  page.scrollHeight += 600
+  render({ status: 'running', items: [...asked, { kind: 'thinking', text: 'Hmm' }], draft: 'A longer reply' })
+  expect(list().scrollTop).toBe(0)
 })
 
-test('queueing a message during a turn scrolls to the bottom once', () => {
+test('queueing a message during a turn scrolls to the bottom and follows from there', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
   scrollTo(0)
   type('Later')
   expect(list().scrollTop).toBe(bottom())
   page.scrollHeight += 300
   render({ status: 'running', items: [USER, REPLY, tool('running')] })
-  expect(list().scrollTop).toBe(bottom() - 300)
+  expect(list().scrollTop).toBe(bottom())
 })
 
 test('the header warns while a chat may edit anywhere, and where nothing is sandboxed', () => {
