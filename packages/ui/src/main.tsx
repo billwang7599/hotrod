@@ -4,7 +4,7 @@ import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedM
 import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, SidePanel, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, type SettingsPage } from './settings.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
@@ -155,8 +155,11 @@ function App() {
             {(sidebarDocks ? sidebarOpen : overlay === 'sidebar') && (
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
                 <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
-                  <div className="flex h-44 items-center justify-between pr-8 pl-16">
-                    <span className="font-bold tracking-[0.02em] text-accent">Hotrod</span>
+                  <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
+                    {!sidebarDocks && (
+                      <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
+                    )}
+                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Hotrod</span>
                     <Hint text={`New ${CHAT_NOUN.one}`}>
                       <Button
                         variant="ghost"
@@ -187,7 +190,12 @@ function App() {
                     </div>
                   )}
                   <div className="px-8 pb-10">
-                    <Button variant="ghost" className="flex w-full items-center gap-8" onClick={() => openSettings()}>
+                    <Button
+                      variant="ghost"
+                      size="none"
+                      className="flex h-control w-full items-center gap-8 px-8"
+                      onClick={() => openSettings()}
+                    >
                       <span aria-hidden="true">⚙</span>
                       Settings
                     </Button>

@@ -7,7 +7,7 @@ import {
   type ContextItem,
   type ContextSection,
 } from '@hotrod/core/shared'
-import { Button, CHAT_NOUN, Chevron, Hint, MOTION, Switch, useSettled } from './controls.tsx'
+import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Switch, useSettled } from './controls.tsx'
 import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -179,9 +179,10 @@ type ContextPanelProps = {
   readOnly: boolean
   connected: boolean
   send: (m: ClientMessage) => void
+  hide?: () => void
 }
 
-export function ContextPanel({ chatId, items, chats, readOnly, connected, send }: ContextPanelProps) {
+export function ContextPanel({ chatId, items, chats, readOnly, connected, send, hide }: ContextPanelProps) {
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) => chats.find((c) => c.id === item.from)?.name ?? item.from
@@ -189,10 +190,11 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send }
   const sections: readonly ContextSection[] = home ? ['agents'] : CONTEXT_SECTIONS
   return (
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
-      <header className="flex h-44 shrink-0 items-center border-b px-14">
+      <header className="flex h-44 shrink-0 items-center justify-between border-b px-12">
         <Hint text={`${home ? HOME_INTRO : CHAT_INTRO} Edits apply from the next message.`} side="bottom" align="start">
           <span className="font-semibold">Context</span>
         </Hint>
+        {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12">
         {sections.map((section) => {

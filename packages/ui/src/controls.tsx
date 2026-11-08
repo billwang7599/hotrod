@@ -97,6 +97,37 @@ export function Hint({ text, side, align, children, onFocus, ...props }: HintPro
   )
 }
 
+type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
+
+export function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
+  return (
+    <Hint text={`${open ? 'Hide' : 'Show'} ${noun}`}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="grid place-items-center aria-pressed:text-text"
+        aria-label={label}
+        aria-pressed={open}
+        onClick={toggle}
+      >
+        <svg
+          className={side === 'left' ? '-scale-x-100' : ''}
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          aria-hidden="true"
+        >
+          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+          <path d="M10 2.5v11" />
+          {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
+        </svg>
+      </Button>
+    </Hint>
+  )
+}
+
 export const GROUP = 'flex flex-col rounded-lg border bg-panel px-14 shadow-raised'
 
 export const NAV_LABEL =

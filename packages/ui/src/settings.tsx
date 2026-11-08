@@ -540,7 +540,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                           .map((p) => (
                             <Tabs.Trigger key={p.id} value={p.id} asChild>
                               <Hint text={p.hint} side="right">
-                                <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
+                                <button className="flex h-control shrink-0 items-center rounded px-8 text-left text-muted transition-colors hover:bg-raised hover:text-text data-[state=active]:bg-raised data-[state=active]:text-text">
                                   {p.title}
                                 </button>
                               </Hint>

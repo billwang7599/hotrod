@@ -25,7 +25,19 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { Button, CHAT_NOUN, Chevron, confirm, ErrorText, Hint, MOTION, Select, SidePanel, useSettled } from './controls.tsx'
+import {
+  Button,
+  CHAT_NOUN,
+  Chevron,
+  confirm,
+  ErrorText,
+  Hint,
+  MOTION,
+  PanelToggle,
+  Select,
+  SidePanel,
+  useSettled,
+} from './controls.tsx'
 import { Markdown } from './markdown.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
@@ -84,7 +96,7 @@ function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean
       data-open={open || undefined}
     >
       <button
-        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
+        className={`flex h-28 w-full items-center gap-8 rounded pr-10 pl-8 text-left transition-colors hover:bg-raised ${quiet ? 'text-sm' : 'text-ui'}`}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
@@ -93,37 +105,6 @@ function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean
       </button>
       <AnimatePresence initial={false}>{open && <m.div {...MOTION.collapse}>{children}</m.div>}</AnimatePresence>
     </div>
-  )
-}
-
-type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
-
-function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
-  return (
-    <Hint text={`${open ? 'Hide' : 'Show'} ${noun}`}>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="grid place-items-center aria-pressed:text-text"
-        aria-label={label}
-        aria-pressed={open}
-        onClick={toggle}
-      >
-        <svg
-          className={side === 'left' ? '-scale-x-100' : ''}
-          width="16"
-          height="16"
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          aria-hidden="true"
-        >
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-          <path d="M10 2.5v11" />
-          {open && <path d="M10 2.5h3a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-3z" fill="currentColor" />}
-        </svg>
-      </Button>
-    </Hint>
   )
 }
 
@@ -915,6 +896,7 @@ export function Chat(props: ChatProps) {
               readOnly={archived}
               connected={connected}
               send={send}
+              hide={props.contextOverlay ? props.toggleContext : undefined}
             />
           </SidePanel>
         )}

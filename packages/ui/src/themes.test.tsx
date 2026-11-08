@@ -115,13 +115,24 @@ describe('theme table', () => {
     }
   })
 
+  it('keeps secondary text readable on light pages and panels', () => {
+    for (const [id, theme] of Object.entries(THEMES)) {
+      const { bg, panel, muted, faint } = theme.light
+      const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop.light : [bg]
+      for (const under of backdrop)
+        for (const surface of [under, over(bg, under), over(panel, under)])
+          for (const [name, color] of [['muted', muted], ['faint', faint]])
+            expect(contrast(color!, surface), `${id} ${name} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
   it('keeps body text readable on every background', () => {
     for (const [id, theme] of Object.entries(THEMES))
       for (const scheme of SCHEMES) {
-        const { bg, text } = theme[scheme]
+        const { bg, panel, text } = theme[scheme]
         const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop[scheme] : [bg]
         for (const under of backdrop)
-          for (const surface of [under, over(bg, under)])
+          for (const surface of [under, over(bg, under), over(panel, under)])
             expect(contrast(text, surface), `${id} ${scheme} on ${surface}`).toBeGreaterThanOrEqual(4.5)
       }
   })

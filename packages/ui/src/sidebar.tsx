@@ -58,11 +58,12 @@ type RowProps = {
   animate: boolean
   title: string
   selected: boolean
+  showEngine: boolean
   select: () => void
   menu?: MenuItem[]
 }
 
-function ChatRow({ row: { chat, depth }, animate, title, selected, select, menu }: RowProps) {
+function ChatRow({ row: { chat, depth }, animate, title, selected, showEngine, select, menu }: RowProps) {
   const highlight = selected
     ? 'bg-raised text-text'
     : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
@@ -71,7 +72,7 @@ function ChatRow({ row: { chat, depth }, animate, title, selected, select, menu 
     : ''
   return (
     <m.div
-      className={`group/row relative flex shrink-0 items-center rounded ${highlight}`}
+      className={`group/row relative flex shrink-0 items-center rounded transition-colors ${highlight}`}
       {...MOTION.collapse}
       initial={animate && MOTION.collapse.initial}
     >
@@ -83,7 +84,7 @@ function ChatRow({ row: { chat, depth }, animate, title, selected, select, menu 
         <span className={`size-7 shrink-0 rounded-full ${DOTS[chat.status]}`} />
         <span className="min-w-0 flex-1 truncate">{chat.name}</span>
         {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
-        <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>
+        {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
       {menu && <RowMenu label={chat.name} items={menu} />}
     </m.div>
@@ -105,6 +106,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
+  const mixedEngines = new Set(chats.map((c) => c.engine)).size > 1
 
   const chatMenu = (chat: ChatView): MenuItem[] => {
     const family = familyOf(chats, chat.id)
@@ -138,6 +140,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         animate={settled.current}
         title={`${chat.name}: ${folder}`}
         selected={chat.id === selectedId}
+        showEngine={mixedEngines}
         select={() => select(chat.id)}
         menu={chat.id === MAIN_CHAT_ID ? undefined : chatMenu(chat)}
       />
