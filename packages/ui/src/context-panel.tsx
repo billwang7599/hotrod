@@ -58,6 +58,10 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
       `Commands that mention ${ASK_FIRST_COMMANDS.join(', ')} ask you first, even while commands run without ` +
       'asking.',
   },
+  autoFetch: {
+    label: 'Fetch web pages without asking',
+    about: 'Agents read web pages and search the web without asking you first.',
+  },
 }
 const PERMISSIONS_HINT =
   'Each shows Settings → Work folder until you pick, or for a subagent, its space. A pick is for this chat only.'

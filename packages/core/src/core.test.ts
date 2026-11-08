@@ -1178,6 +1178,46 @@ describe('commands', () => {
     expect(await turn(t)).toBe('waiting')
   })
 
+  const fetchScript: FakeStep[] = [
+    ...(['WebFetch', 'WebSearch'] as const).flatMap((name, i): FakeStep[] => {
+      const call = { toolId: `f${i}`, name, kind: 'fetch' as const, summary: 'example.com', input: { url: 'https://example.com' } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, output: 'page' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+
+  it('fetches web pages without asking by default, even without the sandbox, and asks once the switch is off', async () => {
+    const t = setup(fetchScript)
+    const space = createChat(t, { name: 'Space' })
+    expect(await turn(t, space.id)).toBe('idle')
+    expect(resolved(t, space.id).map((e) => e.auto)).toEqual([true, true])
+
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'permission.setDefault', name: 'autoFetch', enabled: false })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).autoFetch).toBe(false)
+    expect(await turn(t, space.id)).toBe('waiting')
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoFetch', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+  })
+
+  it("asks before a subagent fetches while its space's fetch switch is off", async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoFetch', enabled: false })
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: new Date().toISOString() }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+    const t = setup(fetchScript, first.garage)
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'fetch' })
+    await until(() => statusOf(t.core, 'sub') !== 'running')
+    expect(statusOf(t.core, 'sub')).toBe('waiting')
+    t.handle({ type: 'chat.interrupt', chatId: 'sub', force: true })
+    await until(() => settled(t.core, 'sub'))
+  })
+
   it('asks before every command while a chat runs without the sandbox', async () => {
     const t = setup(commandScript('ls'))
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })

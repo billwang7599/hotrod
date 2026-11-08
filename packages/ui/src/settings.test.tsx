@@ -125,6 +125,9 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
 }
 
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
+  expect(PERMISSION_SWITCHES).toContain('autoFetch')
+  expect(PERMISSIONS.autoFetch.label).toBe('Fetch web pages without asking')
+  expect(PERMISSION_DEFAULTS.autoFetch).toBe(true)
   for (const name of PERMISSION_SWITCHES) {
     const toggle = () =>
       dialog().querySelector(`[aria-label="${PERMISSIONS[name].label}"]`) as HTMLButtonElement

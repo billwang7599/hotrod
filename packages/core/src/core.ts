@@ -1077,6 +1077,8 @@ export function openCore(options: {
           return { allow: false, message }
         }
         const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
+        // Fetching writes nothing, so it needs no sandbox.
+        if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
         if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
         return { allow: true }
