@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { Mod } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
-import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   memoryPrompt,
@@ -314,6 +314,14 @@ export function openCore(options: {
   void accounts.refresh()
 
   const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
+  const modServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
+    const session = { chat: summaryOf(chat.info), workDir, sandboxed }
+    const servers = mods.filter(isOn).flatMap((mod) => mod.mcpServers?.({ ...session, values: modValues(mod) }) ?? [])
+    const names = ['hotrod', ...servers.map((server) => server.name)]
+    const twin = names.find((name, i) => names.indexOf(name) !== i)
+    if (twin !== undefined) throw new Error(`Two MCP servers are named "${twin}"`)
+    return servers
+  }
   const takesMcp = (engine: string) => adapterFor(engine)?.hotrodMcp === true && mcpUrl !== undefined
   const chosenWorkFolder = () => {
     if (!settings.workFolder) throw new Error('Choose a work folder first, in Settings → Work folder')
@@ -874,6 +882,7 @@ export function openCore(options: {
         const engine = engineInfo(adapter.id)
         const model = pickModel(engine, listsOf(adapter.id), chat.info)
         const thinking = pickThinking(engine, chat.info)
+        const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
         const images = adapter.imageInput
           ? attachments
               .filter((a) => IMAGE_TYPES.includes(a.mimeType))
@@ -886,6 +895,7 @@ export function openCore(options: {
           ...(readFiles.length && { readFiles }),
           ...accounts.sessionFor(adapter.id),
           ...(hotrodMcp && { hotrodMcp }),
+          ...(mcpServers.length && { mcpServers }),
           ...(model && { model }),
           ...(thinking && { thinking }),
           ...(jail && { sandbox: jail }),

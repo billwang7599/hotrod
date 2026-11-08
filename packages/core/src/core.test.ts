@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { Mod, ModChat } from '@hotrod/mod-api'
+import type { Mod, ModChat, ModSession } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
@@ -2866,5 +2866,67 @@ describe('mods', () => {
     expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester, { ...tester, name: 'Again' }])).toThrow(
       'Two mods have the id "tester"',
     )
+  })
+
+  describe('MCP servers', () => {
+    const sessions: ModSession[] = []
+    const web: Mod = {
+      id: 'web',
+      name: 'Web',
+      description: '',
+      enabledByDefault: true,
+      settings: [{ key: 'ask', label: 'Ask', type: 'boolean', default: false }],
+      mcpServers(session) {
+        sessions.push(session)
+        return [{ name: 'web', command: 'web-mcp', args: [session.workDir], allowTools: !session.values.ask }]
+      },
+    }
+    const takesMcp: Adapter = { ...createFakeAdapter(textScript, 0), hotrodMcp: true }
+    const turn = async (t: ReturnType<typeof setup>, chatId: string) => {
+      t.handle({ type: 'chat.send', chatId, text: 'Hi' })
+      await until(() => statusOf(t.core, chatId) === 'idle')
+      return t.calls.at(-1)!.options
+    }
+    beforeEach(() => sessions.splice(0))
+
+    it("gives each session the servers of mods that are on, from its chat, work folder and mod's values", async () => {
+      const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [web])
+      const chat = createChat(t, { name: 'Space' })
+      const workDir = join(t.garage, 'work', chat.id)
+      const server = { name: 'web', command: 'web-mcp', args: [workDir] }
+      expect((await turn(t, chat.id)).mcpServers).toEqual([{ ...server, allowTools: true }])
+      expect(sessions).toEqual([
+        { chat: { id: chat.id, name: 'Space', engine: 'fake' }, workDir, sandboxed: true, values: { ask: false } },
+      ])
+      t.handle({ type: 'mod.setValue', modId: 'web', key: 'ask', value: true })
+      t.handle({ type: 'chat.setPermission', chatId: chat.id, name: 'editAnywhere', enabled: true })
+      expect((await turn(t, chat.id)).mcpServers).toEqual([{ ...server, allowTools: false }])
+      expect(sessions.at(-1)?.sandboxed).toBe(false)
+      t.handle({ type: 'mod.setEnabled', modId: 'web', enabled: false })
+      expect((await turn(t, chat.id)).mcpServers).toBeUndefined()
+    })
+
+    it('gives none to an engine that takes no MCP servers', async () => {
+      const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [web])
+      expect((await turn(t, createChat(t).id)).mcpServers).toBeUndefined()
+      expect(sessions).toEqual([])
+    })
+
+    it("ends the turn when two servers share a name, Hotrod's included", async () => {
+      const named = (id: string, name: string): Mod => ({ ...web, id, mcpServers: () => [{ name, command: name }] })
+      for (const [name, mods] of [
+        ['web', [web, named('again', 'web')]],
+        ['hotrod', [named('hotrod', 'hotrod')]],
+      ] as const) {
+        const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [...mods])
+        const chat = createChat(t)
+        t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
+        expect(entriesOf(t.core, chat.id).at(-1)).toMatchObject({
+          type: 'turn.completed',
+          error: `Error: Two MCP servers are named "${name}"`,
+        })
+        expect(t.calls).toEqual([])
+      }
+    })
   })
 })

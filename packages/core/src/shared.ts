@@ -1,4 +1,4 @@
-import type { ModSetting, ModValues } from '@hotrod/mod-api'
+import type { McpServer, ModSetting, ModValues } from '@hotrod/mod-api'
 
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
@@ -67,6 +67,7 @@ export type SessionOptions = {
   accountDir?: string
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
+  mcpServers?: McpServer[]
   extraDirs?: string[]
   readFiles?: string[]
   model?: string
