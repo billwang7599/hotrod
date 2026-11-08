@@ -5,7 +5,6 @@ import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
   settingProblem,
-  WORKSHOP_NAME,
   type Account,
   type ClientMessage,
   type ContextSection,
@@ -37,6 +36,7 @@ type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextSection, boolean>
+  instructions: { path: string; text: string }
   mods: ModInfo[]
   modelLists: Record<string, ModelLists>
   connected: boolean
@@ -138,8 +138,8 @@ const PAGES = [
     group: 'Options',
     title: 'Context',
     hint:
-      `What a ${CHAT_NOUN.one} uses from ${WORKSHOP_NAME} and the ${CHAT_NOUN.many} above it, unless you switch it in its Context panel. ` +
-      'Its own AGENTS.md, folders and files always start on.',
+      `What a ${CHAT_NOUN.one} uses from the global AGENTS.md and the chats above it, unless you switch it in its ` +
+      'Context panel. Its own AGENTS.md, folders and files always start on.',
     body: ({ contextDefaults, connected, send }: PageProps) => (
       <div className={GROUP}>
         {CONTEXT_SECTIONS.map((section) => (
@@ -153,6 +153,15 @@ const PAGES = [
           </SettingRow>
         ))}
       </div>
+    ),
+  },
+  {
+    id: 'instructions',
+    group: 'Options',
+    title: 'Instructions',
+    hint: 'The global AGENTS.md. Every chat gets it first; a chat can switch it off in its Context panel.',
+    body: ({ instructions, connected, send }: PageProps) => (
+      <GlobalInstructions instructions={instructions} connected={connected} send={send} />
     ),
   },
   {
@@ -471,6 +480,29 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
         )}
       </div>
     </section>
+  )
+}
+
+type GlobalInstructionsProps = Pick<PageProps, 'instructions' | 'connected' | 'send'>
+
+function GlobalInstructions({ instructions, connected, send }: GlobalInstructionsProps) {
+  const [text, setText] = useState(instructions.text)
+  useEffect(() => setText(instructions.text), [instructions.text])
+  return (
+    <div className="flex flex-col gap-6">
+      <span className="font-mono text-xs wrap-anywhere text-faint">{instructions.path}</span>
+      <textarea
+        className="min-h-240 resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent"
+        value={text}
+        rows={12}
+        spellCheck={false}
+        disabled={!connected}
+        aria-label="Global AGENTS.md"
+        placeholder="Empty. Instructions written here go to every chat."
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => text !== instructions.text && send({ type: 'instructions.write', text })}
+      />
+    </div>
   )
 }
 

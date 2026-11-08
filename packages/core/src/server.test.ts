@@ -2,7 +2,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -11,6 +10,7 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
+import type { Mod } from '@hotrod/mod-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
@@ -21,7 +21,7 @@ import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './mem
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
-  WORKSHOP_NAME,
+  GLOBAL_CONTEXT,
   type Adapter,
   type CoreMessage,
   type EngineEvent,
@@ -121,7 +121,8 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   expect(a.messages[0]).toMatchObject({
     type: 'snapshot',
     engines: [{ id: 'fake', enabled: false }],
-    chats: [expect.objectContaining({ id: 'main', name: WORKSHOP_NAME })],
+    chats: [],
+    instructions: { path: expect.stringMatching(/AGENTS\.md$/), text: '' },
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
     memory: {},
@@ -211,6 +212,8 @@ it("serves a chat's attachments with the token, images and PDFs inline and anyth
   cleanups.push(() => server.close())
   const handle = (m: Parameters<typeof core.handle>[0]) => core.handle(m, () => {})
   handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+  handle({ type: 'chat.create', name: 'Mine' })
+  const mine = core.chats().find((c) => c.name === 'Mine')!.id
   const upload = (name: string, mimeType: string, text: string) => ({
     name,
     mimeType,
@@ -218,7 +221,7 @@ it("serves a chat's attachments with the token, images and PDFs inline and anyth
   })
   handle({
     type: 'chat.send',
-    chatId: 'main',
+    chatId: mine,
     text: 'files',
     attachments: [
       upload('shot.png', 'image/png', 'png bytes'),
@@ -232,7 +235,7 @@ it("serves a chat's attachments with the token, images and PDFs inline and anyth
   const base = `http://127.0.0.1:${server.port}`
   const get = (path: string, key = token) => fetch(`${base}${path}?token=${encodeURIComponent(key)}`)
 
-  const image = await get('/chats/main/attachments/shot.png')
+  const image = await get(`/chats/${mine}/attachments/shot.png`)
   expect(image.status).toBe(200)
   expect(image.headers.get('content-type')).toBe('image/png')
   expect(image.headers.get('content-disposition')).toBeNull()
@@ -240,24 +243,24 @@ it("serves a chat's attachments with the token, images and PDFs inline and anyth
   expect(image.headers.get('content-security-policy')).toBe('sandbox')
   expect(image.headers.get('access-control-allow-origin')).toBe(origin)
   expect(await image.text()).toBe('png bytes')
-  const pdf = await get('/chats/main/attachments/doc.pdf')
+  const pdf = await get(`/chats/${mine}/attachments/doc.pdf`)
   expect(pdf.headers.get('content-type')).toBe('application/pdf')
   expect(pdf.headers.get('content-disposition')).toBeNull()
   expect(pdf.headers.get('content-security-policy')).toBe('sandbox')
   expect(pdf.headers.get('x-content-type-options')).toBe('nosniff')
-  const page = await get(`/chats/main/attachments/${encodeURIComponent('page é.html')}`)
+  const page = await get(`/chats/${mine}/attachments/${encodeURIComponent('page é.html')}`)
   expect(page.headers.get('content-type')).toBe('application/octet-stream')
   expect(page.headers.get('content-disposition')).toBe(`attachment; filename*=UTF-8''page%20%C3%A9.html`)
   expect(page.headers.get('content-security-policy')).toBe('sandbox')
   expect(await page.text()).toBe('<script>')
 
-  expect((await get('/chats/main/attachments/shot.png', 'wrong')).status).toBe(401)
-  expect((await fetch(`${base}/chats/main/attachments/shot.png`)).status).toBe(401)
+  expect((await get(`/chats/${mine}/attachments/shot.png`, 'wrong')).status).toBe(401)
+  expect((await fetch(`${base}/chats/${mine}/attachments/shot.png`)).status).toBe(401)
   for (const path of [
-    '/chats/main/attachments/log.jsonl',
-    '/chats/main/attachments/%2E%2E%2Flog.jsonl',
-    '/chats/main/attachments/..%2Fchat.json',
-    '/chats/main/attachments/%E0%A4%A',
+    `/chats/${mine}/attachments/log.jsonl`,
+    `/chats/${mine}/attachments/%2E%2E%2Flog.jsonl`,
+    `/chats/${mine}/attachments/..%2Fchat.json`,
+    `/chats/${mine}/attachments/%E0%A4%A`,
     `/chats/${other.id}/attachments/shot.png`,
     '/chats/nope/attachments/shot.png',
   ]) {
@@ -274,6 +277,36 @@ it('serves no files without a UI folder', async () => {
 const heldOffers = {
   models: ['large', 'small'],
   thinking: ['low', 'high'],
+}
+
+const mainMod: Mod = {
+  id: 'main-mod',
+  name: 'Main mod',
+  description: '',
+  enabledByDefault: true,
+  chats: [{ id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }],
+  tools: [
+    {
+      name: 'make_space',
+      description: 'Make a space and start it',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          prompt: { type: 'string' },
+          folders: { type: 'array', items: { type: 'string' } },
+          engine: { type: 'string' },
+        },
+        required: ['name'],
+      },
+      offered: (caller) => caller.id === 'main',
+      run({ prompt, ...spec }, { host }) {
+        const chat = host.createChat(spec as { name: string })
+        if (typeof prompt === 'string') host.send(chat.id, prompt)
+        return { chatId: chat.id }
+      },
+    },
+  ],
 }
 
 async function startHeld({ hotrodMcp = true } = {}) {
@@ -301,7 +334,7 @@ async function startHeld({ hotrodMcp = true } = {}) {
       }
     },
   }
-  const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine: localMachine })
+  const core = openCore({ garage, adapters: [held], defaultEngine: 'held', machine: localMachine, mods: [mainMod] })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
@@ -360,19 +393,20 @@ it("gives a main chat's session the Hotrod MCP server, only while the session li
   expect(send(named.id, 'hi').options.hotrodMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
 })
 
-it('lets the Workshop make a named chat with a folder and start it, shown like ones the user made', async () => {
+it("runs a mod's tool, whose host makes a top-level chat and starts it, shown like ones the user made", async () => {
   const { core, garage, messages, sessions, tool, json, send } = await startHeld()
   const bearer = send('main', 'hi').options.hotrodMcp!.token
   const folder = join(garage, 'made', 'app')
+  mkdirSync(folder, { recursive: true })
 
   const bad = { name: 'App', prompt: 'x', folders: [folder], engine: 'nope' }
-  expect(await tool(bearer, 'create_chat', bad)).toMatchObject({ isError: true })
+  expect(await tool(bearer, 'make_space', bad)).toMatchObject({ isError: true })
   const made = { name: 'App', prompt: 'Look around', folders: [folder] }
-  const { chatId } = await json(bearer, 'create_chat', made)
-  expect(existsSync(folder) && readdirSync(folder)).toEqual([])
+  const { chatId } = await json(bearer, 'make_space', made)
   const child = core.chats().find((c) => c.id === chatId)
   const folders = [realpathSync(folder)]
-  expect(child).toMatchObject({ name: 'App', parentId: 'main', folders, engine: 'held', status: 'running' })
+  expect(child).toMatchObject({ name: 'App', folders, engine: 'held', status: 'running' })
+  expect(child).not.toHaveProperty('parentId')
   expect(messages.some((m) => m.type === 'chat.added' && m.chat.id === chatId)).toBe(true)
   expect(sessions.at(-1)?.prompt).toBe('Look around')
   expect(sessions.at(-1)?.options.cwd).toBe(folders[0])
@@ -499,7 +533,7 @@ it("gives a subagent its parent's items plus its own, and archives and deletes i
     core.handle({ type: 'context.get', chatId: id }, (m) => replies.push(m))
     return replies[0]?.type === 'chat.context' ? replies[0].items : []
   }
-  expect(itemsOf(chatId).map((i) => i.from)).toEqual(['main', subchat.id, chatId])
+  expect(itemsOf(chatId).map((i) => i.from)).toEqual([GLOBAL_CONTEXT, subchat.id, chatId])
   handle({ type: 'chat.send', chatId, text: 'again' })
   const instructions = sessionOf(chatId).options.instructions.split('\n\n')
   expect(instructions.slice(0, 2)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])

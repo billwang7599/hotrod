@@ -1,4 +1,4 @@
-import { looksBinary, pickModel, pickThinking, WORKSHOP_ID } from '@hotrod/core/shared'
+import { looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
   Attachment,
@@ -16,7 +16,7 @@ import type {
   QueuedMessage,
 } from '@hotrod/core/shared'
 
-export const MAIN_CHAT_ID = WORKSHOP_ID
+export const MAIN_CHAT_ID = 'main'
 
 export type Item =
   | { kind: 'user'; text: string; attachments?: Attachment[] }
@@ -51,11 +51,13 @@ export type ChatView = ChatInfo & {
 export type State = {
   connected: boolean
   rejected: boolean
+  loaded: boolean
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextSection, boolean>
+  instructions: { path: string; text: string }
   mods: ModInfo[]
   modelLists: Record<string, ModelLists>
   context?: { chatId: string; items: ContextItem[] }
@@ -72,11 +74,13 @@ export type Action =
 export const initialState: State = {
   connected: false,
   rejected: false,
+  loaded: false,
   engines: [],
   accounts: [],
   chats: [],
-  selectedId: MAIN_CHAT_ID,
+  selectedId: '',
   contextDefaults: { agents: true, folders: true, files: true },
+  instructions: { path: '', text: '' },
   mods: [],
   modelLists: {},
   toasts: [],
@@ -160,7 +164,9 @@ function updateChat(state: State, id: string, update: (c: ChatView) => ChatView)
 }
 
 const keepSelection = (state: State): State =>
-  state.chats.some((c) => c.id === state.selectedId) ? state : { ...state, selectedId: MAIN_CHAT_ID }
+  state.chats.some((c) => c.id === state.selectedId)
+    ? state
+    : { ...state, selectedId: chatTree(state.chats).active[0]?.chat.id ?? '' }
 
 const endsText = (entry: ChatEntry) =>
   entry.type === 'text.completed' || entry.type === 'turn.completed' || entry.type === 'session.ended'
@@ -170,10 +176,12 @@ export function reduce(state: State, action: Action): State {
     case 'snapshot':
       return keepSelection({
         ...state,
+        loaded: true,
         engines: action.engines,
         accounts: action.accounts,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
+        instructions: action.instructions,
         mods: action.mods,
         modelLists: action.modelLists,
       })
@@ -227,10 +235,12 @@ export function reduce(state: State, action: Action): State {
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, items: action.items } }
     case 'context.file': {
-      const { context } = state
-      if (!context) return state
+      const { context, instructions } = state
+      const ours = instructions.path === action.path
+      const written = ours ? { ...state, instructions: { ...instructions, text: action.text } } : state
+      if (!context) return written
       const items = context.items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
-      return { ...state, context: { ...context, items } }
+      return { ...written, context: { ...context, items } }
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
@@ -260,19 +270,20 @@ const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.cr
 export type TreeRow = { chat: ChatView; depth: number }
 
 export function chatTree(chats: ChatView[]) {
-  const parentOf = (c: ChatView) => (chats.some((p) => p.id === c.parentId) ? c.parentId : MAIN_CHAT_ID)
   const below = (chat: ChatView, archived: boolean) =>
     chats
-      .filter((c) => c.id !== MAIN_CHAT_ID && parentOf(c) === chat.id && c.archived === archived)
+      .filter((c) => c.parentId === chat.id && c.archived === archived)
       .sort((a, b) => Number(!!b.subagent) - Number(!!a.subagent) || newestFirst(a, b))
   const walk = (chat: ChatView, depth: number, archived: boolean): TreeRow[] => [
     { chat, depth },
     ...below(chat, archived).flatMap((c) => walk(c, depth + 1, archived)),
   ]
-  const main = chats.find((c) => c.id === MAIN_CHAT_ID)
+  const activeRoots = chats.filter((c) => !c.archived && !chats.some((p) => p.id === c.parentId))
   const archivedRoots = chats.filter((c) => c.archived && !chats.find((p) => p.id === c.parentId)?.archived)
   return {
-    active: main ? walk(main, 0, false) : [],
+    active: activeRoots
+      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || newestFirst(a, b))
+      .flatMap((c) => walk(c, 0, false)),
     archived: archivedRoots.sort(newestFirst).flatMap((c) => walk(c, 0, true)),
   }
 }
@@ -343,7 +354,7 @@ export function formatBytes(bytes: number) {
 export const MAX_PREVIEW_BYTES = 1_000_000
 
 export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
-  if (chat.id === MAIN_CHAT_ID || chat.archived || !items) return undefined
+  if (chat.mod || chat.archived || !items) return undefined
   const pinned = items.some((i) => i.section === 'files' && i.from === chat.id && i.path === path)
   return pinned ? 'pinned' : 'unpinned'
 }

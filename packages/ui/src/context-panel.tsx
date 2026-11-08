@@ -2,19 +2,19 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   CONTEXT_SECTIONS,
-  WORKSHOP_NAME,
+  GLOBAL_CONTEXT,
   type ClientMessage,
   type ContextItem,
   type ContextSection,
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Switch, useSettled } from './controls.tsx'
-import { folderName, MAIN_CHAT_ID, PANEL_PX, type ChatView } from './state.ts'
+import { folderName, PANEL_PX, type ChatView } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
     label: 'AGENTS.md',
-    about: `Instructions, from ${WORKSHOP_NAME} down`,
-    inherited: `The AGENTS.md of ${WORKSHOP_NAME} and every ${CHAT_NOUN.one} above`,
+    about: 'Instructions: the global ones first, then each chat’s from the top down',
+    inherited: 'The global AGENTS.md, and for a subagent, its parent’s',
   },
   folders: {
     label: 'Folders',
@@ -34,9 +34,9 @@ const EMPTY_SECTION: Record<ContextSection, string> = {
   folders: 'No folders.',
   files: 'No files.',
 }
-const HOME_INTRO = `${WORKSHOP_NAME} keeps no folders or files; name a folder in the chat to work there.`
-const CHAT_INTRO = `Each message gets the items that are on, from ${WORKSHOP_NAME} down.`
-const HOME_AGENTS_ABOUT = `Read by ${WORKSHOP_NAME} and every ${CHAT_NOUN.one}`
+const GLOBAL_SOURCE = 'Global'
+const GLOBAL_HINT = 'Every chat gets it. Edit it in Settings → Instructions.'
+const CHAT_INTRO = 'Each message gets the items that are on, the global AGENTS.md first.'
 const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text-muted'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
@@ -59,7 +59,9 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
       <div className="flex items-center justify-between gap-8">
         <span className={`flex min-w-0 items-center gap-6 font-semibold ${dim}`}>
           <span className="truncate">{source}</span>
-          <span className={PILL}>{own ? 'Own' : 'Read-only here'}</span>
+          <Hint text={item.from === GLOBAL_CONTEXT && GLOBAL_HINT}>
+            <span className={PILL}>{own ? 'Own' : 'Read-only here'}</span>
+          </Hint>
         </span>
         <Switch
           label={`Use the AGENTS.md of ${source}`}
@@ -185,13 +187,15 @@ type ContextPanelProps = {
 export function ContextPanel({ chatId, items, chats, readOnly, connected, send, hide }: ContextPanelProps) {
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
-  const sourceOf = (item: ContextItem) => chats.find((c) => c.id === item.from)?.name ?? item.from
-  const home = chatId === MAIN_CHAT_ID
-  const sections: readonly ContextSection[] = home ? ['agents'] : CONTEXT_SECTIONS
+  const sourceOf = (item: ContextItem) =>
+    item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
+  const chat = chats.find((c) => c.id === chatId)
+  const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
+  const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   return (
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center justify-between border-b px-12">
-        <Hint text={`${home ? HOME_INTRO : CHAT_INTRO} Edits apply from the next message.`} side="bottom" align="start">
+        <Hint text={`${intro} Edits apply from the next message.`} side="bottom" align="start">
           <span className="font-semibold">Context</span>
         </Hint>
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
@@ -201,7 +205,7 @@ export function ContextPanel({ chatId, items, chats, readOnly, connected, send, 
           const listed = items?.filter((item) => item.section === section) ?? []
           return (
             <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
-              <Hint text={home ? HOME_AGENTS_ABOUT : SECTIONS[section].about} align="start">
+              <Hint text={SECTIONS[section].about} align="start">
                 <h3 className="mb-8 w-fit font-semibold">{SECTIONS[section].label}</h3>
               </Hint>
               <AnimatePresence initial={false}>

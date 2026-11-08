@@ -112,12 +112,10 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const WORKSHOP_ID = 'main'
-export const WORKSHOP_NAME = 'Home'
-
 export type ChatInfo = {
   id: string
   name: string
+  mod?: string
   parentId?: string
   subagent?: boolean
   parentMessages?: number
@@ -174,6 +172,8 @@ export const CONTEXT_SECTIONS = ['agents', 'folders', 'files'] as const
 
 export type ContextSection = (typeof CONTEXT_SECTIONS)[number]
 
+export const GLOBAL_CONTEXT = 'global'
+
 export type ContextItem = {
   section: ContextSection
   path: string
@@ -187,7 +187,7 @@ const BINARY_SNIFF_BYTES = 8192
 
 export const looksBinary = (bytes: Uint8Array) => bytes.subarray(0, BINARY_SNIFF_BYTES).includes(0)
 
-export type NewChat = { parentId?: string; name: string; engine?: string; folders?: string[]; files?: string[] }
+export type NewChat = { name: string; engine?: string; folders?: string[]; files?: string[] }
 
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
@@ -234,6 +234,7 @@ export type ClientMessage =
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
+  | { type: 'instructions.write'; text: string }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
@@ -254,6 +255,7 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
+      instructions: { path: string; text: string }
       mods: ModInfo[]
       modelLists: Record<string, ModelLists>
       memory: MemorySettings

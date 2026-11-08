@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { Mod } from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
-import { openHotrodMcp, SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   memoryPrompt,
@@ -29,6 +29,7 @@ import {
 import { valuesOf } from './mods.ts'
 import {
   CONTEXT_SECTIONS,
+  GLOBAL_CONTEXT,
   IMAGE_TYPES,
   looksBinary,
   MAX_ATTACHMENT_BYTES,
@@ -37,8 +38,6 @@ import {
   pickModel,
   pickThinking,
   settingProblem,
-  WORKSHOP_ID,
-  WORKSHOP_NAME,
   type Adapter,
   type Attachment,
   type ChatEntry,
@@ -65,13 +64,6 @@ import {
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
-export const MAX_CHAT_DEPTH = 1
-export const HOME_INSTRUCTIONS =
-  `You are the user's personal assistant in Hotrod, running in its main chat, ${WORKSHOP_NAME}. Answer general ` +
-  'questions, help with personal tasks and use your MCP tools. You may work in any directory the user names in this ' +
-  `chat: read, edit and run commands there. No folder stays attached to ${WORKSHOP_NAME}; each message starts in a ` +
-  'scratch folder. For ongoing work in a folder, offer to make a space for it: a chat below you with that folder, ' +
-  'made with the hotrod create_chat tool. list_chats, read_chat and send_message reach the spaces that exist.'
 
 type Chat = {
   info: ChatInfo
@@ -111,8 +103,16 @@ export function openCore(options: {
   }
   checkEngine(defaultEngine)
   const mods = [...(options.mods ?? []), SUBAGENTS_MOD]
-  const twin = mods.find((mod, i) => mods.findIndex((m) => m.id === mod.id) !== i)
-  if (twin) throw new Error(`Two mods have the id "${twin.id}"`)
+  const modChats = mods.flatMap((mod) => (mod.chats ?? []).map((chat) => ({ ...chat, mod })))
+  const toolNames = [...CORE_TOOL_NAMES, ...mods.flatMap((mod) => (mod.tools ?? []).map((tool) => tool.name))]
+  for (const [what, ids] of [
+    ['mods', mods.map((mod) => mod.id)],
+    ['mod chats', modChats.map((chat) => chat.id)],
+    ['tools', toolNames],
+  ] as const) {
+    const twin = ids.find((id, i) => ids.indexOf(id) !== i)
+    if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
+  }
   const settingsFile = join(garage, 'settings.json')
   const settings: {
     engines: Record<string, boolean>
@@ -133,11 +133,14 @@ export function openCore(options: {
     if (!mod) throw new Error(`Unknown mod "${id}"`)
     return mod
   }
+  const isOn = (mod: Mod) => {
+    const saved = settings.mods?.[mod.id]?.enabled
+    return typeof saved === 'boolean' ? saved : mod.enabledByDefault
+  }
+  const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
   const modInfo = (mod: Mod): ModInfo => {
-    const { enabled, ...saved } = settings.mods?.[mod.id] ?? {}
     const { id, name, description, settings: declared = [] } = mod
-    const on = typeof enabled === 'boolean' ? enabled : mod.enabledByDefault
-    return { id, name, description, enabled: on, settings: declared, values: valuesOf(mod, saved) }
+    return { id, name, description, enabled: isOn(mod), settings: declared, values: modValues(mod) }
   }
   const listsOf = (engine: string): ModelLists => ({
     chat: [],
@@ -280,11 +283,18 @@ export function openCore(options: {
 
   const chatFor = (chatId: string) => {
     const chat = chats.get(chatId)
-    if (!chat) throw new Error(`Unknown chat "${chatId}"`)
+    if (!chat || !shown(chat)) throw new Error(`Unknown chat "${chatId}"`)
     return chat
   }
 
-  const isWorkshop = (chat: Chat) => chat.info.id === WORKSHOP_ID
+  const modChatOf = (chat: Chat) => modChats.find((declared) => declared.id === chat.info.id)
+
+  const shown = (chat: Chat) => {
+    const owner = modChatOf(chainOf(chat)[0]!)?.mod
+    return !owner || isOn(owner)
+  }
+
+  const shownChats = () => [...chats.values()].filter(shown)
 
   const parentOf = (chat: Chat) => (chat.info.parentId === undefined ? undefined : chats.get(chat.info.parentId))
 
@@ -298,10 +308,8 @@ export function openCore(options: {
     ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id).flatMap(familyOf),
   ]
 
-  const canNest = (chat: Chat) => !chat.info.subagent && chainOf(chat).length - 1 < MAX_CHAT_DEPTH
-
   const checkRemovable = (chat: Chat) => {
-    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be archived or deleted`)
+    if (chat.info.mod) throw new Error(`${chat.info.name} cannot be archived or deleted`)
     if (chat.status !== 'idle') throw new Error('Stop the running chat first')
   }
 
@@ -354,9 +362,16 @@ export function openCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const { context = {}, title, ...saved } = readJson(file)
-    const info: ChatInfo = { ...fallback, ...(title !== undefined && { name: title }), ...saved, id: fallback.id }
-    if (info.id === WORKSHOP_ID) Object.assign(info, { name: WORKSHOP_NAME, folders: [], files: [] })
+    const { context = {}, title, parentId, mod, ...saved } = readJson(file)
+    const declared = modChats.find((chat) => chat.id === fallback.id)
+    const info: ChatInfo = {
+      ...fallback,
+      ...(title !== undefined && { name: title }),
+      ...saved,
+      id: fallback.id,
+      ...(saved.subagent && parentId !== undefined && { parentId }),
+      ...(declared && { name: declared.name, mod: declared.mod.id, folders: [], files: [] }),
+    }
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
     const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
@@ -371,7 +386,7 @@ export function openCore(options: {
       queue: [],
       summaries: openSummaries(join(dir, 'summaries.jsonl')),
     }
-    if (!existsSync(file) || info.id === WORKSHOP_ID) saveChat(chat)
+    if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     if (lastTurnEvent?.type === 'turn.started' || entries.at(-1)?.type === 'user.message') {
@@ -380,10 +395,9 @@ export function openCore(options: {
     return chat
   }
 
-  const freshInfo = (id: string, name: string, parentId?: string): ChatInfo => ({
+  const freshInfo = (id: string, name: string): ChatInfo => ({
     id,
     name,
-    ...(parentId !== undefined && { parentId }),
     folders: [],
     files: [],
     engine: newChatEngine(),
@@ -391,33 +405,30 @@ export function openCore(options: {
     createdAt: new Date().toISOString(),
   })
 
-  loadChat(join(chatsDir, WORKSHOP_ID), freshInfo(WORKSHOP_ID, WORKSHOP_NAME))
+  for (const { id, name } of modChats) loadChat(join(chatsDir, id), freshInfo(id, name))
   for (const id of readdirSync(chatsDir)) {
-    if (id === WORKSHOP_ID || !existsSync(join(chatsDir, id, 'chat.json'))) continue
-    loadChat(join(chatsDir, id), freshInfo(id, id, WORKSHOP_ID))
+    if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
+    loadChat(join(chatsDir, id), freshInfo(id, id))
   }
 
-  const createChat = (spec: NewChat & { subagent?: boolean; role?: ModelRole }) => {
+  const createChat = (spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }) => {
     const name = checkName(spec.name)
     const engine = spec.engine ?? newChatEngine()
     checkEngine(engine)
     if (spec.engine !== undefined) checkEnabled(engine)
-    const parent = chatFor(spec.parentId ?? WORKSHOP_ID)
-    checkActive(parent)
-    if (parent.info.subagent) throw new Error('A subagent cannot start chats')
-    if (!spec.subagent && !canNest(parent)) {
-      throw new Error(`Chats nest at most ${MAX_CHAT_DEPTH} deep below ${WORKSHOP_NAME}`)
-    }
+    const parent = spec.subagent ? chatFor(spec.parentId ?? '') : undefined
+    if (parent) checkActive(parent)
+    if (parent?.info.subagent) throw new Error('A subagent cannot start chats')
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
-    const parentMemory = spec.subagent ? memoryOf(parent) : undefined
+    const parentMemory = parent && memoryOf(parent)
     const info: ChatInfo = {
       id,
       name,
-      parentId: parent.info.id,
-      ...(parentMemory && {
+      ...(parent && parentMemory && {
+        parentId: parent.info.id,
         subagent: true,
         role: spec.role ?? 'subagents',
         parentMessages: parentMemory.messages.length,
@@ -427,7 +438,7 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt: new Date().toISOString(),
-      ...(spec.subagent && parent.info.engine === engine && { thinking: parent.info.thinking }),
+      ...(parent?.info.engine === engine && { thinking: parent.info.thinking }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parentMemory?.messages.length) {
@@ -446,7 +457,7 @@ export function openCore(options: {
   }
 
   const renameChat = (chat: Chat, name: unknown) => {
-    if (isWorkshop(chat)) throw new Error(`${WORKSHOP_NAME} cannot be renamed`)
+    if (chat.info.mod) throw new Error(`${chat.info.name} cannot be renamed`)
     updateChat(chat, { name: checkName(name) })
   }
 
@@ -466,6 +477,20 @@ export function openCore(options: {
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
     }
+  }
+
+  const setModEnabled = (mod: Mod, enabled: boolean) => {
+    const family = (mod.chats ?? []).flatMap(({ id }) => {
+      const chat = chats.get(id)
+      return chat ? familyOf(chat) : []
+    })
+    const busy = family.find((chat) => chat.status !== 'idle')
+    if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${mod.name} off`)
+    const changed = isOn(mod) !== enabled
+    saveMod(mod, { enabled })
+    if (!changed) return
+    if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
+    else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
   }
 
   const setEngine = (chat: Chat, engine: string) => {
@@ -500,7 +525,7 @@ export function openCore(options: {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
 
-  const agentsFileOf = (chat: Chat) => join(isWorkshop(chat) ? garage : chat.dir, 'AGENTS.md')
+  const globalAgentsFile = join(garage, 'AGENTS.md')
 
   const switchOf = (chat: Chat, item: Pick<ContextItem, 'section' | 'path' | 'from'>): boolean => {
     const pinned = chat.context[item.path]
@@ -511,22 +536,23 @@ export function openCore(options: {
   }
 
   const contextItems = (chat: Chat): ContextItem[] => {
+    const owned = chainOf(chat).flatMap(({ info, dir }) =>
+      info.mod
+        ? []
+        : [
+            ...info.folders.map((path) => ({ section: 'folders' as const, path, from: info.id })),
+            { section: 'agents' as const, path: join(dir, 'AGENTS.md'), from: info.id },
+            ...info.files.map((path) => ({ section: 'files' as const, path, from: info.id })),
+          ],
+    )
     const seen = new Set<string>()
-    return chainOf(chat).flatMap((owner) => {
-      const owned = [
-        ...owner.info.folders.map((path) => ({ section: 'folders' as const, path })),
-        { section: 'agents' as const, path: agentsFileOf(owner) },
-        ...owner.info.files.map((path) => ({ section: 'files' as const, path })),
-      ]
-      return owned.flatMap(({ section, path }) => {
-        if (seen.has(path)) return []
-        seen.add(path)
-        const item = { section, path, from: owner.info.id }
-        const bytes = readBytes(section === 'folders' ? join(path, 'AGENTS.md') : path)
-        const binary = section === 'files' && looksBinary(bytes)
-        const text = binary ? '' : bytes.toString('utf8')
-        return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
-      })
+    return [{ section: 'agents' as const, path: globalAgentsFile, from: GLOBAL_CONTEXT }, ...owned].flatMap((item) => {
+      if (seen.has(item.path)) return []
+      seen.add(item.path)
+      const bytes = readBytes(item.section === 'folders' ? join(item.path, 'AGENTS.md') : item.path)
+      const binary = item.section === 'files' && looksBinary(bytes)
+      const text = binary ? '' : bytes.toString('utf8')
+      return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
     })
   }
 
@@ -543,11 +569,13 @@ export function openCore(options: {
     broadcastContext(chat)
   }
 
+  const checkOwnsContext = (chat: Chat) => {
+    if (chat.info.mod) throw new Error(`${chat.info.name} keeps no folders, files or AGENTS.md of its own`)
+  }
+
   const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
     checkActive(chat)
-    if (isWorkshop(chat)) {
-      throw new Error(`${WORKSHOP_NAME} keeps no folders or files. Name a folder in its chat, or make a space for it.`)
-    }
+    checkOwnsContext(chat)
     const path = checkPath(rawPath, section)
     if (contextItems(chat).some((item) => item.path === path)) {
       throw new Error(`${path} is already in this chat's context`)
@@ -564,12 +592,16 @@ export function openCore(options: {
     broadcastContext(chat)
   }
 
-  const writeContext = (chat: Chat, text: string) => {
-    checkActive(chat)
-    const path = agentsFileOf(chat)
+  const writeAgentsFile = (path: string, text: string) => {
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, text)
     broadcast({ type: 'context.file', path, text })
+  }
+
+  const writeContext = (chat: Chat, text: string) => {
+    checkActive(chat)
+    checkOwnsContext(chat)
+    writeAgentsFile(join(chat.dir, 'AGENTS.md'), text)
   }
 
   const setContextDefault = (section: ContextSection, enabled: boolean) => {
@@ -605,7 +637,7 @@ export function openCore(options: {
       return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
     })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
-    const role = isWorkshop(chat) ? [HOME_INSTRUCTIONS] : []
+    const role = modChatOf(chat)?.instructions
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
     const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
     const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
@@ -614,7 +646,7 @@ export function openCore(options: {
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
     ]
-    const instructions = [...role, ...memory, ...contextText].join('\n\n')
+    const instructions = [...(role ? [role] : []), ...memory, ...contextText].join('\n\n')
     const folders = items.filter((item) => item.section === 'folders')
     const nearest = folders.at(-1)?.from
     const cwd = folders.find((folder) => folder.from === nearest)?.path ?? homeDir
@@ -747,11 +779,8 @@ export function openCore(options: {
   }
 
   const mcp = openHotrodMcp({
-    chats: () => [...chats.values()].map(state),
-    canNest: (chatId) => {
-      const chat = chats.get(chatId)
-      return chat !== undefined && canNest(chat)
-    },
+    chats: () => shownChats().map(state),
+    seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
     subagents: () => {
@@ -759,6 +788,8 @@ export function openCore(options: {
       return { enabled, limit: Number(values.limit) }
     },
     memory: (chatId) => memoryOf(chatFor(chatId)),
+    modTools: () =>
+      mods.filter(isOn).flatMap((mod) => (mod.tools ?? []).map((tool) => ({ tool, values: modValues(mod) }))),
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
@@ -803,7 +834,8 @@ export function openCore(options: {
     mods: () => mods.map(modInfo),
     modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
     memory: () => settings.memory ?? {},
-    chats: () => [...chats.values()].map(state),
+    chats: () => shownChats().map(state),
+    instructions: () => ({ path: globalAgentsFile, text: readBytes(globalAgentsFile).toString('utf8') }),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -826,7 +858,6 @@ export function openCore(options: {
           return setDefaultThinking(String(message.engine), String(message.thinking))
         case 'chat.create':
           return void createChat({
-            parentId: optionalText(message.parentId),
             name: message.name,
             engine: optionalText(message.engine),
             folders: message.folders,
@@ -866,13 +897,16 @@ export function openCore(options: {
         case 'context.write':
           if (typeof message.text !== 'string') throw new Error('Context text is missing')
           return writeContext(chatFor(message.chatId), message.text)
+        case 'instructions.write':
+          if (typeof message.text !== 'string') throw new Error('Instructions text is missing')
+          return writeAgentsFile(globalAgentsFile, message.text)
         case 'context.setDefault':
           if (!CONTEXT_SECTIONS.includes(message.section)) {
             throw new Error(`Unknown context section "${message.section}"`)
           }
           return setContextDefault(message.section, message.enabled === true)
         case 'mod.setEnabled':
-          return saveMod(modFor(String(message.modId)), { enabled: message.enabled === true })
+          return setModEnabled(modFor(String(message.modId)), message.enabled === true)
         case 'mod.setValue':
           return setModValue(modFor(String(message.modId)), String(message.key), message.value)
         case 'memory.set':

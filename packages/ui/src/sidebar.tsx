@@ -3,7 +3,7 @@ import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
 import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
-import { chatTree, familyOf, folderName, folderOf, MAIN_CHAT_ID, type ChatView, type TreeRow } from './state.ts'
+import { chatTree, familyOf, folderName, folderOf, type ChatView, type TreeRow } from './state.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
 const DOTS: Record<ChatStatus, string> = {
@@ -142,7 +142,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         selected={chat.id === selectedId}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.id === MAIN_CHAT_ID ? undefined : chatMenu(chat)}
+        menu={chat.mod ? undefined : chatMenu(chat)}
       />
     )
   }

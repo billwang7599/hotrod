@@ -13,7 +13,6 @@ import {
   folderName,
   folderOf,
   initialState,
-  MAIN_CHAT_ID,
   MIN_WINDOW_PX,
   PANEL_PX,
   reduce,
@@ -64,7 +63,7 @@ function Banner({ tone, children, action }: { tone: keyof typeof BANNER_TONES; c
 function App() {
   const [state, dispatch] = useReducer(reduce, initialState, (s) => ({
     ...s,
-    selectedId: localStorage.getItem(SELECTED_KEY) ?? MAIN_CHAT_ID,
+    selectedId: localStorage.getItem(SELECTED_KEY) ?? '',
   }))
   const send = useCore(dispatch)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
@@ -91,6 +90,7 @@ function App() {
   }
   const sidebarDocks = docked !== 'none'
   const contextDocks = docked === 'both'
+  const sidebarShown = sidebarDocks ? sidebarOpen : overlay === 'sidebar'
   const flipOverlay = (panel: Overlay) => setOverlay((open) => (open === panel ? null : panel))
   const toggleSidebar = useCallback(
     () => (sidebarDocks ? setSidebarOpen((open) => !open) : flipOverlay('sidebar')),
@@ -152,7 +152,7 @@ function App() {
             )}
           </AnimatePresence>
           <AnimatePresence initial={false}>
-            {(sidebarDocks ? sidebarOpen : overlay === 'sidebar') && (
+            {sidebarShown && (
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
                 <aside className="flex shrink-0 flex-col border-r bg-panel" style={{ width: PANEL_PX.sidebar }}>
                   <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
@@ -239,6 +239,7 @@ function App() {
               engines={state.engines}
               accounts={state.accounts}
               contextDefaults={state.contextDefaults}
+              instructions={state.instructions}
               mods={state.mods}
               modelLists={state.modelLists}
               connected={connected}
@@ -259,7 +260,7 @@ function App() {
                 connected={state.connected}
                 send={send}
                 openSettings={openSettings}
-                sidebarOpen={sidebarDocks ? sidebarOpen : overlay === 'sidebar'}
+                sidebarOpen={sidebarShown}
                 toggleSidebar={toggleSidebar}
                 contextOpen={contextDocks ? contextOpen : overlay === 'context'}
                 contextOverlay={!contextDocks}
@@ -272,11 +273,27 @@ function App() {
                 modelLists={state.modelLists[selected.engine]}
               />
             ) : (
-              <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                <strong className="text-body font-semibold text-text">
-                  {state.connected ? 'Loading…' : 'Connecting to the core…'}
-                </strong>
-              </div>
+              <>
+                <header className="flex h-44 shrink-0 items-center border-b px-12">
+                  <PanelToggle side="left" label="Sidebar" noun="sidebar" open={sidebarShown} toggle={toggleSidebar} />
+                </header>
+                <div className="m-auto flex max-w-420 flex-col items-center gap-12 p-24 text-center text-muted">
+                  <strong className="text-body font-semibold text-text">
+                    {state.loaded
+                      ? `No ${CHAT_NOUN.one} open`
+                      : state.connected
+                        ? 'Loading…'
+                        : 'Connecting to the core…'}
+                  </strong>
+                  {state.loaded && (
+                    <Hint text={`A ${CHAT_NOUN.one} is a chat with its own folders, files and AGENTS.md`}>
+                      <Button variant="primary" disabled={!connected} onClick={() => setNameRequest({ kind: 'new' })}>
+                        New {CHAT_NOUN.one}…
+                      </Button>
+                    </Hint>
+                  )}
+                </div>
+              </>
             )}
           </div>
           <div className="fixed right-16 bottom-120 z-30 flex max-w-360 flex-col">

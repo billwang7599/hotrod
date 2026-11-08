@@ -12,10 +12,10 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Mod } from '@hotrod/mod-api'
+import type { Mod, ModChat } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
-import { HOME_INSTRUCTIONS, MAX_CHAT_DEPTH, openCore, SUMMARY_MODELS, type Core } from './core.ts'
+import { openCore, SUMMARY_MODELS, type Core } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -30,7 +30,7 @@ import {
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
-  WORKSHOP_NAME,
+  GLOBAL_CONTEXT,
   type Adapter,
   type ImageInput,
   type ChatEntry,
@@ -42,6 +42,8 @@ import {
 } from './shared.ts'
 
 const TEST_STOP_GRACE_MS = 30
+const MAIN: ModChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
+const mainMod: Mod = { id: 'main-mod', name: 'Main mod', description: '', enabledByDefault: true, chats: [MAIN] }
 const at = '2026-11-06T00:00:00.000Z'
 const otherModel = FAKE_MODELS.find((m) => m !== FAKE_DEFAULTS.defaultModel)!
 const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
@@ -110,7 +112,12 @@ function tempDir() {
   return dir
 }
 
-function setup(source: FakeStep[] | Adapter, garage = tempDir(), stopGraceMs = TEST_STOP_GRACE_MS, mods: Mod[] = []) {
+function setup(
+  source: FakeStep[] | Adapter,
+  garage = tempDir(),
+  stopGraceMs = TEST_STOP_GRACE_MS,
+  mods: Mod[] = [mainMod],
+) {
   const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
   return { ...open(garage, [adapter], adapter.id, stopGraceMs, [adapter.id], mods), calls }
 }
@@ -121,7 +128,7 @@ function open(
   defaultEngine: string,
   stopGraceMs = TEST_STOP_GRACE_MS,
   enabled = adapters.map((a) => a.id),
-  mods: Mod[] = [],
+  mods: Mod[] = [mainMod],
 ) {
   const machine = localMachine
   const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
@@ -134,7 +141,7 @@ function open(
   return { core, garage, messages, replies, handle }
 }
 
-type NewChatFields = { name?: string; parentId?: string; folders?: string[]; files?: string[]; engine?: string }
+type NewChatFields = { name?: string; folders?: string[]; files?: string[]; engine?: string }
 
 function createChat(t: ReturnType<typeof open>, fields: NewChatFields = {}) {
   t.handle({ type: 'chat.create', name: 'Chat', ...fields })
@@ -180,68 +187,128 @@ describe('chats', () => {
     return info
   }
 
-  it('opens one permanent Workshop chat that runs in a scratch home folder', async () => {
+  it("opens each mod's chat first, permanent and running in the scratch folder with its instructions", async () => {
     const t = setup(textScript)
+    const otherMod: Mod = { ...mainMod, id: 'other-mod', chats: [{ id: 'side', name: 'Side', instructions: '' }] }
+    const both = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, otherMod])
+    expect(both.core.chats().map((c) => c.id)).toEqual(['main', 'side'])
     expect(t.core.chats()).toEqual([
-      expect.objectContaining({ id: 'main', name: WORKSHOP_NAME, engine: 'fake', folders: [], files: [] }),
+      expect.objectContaining({ id: 'main', name: MAIN.name, mod: mainMod.id, engine: 'fake', folders: [], files: [] }),
     ])
     expect(chatOf(t.core, 'main')?.parentId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'home'))
+    expect(t.calls[0]?.options.instructions.split('\n\n')[0]).toBe(MAIN.instructions)
     expect(statSync(join(t.garage, 'home')).isDirectory()).toBe(true)
     const log = readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')
     expect(log.trim().split('\n')).toHaveLength(4)
-    expect(chatOf(t.core, 'main')?.name).toBe(WORKSHOP_NAME)
 
-    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(WORKSHOP_NAME)
-    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(WORKSHOP_NAME)
-    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(WORKSHOP_NAME)
+    expect(() => t.handle({ type: 'chat.archive', chatId: 'main', archived: true })).toThrow(MAIN.name)
+    expect(() => t.handle({ type: 'chat.delete', chatId: 'main' })).toThrow(MAIN.name)
+    expect(() => t.handle({ type: 'chat.rename', chatId: 'main', name: 'Mine' })).toThrow(MAIN.name)
     t.core.close()
     expect(entriesOf(setup(textScript, t.garage).core, 'main')).toHaveLength(4)
   })
 
-  it(`keeps ${WORKSHOP_NAME} free of folders and files, dropping any a garage saved`, async () => {
+  it("keeps a mod's chat free of folders, files and its own AGENTS.md, dropping any a garage saved", async () => {
     const garage = tempDir()
     const dir = realpathSync(tempDir())
     const file = join(dir, 'notes.md')
     writeFileSync(file, 'NOTES')
     mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
-    const saved = { id: 'main', name: 'Main', folders: [dir], files: [file], engine: 'fake', createdAt: at }
+    const saved = { id: 'main', name: 'Home', folders: [dir], files: [file], engine: 'fake', createdAt: at }
     writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
     const t = setup(textScript, garage)
-    expect(chatOf(t.core, 'main')).toMatchObject({ folders: [], files: [] })
+    expect(chatOf(t.core, 'main')).toMatchObject({ name: MAIN.name, folders: [], files: [] })
     const rewritten = JSON.parse(readFileSync(join(garage, 'chats', 'main', 'chat.json'), 'utf8'))
-    expect(rewritten).toMatchObject({ name: WORKSHOP_NAME, folders: [], files: [] })
+    expect(rewritten).toMatchObject({ name: MAIN.name, folders: [], files: [] })
     for (const [section, path] of [['folders', dir], ['files', file]] as const) {
-      expect(() => t.handle({ type: 'context.add', chatId: 'main', section, path })).toThrow(WORKSHOP_NAME)
+      expect(() => t.handle({ type: 'context.add', chatId: 'main', section, path })).toThrow(MAIN.name)
     }
-    expect(chatOf(t.core, 'main')).toMatchObject({ folders: [], files: [] })
+    expect(() => t.handle({ type: 'context.write', chatId: 'main', text: 'MINE' })).toThrow(MAIN.name)
+    expect(existsSync(join(garage, 'chats', 'main', 'AGENTS.md'))).toBe(false)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     expect(t.calls[0]?.options.cwd).toBe(join(garage, 'home'))
     expect(t.calls[0]?.options).not.toHaveProperty('extraDirs')
   })
 
-  it(`calls the root chat ${WORKSHOP_NAME}, even in a garage that saved an older name`, () => {
-    for (const old of ['Main', 'Workshop']) {
+  it("hides an off mod's chat and its subagents, keeping their history, and shows them again once it is on", async () => {
+    const first = setup(textScript)
+    first.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => statusOf(first.core, 'main') === 'idle')
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const subagent = { id: 'sub', name: 'Sub', parentId: 'main', subagent: true, engine: 'fake', createdAt: at }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(subagent))
+    const t = setup(textScript, first.garage)
+    const space = createChat(t, { name: 'Space' })
+    expect(t.core.chats().map((c) => c.id)).toEqual(['main', 'sub', space.id])
+
+    t.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: false })
+    expect(t.messages.slice(-3)).toEqual([
+      { type: 'mod.updated', mod: expect.objectContaining({ id: mainMod.id, enabled: false }) },
+      { type: 'chat.removed', chatId: 'main' },
+      { type: 'chat.removed', chatId: 'sub' },
+    ])
+    expect(t.core.chats().map((c) => c.id)).toEqual([space.id])
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow('Unknown chat "main"')
+    expect(() => t.handle({ type: 'context.get', chatId: 'sub' })).toThrow('Unknown chat "sub"')
+    expect(readFileSync(join(t.garage, 'chats', 'main', 'log.jsonl'), 'utf8')).toContain('hi')
+    t.core.close()
+
+    const reopened = setup(textScript, t.garage)
+    expect(reopened.core.chats().map((c) => c.id)).toEqual([space.id])
+    reopened.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: true })
+    expect(reopened.messages.slice(-2).map((m) => m.type === 'chat.added' && m.chat.id)).toEqual(['sub', 'main'])
+    expect(reopened.core.chats().map((c) => c.id)).toEqual(['main', ...[space.id, 'sub'].sort()])
+    expect(entriesOf(reopened.core, 'main')).toHaveLength(4)
+  })
+
+  it('refuses to turn a mod off while its chat or a subagent of it is busy', async () => {
+    const t = setup(permissionScript)
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'go' })
+    await until(() => statusOf(t.core, 'main') === 'waiting')
+    expect(() => t.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: false })).toThrow(
+      `Stop "${MAIN.name}" before turning ${mainMod.name} off`,
+    )
+    expect(t.core.mods()[0]?.enabled).toBe(true)
+    expect(chatOf(t.core, 'main')).toBeDefined()
+  })
+
+  it('opens with no chats when no mod has one, and makes spaces as usual', () => {
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [])
+    expect(t.core.chats()).toEqual([])
+    expect(createChat(t, { name: 'First' })).toMatchObject({ name: 'First', folders: [] })
+  })
+
+  it('refuses two mod chats with one id', () => {
+    const twin: Mod = { ...mainMod, id: 'twin' }
+    expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, twin])).toThrow(
+      'Two mod chats have the id "main"',
+    )
+  })
+
+  it("always names a mod's chat as its mod does, even in a garage that saved another name", () => {
+    for (const old of ['Main', 'Workshop', 'Home']) {
       const garage = tempDir()
       mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
       const saved = { id: 'main', title: old, name: old, engine: 'fake', archived: false, createdAt: at }
       writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify(saved))
-      expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe(WORKSHOP_NAME)
+      expect(chatOf(setup(textScript, garage).core, 'main')?.name).toBe(MAIN.name)
     }
   })
 
-  it('creates named chats under the Workshop, stored flat in the garage, and keeps their names', async () => {
+  it('creates named chats at the top, stored flat in the garage, and keeps their names', async () => {
     const t = setup(textScript)
     const chat = createChat(t, { name: '  Build speed ' })
-    expect(chat).toMatchObject({ name: 'Build speed', parentId: 'main', engine: 'fake', folders: [], files: [] })
+    expect(chat).toMatchObject({ name: 'Build speed', engine: 'fake', folders: [], files: [] })
+    expect(chat).not.toHaveProperty('parentId')
     expect(chat.id).toMatch(/^[0-9a-f]{8}$/)
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8'))).toEqual({
       id: chat.id,
       name: 'Build speed',
-      parentId: 'main',
       folders: [],
       files: [],
       engine: 'fake',
@@ -253,21 +320,30 @@ describe('chats', () => {
     await until(() => statusOf(t.core, chat.id) === 'idle')
     expect(chatOf(t.core, chat.id)?.name).toBe('Build speed')
     expect(t.calls[0]?.options.cwd).toBe(join(t.garage, 'home'))
-    const other = createChat(t, { name: 'Other', parentId: 'main' })
-    expect(other.parentId).toBe('main')
+    const other = createChat(t, { name: 'Other', parentId: 'main' } as never)
+    expect(other).not.toHaveProperty('parentId')
 
     expect(() => t.handle({ type: 'chat.create', name: '  ' })).toThrow(/name/i)
     expect(() => t.handle({ type: 'chat.create' } as never)).toThrow(/name/i)
-    expect(() => t.handle({ type: 'chat.create', name: 'x', parentId: 'nope' })).toThrow(/Unknown chat/)
     t.core.close()
     expect(byId(setup(textScript, t.garage).core.chats())).toEqual(byId(t.core.chats()))
   })
 
-  it(`nests named chats at most ${MAX_CHAT_DEPTH} deep below the Workshop`, () => {
-    const t = setup(textScript)
-    let parentId = 'main'
-    for (let depth = 1; depth <= MAX_CHAT_DEPTH; depth++) parentId = createChat(t, { name: `${depth}`, parentId }).id
-    expect(() => t.handle({ type: 'chat.create', name: 'Too deep', parentId })).toThrow(/deep/)
+  it('moves named chats saved below another chat to the top, while subagents keep their parent', () => {
+    const garage = tempDir()
+    const save = (info: { id: string } & Record<string, unknown>) => {
+      mkdirSync(join(garage, 'chats', info.id), { recursive: true })
+      writeFileSync(join(garage, 'chats', info.id, 'chat.json'), JSON.stringify(info))
+    }
+    const base = { engine: 'fake', archived: false, createdAt: at }
+    save({ id: 'aaaa0001', name: 'Old space', parentId: 'main', ...base })
+    save({ id: 'aaaa0002', name: 'Deeper', parentId: 'aaaa0001', ...base })
+    save({ id: 'aaaa0003', name: 'Sub', parentId: 'aaaa0001', subagent: true, ...base })
+    const t = setup(textScript, garage)
+    expect(chatOf(t.core, 'aaaa0001')).not.toHaveProperty('parentId')
+    expect(chatOf(t.core, 'aaaa0002')).not.toHaveProperty('parentId')
+    expect(chatOf(t.core, 'aaaa0003')).toMatchObject({ parentId: 'aaaa0001', subagent: true })
+    expect(JSON.parse(readFileSync(chatFile(t, 'aaaa0001'), 'utf8'))).not.toHaveProperty('parentId')
   })
 
   it('renames a chat and saves it', () => {
@@ -332,7 +408,7 @@ describe('chats', () => {
     const t = setup(textScript, garage)
 
     expect(t.core.chats().map((c) => c.id)).toEqual(['main', 'abcd0123'])
-    expect(chatOf(t.core, 'abcd0123')).toMatchObject({ name: 'Old subchat', parentId: 'main', folders: [], files: [] })
+    expect(chatOf(t.core, 'abcd0123')).toMatchObject({ name: 'Old subchat', folders: [], files: [] })
     expect(chatOf(t.core, 'abcd0123')).not.toHaveProperty('title')
     expect(existsSync(join(projectDir, 'project.json'))).toBe(true)
   })
@@ -1287,7 +1363,14 @@ describe('memory', () => {
       },
     })
     const adapters = [...others, adapter]
-    const core = openCore({ garage, adapters, defaultEngine: 'fake', machine: localMachine, compactDebounceMs: 0 })
+    const core = openCore({
+      garage,
+      adapters,
+      defaultEngine: 'fake',
+      machine: localMachine,
+      mods: [mainMod],
+      compactDebounceMs: 0,
+    })
     cores.push(core)
     for (const { id } of adapters) core.handle({ type: 'engine.setEnabled', engine: id, enabled: true }, () => {})
     const messages: CoreMessage[] = []
@@ -1304,7 +1387,7 @@ describe('memory', () => {
     const t = setupMemory()
     writeFileSync(join(t.garage, 'AGENTS.md'), 'RULES')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
-    expect(t.calls[0]?.options.instructions).toBe([HOME_INSTRUCTIONS, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
+    expect(t.calls[0]?.options.instructions).toBe([MAIN.instructions, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
     const chat = createChat({ ...t, replies: [] }, { name: 'App' })
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
     expect(t.calls[1]?.options.instructions).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
@@ -1761,29 +1844,29 @@ describe('context', () => {
   const add = (t: ReturnType<typeof open>, chatId: string, section: 'folders' | 'files', path: string) =>
     t.handle({ type: 'context.add', chatId, section, path })
 
-  it("lists a chat's AGENTS.md, folders and files from the Workshop down to itself", () => {
+  it("lists the global AGENTS.md, then a chat's folders, AGENTS.md and files from the top down to itself", () => {
     const t = setup(textScript)
     const repo = folderWith('REPO RULES')
     const notes = fileWith('NOTES')
     const chat = createChat(t, { name: 'App', folders: [repo], files: [notes] })
-    const workshop = { section: 'agents', path: join(t.garage, 'AGENTS.md'), from: 'main', enabled: true, text: '' }
+    const global = { section: 'agents', path: join(t.garage, 'AGENTS.md'), from: GLOBAL_CONTEXT, enabled: true, text: '' }
     const own = join(t.garage, 'chats', chat.id, 'AGENTS.md')
 
-    expect(itemsOf(t, 'main')).toEqual([workshop])
+    expect(itemsOf(t, 'main')).toEqual([global])
     expect(itemsOf(t, chat.id)).toEqual([
-      workshop,
+      global,
       { section: 'folders', path: repo, from: chat.id, enabled: true, text: 'REPO RULES' },
       { section: 'agents', path: own, from: chat.id, enabled: true, text: '' },
       { section: 'files', path: notes, from: chat.id, enabled: true, text: 'NOTES' },
     ])
   })
 
-  it(`injects enabled items root first, after the role instructions only ${WORKSHOP_NAME} gets`, async () => {
+  it("injects enabled items global first, after the instructions a mod's own chat gets", async () => {
     const t = setup(textScript)
     const repo = folderWith('REPO RULES')
     const notes = fileWith('NOTES\n')
-    expect(await instructionsOf(t, 'main')).toBe(HOME_INSTRUCTIONS)
-    t.handle({ type: 'context.write', chatId: 'main', text: 'WORKSHOP RULES' })
+    expect(await instructionsOf(t, 'main')).toBe(MAIN.instructions)
+    t.handle({ type: 'instructions.write', text: 'GLOBAL RULES' })
     const chat = createChat(t, { name: 'App', folders: [repo], files: [notes] })
     const other = createChat(t, { name: 'Other' })
     t.handle({ type: 'context.write', chatId: chat.id, text: 'APP RULES' })
@@ -1791,11 +1874,11 @@ describe('context', () => {
 
     const file = `<file path="${notes}">\nNOTES\n</file>`
     expect(await instructionsOf(t, chat.id)).toBe(
-      ['WORKSHOP RULES', 'REPO RULES', 'APP RULES', file].join('\n\n'),
+      ['GLOBAL RULES', 'REPO RULES', 'APP RULES', file].join('\n\n'),
     )
-    expect(await instructionsOf(t, 'main')).toBe(`${HOME_INSTRUCTIONS}\n\nWORKSHOP RULES`)
-    expect(await instructionsOf(t, other.id)).toBe('WORKSHOP RULES\n\nOTHER RULES')
-    expect(itemsOf(t, 'main').map((item) => item.text)).toEqual(['WORKSHOP RULES'])
+    expect(await instructionsOf(t, 'main')).toBe(`${MAIN.instructions}\n\nGLOBAL RULES`)
+    expect(await instructionsOf(t, other.id)).toBe('GLOBAL RULES\n\nOTHER RULES')
+    expect(itemsOf(t, 'main').map((item) => item.text)).toEqual(['GLOBAL RULES'])
   })
 
   it("runs in its first enabled folder, else its nearest ancestor's, else home, with the rest as extras", async () => {
@@ -1895,7 +1978,7 @@ describe('context', () => {
   it('turns an item off for one chat, saves it in chat.json and tells every client', async () => {
     const t = setup(textScript)
     const repo = folderWith('REPO RULES')
-    t.handle({ type: 'context.write', chatId: 'main', text: 'WORKSHOP RULES' })
+    t.handle({ type: 'instructions.write', text: 'GLOBAL RULES' })
     const chat = createChat(t, { name: 'App', folders: [repo] })
 
     t.handle({ type: 'context.set', chatId: chat.id, path: repo, enabled: false })
@@ -1904,11 +1987,11 @@ describe('context', () => {
     expect(updated.chatId).toBe(chat.id)
     expect(updated.items.find((i) => i.path === repo)?.enabled).toBe(false)
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).context).toEqual({ [repo]: false })
-    expect(await instructionsOf(t, chat.id)).toBe('WORKSHOP RULES')
+    expect(await instructionsOf(t, chat.id)).toBe('GLOBAL RULES')
 
     t.handle({ type: 'context.set', chatId: 'main', path: join(t.garage, 'AGENTS.md'), enabled: false })
-    expect(await instructionsOf(t, 'main')).toBe(HOME_INSTRUCTIONS)
-    expect(await instructionsOf(t, chat.id)).toBe('WORKSHOP RULES')
+    expect(await instructionsOf(t, 'main')).toBe(MAIN.instructions)
+    expect(await instructionsOf(t, chat.id)).toBe('GLOBAL RULES')
 
     t.core.close()
     const reopened = setup(textScript, t.garage)
@@ -1937,13 +2020,13 @@ describe('context', () => {
     })
     const switches = (chatId: string) => itemsOf(t, chatId).map((i) => [i.from, i.section, i.enabled])
     expect(switches(chat.id)).toEqual([
-      ['main', 'agents', false],
+      [GLOBAL_CONTEXT, 'agents', false],
       [chat.id, 'folders', true],
       [chat.id, 'agents', true],
     ])
-    expect(switches('main').map(([, , enabled]) => enabled)).toEqual([true])
+    expect(switches('main').map(([, , enabled]) => enabled)).toEqual([false])
     t.handle({ type: 'context.set', chatId: chat.id, path: join(garage, 'AGENTS.md'), enabled: true })
-    expect(switches(chat.id)[0]).toEqual(['main', 'agents', true])
+    expect(switches(chat.id)[0]).toEqual([GLOBAL_CONTEXT, 'agents', true])
     expect(() => t.handle({ type: 'context.setDefault', section: 'nope', enabled: false } as never)).toThrow(
       /Unknown context section/,
     )
@@ -1962,8 +2045,20 @@ describe('context', () => {
     expect(readFileSync(file, 'utf8')).toBe('APP RULES\n')
     expect(t.messages.at(-1)).toEqual({ type: 'context.file', path: file, text: 'APP RULES\n' })
     expect(itemsOf(t, chat.id).find((i) => i.path === file)?.text).toBe('APP RULES\n')
-    t.handle({ type: 'context.write', chatId: 'main', text: 'WORKSHOP RULES' })
-    expect(readFileSync(join(t.garage, 'AGENTS.md'), 'utf8')).toBe('WORKSHOP RULES')
+  })
+
+  it('writes the global AGENTS.md from Settings, given to every chat with or without a mod chat', async () => {
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [])
+    const global = join(t.garage, 'AGENTS.md')
+    expect(t.core.instructions()).toEqual({ path: global, text: '' })
+    t.handle({ type: 'instructions.write', text: 'EVERY CHAT' })
+    expect(readFileSync(global, 'utf8')).toBe('EVERY CHAT')
+    expect(t.messages.at(-1)).toEqual({ type: 'context.file', path: global, text: 'EVERY CHAT' })
+    expect(t.core.instructions()).toEqual({ path: global, text: 'EVERY CHAT' })
+    const chat = createChat(t, { name: 'App' })
+    expect(itemsOf(t, chat.id)[0]).toMatchObject({ path: global, from: GLOBAL_CONTEXT, text: 'EVERY CHAT' })
+    expect(await instructionsOf(t, chat.id)).toBe('EVERY CHAT')
+    expect(() => t.handle({ type: 'instructions.write' } as never)).toThrow(/text/)
   })
 
   it("never writes into a chat's folders, and keeps archived chats read-only", () => {
@@ -2188,7 +2283,9 @@ describe('mods', () => {
   it('reads the subagents switch and limit saved before mods had declarations', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { subagents: { enabled: true, limit: -1 } } }))
-    expect(setup(textScript, garage).core.mods()).toEqual([infoOf(SUBAGENTS_MOD, true, { limit: -1 })])
+    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.mods()).toEqual([
+      infoOf(SUBAGENTS_MOD, true, { limit: -1 }),
+    ])
   })
 
   it('refuses two mods with one id', () => {
