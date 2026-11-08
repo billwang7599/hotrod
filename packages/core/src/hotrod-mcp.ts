@@ -41,7 +41,7 @@ type Hub = {
 const reaches = (hub: Hub, caller: ChatState, chat: ChatState) =>
   chat.subagent ? chat.parentId === caller.id : chat.id !== caller.id && hub.seesAll(caller.id)
 
-const summaryOf = ({ id, name, engine, parentId, subagent }: ChatState): ChatSummary => ({
+export const summaryOf = ({ id, name, engine, parentId, subagent }: ChatInfo): ChatSummary => ({
   id,
   name,
   engine,

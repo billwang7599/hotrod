@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { Mod, ModChat } from '@hotrod/mod-api'
+import type { Mod, ModChat, ModSession } from '@hotrod/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
@@ -30,6 +30,7 @@ import {
   pendingOf,
 } from './memory.ts'
 import {
+  ASK_FIRST_COMMANDS,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -132,8 +133,9 @@ function open(
   stopGraceMs = TEST_STOP_GRACE_MS,
   enabled = adapters.map((a) => a.id),
   mods: Mod[] = [mainMod],
+  machine: Machine = sandboxingMachine,
 ) {
-  const core = openCore({ garage, adapters, defaultEngine, machine: sandboxingMachine, stopGraceMs, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -526,7 +528,10 @@ describe('work folder', () => {
     const send = () => core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
     expect(send).toThrow(/can't sandbox engines.*Edits anywhere/)
     expect(entriesOf(core, 'main')).toEqual([])
-    core.handle({ type: 'chat.setEditAnywhere', chatId: 'main', enabled: true }, () => {})
+    core.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: true }, () => {})
+    core.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: false }, () => {})
+    expect(send).toThrow(/can't sandbox engines.*Edits anywhere/)
+    core.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true }, () => {})
     send()
     await until(() => statusOf(core, 'main') === 'idle')
     expect(calls[0]?.options.cwd).toBe(join(workOf(t), 'home'))
@@ -701,8 +706,8 @@ describe('edits', () => {
     await until(() => statusOf(t.core, 'main') !== 'running')
     return t
   }
-  const resolved = (t: { core: Core }) =>
-    entriesOf(t.core, 'main').flatMap((e) => (e.type === 'permission.resolved' ? [e] : []))
+  const resolved = (t: { core: Core }, chatId = 'main') =>
+    entriesOf(t.core, chatId).flatMap((e) => (e.type === 'permission.resolved' ? [e] : []))
   const outputs = (t: { core: Core }) =>
     entriesOf(t.core, 'main').flatMap((e) => (e.type === 'tool.completed' ? [e.output] : []))
 
@@ -732,7 +737,7 @@ describe('edits', () => {
     const garage = tempDir()
     const outside = join(tempDir(), 'a.ts')
     const t = setup(editScript(outside), garage)
-    t.handle({ type: 'chat.setEditAnywhere', chatId: 'main', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
     expect(t.messages.at(-1)).toEqual({ type: 'chat.updated', chat: expect.objectContaining({ editAnywhere: true }) })
     expect(JSON.parse(readFileSync(chatFile(t, 'main'), 'utf8')).editAnywhere).toBe(true)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'edit' })
@@ -742,7 +747,7 @@ describe('edits', () => {
     expect(resolved(t)).toEqual([])
     t.handle({ type: 'chat.interrupt', chatId: 'main', force: true })
 
-    t.handle({ type: 'chat.setEditAnywhere', chatId: 'main', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere' })
     expect(chatOf(t.core, 'main')).not.toHaveProperty('editAnywhere')
     expect(JSON.parse(readFileSync(chatFile(t, 'main'), 'utf8'))).not.toHaveProperty('editAnywhere')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'edit' })
@@ -753,7 +758,7 @@ describe('edits', () => {
   it('never passes edits anywhere on: subagents and new spaces start without it', async () => {
     const first = setup(editScript(join(tempDir(), 'a.ts')))
     const space = createChat(first, { name: 'Space' })
-    first.handle({ type: 'chat.setEditAnywhere', chatId: space.id, enabled: true })
+    first.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
     first.core.close()
     mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
     const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
@@ -764,13 +769,14 @@ describe('edits', () => {
     t.handle({ type: 'chat.send', chatId: 'sub', text: 'hi' })
     await until(() => statusOf(t.core, 'sub') === 'idle')
     expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(first.garage, 'work', space.id)])
-    expect(() => t.handle({ type: 'chat.setEditAnywhere', chatId: 'nope', enabled: true })).toThrow('Unknown chat')
+    const nope = { type: 'chat.setPermission' as const, chatId: 'nope', name: 'editAnywhere' as const, enabled: true }
+    expect(() => t.handle(nope)).toThrow('Unknown chat')
   })
 
-  it('with edits anywhere on for every chat, runs Home, spaces and subagents unsandboxed, their own switches off', async () => {
+  it('with edits anywhere on by default, runs Home, spaces and subagents that follow it unsandboxed', async () => {
     const first = setup(textScript)
     const space = createChat(first, { name: 'Space' })
-    first.handle({ type: 'workFolder.setEditAnywhere', enabled: true })
+    first.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: true })
     expect(first.core.workFolder()).toMatchObject({ editAnywhere: true })
     expect(first.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: first.core.workFolder() })
     expect(JSON.parse(readFileSync(join(first.garage, 'settings.json'), 'utf8')).editAnywhere).toBe(true)
@@ -791,17 +797,49 @@ describe('edits', () => {
       await until(() => statusOf(t.core, chatId) === 'idle')
     }
 
-    t.handle({ type: 'workFolder.setEditAnywhere', enabled: false })
-    expect(t.core.workFolder()).not.toHaveProperty('editAnywhere')
-    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8'))).not.toHaveProperty('editAnywhere')
+    t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: false })
+    expect(t.core.workFolder()).toMatchObject({ editAnywhere: false })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).editAnywhere).toBe(false)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'edit' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     expect(t.calls.at(-1)?.options.sandbox).toBeDefined()
   })
 
-  it('with edits anywhere on for every chat, runs a chat where the machine cannot sandbox', async () => {
+  it('lets a space turn edits anywhere off while the default is on, and on while it is off', async () => {
+    const t = setup(editScript(join(tempDir(), 'a.ts')))
+    const space = createChat(t, { name: 'Space' })
+    t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: false })
+    expect(JSON.parse(readFileSync(chatFile(t, space.id), 'utf8')).editAnywhere).toBe(false)
+    t.handle({ type: 'chat.send', chatId: space.id, text: 'edit' })
+    await until(() => statusOf(t.core, space.id) === 'idle')
+    expect(t.calls.at(-1)?.options.sandbox).toBeDefined()
+    expect(resolved(t, space.id).map((e) => [e.allow, e.auto])).toEqual([[false, true]])
+
+    t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
+    t.handle({ type: 'chat.send', chatId: space.id, text: 'edit' })
+    await until(() => statusOf(t.core, space.id) === 'waiting')
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+  })
+
+  it('reads edits anywhere saved on before the defaults as On', async () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ engines: {}, editAnywhere: true }))
+    mkdirSync(join(garage, 'chats', 'old'), { recursive: true })
+    const saved = { id: 'old', name: 'Old', engine: 'fake', archived: false, createdAt: at, editAnywhere: true }
+    writeFileSync(join(garage, 'chats', 'old', 'chat.json'), JSON.stringify(saved))
+    const t = setup(textScript, garage)
+    expect(t.core.workFolder().editAnywhere).toBe(true)
+    expect(chatOf(t.core, 'old')?.editAnywhere).toBe(true)
+    t.handle({ type: 'chat.send', chatId: 'old', text: 'hi' })
+    await until(() => statusOf(t.core, 'old') === 'idle')
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+  })
+
+  it('with edits anywhere on by default, runs a chat where the machine cannot sandbox', async () => {
     const t = setup(textScript)
-    t.handle({ type: 'workFolder.setEditAnywhere', enabled: true })
+    t.handle({ type: 'permission.setDefault', name: 'editAnywhere', enabled: true })
     t.core.close()
     const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
     const machine = { ...localMachine, canSandbox: false }
@@ -811,6 +849,125 @@ describe('edits', () => {
     core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
     await until(() => statusOf(core, 'main') === 'idle')
     expect(calls[0]?.options).not.toHaveProperty('sandbox')
+  })
+})
+
+describe('commands', () => {
+  const commandScript = (...commands: string[]): FakeStep[] => [
+    ...commands.flatMap((command, i): FakeStep[] => {
+      const call = { toolId: `c${i}`, name: 'Bash', kind: 'shell' as const, summary: command, input: { command } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, command, output: 'ran' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+  const resolved = (t: { core: Core }, chatId = 'main') =>
+    entriesOf(t.core, chatId).flatMap((e) => (e.type === 'permission.resolved' ? [e] : []))
+  const turn = async (t: ReturnType<typeof setup>, chatId = 'main') => {
+    t.handle({ type: 'chat.send', chatId, text: 'run' })
+    await until(() => statusOf(t.core, chatId) !== 'running')
+    const status = statusOf(t.core, chatId)
+    if (status === 'waiting') {
+      t.handle({ type: 'chat.interrupt', chatId, force: true })
+      await until(() => statusOf(t.core, chatId) === 'idle')
+    }
+    return status
+  }
+
+  it('by default runs a command in a sandboxed chat without asking, logged as automatic', async () => {
+    const t = setup(commandScript('npm test', 'ls -la'))
+    const space = createChat(t, { name: 'Space' })
+    for (const chatId of ['main', space.id]) {
+      expect(await turn(t, chatId)).toBe('idle')
+      expect(resolved(t, chatId).map((e) => [e.allow, e.auto])).toEqual([[true, true], [true, true]])
+      const outputs = entriesOf(t.core, chatId).flatMap((e) => (e.type === 'tool.completed' ? [e.output] : []))
+      expect(outputs).toEqual(['ran', 'ran'])
+    }
+    expect(t.messages.some((m) => m.type === 'chat.status' && m.status === 'waiting')).toBe(false)
+  })
+
+  it('still asks before a command that publishes or reaches the network, anywhere in the command', async () => {
+    for (const command of ASK_FIRST_COMMANDS) {
+      const t = setup(commandScript(`cd app && ${command} origin`))
+      expect(await turn(t), command).toBe('waiting')
+      expect(resolved(t)).toEqual([])
+    }
+    const t = setup(commandScript('git status', 'ghost --help'))
+    expect(await turn(t)).toBe('idle')
+  })
+
+  it('runs network commands without asking too once that default is off', async () => {
+    const t = setup(commandScript(`${ASK_FIRST_COMMANDS[0]} origin`))
+    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
+    expect(await turn(t)).toBe('idle')
+    expect(resolved(t).map((e) => e.auto)).toEqual([true])
+  })
+
+  it('asks before every command once the default is off, and saves the default in settings.json', async () => {
+    const t = setup(commandScript('ls'))
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: false })
+    expect(t.core.workFolder()).toMatchObject({ autoRunCommands: false })
+    expect(t.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: t.core.workFolder() })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).autoRunCommands).toBe(false)
+    expect(await turn(t)).toBe('waiting')
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: true })
+    expect(await turn(t)).toBe('idle')
+  })
+
+  it("lets a space, Home too, turn a default off or on for itself, saved in its chat.json", async () => {
+    const t = setup(commandScript('ls'))
+    const space = createChat(t, { name: 'Space' })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: false })
+    expect(t.messages.at(-1)).toEqual({
+      type: 'chat.updated',
+      chat: expect.objectContaining({ id: 'main', autoRunCommands: false }),
+    })
+    expect(JSON.parse(readFileSync(chatFile(t, 'main'), 'utf8')).autoRunCommands).toBe(false)
+    expect(await turn(t, 'main')).toBe('waiting')
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoRunCommands', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoRunCommands' })
+    expect(chatOf(t.core, space.id)).not.toHaveProperty('autoRunCommands')
+    expect(JSON.parse(readFileSync(chatFile(t, space.id), 'utf8'))).not.toHaveProperty('autoRunCommands')
+    expect(await turn(t, space.id)).toBe('waiting')
+  })
+
+  it('lets a space ask before network commands while the default runs them', async () => {
+    const t = setup(commandScript(`${ASK_FIRST_COMMANDS.at(-1)} x`))
+    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: true })
+    expect(await turn(t)).toBe('waiting')
+  })
+
+  it('asks before every command while a chat runs without the sandbox', async () => {
+    const t = setup(commandScript('ls'))
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: false })
+    expect(await turn(t)).toBe('waiting')
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+
+    t.core.close()
+    const { adapter, calls } = recording(createFakeAdapter(commandScript('ls'), 0))
+    const machine = { ...localMachine, canSandbox: false }
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    const unsandboxed = { ...t, core, calls, handle: (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {}) }
+    expect(await turn(unsandboxed)).toBe('waiting')
+  })
+
+  it('asks when the engine gives no command, and refuses an unknown switch', async () => {
+    const t = setup(permissionScript)
+    expect(await turn(t)).toBe('waiting')
+    const unknown = { name: 'everything', enabled: true } as unknown as { name: 'autoRunCommands'; enabled: boolean }
+    const messages = [{ type: 'permission.setDefault' as const }, { type: 'chat.setPermission' as const, chatId: 'main' }]
+    for (const message of messages) {
+      expect(() => t.handle({ ...message, ...unknown })).toThrow('Unknown permission switch')
+    }
   })
 })
 
@@ -2710,5 +2867,189 @@ describe('mods', () => {
     expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester, { ...tester, name: 'Again' }])).toThrow(
       'Two mods have the id "tester"',
     )
+  })
+
+  describe('MCP servers', () => {
+    const sessions: ModSession[] = []
+    const web: Mod = {
+      id: 'web',
+      name: 'Web',
+      description: '',
+      enabledByDefault: true,
+      settings: [{ key: 'ask', label: 'Ask', type: 'boolean', default: false }],
+      mcpServers(session) {
+        sessions.push(session)
+        return [{ name: 'web', command: 'web-mcp', args: [session.workDir], allowTools: !session.values.ask }]
+      },
+    }
+    const takesMcp: Adapter = { ...createFakeAdapter(textScript, 0), hotrodMcp: true }
+    const turn = async (t: ReturnType<typeof setup>, chatId: string) => {
+      t.handle({ type: 'chat.send', chatId, text: 'Hi' })
+      await until(() => statusOf(t.core, chatId) === 'idle')
+      return t.calls.at(-1)!.options
+    }
+    beforeEach(() => sessions.splice(0))
+
+    it("gives each session the servers of mods that are on, from its chat, work folder and mod's values", async () => {
+      const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [web])
+      const chat = createChat(t, { name: 'Space' })
+      const workDir = join(t.garage, 'work', chat.id)
+      const server = { name: 'web', command: 'web-mcp', args: [workDir] }
+      expect((await turn(t, chat.id)).mcpServers).toEqual([{ ...server, allowTools: true }])
+      expect(sessions).toEqual([
+        { chat: { id: chat.id, name: 'Space', engine: 'fake' }, workDir, sandboxed: true, values: { ask: false } },
+      ])
+      t.handle({ type: 'mod.setValue', modId: 'web', key: 'ask', value: true })
+      t.handle({ type: 'chat.setPermission', chatId: chat.id, name: 'editAnywhere', enabled: true })
+      expect((await turn(t, chat.id)).mcpServers).toEqual([{ ...server, allowTools: false }])
+      expect(sessions.at(-1)?.sandboxed).toBe(false)
+      t.handle({ type: 'mod.setEnabled', modId: 'web', enabled: false })
+      expect((await turn(t, chat.id)).mcpServers).toBeUndefined()
+    })
+
+    it('gives none to an engine that takes no MCP servers', async () => {
+      const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [web])
+      expect((await turn(t, createChat(t).id)).mcpServers).toBeUndefined()
+      expect(sessions).toEqual([])
+    })
+
+    it("ends the turn when two servers share a name, Hotrod's included", async () => {
+      const named = (id: string, name: string): Mod => ({ ...web, id, mcpServers: () => [{ name, command: name }] })
+      for (const [name, mods] of [
+        ['web', [web, named('again', 'web')]],
+        ['hotrod', [named('hotrod', 'hotrod')]],
+      ] as const) {
+        const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [...mods])
+        const chat = createChat(t)
+        t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
+        expect(entriesOf(t.core, chat.id).at(-1)).toMatchObject({
+          type: 'turn.completed',
+          error: `Error: Two MCP servers are named "${name}"`,
+        })
+        expect(t.calls).toEqual([])
+      }
+    })
+  })
+
+  describe('setup', () => {
+    const description = 'Downloads the tool.'
+    const tool: Mod = {
+      id: 'tool',
+      name: 'Tool',
+      description: '',
+      enabledByDefault: true,
+      mcpServers: () => [{ name: 'tool', command: 'tool-mcp' }],
+      setup: {
+        description,
+        async check(run) {
+          const { code } = await run('check', [])
+          return { ready: code === 0, message: code === 0 ? 'Tool installed' : 'Tool not installed' }
+        },
+        async install(run, report) {
+          const onStdout = (chunk: string) =>
+            report({ text: `Got ${chunk.trim()}`, progress: parseInt(chunk) / 100 })
+          const { code, stderr } = await run('install', ['--all'], { timeoutMs: 1000, onStdout })
+          if (code !== 0) throw new Error(stderr)
+        },
+      },
+    }
+
+    function start() {
+      const state = { installed: false, finish: (_code: number | null, _stderr?: string) => {} }
+      const runs: { command: string; args: string[]; options: Parameters<Machine['run']>[2] }[] = []
+      const machine: Machine = {
+        ...sandboxingMachine,
+        async run(command, args, options) {
+          runs.push({ command, args, options })
+          if (command === 'check') return { code: state.installed ? 0 : 1, stdout: '', stderr: '' }
+          options.onStdout?.('10%\n')
+          options.onStdout?.('60%\n')
+          return new Promise((resolve) => {
+            state.finish = (code, stderr = '') => {
+              if (code === 0) state.installed = true
+              resolve({ code, stdout: '', stderr })
+            }
+            options.signal?.addEventListener('abort', () => state.finish(null, 'killed'))
+          })
+        },
+      }
+      const { adapter, calls } = recording({ ...createFakeAdapter(textScript, 0), hotrodMcp: true })
+      const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [tool], machine)
+      const setupOf = () => t.core.mods()[0]!.setup!
+      const turn = async () => {
+        const chat = createChat(t)
+        t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
+        await until(() => statusOf(t.core, chat.id) === 'idle')
+        return calls.at(-1)!.options
+      }
+      return { ...t, state, runs, setupOf, turn }
+    }
+
+    it('checks each mod that is on at start, then installs it with progress and checks again', async () => {
+      const t = start()
+      expect(t.setupOf()).toEqual({ description, status: 'checking' })
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
+      expect(t.runs[0]).toMatchObject({ command: 'check', args: [], options: { cwd: '/' } })
+
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      const progress = t.messages.flatMap((m) => (m.type === 'mod.updated' ? [m.mod.setup?.progress] : []))
+      expect(progress).toEqual([undefined, undefined, 0.1, 0.6])
+      const installing = { status: 'installing', message: 'Tool not installed', progressText: 'Got 60%', progress: 0.6 }
+      expect(t.setupOf()).toEqual({ description, ...installing })
+      const install = t.runs.at(-1)!
+      expect(install).toMatchObject({ command: 'install', args: ['--all'], options: { cwd: '/', timeoutMs: 1000 } })
+      expect(install.options).not.toHaveProperty('sandbox')
+      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installing')
+
+      t.state.finish(0)
+      await until(() => t.setupOf().status === 'ready')
+      expect(t.setupOf()).toEqual({ description, status: 'ready', message: 'Tool installed' })
+      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installed')
+    })
+
+    it('stops an install on cancel, and shows why one failed', async () => {
+      const t = start()
+      await until(() => t.setupOf().status === 'missing')
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      expect(t.runs.at(-1)!.options.signal?.aborted).toBe(true)
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
+
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.state.finish(1, 'Disk full')
+      await until(() => t.setupOf().status === 'missing')
+      expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed', error: 'Disk full' })
+    })
+
+    it("offers a mod's MCP servers only once it is set up, and checks again when it is turned on", async () => {
+      const t = start()
+      await until(() => t.setupOf().status === 'missing')
+      expect((await t.turn()).mcpServers).toBeUndefined()
+      t.state.installed = true
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: false })
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
+      expect(t.setupOf().status).toBe('checking')
+      await until(() => t.setupOf().status === 'ready')
+      expect((await t.turn()).mcpServers).toEqual([{ name: 'tool', command: 'tool-mcp' }])
+    })
+
+    it('checks a mod that is off once it is turned on, and refuses to install one with no setup', async () => {
+      const garage = tempDir()
+      writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { tool: { enabled: false } } }))
+      const checks: string[] = []
+      const check = async () => (checks.push('check'), { ready: true })
+      const quiet: Mod = { ...tool, setup: { ...tool.setup!, check } }
+      const t = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [quiet, tester])
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(checks).toEqual([])
+      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
+      await until(() => t.core.mods()[0]?.setup?.status === 'ready')
+      expect(checks).toEqual(['check'])
+      expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
+      expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
+    })
   })
 })

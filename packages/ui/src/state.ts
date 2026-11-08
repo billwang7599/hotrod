@@ -14,12 +14,14 @@ import type {
   ModelLists,
   ModInfo,
   QueuedMessage,
+  ToolKind,
   WorkFolder,
 } from '@hotrod/core/shared'
 
 export type Permission = {
   requestId: string
   name: string
+  toolKind: ToolKind
   summary: string
   input: unknown
   outcome: 'pending' | 'allowed' | 'denied' | 'cancelled'
@@ -117,8 +119,8 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
           : i,
       )
     case 'permission.requested': {
-      const { requestId, name, summary, input, toolId } = entry
-      const permission: Permission = { requestId, name, summary, input, outcome: 'pending' }
+      const { requestId, name, kind: toolKind, summary, input, toolId } = entry
+      const permission: Permission = { requestId, name, toolKind, summary, input, outcome: 'pending' }
       const own = (i: Item) => i.kind === 'tool' && i.toolId === toolId
       if (!items.some(own)) return [...items, { kind: 'permission', ...permission }]
       return items.map((i) =>

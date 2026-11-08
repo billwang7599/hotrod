@@ -173,7 +173,7 @@ export function createLocalMachine({
     }
   }
 
-  function run(command: string, args: string[], options: SpawnOptions & { input?: string; timeoutMs?: number }) {
+  function run(command: string, args: string[], options: Parameters<Machine['run']>[2]) {
     const timeoutMs = options.timeoutMs ?? runTimeoutMs
     return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
       const child = spawnProcess(command, args, options)
@@ -183,7 +183,11 @@ export function createLocalMachine({
         timedOut = true
         child.kill()
       }, timeoutMs)
-      child.onStdout((chunk) => (stdout += chunk))
+      child.onStdout((chunk) => {
+        stdout += chunk
+        options.onStdout?.(chunk)
+      })
+      options.signal?.addEventListener('abort', child.kill, { once: true })
       child.onExit((code, stderr) => {
         clearTimeout(timeout)
         if (!timedOut) return resolve({ code, stdout, stderr })

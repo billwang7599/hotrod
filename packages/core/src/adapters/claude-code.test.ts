@@ -62,6 +62,28 @@ describe('claudeCode adapter', () => {
     expect(fake.spawned[0]?.env).toEqual({ HOTROD_MCP_TOKEN: token })
   })
 
+  it("connects each mod's MCP server next to Hotrod's, running without asking the tools of those that allow it", () => {
+    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const mcpServers = [
+      { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' }, allowTools: true },
+      { name: 'asks', command: 'asks-mcp' },
+    ]
+    const args = startSession('', { hotrodMcp, mcpServers, readFiles: ['/tmp/a.png'] }).fake.spawned[0]!.args
+    expect(JSON.parse(args[args.indexOf('--mcp-config') + 1]!).mcpServers).toEqual({
+      hotrod: { type: 'http', url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' } },
+      browser: { type: 'stdio', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' } },
+      asks: { type: 'stdio', command: 'asks-mcp', args: [], env: {} },
+    })
+    expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 4)).toEqual([
+      'mcp__hotrod__*',
+      'mcp__browser__*',
+      'Read(//tmp/a.png)',
+    ])
+    const alone = startSession('', { mcpServers: mcpServers.slice(1) }).fake.spawned[0]!.args
+    expect(Object.keys(JSON.parse(alone[alone.indexOf('--mcp-config') + 1]!).mcpServers)).toEqual(['asks'])
+    expect(alone).not.toContain('--allowedTools')
+  })
+
   it('passes the model and effort only when set', async () => {
     const { models = [], thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
     const model = models.at(-1)!
@@ -193,7 +215,16 @@ describe('claudeCode adapter', () => {
     expect(events).toEqual([
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
-      { type: 'permission.requested', requestId, toolId, name: 'Bash', kind: 'shell', summary: 'echo hi > a.txt', input },
+      {
+        type: 'permission.requested',
+        requestId,
+        toolId,
+        name: 'Bash',
+        kind: 'shell',
+        summary: 'echo hi > a.txt',
+        command: input.command,
+        input,
+      },
       { type: 'tool.completed', toolId, output: '(Bash completed with no output)', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.delta', text: '.' },
@@ -324,7 +355,7 @@ describe('claudeCode adapter', () => {
     ])
   })
 
-  it('summarizes a permission request, with the path an edit writes', () => {
+  it('summarizes a permission request, with the path an edit writes and the command a shell runs', () => {
     const { fake, events } = startSession()
     const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }
     const notebook = { subtype: 'can_use_tool', tool_name: 'NotebookEdit', input: { notebook_path: '/n.ipynb' } }
@@ -343,7 +374,15 @@ describe('claudeCode adapter', () => {
         path: '/n.ipynb',
         input: notebook.input,
       },
-      { type: 'permission.requested', requestId: 'r3', name: 'Bash', kind: 'shell', summary: 'ls /c.ts', input: shell.input },
+      {
+        type: 'permission.requested',
+        requestId: 'r3',
+        name: 'Bash',
+        kind: 'shell',
+        summary: 'ls /c.ts',
+        command: 'ls /c.ts',
+        input: shell.input,
+      },
     ])
   })
 

@@ -1,4 +1,4 @@
-import type { ModSetting, ModValues } from '@hotrod/mod-api'
+import type { McpServer, ModSetting, ModValues } from '@hotrod/mod-api'
 
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
@@ -17,6 +17,7 @@ export type EngineEvent =
       kind: ToolKind
       summary: string
       path?: string
+      command?: string
       input: unknown
     }
   | { type: 'turn.completed'; error?: string }
@@ -41,7 +42,12 @@ export interface Machine {
   run(
     command: string,
     args: string[],
-    options: SpawnOptions & { input?: string; timeoutMs?: number },
+    options: SpawnOptions & {
+      input?: string
+      timeoutMs?: number
+      onStdout?: (chunk: string) => void
+      signal?: AbortSignal
+    },
   ): Promise<{ code: number | null; stdout: string; stderr: string }>
   stopAll(): Promise<void>
 }
@@ -66,6 +72,7 @@ export type SessionOptions = {
   accountDir?: string
   apiKey?: string
   hotrodMcp?: { url: string; token: string }
+  mcpServers?: McpServer[]
   extraDirs?: string[]
   readFiles?: string[]
   model?: string
@@ -126,7 +133,20 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export type ChatInfo = {
+export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true }
+
+export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
+
+export const PERMISSION_SWITCHES = Object.keys(PERMISSION_DEFAULTS) as PermissionSwitch[]
+
+export type PermissionSwitches = Partial<Record<PermissionSwitch, boolean>>
+
+export const switchedOn = (name: PermissionSwitch, ...layers: PermissionSwitches[]) =>
+  layers.find((layer) => layer[name] !== undefined)?.[name] ?? PERMISSION_DEFAULTS[name]
+
+export const ASK_FIRST_COMMANDS = ['git push', 'npm publish', 'gh', 'curl', 'wget', 'ssh', 'scp', 'rsync']
+
+export type ChatInfo = PermissionSwitches & {
   id: string
   name: string
   mod?: string
@@ -143,15 +163,14 @@ export type ChatInfo = {
   thinking?: string
   workDir?: string
   worktrees?: Record<string, Worktree>
-  editAnywhere?: true
 }
 
 export type Worktree = { path: string; branch: string }
 
-export type WorkFolder = { path?: string; defaultPath: string; canSandbox: boolean; editAnywhere?: true }
+export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
 
-export const editsAnywhere = (chat: Pick<ChatInfo, 'editAnywhere'>, workFolder: Pick<WorkFolder, 'editAnywhere'>) =>
-  chat.editAnywhere === true || workFolder.editAnywhere === true
+export const editsAnywhere = (chat: PermissionSwitches, workFolder: PermissionSwitches) =>
+  switchedOn('editAnywhere', chat, workFolder)
 
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
 
@@ -176,6 +195,16 @@ export type ModInfo = {
   enabled: boolean
   settings: ModSetting[]
   values: ModValues
+  setup?: SetupState
+}
+
+export type SetupState = {
+  description: string
+  status: 'checking' | 'missing' | 'installing' | 'ready'
+  message?: string
+  progressText?: string
+  progress?: number
+  error?: string
 }
 
 export function settingProblem(setting: ModSetting, value: unknown) {
@@ -248,7 +277,7 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
-  | { type: 'chat.setEditAnywhere'; chatId: string; enabled: boolean }
+  | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
@@ -261,9 +290,11 @@ export type ClientMessage =
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
   | { type: 'workFolder.set'; path: string }
-  | { type: 'workFolder.setEditAnywhere'; enabled: boolean }
+  | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
+  | { type: 'mod.install'; modId: string }
+  | { type: 'mod.cancelInstall'; modId: string }
   | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }

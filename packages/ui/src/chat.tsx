@@ -22,11 +22,13 @@ import {
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
+  type ToolKind,
   type Upload,
   type WorkFolder,
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { useSmoothText } from './smooth.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -68,9 +70,12 @@ const THINKING_HINT = 'Thinking level, from the next message. Choosing the Setti
 const INTERRUPTED = 'Interrupted'
 const VERDICTS = { allowed: 'Allowed', denied: 'Denied', cancelled: 'Cancelled' }
 const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
-const AUTO_VERDICT_HINTS = {
-  allowed: 'An edit inside the work folder, so Hotrod allowed it without asking',
-  denied: 'An edit outside the work folder, so Hotrod denied it without asking',
+const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, string>>> = {
+  allowed: {
+    edit: 'An edit inside the work folder, so Hotrod allowed it without asking',
+    shell: 'A command in a sandboxed chat, so Hotrod ran it without asking',
+  },
+  denied: { edit: 'An edit outside the work folder, so Hotrod denied it without asking' },
 }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -333,9 +338,9 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
   )
 }
 
-function Verdict({ permission: { outcome, auto } }: { permission: Permission }) {
+function Verdict({ permission: { outcome, auto, toolKind } }: { permission: Permission }) {
   if (outcome === 'pending') return null
-  const hint = auto && outcome !== 'cancelled' ? AUTO_VERDICT_HINTS[outcome] : undefined
+  const hint = auto && outcome !== 'cancelled' ? AUTO_VERDICT_HINTS[outcome][toolKind] : undefined
   return (
     <Hint text={hint}>
       <span
@@ -701,7 +706,7 @@ export function Chat(props: ChatProps) {
               text={
                 !workFolder.canSandbox
                   ? NOT_SANDBOXED_HINT
-                  : workFolder.editAnywhere
+                  : chat.editAnywhere === undefined
                     ? EDITS_ANYWHERE_ALL_HINT
                     : EDITS_ANYWHERE_HINT
               }
@@ -784,7 +789,7 @@ export function Chat(props: ChatProps) {
             })}
             {chat.draft && (
               <m.div initial={enter} animate={MOTION.rise.animate}>
-                <Markdown className={`streaming ${ASSISTANT}`} text={chat.draft} />
+                <StreamingText text={chat.draft} smooth={!reduceMotion} />
               </m.div>
             )}
             {awaitingOutput && (
@@ -1047,4 +1052,10 @@ export function Chat(props: ChatProps) {
       </AnimatePresence>
     </div>
   )
+}
+
+/** The reply as it streams in, revealed smoothly rather than in the bursts the engine sends. */
+function StreamingText(props: { text: string; smooth: boolean }) {
+  const text = useSmoothText(props.text, props.smooth)
+  return <Markdown className={`streaming ${ASSISTANT}`} text={text} />
 }
