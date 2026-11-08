@@ -373,6 +373,9 @@ test('thinking and tool calls show unfolded by default from Settings, and each c
   act(() => rowButtons()[1]!.click())
   expect(open()).toEqual(['true', 'false'])
 
+  expect(container.querySelector('aside button[aria-label="Thinking and tool calls"]')).toBeNull()
+  const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
+  act(() => general.click())
   const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Thinking and tool calls"]')!
   expect(select().textContent).toBe('Default (Unfolded)')
   act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
