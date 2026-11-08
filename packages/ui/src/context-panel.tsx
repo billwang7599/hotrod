@@ -15,7 +15,7 @@ import {
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
-import { showStepsIn, useStepsChoice, useStepsDefault } from './steps.ts'
+import { showStepsIn, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { folderName, type ChatView } from './state.ts'
 
@@ -60,7 +60,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   },
 }
 const PERMISSIONS_HINT =
-  'Default follows Settings → Work folder. Each choice is for this chat only; its subagents follow their own.'
+  'Each shows Settings → Work folder until you pick. A pick is for this chat only; its subagents follow their own.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -292,22 +292,19 @@ function AddPath({ section, chatId, disabled, send }: {
 
 const STEPS_LABEL = 'Thinking and tool calls'
 function StepsSwitch({ chatId }: { chatId: string }) {
-  const chosen = useStepsChoice(chatId)
-  const byDefault = useStepsDefault()
-  const word = (on: boolean) => (on ? 'Unfolded' : 'Folded')
+  const shown = useStepsShown(chatId)
   return (
     <section className="flex flex-col" aria-label="View">
       <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
         <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
         <Select
           label={STEPS_LABEL}
-          value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+          value={shown ? 'on' : 'off'}
           options={[
-            { value: 'default', label: `Default (${word(byDefault)})` },
-            { value: 'on', label: word(true) },
-            { value: 'off', label: word(false) },
+            { value: 'on', label: 'Unfolded' },
+            { value: 'off', label: 'Folded' },
           ]}
-          onChange={(value) => showStepsIn(chatId, value === 'default' ? undefined : value === 'on')}
+          onChange={(value) => showStepsIn(chatId, value === 'on')}
         />
       </div>
     </section>
@@ -413,8 +410,8 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
             <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
             {PERMISSION_SWITCHES.map((name) => {
               const { label, amberWhileOn } = PERMISSIONS[name]
-              const chosen = chat[name]
-              const amber = amberWhileOn && switchedOn(name, chat, workFolder)
+              const on = switchedOn(name, chat, workFolder)
+              const amber = amberWhileOn && on
               return (
                 <div
                   key={name}
@@ -423,21 +420,13 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
                   <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
                   <Select
                     label={label}
-                    value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+                    value={on ? 'on' : 'off'}
                     disabled={locked}
                     options={[
-                      { value: 'default', label: `Default (${switchedOn(name, workFolder) ? 'On' : 'Off'})` },
                       { value: 'on', label: 'On' },
                       { value: 'off', label: 'Off' },
                     ]}
-                    onChange={(value) =>
-                      send({
-                        type: 'chat.setPermission',
-                        chatId,
-                        name,
-                        ...(value !== 'default' && { enabled: value === 'on' }),
-                      })
-                    }
+                    onChange={(value) => send({ type: 'chat.setPermission', chatId, name, enabled: value === 'on' })}
                   />
                 </div>
               )

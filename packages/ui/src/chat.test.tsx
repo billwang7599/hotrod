@@ -376,14 +376,19 @@ test('thinking and tool calls show unfolded by default from Settings, and each c
   const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => general.click())
   const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Thinking and tool calls"]')!
-  expect(select().textContent).toBe('Default (Unfolded)')
+  expect(select().textContent).toBe('Unfolded')
   act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  const folded = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Folded')!
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Unfolded', 'Folded'])
+  const folded = options.find((o) => o.textContent === 'Folded')!
   act(() => folded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(select().textContent).toBe('Folded')
   expect(foldButton()?.textContent).toBe('3 steps')
+  act(() => showStepsByDefault(true))
+  expect(select().textContent).toBe('Folded')
   render({ id: 'c2', items }, () => {}, { contextOpen: true })
   expect(foldButton()).toBeUndefined()
+  expect(select().textContent).toBe('Unfolded')
 
   act(() => showStepsByDefault(false))
   localStorage.clear()
@@ -563,19 +568,22 @@ test('every chat, Home too, overrides each permission default in its Context pan
     for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
       const sent: ClientMessage[] = []
       render(chat, (m) => sent.push(m), { contextOpen: true })
-      expect(select().textContent).toBe(`Default (${fallback})`)
-      choose(select(), (text) => text.endsWith(flipped))
+      expect(select().textContent).toBe(fallback)
+      choose(select(), (text) => text.startsWith(flipped))
       const chatId = 'id' in chat ? chat.id : 'c1'
       expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId, name, enabled: !PERMISSION_DEFAULTS[name] })
     }
 
     render({}, () => {}, { contextOpen: true, workFolder: { [name]: !PERMISSION_DEFAULTS[name] } })
-    expect(select().textContent).toBe(`Default (${flipped})`)
-    const sent: ClientMessage[] = []
-    render({ [name]: true }, (m) => sent.push(m), { contextOpen: true })
+    expect(select().textContent).toBe(flipped)
+    render({ [name]: true }, () => {}, { contextOpen: true, workFolder: { [name]: false } })
     expect(select().textContent).toBe('On')
-    choose(select(), (text) => text.includes('Default'))
-    expect(sent.at(-1)).toEqual({ type: 'chat.setPermission', chatId: 'c1', name })
+    act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+    expect([...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.replace('✓', ''))).toEqual([
+      'On',
+      'Off',
+    ])
+    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
   }
   localStorage.clear()
 })
@@ -586,7 +594,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
   localStorage.setItem('hotrod.panelTab', 'permissions')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
-  expect(select().textContent).toBe('Default (On)')
+  expect(select().textContent).toBe('On')
   expect(amber()).toContain('text-amber')
   render({ editAnywhere: false }, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('Off')

@@ -42,11 +42,6 @@ export function showStepsIn(chatId: string, shown: boolean | undefined) {
   save({ ...current, chats: shown === undefined ? chats : { ...chats, [chatId]: shown } })
 }
 
-/** One chat's own choice, undefined while it follows Settings. */
-export function useStepsChoice(chatId: string): boolean | undefined {
-  return useSyncExternalStore(subscribe, snapshot, snapshot).chats[chatId]
-}
-
 /** Rereads the saved choice, for tests that clear storage. */
 export function reloadSteps() {
   current = read()
