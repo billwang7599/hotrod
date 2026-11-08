@@ -282,7 +282,6 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
-      instructions: { path: string; text: string }
       mods: ModInfo[]
       modelLists: Record<string, ModelLists>
       memory: MemorySettings

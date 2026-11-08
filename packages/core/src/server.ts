@@ -88,7 +88,6 @@ export async function startServer(options: {
       chats: core.chats(),
       accounts: core.accounts(),
       contextDefaults: core.contextDefaults(),
-      instructions: core.instructions(),
       mods: core.mods(),
       modelLists: core.modelLists(),
       memory: core.memory(),

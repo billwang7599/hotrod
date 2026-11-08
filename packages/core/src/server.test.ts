@@ -123,7 +123,6 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     type: 'snapshot',
     engines: [{ id: 'fake', enabled: false }],
     chats: [],
-    instructions: { path: expect.stringMatching(/AGENTS\.md$/), text: '' },
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
     memory: {},

@@ -58,7 +58,6 @@ const modInfo = (id: string, enabled = false): ModInfo => ({
 const mods = [modInfo('subagents'), modInfo('other')]
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
 const modelLists = { fake: noLists }
-const instructions = { path: '/g/AGENTS.md', text: 'RULES' }
 const snapshot = (chats: ChatState[]): Action =>
   ({
     type: 'snapshot',
@@ -66,7 +65,6 @@ const snapshot = (chats: ChatState[]): Action =>
     accounts: [],
     chats,
     contextDefaults,
-    instructions,
     mods,
     modelLists,
     memory: {},
@@ -95,7 +93,7 @@ describe('reduce', () => {
       ]),
     )
     expect(state.engines).toEqual(engines)
-    expect(state).toMatchObject({ loaded: true, instructions })
+    expect(state.loaded).toBe(true)
     expect(initialState.loaded).toBe(false)
     expect(state.selectedId).toBe(MAIN_CHAT_ID)
     expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'a', 'b'])
@@ -399,10 +397,6 @@ describe('reduce', () => {
 
     const written = reduce(loaded, { type: 'context.file', path: '/g/AGENTS.md', text: 'rules' })
     expect(written.context?.items.map((i) => i.text)).toEqual(['rules', 'REPO', ''])
-    expect(written.instructions).toEqual({ path: '/g/AGENTS.md', text: 'rules' })
-    const own = reduce(loaded, { type: 'context.file', path: '/g/chats/a/AGENTS.md', text: 'mine' })
-    expect(own.instructions).toEqual(instructions)
-    expect(reduce(run(snapshot([])), { type: 'context.file', path: '/g/AGENTS.md', text: 'x' }).instructions.text).toBe('x')
 
     const defaults = { ...contextDefaults, files: false }
     expect(reduce(written, { type: 'context.defaults', defaults }).contextDefaults).toEqual(defaults)

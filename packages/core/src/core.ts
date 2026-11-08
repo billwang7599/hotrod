@@ -1038,7 +1038,6 @@ export function openCore(options: {
     chats: () => shownChats().map(state),
     workFolder,
     setWorkFolder,
-    instructions: () => ({ path: globalAgentsFile, text: readBytes(globalAgentsFile).toString('utf8') }),
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),

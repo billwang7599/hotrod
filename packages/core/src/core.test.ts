@@ -2467,14 +2467,12 @@ describe('context', () => {
     expect(itemsOf(t, chat.id).find((i) => i.path === file)?.text).toBe('APP RULES\n')
   })
 
-  it('writes the global AGENTS.md from Settings, given to every chat with or without a mod chat', async () => {
+  it('writes the global AGENTS.md, given to every chat with or without a mod chat', async () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [])
     const global = join(t.garage, 'AGENTS.md')
-    expect(t.core.instructions()).toEqual({ path: global, text: '' })
     t.handle({ type: 'instructions.write', text: 'EVERY CHAT' })
     expect(readFileSync(global, 'utf8')).toBe('EVERY CHAT')
     expect(t.messages.at(-1)).toEqual({ type: 'context.file', path: global, text: 'EVERY CHAT' })
-    expect(t.core.instructions()).toEqual({ path: global, text: 'EVERY CHAT' })
     const chat = createChat(t, { name: 'App' })
     expect(itemsOf(t, chat.id)[0]).toMatchObject({ path: global, from: GLOBAL_CONTEXT, text: 'EVERY CHAT' })
     expect(await instructionsOf(t, chat.id)).toBe('EVERY CHAT')

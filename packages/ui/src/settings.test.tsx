@@ -100,7 +100,6 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
               engines={[]}
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
-              instructions={{ path: '/garage/AGENTS.md', text: '' }}
               mods={[]}
               modelLists={{}}
               workFolder={workFolder}
@@ -127,6 +126,13 @@ test('Settings → Work folder turns edits outside the work folder on for every 
   expect(editSwitch().getAttribute('aria-checked')).toBe('true')
   act(() => editSwitch().click())
   expect(sent.at(-1)).toEqual({ type: 'workFolder.setEditAnywhere', enabled: false })
+})
+
+test('Settings has no Instructions page: the global AGENTS.md is edited in the Context panel', () => {
+  renderSettings(workFolder)
+  const tabs = [...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
+  expect(tabs).toContain('Work folder')
+  expect(tabs).not.toContain('Instructions')
 })
 
 test('from Settings it starts at the current folder and can be cancelled', () => {

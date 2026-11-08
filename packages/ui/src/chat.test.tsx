@@ -5,7 +5,7 @@ import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, JUMP_BELOW_PX } from './chat.tsx'
-import type { ClientMessage, WorkFolder } from '@hotrod/core/shared'
+import { GLOBAL_CONTEXT, type ClientMessage, type ContextItem, type WorkFolder } from '@hotrod/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -70,7 +70,7 @@ afterEach(() => {
   for (const key of [...Object.keys(sizes), 'scrollTo']) delete (HTMLElement.prototype as unknown as Record<string, unknown>)[key]
 })
 
-type RenderOptions = { workFolder?: Partial<WorkFolder>; contextOpen?: boolean }
+type RenderOptions = { workFolder?: Partial<WorkFolder>; contextOpen?: boolean; contextItems?: ContextItem[] }
 
 function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () => {}, options: RenderOptions = {}) {
   const view: ChatView = {
@@ -102,6 +102,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               sidebarOpen
               toggleSidebar={() => {}}
               contextOpen={options.contextOpen ?? false}
+              contextItems={options.contextItems}
               contextOverlay={false}
               toggleContext={() => {}}
               contextDefaults={{ agents: true, folders: true, files: true }}
@@ -294,4 +295,22 @@ test('says when Hotrod answered an edit itself', () => {
   expect(text).toContain('✓ Allowed automatically')
   expect(text).toContain('✕ Denied: outside the work folder')
   expect(text).toContain('✕ DeniedWrite')
+})
+
+test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
+  const global: ContextItem = { section: 'agents', path: '/g/AGENTS.md', from: GLOBAL_CONTEXT, enabled: true, text: 'OLD' }
+  const box = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]') as HTMLTextAreaElement
+  for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
+    const sent: ClientMessage[] = []
+    render(chat, (m) => sent.push(m), { contextOpen: true, contextItems: [global] })
+    expect(box().readOnly).toBe(false)
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'NEW')
+      box().dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    act(() => box().dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+    expect(sent.at(-1)).toEqual({ type: 'instructions.write', text: 'NEW' })
+  }
+  const pill = [...container.querySelectorAll('aside[aria-label="Context"] span')].find((s) => s.textContent === 'Every chat')!
+  expect(await hintOf(pill)).toContain('changes it everywhere')
 })

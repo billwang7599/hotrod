@@ -242,7 +242,6 @@ function App() {
               engines={state.engines}
               accounts={state.accounts}
               contextDefaults={state.contextDefaults}
-              instructions={state.instructions}
               mods={state.mods}
               modelLists={state.modelLists}
               workFolder={state.workFolder}

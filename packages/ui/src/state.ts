@@ -57,7 +57,6 @@ export type State = {
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextSection, boolean>
-  instructions: { path: string; text: string }
   mods: ModInfo[]
   modelLists: Record<string, ModelLists>
   workFolder: WorkFolder
@@ -81,7 +80,6 @@ export const initialState: State = {
   chats: [],
   selectedId: '',
   contextDefaults: { agents: true, folders: true, files: true },
-  instructions: { path: '', text: '' },
   mods: [],
   modelLists: {},
   workFolder: { defaultPath: '', canSandbox: true },
@@ -183,7 +181,6 @@ export function reduce(state: State, action: Action): State {
         accounts: action.accounts,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
-        instructions: action.instructions,
         mods: action.mods,
         modelLists: action.modelLists,
         workFolder: action.workFolder,
@@ -238,12 +235,10 @@ export function reduce(state: State, action: Action): State {
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, items: action.items } }
     case 'context.file': {
-      const { context, instructions } = state
-      const ours = instructions.path === action.path
-      const written = ours ? { ...state, instructions: { ...instructions, text: action.text } } : state
-      if (!context) return written
+      const { context } = state
+      if (!context) return state
       const items = context.items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
-      return { ...written, context: { ...context, items } }
+      return { ...state, context: { ...context, items } }
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }

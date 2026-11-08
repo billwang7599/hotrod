@@ -38,7 +38,7 @@ const EMPTY_SECTION: Record<ContextSection, string> = {
   files: 'No files.',
 }
 const GLOBAL_SOURCE = 'Global'
-const GLOBAL_HINT = 'Every chat gets it. Edit it in Settings → Instructions.'
+const GLOBAL_HINT = 'Every chat gets this. Editing it here changes it everywhere.'
 const CHAT_INTRO = 'Each message gets the items that are on, the global AGENTS.md first.'
 const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text-muted'
 const CHECKOUT_HINT =
@@ -65,15 +65,16 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const [text, setText] = useState(item.text)
   useEffect(() => setText(item.text), [item.text])
   const own = item.from === chatId
-  const editable = own && !readOnly
+  const global = item.from === GLOBAL_CONTEXT
+  const writable = own || global
   const dim = item.enabled ? '' : 'opacity-55'
   return (
     <div className={`mb-8 flex flex-col gap-6 rounded-lg border p-10 ${item.enabled ? 'bg-bg shadow-raised' : ''}`}>
       <div className="flex items-center justify-between gap-8">
         <span className={`flex min-w-0 items-center gap-6 font-semibold ${dim}`}>
           <span className="truncate">{source}</span>
-          <Hint text={item.from === GLOBAL_CONTEXT && GLOBAL_HINT}>
-            <span className={PILL}>{own ? 'Own' : 'Read-only here'}</span>
+          <Hint text={global && GLOBAL_HINT}>
+            <span className={PILL}>{own ? 'Own' : global ? 'Every chat' : 'Read-only here'}</span>
           </Hint>
         </span>
         <Switch
@@ -87,15 +88,24 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
         {item.path}
       </span>
       <textarea
-        className={`resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent read-only:bg-transparent read-only:text-muted ${own ? 'min-h-96' : 'min-h-36'} ${dim}`}
+        className={`resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent read-only:bg-transparent read-only:text-muted ${writable ? 'min-h-96' : 'min-h-36'} ${dim}`}
         value={text}
-        rows={own ? 6 : 2}
+        rows={writable ? 6 : 2}
         spellCheck={false}
-        readOnly={!editable}
+        readOnly={!writable || readOnly}
         aria-label={`AGENTS.md of ${source}`}
-        placeholder={own ? 'Empty. Instructions written here go to the engine.' : 'Empty'}
+        placeholder={
+          global
+            ? 'Empty. Instructions written here go to every chat.'
+            : own
+              ? 'Empty. Instructions written here go to the engine.'
+              : 'Empty'
+        }
         onChange={(e) => setText(e.target.value)}
-        onBlur={() => text !== item.text && send({ type: 'context.write', chatId: item.from, text })}
+        onBlur={() => {
+          if (text === item.text) return
+          send(global ? { type: 'instructions.write', text } : { type: 'context.write', chatId: item.from, text })
+        }}
       />
     </div>
   )
