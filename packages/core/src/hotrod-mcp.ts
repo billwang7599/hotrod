@@ -14,7 +14,7 @@ export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
   name: 'Subagents',
   description: 'Chats can hand a task to a new chat that reports back when it ends. Claude Code only.',
-  enabledByDefault: false,
+  enabledByDefault: true,
   settings: [
     {
       key: 'limit',
@@ -27,6 +27,13 @@ export const SUBAGENTS_MOD: Mod = {
     },
   ],
 }
+
+export const SUBAGENT_INSTRUCTIONS =
+  'Hand work to subagents with spawn_subagent, as many as the work needs, so you stay free to keep talking with ' +
+  'the user while they run. Give each one a whole task it can finish on its own, independent of the others: ' +
+  "never two on the same files. Use spawn_subagent, not your engine's own subagent or task tool. Each " +
+  "subagent's final reply comes back to you as a message, so don't wait for it or poll it. Answer quick " +
+  'questions and make small changes yourself.'
 
 type Hub = {
   chats(): ChatState[]

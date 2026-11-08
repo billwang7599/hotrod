@@ -16,7 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { SUBAGENT_INSTRUCTIONS, SUBAGENTS_MOD } from './hotrod-mcp.ts'
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
@@ -126,7 +126,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
     memory: {},
-    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: false, values: { limit: expect.any(Number) } })],
+    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: true, values: { limit: expect.any(Number) } })],
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -444,21 +444,27 @@ const chatIn = (core: ReturnType<typeof openCore>, id: string) => core.chats().f
 it('lets every user chat spawn subagents while the mod is on, up to the limit of running ones', async () => {
   const { core, garage, sessions, post, tool, json, send } = await startHeld()
   const handle = handleOn(core)
+  handle({ type: 'mod.setEnabled', modId: SUBAGENTS_MOD.id, enabled: false })
   const workshop = send('main', 'hi').options.hotrodMcp!.token
   expect((await (await post(workshop, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_subagent not found',
   )
   handle({ type: 'chat.create', name: 'Side' })
   const subchat = core.chats().find((c) => c.id !== 'main')!
-  const before = send(subchat.id, 'hi').options.hotrodMcp!.token
+  const offered = send(subchat.id, 'hi').options
+  expect(offered.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
+  const before = offered.hotrodMcp!.token
   expect((await (await post(before, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_subagent not found',
   )
 
   subagentsOn(core, 1)
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
-  const lead = send(subchat.id, 'again').options.hotrodMcp!.token
+  const leading = send(subchat.id, 'again').options
+  expect(leading.instructions).toContain(SUBAGENT_INSTRUCTIONS)
+  const lead = leading.hotrodMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Read the tests' })
+  expect(sessions.at(-1)?.options.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
   expect(chatIn(core, chatId)).toMatchObject({
     name: 'Read the tests',
     parentId: subchat.id,
