@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
+import { resetReveals } from './smooth.ts'
 import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
 import { ChatNav } from './sidebar.tsx'
 import {
@@ -56,6 +57,7 @@ let container: HTMLElement
 
 beforeEach(() => {
   page.scrollHeight = 2000
+  resetReveals()
   resizeCallbacks = []
   Object.defineProperties(HTMLElement.prototype, sizes)
   HTMLElement.prototype.scrollTo = vi.fn()
@@ -145,6 +147,62 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
 }
 
 const working = () => container.querySelector('[aria-label="Working"]')
+
+/** Takes over animation frames and the clock; returns a function that runs `times` frames of 16ms. */
+function driveFrames() {
+  let now = 0
+  const frames = new Map<number, FrameRequestCallback>()
+  let next = 1
+  vi.spyOn(performance, 'now').mockImplementation(() => now)
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => (frames.set(next, callback), next++))
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id))
+  return (times = 1) => {
+    for (let i = 0; i < times; i++) {
+      now += 16
+      const due = [...frames.values()]
+      frames.clear()
+      act(() => due.forEach((callback) => callback(now)))
+    }
+  }
+}
+const replyText = () => [...container.querySelectorAll('.markdown')].at(-1)?.textContent ?? ''
+const LONG_REPLY = 'Here is what I found after reading the code, in a few short sentences.'
+
+test('a streamed reply types out, and carries on from there when it becomes the finished reply', () => {
+  const frame = driveFrames()
+  render({ status: 'running', items: [USER] })
+  render({ status: 'running', items: [USER], draft: LONG_REPLY.slice(0, 40) })
+  expect(replyText()).toBe('')
+  frame(5)
+  const typed = replyText().length
+  expect(typed).toBeGreaterThan(0)
+  expect(typed).toBeLessThan(40)
+  render({ status: 'idle', items: [USER, { kind: 'text', text: LONG_REPLY }] })
+  expect(replyText().length).toBe(typed)
+  frame(200)
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
+
+test('a reply that arrives whole while the chat is open types out too, but history shows at once', () => {
+  const frame = driveFrames()
+  render({ status: 'idle', items: [USER, { kind: 'text', text: 'Earlier reply' }] })
+  expect(replyText()).toBe('Earlier reply')
+  const before: Item[] = [USER, { kind: 'text', text: 'Earlier reply' }, tool('done', 'a.txt')]
+  render({ status: 'running', items: before })
+  render({ status: 'running', items: [...before, { kind: 'text', text: LONG_REPLY }] })
+  expect(replyText().length).toBeLessThan(LONG_REPLY.length)
+  frame(200)
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
+
+test('a reply already streaming when the chat opens shows what has arrived at once', () => {
+  driveFrames()
+  render({ status: 'running', items: [USER], draft: LONG_REPLY })
+  expect(replyText()).toBe(LONG_REPLY)
+  vi.restoreAllMocks()
+})
 
 test('shows typing dots where the reply will appear while a turn runs and nothing streams yet', () => {
   render({ status: 'running', items: [USER] })

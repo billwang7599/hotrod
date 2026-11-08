@@ -32,7 +32,7 @@ import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { usePathsShown } from './paths.ts'
 import { draftOf, saveDraft } from './drafts.ts'
-import { useSmoothText } from './smooth.ts'
+import { useReveal, type RevealFrom } from './smooth.ts'
 import { StepsOpen, useStepsShown } from './steps.ts'
 import {
   Button,
@@ -136,6 +136,17 @@ function Dots({ label, className = '' }: { label: string; className?: string }) 
       ))}
     </span>
   )
+}
+
+/** How a streamed text is named across elements and where it starts typing; undefined shows it whole. */
+type RevealOf = (item: Item) => { key: string; from: RevealFrom } | undefined
+
+type RevealedProps = { item: Item & { text: string }; revealOf?: RevealOf; children: (text: string) => ReactNode }
+
+/** A reply or thinking text, typed out while it arrives live. */
+function Revealed({ item, revealOf, children }: RevealedProps) {
+  const reveal = revealOf?.(item)
+  return children(useReveal(reveal?.key ?? '', item.text, reveal?.from ?? 'none', !!reveal))
 }
 
 function Row({ summary, quiet, children }: { summary: ReactNode; quiet?: boolean; children: ReactNode }) {
@@ -637,9 +648,10 @@ type ItemProps = {
   select?: (chatId: string) => void
   // Opens a chat that still exists, for a subagent's report.
   openChat?: (chatId: string) => (() => void) | undefined
+  revealOf?: RevealOf
 }
 
-function ItemView({ item, chat, contextItems, connected, send, space, select, openChat }: ItemProps) {
+function ItemView({ item, chat, contextItems, connected, send, space, select, openChat, revealOf }: ItemProps) {
   const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
     case 'report': {
@@ -695,7 +707,9 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
     case 'text':
       return (
         <div className="flex flex-col gap-2">
-          <Markdown className={ASSISTANT} text={item.text} />
+          <Revealed item={item} revealOf={revealOf}>
+            {(text) => <Markdown className={ASSISTANT} text={text} />}
+          </Revealed>
           <CopyButton label="Copy reply" text={item.text} className="self-start" />
         </div>
       )
@@ -709,7 +723,9 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
       return (
         <Row quiet summary={<span className="italic">Thinking…</span>}>
           <div className="mt-2 mb-4 ml-13 max-h-320 overflow-y-auto border-l-2 pl-12 text-sm leading-[1.5] whitespace-pre-wrap">
-            {item.text}
+            <Revealed item={item} revealOf={revealOf}>
+              {(text) => text}
+            </Revealed>
           </div>
         </Row>
       )
@@ -998,8 +1014,34 @@ export function Chat(props: ChatProps) {
   const setModel = (model?: string, thinking?: string) =>
     send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
+  // A chat's nth reply keeps one name from draft to finished item, so its reveal carries over. Texts already there when
+  // the chat was opened show whole; ones that arrive while it's open type out.
+  const replyNumbers = new Map<Item, number>()
+  const thoughtNumbers = new Map<Item, number>()
+  for (const i of chat.items) {
+    if (i.kind === 'text') replyNumbers.set(i, replyNumbers.size)
+    else if (i.kind === 'thinking') thoughtNumbers.set(i, thoughtNumbers.size)
+  }
+  const draftKey = `${chat.id}:text:${replyNumbers.size}`
+  const opened = useRef({ chatId: '', texts: 0, thoughts: 0, draftKey: '' })
+  if (opened.current.chatId !== chat.id) {
+    const [texts, thoughts] = [replyNumbers.size, thoughtNumbers.size]
+    opened.current = { chatId: chat.id, texts, thoughts, draftKey: chat.draft ? draftKey : '' }
+  }
+  // A finished turn drops its thinking, so the next turn's thoughts count from zero again.
+  opened.current.thoughts = Math.min(opened.current.thoughts, thoughtNumbers.size)
+  const revealOf: RevealOf = (item) => {
+    const reply = replyNumbers.get(item)
+    if (reply !== undefined)
+      return { key: `${chat.id}:text:${reply}`, from: reply >= opened.current.texts ? 'start' : 'none' }
+    const thought = thoughtNumbers.get(item)
+    if (thought === undefined) return undefined
+    return { key: `${chat.id}:thinking:${thought}`, from: thought >= opened.current.thoughts ? 'start' : 'end' }
+  }
+  const draftFrom: RevealFrom = draftKey === opened.current.draftKey ? 'end' : 'start'
   const itemProps = {
     chat,
+    ...(!reduceMotion && { revealOf }),
     contextItems: props.contextItems,
     connected,
     send,
@@ -1153,7 +1195,7 @@ export function Chat(props: ChatProps) {
               })}
               {chat.draft && (
                 <m.div initial={enter} animate={MOTION.rise.animate}>
-                  <StreamingText text={chat.draft} smooth={!reduceMotion} />
+                  <StreamingText name={draftKey} text={chat.draft} from={draftFrom} smooth={!reduceMotion} />
                 </m.div>
               )}
               {awaitingOutput && (
@@ -1489,8 +1531,8 @@ export function Chat(props: ChatProps) {
   )
 }
 
-/** The reply as it streams in, revealed smoothly rather than in the bursts the engine sends. */
-function StreamingText(props: { text: string; smooth: boolean }) {
-  const text = useSmoothText(props.text, props.smooth)
+/** The reply as it streams in, typed out rather than shown in the bursts the engine sends. */
+function StreamingText(props: { name: string; text: string; from: RevealFrom; smooth: boolean }) {
+  const text = useReveal(props.name, props.text, props.from, props.smooth)
   return <Markdown className={`streaming ${ASSISTANT}`} text={text} />
 }
