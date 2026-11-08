@@ -308,7 +308,7 @@ describe('appearance', () => {
     expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Rosé Pine/)
   })
 
-  it('explains the color scheme on hover, not on the page', () => {
+  it('leaves the color scheme to speak for itself, with no explanation', () => {
     fakePage({ dark: true })
     startAppearance()
     const html = renderToStaticMarkup(
@@ -318,6 +318,5 @@ describe('appearance', () => {
     )
     expect(html).toContain('Base color scheme')
     expect(html).not.toContain('System follows your OS')
-    expect(html).toMatch(/data-state="closed"[^>]*>(?:(?!<\/div>).)*Base color scheme/)
   })
 })

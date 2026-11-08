@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
-import { GROUP, Hint, Select } from './controls.tsx'
+import { GROUP, Select } from './controls.tsx'
 
 export const TOKENS = [
   'bg',
@@ -496,17 +496,15 @@ export function Appearance() {
   return (
     <>
       <div className={GROUP}>
-        <Hint text="Every theme has a light and a dark version. System follows your OS." align="start">
-          <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
-            <span className="min-w-200 flex-1">Base color scheme</span>
-            <Select
-              label="Base color scheme"
-              value={scheme}
-              options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
-              onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
-            />
-          </div>
-        </Hint>
+        <div className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12">
+          <span className="min-w-200 flex-1">Base color scheme</span>
+          <Select
+            label="Base color scheme"
+            value={scheme}
+            options={Object.entries(SCHEMES).map(([value, label]) => ({ value, label }))}
+            onChange={(value) => chooseAppearance({ scheme: value as Scheme })}
+          />
+        </div>
       </div>
       <div className="pt-24 pb-8 font-semibold">Themes</div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-12">

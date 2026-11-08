@@ -467,6 +467,20 @@ test('the global AGENTS.md is editable in every chat, Home too, and saves as the
   expect(await hintOf(pill)).toContain('changes it everywhere')
 })
 
+test("each panel tab folds its explanations under How this works, not in tooltips", () => {
+  localStorage.clear()
+  render({}, () => {}, { contextOpen: true })
+  const about = () => container.querySelector<HTMLDetailsElement>('aside details')!
+  expect(about().open).toBe(false)
+  expect(about().querySelector('summary')!.textContent).toBe('How this works')
+  expect(about().textContent).toContain('Folders:')
+  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'Permissions')!
+  act(() => tab.click())
+  expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
+  expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
+  localStorage.clear()
+})
+
 test('a subagent is view only: no composer, just a Stop button while it runs', () => {
   const sent: ClientMessage[] = []
   render({ subagent: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))

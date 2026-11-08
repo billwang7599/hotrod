@@ -290,10 +290,6 @@ function AddPath({ section, chatId, disabled, send }: {
 }
 
 const STEPS_LABEL = 'Thinking and tool calls'
-const STEPS_HINT =
-  `Unfolded, each finished turn's thinking and tool calls stay listed and open instead of folding into "N steps". ` +
-  'Only changes this view; the default is in Settings → Appearance.'
-
 function StepsSwitch({ chatId }: { chatId: string }) {
   const chosen = useStepsChoice(chatId)
   const byDefault = useStepsDefault()
@@ -301,21 +297,19 @@ function StepsSwitch({ chatId }: { chatId: string }) {
   return (
     <section className="flex flex-col" aria-label="View">
       <h3 className="mb-8 font-semibold">View</h3>
-      <Hint text={STEPS_HINT} align="start">
-        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
-          <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
-          <Select
-            label={STEPS_LABEL}
-            value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
-            options={[
-              { value: 'default', label: `Default (${word(byDefault)})` },
-              { value: 'on', label: word(true) },
-              { value: 'off', label: word(false) },
-            ]}
-            onChange={(value) => showStepsIn(chatId, value === 'default' ? undefined : value === 'on')}
-          />
-        </div>
-      </Hint>
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+        <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
+        <Select
+          label={STEPS_LABEL}
+          value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+          options={[
+            { value: 'default', label: `Default (${word(byDefault)})` },
+            { value: 'on', label: word(true) },
+            { value: 'off', label: word(false) },
+          ]}
+          onChange={(value) => showStepsIn(chatId, value === 'default' ? undefined : value === 'on')}
+        />
+      </div>
     </section>
   )
 }
@@ -328,24 +322,38 @@ type PanelTabProps = {
   id: PanelTabId
   tab: PanelTabId
   choose: (id: PanelTabId) => void
-  hint: string
   children: ReactNode
 }
 
 function PanelTab(props: PanelTabProps) {
   const selected = props.id === props.tab
   return (
-    <Hint text={props.hint} side="bottom" align="start">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={selected}
-        className="rounded px-8 py-4 font-semibold text-muted transition-[background-color,color] hover:bg-hover hover:text-text aria-selected:bg-hover aria-selected:text-text"
-        onClick={() => props.choose(props.id)}
-      >
-        {props.children}
-      </button>
-    </Hint>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      className="rounded px-8 py-4 font-semibold text-muted transition-[background-color,color] hover:bg-hover hover:text-text aria-selected:bg-hover aria-selected:text-text"
+      onClick={() => props.choose(props.id)}
+    >
+      {props.children}
+    </button>
+  )
+}
+
+/** A tab's how-it-works notes, folded under one quiet line until asked for. */
+function About({ intro, notes }: { intro: string; notes: readonly { label: string; about: string }[] }) {
+  return (
+    <details className="text-sm text-muted">
+      <summary className="w-fit cursor-pointer text-faint transition-colors hover:text-muted">How this works</summary>
+      <div className="mt-6 flex flex-col gap-6">
+        <p>{intro}</p>
+        {notes.map((n) => (
+          <p key={n.label}>
+            <span className="text-text">{n.label}:</span> {n.about}
+          </p>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -380,11 +388,11 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
     <aside className="flex shrink-0 flex-col border-l bg-panel" style={{ width: PANEL_PX.context }} aria-label="Context">
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <div role="tablist" aria-label="Panel" className="flex items-center gap-2">
-          <PanelTab id="context" tab={tab} choose={chooseTab} hint={`${intro} Edits apply from the next message.`}>
+          <PanelTab id="context" tab={tab} choose={chooseTab}>
             Context
           </PanelTab>
           {chat && (
-            <PanelTab id="permissions" tab={tab} choose={chooseTab} hint={PERMISSIONS_HINT}>
+            <PanelTab id="permissions" tab={tab} choose={chooseTab}>
               Permissions
             </PanelTab>
           )}
@@ -394,46 +402,49 @@ export function ContextPanel({ chatId, items, chats, workFolder, readOnly, conne
       <div className="flex flex-1 flex-col gap-18 overflow-y-auto p-12" role="tabpanel" aria-label={TAB_LABEL[shown]}>
         {shown === 'permissions' && chat && (
           <section className="flex flex-col gap-8" aria-label="Permissions">
+            <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
             {PERMISSION_SWITCHES.map((name) => {
-              const { label, about, amberWhileOn } = PERMISSIONS[name]
+              const { label, amberWhileOn } = PERMISSIONS[name]
               const chosen = chat[name]
               const amber = amberWhileOn && switchedOn(name, chat, workFolder)
               return (
-                <Hint key={name} text={about} align="start">
-                  <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
-                    <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
-                    <Select
-                      label={label}
-                      value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
-                      disabled={locked}
-                      options={[
-                        { value: 'default', label: `Default (${switchedOn(name, workFolder) ? 'On' : 'Off'})` },
-                        { value: 'on', label: 'On' },
-                        { value: 'off', label: 'Off' },
-                      ]}
-                      onChange={(value) =>
-                        send({
-                          type: 'chat.setPermission',
-                          chatId,
-                          name,
-                          ...(value !== 'default' && { enabled: value === 'on' }),
-                        })
-                      }
-                    />
-                  </div>
-                </Hint>
+                <div
+                  key={name}
+                  className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8"
+                >
+                  <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
+                  <Select
+                    label={label}
+                    value={chosen === undefined ? 'default' : chosen ? 'on' : 'off'}
+                    disabled={locked}
+                    options={[
+                      { value: 'default', label: `Default (${switchedOn(name, workFolder) ? 'On' : 'Off'})` },
+                      { value: 'on', label: 'On' },
+                      { value: 'off', label: 'Off' },
+                    ]}
+                    onChange={(value) =>
+                      send({
+                        type: 'chat.setPermission',
+                        chatId,
+                        name,
+                        ...(value !== 'default' && { enabled: value === 'on' }),
+                      })
+                    }
+                  />
+                </div>
               )
             })}
           </section>
+        )}
+        {shown === 'context' && (
+          <About intro={`${intro} Edits apply from the next message.`} notes={sections.map((s) => SECTIONS[s])} />
         )}
         {shown === 'context' &&
           sections.map((section) => {
             const listed = items?.filter((item) => item.section === section) ?? []
             return (
               <section key={section} className="flex flex-col" aria-label={SECTIONS[section].label}>
-                <Hint text={SECTIONS[section].about} align="start">
-                  <h3 className="mb-8 w-fit font-semibold">{SECTIONS[section].label}</h3>
-                </Hint>
+                <h3 className="mb-8 font-semibold">{SECTIONS[section].label}</h3>
                 <AnimatePresence initial={false}>
                   {listed.map((item) => (
                     <m.div key={item.path} {...MOTION.collapse} initial={settled.current && MOTION.collapse.initial}>
