@@ -586,6 +586,8 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
+  const working = busy && !archived && !text
+  const asking = chat.status === 'waiting'
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle'
   const last = chat.items.at(-1)
@@ -807,10 +809,15 @@ export function Chat(props: ChatProps) {
           <div className="pointer-events-none absolute inset-x-24 bottom-full mx-auto flex max-w-column justify-end pb-12">
             <AnimatePresence>
               {jumpShown && (
-                <Hint key="jump" text="Jump to the latest output">
+                <Hint key="jump" text={asking ? 'A permission request is waiting below' : 'Jump to the latest output'}>
                   <m.button
-                    className="pointer-events-auto grid size-32 place-items-center rounded-full border bg-panel text-muted shadow-floating transition-colors hover:bg-raised hover:text-text"
-                    aria-label="Scroll to bottom"
+                    className={`pointer-events-auto grid size-32 place-items-center rounded-full border shadow-floating transition-colors ${
+                      asking
+                        ? 'border-amber bg-warning-bg text-amber hover:bg-raised'
+                        : 'bg-panel text-muted hover:bg-raised hover:text-text'
+                    }`}
+                    aria-label={asking ? 'Scroll to the permission request' : 'Scroll to bottom'}
+                    data-asking={asking || undefined}
                     onClick={() => {
                       const list = listRef.current
                       list?.scrollTo({ top: list.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' })
@@ -920,27 +927,39 @@ export function Chat(props: ChatProps) {
                   ))}
                 </ul>
               )}
-              <textarea
-                className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
-                value={text}
-                rows={2}
-                placeholder={archived ? 'Archived' : PLACEHOLDERS[chat.status]}
-                disabled={!(canSend || canQueue)}
-                onChange={(e) => setText(e.target.value)}
-                onPaste={(e) => {
-                  const { types, files } = e.clipboardData
-                  if (types.includes('text/plain') || !files.length) return
-                  e.preventDefault()
-                  void attach([...files])
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
-                  e.preventDefault()
-                  const emptyWithQueue = !hasContent && chat.queue.length > 0
-                  if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
-                  else submit()
-                }}
-              />
+              <div className="relative">
+                {working && (
+                  <span
+                    className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
+                    data-status={chat.status}
+                    aria-hidden="true"
+                  >
+                    {PLACEHOLDERS[chat.status]}
+                  </span>
+                )}
+                <textarea
+                  className="block max-h-[calc(12lh+16px)] min-h-[calc(2lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
+                  value={text}
+                  rows={2}
+                  placeholder={working ? undefined : archived ? 'Archived' : PLACEHOLDERS[chat.status]}
+                  aria-placeholder={working ? PLACEHOLDERS[chat.status] : undefined}
+                  disabled={!(canSend || canQueue)}
+                  onChange={(e) => setText(e.target.value)}
+                  onPaste={(e) => {
+                    const { types, files } = e.clipboardData
+                    if (types.includes('text/plain') || !files.length) return
+                    e.preventDefault()
+                    void attach([...files])
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+                    e.preventDefault()
+                    const emptyWithQueue = !hasContent && chat.queue.length > 0
+                    if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
+                    else submit()
+                  }}
+                />
+              </div>
               <div className="flex items-center gap-8 px-6 pb-6">
                 <span className="flex min-w-0 flex-1 items-center gap-6">
                   <Hint text="Attach files, or paste or drop them here">
