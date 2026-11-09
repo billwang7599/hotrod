@@ -40,15 +40,8 @@ const MODELS = [
   'claude-haiku-5-5',
   'claude-haiku-4-5',
 ]
-// Hotrod's thinking levels as Claude Code's --effort values. Claude Code can't turn thinking off, so `off` isn't one.
-const EFFORT_OF: Partial<Record<ThinkingLevel, string>> = {
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'max',
-}
-const EFFORTS = Object.keys(EFFORT_OF) as ThinkingLevel[]
+// The thinking levels Claude Code takes, passed as --effort as they are. It can't turn thinking off, so `off` isn't one.
+const EFFORTS: ThinkingLevel[] = ['low', 'medium', 'high', 'xhigh', 'max']
 // Models that take fewer --effort levels than EFFORTS; Claude Code silently lowers or drops the rest. From Claude
 // Code 2.1.319's own model list (supportedEffortLevels in its initialize reply) and, for the 4.5 models it doesn't
 // list, its effort, xhigh and max checks.
@@ -243,8 +236,7 @@ export const claudeCode: Adapter = {
       '--replay-user-messages',
     ]
     if (model) args.push('--model', model)
-    const effort = thinking && EFFORT_OF[thinking]
-    if (effort) args.push('--effort', effort)
+    if (thinking) args.push('--effort', thinking)
     for (const dir of extraDirs) args.push('--add-dir', dir)
     const jail = sandbox && jailed(sandbox, accountDir)
     const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }

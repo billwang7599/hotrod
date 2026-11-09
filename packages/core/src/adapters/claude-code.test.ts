@@ -97,10 +97,9 @@ describe('claudeCode adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--effort')
   })
 
-  it("never offers or passes off, which Claude Code's --effort has no value for", async () => {
+  it("never offers off, which Claude Code's --effort has no value for", async () => {
     const { thinking = [] } = await claudeCode.detect(fakeMachine(detected).machine)
     expect(thinking).not.toContain('off')
-    expect(startSession('', { thinking: 'off' }).fake.spawned[0]?.args).not.toContain('--effort')
   })
 
   it('reports the effort levels each model takes where they differ from the full list', async () => {

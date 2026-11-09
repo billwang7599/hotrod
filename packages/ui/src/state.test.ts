@@ -676,47 +676,41 @@ describe('modelMenu', () => {
   const levels: ThinkingLevel[] = ['low', 'medium', 'high']
   const cc = { ...engines[0]!, id: 'cc', models: catalog, thinking: levels, defaultThinking: 'medium' as const }
   const pi = { ...engines[0]!, id: 'pi', models: [{ id: 'p/one', label: 'One' }], thinking: ['off', 'high'] as ThinkingLevel[] }
-  const row = (engine: string, model: string, thinking?: ThinkingLevel) => ({ engine, model, ...(thinking && { thinking }) })
   const view = (extra: object = {}) => ({ ...reduce(initialState, snapshot([chat('a')])).chats[0]!, engine: 'cc', ...extra })
 
-  it("shows the Chat list's first model that can run, at its row's level, and only the levels it takes", () => {
-    const lists = { ...noLists, chat: [row('cc', 'gone', 'high'), row('cc', 'opus-5-5', 'high')] }
-    const menu = modelMenu(view(), [cc, pi], lists)
+  it('shows what the core says the chat runs, with only the levels that model takes', () => {
+    const menu = modelMenu(view({ run: { engine: 'cc', model: 'opus-5-5', thinking: 'high' } }), [cc, pi])
     expect(menu).toMatchObject({ value: modelKey({ engine: 'cc', model: 'opus-5-5' }), thinking: 'high', levels })
-    expect(menu.run).toMatchObject({ engine: 'cc', model: 'opus-5-5', pinned: false })
     expect(menu.choices.map((c) => c.group)).toEqual(['cc', 'cc', 'cc', 'pi'])
-  })
-
-  it('falls back to a model on another engine when the first one cannot run', () => {
-    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'high'), row('pi', 'p/one', 'high')] }
-    expect(modelMenu(view(), [{ ...cc, enabled: false }, pi], lists)).toMatchObject({
-      run: { engine: 'pi', model: 'p/one', thinking: 'high' },
+    expect(modelMenu(view({ run: { engine: 'pi', model: 'p/one', thinking: 'high' } }), [cc, pi])).toMatchObject({
+      runnable: true,
       levels: ['off', 'high'],
     })
-  })
-
-  it("uses a subagent's role list, else the Chat list while the role's is empty", () => {
-    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'low')], planning: [row('pi', 'p/one', 'off')] }
-    expect(modelMenu(view({ role: 'planning' }), [cc, pi], lists).run).toMatchObject({ engine: 'pi', thinking: 'off' })
-    expect(modelMenu(view({ role: 'subagents' }), [cc, pi], lists).run).toMatchObject({ model: 'opus-5-5' })
-  })
-
-  it("keeps the chat's own picks, snapping its level to the model's, and shows one that can't run", () => {
-    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'low')] }
-    expect(modelMenu(view({ thinking: 'max' }), [cc], lists).thinking).toBe('high')
-    const haiku = modelMenu(view({ model: 'haiku-5-5', thinking: 'high' }), [cc], lists)
-    expect(haiku).toMatchObject({ run: { model: 'haiku-5-5', thinking: 'low', pinned: true }, levels: ['low'] })
-    const none = modelMenu(view({ model: 'opus-4-8' }), [cc], lists)
+    const haiku = modelMenu(view({ model: 'haiku-5-5', run: { engine: 'cc', model: 'haiku-5-5', thinking: 'low' } }), [cc])
+    expect(haiku).toMatchObject({ thinking: 'low', levels: ['low'] })
+    const none = modelMenu(view({ model: 'opus-4-8', run: { engine: 'cc', model: 'opus-4-8' } }), [cc])
     expect(none).toMatchObject({ thinking: undefined, levels: [] })
-    const gone = modelMenu(view({ model: 'opus-1' }), [cc], lists)
+  })
+
+  it("shows a pick of the chat's own that can't run, so the user sees why nothing does", () => {
+    const gone = modelMenu(view({ model: 'opus-1' }), [cc])
     expect(gone).toMatchObject({ run: undefined, runnable: false, value: modelKey({ engine: 'cc', model: 'opus-1' }) })
     expect(gone.choices.at(-1)).toMatchObject({ model: 'opus-1', label: 'opus-1 (not available)' })
   })
 
   it('runs an engine that lists no models as it is, and says so when nothing else can run', () => {
     const bare = { ...engines[0]!, id: 'cc' }
-    expect(modelMenu(view(), [bare], noLists)).toMatchObject({ run: undefined, runnable: true, value: undefined })
-    expect(modelMenu(view(), [cc], { ...noLists, chat: [row('cc', 'gone')] }).runnable).toBe(false)
+    expect(modelMenu(view(), [bare])).toMatchObject({ run: undefined, runnable: true, value: undefined })
+    expect(modelMenu(view(), [cc]).runnable).toBe(false)
+  })
+
+  it('takes the run from each update, and drops it when the core sends none', () => {
+    const run = { engine: 'cc', model: 'opus-5-5', thinking: 'high' as const }
+    const base = reduce(initialState, snapshot([chat('a')]))
+    const info = { ...base.chats[0]!, items: undefined }
+    const running = reduce(base, { type: 'chat.updated', chat: { ...info, run } })
+    expect(running.chats[0]!.run).toEqual(run)
+    expect(reduce(running, { type: 'chat.updated', chat: info }).chats[0]!.run).toBeUndefined()
   })
 })
 

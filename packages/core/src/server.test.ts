@@ -533,9 +533,12 @@ it("starts a subagent on the Subagents list, else the Chat list, or its role's l
   expect(chatIn(core, next)).not.toHaveProperty('thinking')
   expect(sessionOf(next).options).toMatchObject({ model: small, thinking: 'high' })
 
-  // Naming an engine pins the subagent to that engine's first model in its list.
-  const pinned = (await json(token, 'spawn_subagent', { task: 'On held', engine: 'held' })).chatId
-  expect(chatIn(core, pinned)).toMatchObject({ engine: 'held', model: small, thinking: 'high' })
+  // The tool takes no engine: one an agent names anyway is dropped, and the core picks from the list as always.
+  const named = (await json(token, 'spawn_subagent', { task: 'On held', engine: 'held' })).chatId
+  expect(chatIn(core, named)).not.toHaveProperty('model')
+  expect(chatIn(core, named)).toMatchObject({ run: { engine: 'held', model: small, thinking: 'high' } })
+  // What runs is worked out each time, never saved with the chat.
+  expect(JSON.parse(readFileSync(join(garage, 'chats', named, 'chat.json'), 'utf8'))).not.toHaveProperty('run')
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy, then removes the subagent", async () => {

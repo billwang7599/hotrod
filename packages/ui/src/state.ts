@@ -1,5 +1,5 @@
 import type { ModView } from '@hotrod/mod-api'
-import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS, pickRun } from '@hotrod/core/shared'
+import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@hotrod/core/shared'
 import type {
   Account,
   Answers,
@@ -15,6 +15,7 @@ import type {
   EngineAccounts,
   EngineInfo,
   ModelLists,
+  Run,
   ModInfo,
   PanelTab,
   QueuedMessage,
@@ -60,6 +61,8 @@ export type Item =
   | { kind: 'note'; text: string; mod?: string; panel?: string }
 
 export type ChatView = ChatInfo & {
+  // What the chat runs now, as the core picked it; absent when nothing can run.
+  run?: Run
   status: ChatStatus
   items: Item[]
   draft: string
@@ -298,6 +301,7 @@ export function reduce(state: State, action: Action): State {
         ...c,
         model: undefined,
         thinking: undefined,
+        run: undefined,
         ...action.chat,
       }))
     case 'chat.removed': {
@@ -493,12 +497,12 @@ export function modelChoices(engines: EngineInfo[]): ModelChoice[] {
 }
 
 /**
- * What a chat's model and thinking pickers show: what it runs (pickRun), the models it can pick and the levels the
- * running model takes. `runnable` is false when sending would fail: nothing can run, unless its engine lists no
- * models (not detected yet), in which case the engine runs as is.
+ * What a chat's model and thinking pickers show: what it runs (the core's pick, sent with the chat), the models it can
+ * pick and the levels the running model takes. `runnable` is false when sending would fail: nothing can run, unless
+ * its engine lists no models (not detected yet), in which case the engine runs as is.
  */
-export function modelMenu(chat: ChatView, engines: EngineInfo[], lists = NO_LISTS) {
-  const run = pickRun(engines, lists, chat)
+export function modelMenu(chat: ChatView, engines: EngineInfo[]) {
+  const { run } = chat
   const engine = engines.find((e) => e.id === (run?.engine ?? chat.engine))
   const choices = modelChoices(engines)
   // A pick of the chat's own that can't run stays on show, so the user sees why nothing runs.

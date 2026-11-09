@@ -17,8 +17,9 @@ import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@hotrod/mo
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
-import { CHECKOUT_RULES, openCore, SUMMARY_MODELS, WRITE_RULES, type Core } from './core.ts'
+import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import {
   COMPACT_MIN_CHARS,
@@ -32,8 +33,6 @@ import {
 import {
   ASK_FIRST_COMMANDS,
   bySpaceOrder,
-  pickRun,
-  snapLevel,
   isUnread,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
@@ -3321,8 +3320,12 @@ describe('models', () => {
     await until(() => settled(t.core, 'main'))
     expect(beta.calls.at(-1)!.options).toMatchObject({ model: older, thinking: 'low' })
 
+    t.messages.length = 0
     t.handle({ type: 'engine.setEnabled', engine: 'alpha', enabled: true })
     expect(chatOf(t.core, 'main')?.engine).toBe('alpha')
+    // The core alone picks what runs, and tells the UI.
+    expect(chatOf(t.core, 'main')?.run).toEqual({ engine: 'alpha', model: newest, thinking: 'high' })
+    expect(t.messages.findLast((m) => m.type === 'chat.updated')).toMatchObject({ chat: { id: 'main', run: { engine: 'alpha' } } })
     t.handle({ type: 'chat.send', chatId: 'main', text: 'again' })
     await until(() => settled(t.core, 'main'))
     expect(alpha.calls.at(-1)!.options).toMatchObject({ model: newest, thinking: 'high' })
@@ -3367,7 +3370,11 @@ describe('models', () => {
   it("runs a role's list, else the Chat list while the role's own is empty", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
-    const runs = (role: 'planning' | 'subagents') => pickRun(t.core.engines(), t.core.modelLists(), { engine: 'fake', role })
+    const runs = (role: 'planning' | 'subagents') => {
+      const settings = { engines: {}, models: t.core.modelLists() }
+      const options = { settings, save: () => {}, engines: t.core.engines, defaultEngine: 'fake', broadcast: () => {} }
+      return openModels(options).runOf({ engine: 'fake', role })
+    }
     expect(runs('subagents')).toMatchObject({ model: defaultModel, thinking: defaultThinking })
     t.handle({ type: 'models.setList', role: 'planning', models: [row(newest, 'low')] })
     expect(runs('planning')).toMatchObject({ model: newest, thinking: 'low' })
