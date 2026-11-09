@@ -232,7 +232,8 @@ const SELECT_TRIGGERS = {
   chip: 'h-26 max-w-220 gap-6 rounded border border-transparent pr-6 pl-8 text-sm text-muted enabled:hover:border-border enabled:hover:text-text enabled:hover:shadow-raised disabled:text-faint data-[state=open]:border-border data-[state=open]:text-text max-[900px]:max-w-150',
 }
 
-export type SelectOption = { value: string; label: string; disabled?: boolean }
+// group: options with one sit under its heading, in the order the groups first appear.
+export type SelectOption = { value: string; label: string; disabled?: boolean; group?: string }
 
 type SelectProps = {
   label: string
@@ -273,25 +274,48 @@ export function Select({ label, value, options, onChange, placeholder, hint, dis
           className="z-40 max-h-(--radix-select-content-available-height) max-w-[calc(100vw-16px)] min-w-(--radix-select-trigger-width) overflow-hidden rounded-lg border bg-panel text-text shadow-floating"
         >
           <SelectPrimitive.Viewport className="p-4">
-            {options.map((o) => (
-              <SelectPrimitive.Item
-                key={o.value}
-                value={o.value}
-                disabled={o.disabled}
-                className="flex h-26 items-center gap-8 rounded-sm pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
-              >
-                <span className="w-12 shrink-0 text-accent">
-                  <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
-                </span>
-                <SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
-              </SelectPrimitive.Item>
-            ))}
+            {groupsOf(options).map(({ group, items }) =>
+              group === undefined ? (
+                items.map(selectItem)
+              ) : (
+                <SelectPrimitive.Group key={group} className="not-first:pt-4">
+                  <SelectPrimitive.Label className="flex h-22 items-center px-8 text-xs text-faint">
+                    {group}
+                  </SelectPrimitive.Label>
+                  {items.map(selectItem)}
+                </SelectPrimitive.Group>
+              ),
+            )}
           </SelectPrimitive.Viewport>
         </SelectPrimitive.Content>
       </SelectPrimitive.Portal>
     </SelectPrimitive.Root>
   )
 }
+
+function groupsOf(options: SelectOption[]) {
+  const groups: { group?: string; items: SelectOption[] }[] = []
+  for (const o of options) {
+    const found = groups.find((g) => g.group === o.group)
+    if (found) found.items.push(o)
+    else groups.push({ group: o.group, items: [o] })
+  }
+  return groups
+}
+
+const selectItem = (o: SelectOption) => (
+  <SelectPrimitive.Item
+    key={o.value}
+    value={o.value}
+    disabled={o.disabled}
+    className="flex h-26 items-center gap-8 rounded-sm pr-12 pl-8 text-sm whitespace-nowrap outline-none data-disabled:text-faint data-highlighted:bg-raised"
+  >
+    <span className="w-12 shrink-0 text-accent">
+      <SelectPrimitive.ItemIndicator>✓</SelectPrimitive.ItemIndicator>
+    </span>
+    <SelectPrimitive.ItemText>{o.label}</SelectPrimitive.ItemText>
+  </SelectPrimitive.Item>
+)
 
 type SwitchProps = { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }
 

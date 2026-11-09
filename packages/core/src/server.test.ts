@@ -26,6 +26,7 @@ import {
   type CoreMessage,
   type EngineEvent,
   type SessionOptions,
+  type ThinkingLevel,
 } from './shared.ts'
 
 const origin = 'http://localhost:4318'
@@ -124,7 +125,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     engines: [{ id: 'fake', enabled: false }],
     chats: [],
     accounts: [{ engine: 'fake', active: 'default' }],
-    modelLists: { fake: { chat: [], planning: [], searching: [], subagents: [] } },
+    modelLists: { chat: [], planning: [], searching: [], subagents: [] },
     memory: {},
     mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: true, values: { limit: expect.any(Number), instructions: SUBAGENT_INSTRUCTIONS } })],
   })
@@ -136,11 +137,11 @@ it('sends a snapshot, then broadcasts to every client', async () => {
   const added = b.messages.find((m) => m.type === 'chat.added')
   if (added?.type !== 'chat.added') throw new Error('no chat')
 
-  a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'nope' }))
+  a.socket.send(JSON.stringify({ type: 'chat.setModel', chatId: added.chat.id, engine: 'nope', model: 'x' }))
   await until(() => a.messages.some((m) => m.type === 'error'))
   a.socket.send(JSON.stringify({ type: 'engine.setEnabled', engine: 'fake', enabled: true }))
   await until(() => b.messages.some((m) => m.type === 'engine.updated' && m.engine.enabled))
-  a.socket.send(JSON.stringify({ type: 'chat.setEngine', chatId: added.chat.id, engine: 'fake' }))
+  a.socket.send(JSON.stringify({ type: 'chat.rename', chatId: added.chat.id, name: 'App 2' }))
   await until(() => b.messages.some((m) => m.type === 'chat.updated'))
   expect(b.messages.some((m) => m.type === 'error')).toBe(false)
 
@@ -282,7 +283,7 @@ it('serves no files without a UI folder', async () => {
 
 const heldOffers = {
   models: ['large', 'small'],
-  thinking: ['low', 'high'],
+  thinking: ['low', 'high'] as ThinkingLevel[],
 }
 
 const mainMod: Mod = {
@@ -505,30 +506,36 @@ it('tells a chat that can spawn subagents the saved subagent instructions, or th
   expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
 })
 
-it("starts a subagent on its parent's model and thinking level, unless a role or the Subagents list picks one", async () => {
+it("starts a subagent on the Subagents list, else the Chat list, or its role's list, not its parent's model", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
   subagentsOn(core, -1)
   const [large, small] = heldOffers.models as [string, string]
-  const thinking = heldOffers.thinking[1]
-  handle({ type: 'chat.setModel', chatId: 'main', model: large, thinking })
-  handle({ type: 'models.setList', engine: 'held', role: 'chat', models: [small] })
-  handle({ type: 'models.setList', engine: 'held', role: 'planning', models: [large] })
+  const row = (model: string, thinking: ThinkingLevel) => ({ engine: 'held', model, thinking })
+  handle({ type: 'models.setList', role: 'chat', models: [row(large, 'high')] })
+  handle({ type: 'models.setList', role: 'planning', models: [row(small, 'low')] })
+  handle({ type: 'chat.setModel', chatId: 'main', engine: 'held', model: small, thinking: 'low' })
   const token = send('main', 'Plan it').options.hotrodMcp!.token
 
+  // The Subagents list is empty, so a subagent runs what Chat does, whatever its parent picked.
   const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
-  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents', model: large, thinking })
-  expect(sessionOf(helper).options).toMatchObject({ model: large, thinking })
+  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents' })
+  expect(chatIn(core, helper)).not.toHaveProperty('model')
+  expect(sessionOf(helper).options).toMatchObject({ model: large, thinking: 'high' })
 
   const planner = (await json(token, 'spawn_subagent', { task: 'Plan', role: 'planning' })).chatId
-  expect(sessionOf(planner).options.model).toBe(large)
+  expect(sessionOf(planner).options).toMatchObject({ model: small, thinking: 'low' })
   expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
 
-  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [small] })
+  handle({ type: 'models.setList', role: 'subagents', models: [row(small, 'high')] })
   const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
-  expect(chatIn(core, next).model).toBeUndefined()
-  expect(sessionOf(next).options).toMatchObject({ model: small, thinking })
+  expect(chatIn(core, next)).not.toHaveProperty('thinking')
+  expect(sessionOf(next).options).toMatchObject({ model: small, thinking: 'high' })
+
+  // Naming an engine pins the subagent to that engine's first model in its list.
+  const pinned = (await json(token, 'spawn_subagent', { task: 'On held', engine: 'held' })).chatId
+  expect(chatIn(core, pinned)).toMatchObject({ engine: 'held', model: small, thinking: 'high' })
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy, then removes the subagent", async () => {

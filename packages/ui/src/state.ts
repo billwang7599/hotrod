@@ -1,5 +1,5 @@
 import type { ModView } from '@hotrod/mod-api'
-import { bySpaceOrder, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
+import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS, pickRun } from '@hotrod/core/shared'
 import type {
   Account,
   Answers,
@@ -76,7 +76,7 @@ export type State = {
   selectedId: string
   contextDefaults: Record<ContextSection, boolean>
   mods: ModInfo[]
-  modelLists: Record<string, ModelLists>
+  modelLists: ModelLists
   workFolder: WorkFolder
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
@@ -102,7 +102,7 @@ export const initialState: State = {
   selectedId: '',
   contextDefaults: { agents: true, folders: true, files: true },
   mods: [],
-  modelLists: {},
+  modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
   panelViews: {},
   toasts: [],
@@ -354,7 +354,7 @@ export function reduce(state: State, action: Action): State {
     case 'mod.updated':
       return { ...state, mods: state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) }
     case 'models.updated':
-      return { ...state, modelLists: { ...state.modelLists, [action.engine]: action.lists } }
+      return { ...state, modelLists: action.lists }
     case 'memory.updated':
       return state
     case 'workFolder.updated':
@@ -438,7 +438,8 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
 export const MIN_WINDOW_PX = { width: 375, height: 600 }
 export const PANEL_PX = { sidebar: 232, context: 320 }
 const PANE_PADDING_PX = 24
-export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, default: 760 }
+/** The chat column's width. It never exceeds the pane (CSS caps it at 100%); `max` only bounds a saved value. */
+export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, max: 2400, default: 760 }
 
 export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
   const sidebar = widths.sidebar + MIN_WINDOW_PX.width
@@ -448,7 +449,7 @@ export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_P
 
 export function storedColumn(value: string | null) {
   const px = Number(value ?? NaN)
-  return Number.isFinite(px) ? Math.max(Math.round(px), COLUMN_PX.min) : COLUMN_PX.default
+  return Number.isFinite(px) ? Math.min(Math.max(Math.round(px), COLUMN_PX.min), COLUMN_PX.max) : COLUMN_PX.default
 }
 
 export function columnSlider(savedPx: number, paneColumnPx: number) {
@@ -464,23 +465,58 @@ export const folderName = (path: string) => path.split('/').filter(Boolean).at(-
 export const engineProblem = (engine: EngineInfo) =>
   !engine.installed ? 'not installed' : !engine.signedIn ? 'not signed in' : undefined
 
-export function engineOptions(engines: EngineInfo[], current: string) {
-  const options: { id: string; label: string; disabled?: true }[] = engines
-    .filter((e) => e.enabled)
-    .map((e) => ({ id: e.id, label: engineProblem(e) ? `${e.id} (${engineProblem(e)})` : e.id }))
-  if (options.some((o) => o.id === current)) return options
-  const known = engines.some((e) => e.id === current)
-  return [...options, { id: current, label: `${current} (${known ? 'off' : 'unknown'})`, disabled: true as const }]
+export const engineName = (engine?: Pick<EngineInfo, 'id' | 'name'>) => engine?.name ?? engine?.id ?? ''
+
+// A model on an engine as one Select value; model ids can hold '/', never a newline.
+export const modelKey = (choice: { engine: string; model: string }) => `${choice.engine}\n${choice.model}`
+export const fromModelKey = (key: string) => {
+  const [engine = '', model = ''] = key.split('\n')
+  return { engine, model }
 }
 
-export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
+// name: the model's own label; label: with its engine added when more than one engine offers models; group: the engine.
+export type ModelChoice = { engine: string; model: string; name: string; label: string; group: string }
 
-export const modelMenu = (chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) => ({
-  model: pickModel(engine, lists, chat),
-  models: engine?.models ?? [],
-  thinking: pickThinking(engine, chat),
-  levels: engine?.thinking ?? [],
-})
+/** Every model the engines that are on offer, labelled with its engine when more than one engine offers models. */
+export function modelChoices(engines: EngineInfo[]): ModelChoice[] {
+  const offering = engines.filter((e) => e.enabled && e.models?.length)
+  const mixed = offering.length > 1
+  return offering.flatMap((e) =>
+    e.models!.map((m) => ({
+      engine: e.id,
+      model: m.id,
+      name: m.label,
+      label: mixed ? `${m.label} · ${engineName(e)}` : m.label,
+      group: engineName(e),
+    })),
+  )
+}
+
+/**
+ * What a chat's model and thinking pickers show: what it runs (pickRun), the models it can pick and the levels the
+ * running model takes. `runnable` is false when sending would fail: nothing can run, unless its engine lists no
+ * models (not detected yet), in which case the engine runs as is.
+ */
+export function modelMenu(chat: ChatView, engines: EngineInfo[], lists = NO_LISTS) {
+  const run = pickRun(engines, lists, chat)
+  const engine = engines.find((e) => e.id === (run?.engine ?? chat.engine))
+  const choices = modelChoices(engines)
+  // A pick of the chat's own that can't run stays on show, so the user sees why nothing runs.
+  if (!run && chat.model && !choices.some((c) => c.engine === chat.engine && c.model === chat.model)) {
+    const label = `${chat.model} (not available)`
+    choices.push({ engine: chat.engine, model: chat.model, name: chat.model, label, group: engineName(engine) || chat.engine })
+  }
+  const runnable = run !== undefined || (engine?.enabled === true && !engine.models?.length)
+  const shown = run ?? (chat.model ? { engine: chat.engine, model: chat.model } : undefined)
+  return {
+    run,
+    runnable,
+    value: shown && modelKey(shown),
+    choices,
+    thinking: run?.thinking,
+    levels: run ? levelsOf(engine, run.model) : [],
+  }
+}
 
 export function formatBytes(bytes: number) {
   if (bytes < 1000) return `${bytes} B`

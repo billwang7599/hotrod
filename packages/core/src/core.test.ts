@@ -32,6 +32,9 @@ import {
 import {
   ASK_FIRST_COMMANDS,
   bySpaceOrder,
+  pickRun,
+  snapLevel,
+  isUnread,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -44,6 +47,7 @@ import {
   type EngineEvent,
   type Machine,
   type SessionOptions,
+  type ThinkingLevel,
 } from './shared.ts'
 
 const TEST_STOP_GRACE_MS = 30
@@ -1500,6 +1504,87 @@ describe('chat', () => {
   })
 })
 
+describe('read state', () => {
+  const finish = async (t: ReturnType<typeof setup>, chatId: string) => {
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+  }
+
+  it('marks a chat unread when a turn ends, until the user reads it', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(false)
+    await finish(t, chat.id)
+    const done = chatOf(t.core, chat.id)!
+    expect(done.doneAt).toBe(entriesOf(t.core, chat.id).at(-1)?.at)
+    expect(isUnread(done)).toBe(true)
+    // Every window hears it, after the status.
+    const types = t.messages.map((m) => m.type)
+    expect(types.lastIndexOf('chat.updated')).toBeGreaterThan(types.lastIndexOf('chat.status'))
+
+    t.handle({ type: 'chat.read', chatId: chat.id })
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(false)
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, readAt: expect.any(String) } })
+    // Reading it again changes nothing.
+    const count = t.messages.length
+    t.handle({ type: 'chat.read', chatId: chat.id })
+    expect(t.messages).toHaveLength(count)
+
+    await finish(t, chat.id)
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(true)
+  })
+
+  it("keeps no read state for a subagent; only its space's own turn makes the space unread", async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+    const t = setup(textScript, first.garage)
+
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'hi' })
+    await until(() => settled(t.core, 'sub') && statusOf(t.core, space.id) === 'idle' && !!chatOf(t.core, space.id)?.doneAt)
+    const subUpdates = t.messages.filter((m) => m.type === 'chat.updated' && m.chat.id === 'sub')
+    expect(subUpdates.some((m) => m.type === 'chat.updated' && m.chat.doneAt !== undefined)).toBe(false)
+    // The report woke the space's lead, whose own turn is what's unread.
+    expect(isUnread(chatOf(t.core, space.id)!)).toBe(true)
+  })
+
+  it('keeps read state across a restart', async () => {
+    const t = setup(textScript)
+    const read = folderChat(t)
+    const unread = folderChat(t)
+    await finish(t, read.id)
+    await finish(t, unread.id)
+    t.handle({ type: 'chat.read', chatId: read.id })
+    t.core.close()
+
+    const reopened = setup(textScript, t.garage)
+    expect(isUnread(chatOf(reopened.core, read.id)!)).toBe(false)
+    expect(isUnread(chatOf(reopened.core, unread.id)!)).toBe(true)
+    const file = JSON.parse(readFileSync(join(t.garage, 'chats', unread.id, 'chat.json'), 'utf8'))
+    expect(file).toMatchObject({ doneAt: expect.any(String) })
+    expect(file.readAt).toBeUndefined()
+  })
+
+  it("doesn't mark chats from before read state existed unread, only their next turn", async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    await finish(t, chat.id)
+    t.core.close()
+    // An older Hotrod wrote neither time.
+    const file = join(t.garage, 'chats', chat.id, 'chat.json')
+    const { doneAt: _done, readAt: _read, ...old } = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify(old))
+
+    const reopened = setup(textScript, t.garage)
+    expect(isUnread(chatOf(reopened.core, chat.id)!)).toBe(false)
+    await finish(reopened, chat.id)
+    expect(isUnread(chatOf(reopened.core, chat.id)!)).toBe(true)
+  })
+})
+
 describe('questions', () => {
   const format = 'How should I format it?'
   const questionScript: FakeStep[] = [
@@ -1634,37 +1719,40 @@ describe('engines', () => {
     expect(engineOf(setupEngines(t.garage).core, chat.id)).toBe('alpha')
   })
 
-  it('sets a chat engine, saves it and tells every client', () => {
+  it("pins a chat to a model on another engine, saves it and tells every client", async () => {
     const t = setupEngines()
+    await t.core.refreshEngines()
     const chat = folderChat(t)
     const other = createChat(t)
-    t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
+    t.handle({ type: 'chat.setModel', chatId: chat.id, engine: 'beta', model: otherModel })
     const { status, entries, draft, queue, ...info } = chatOf(t.core, chat.id)!
-    expect(t.messages.at(-1)).toEqual({ type: 'chat.updated', chat: { ...info, engine: 'beta' } })
+    expect(t.messages.at(-1)).toEqual({ type: 'chat.updated', chat: { ...info, engine: 'beta', model: otherModel } })
     expect(engineOf(t.core, chat.id)).toBe('beta')
     expect(engineOf(t.core, other.id)).toBe('alpha')
     t.core.close()
-    expect(engineOf(setupEngines(t.garage).core, chat.id)).toBe('beta')
+    expect(chatOf(setupEngines(t.garage).core, chat.id)).toMatchObject({ engine: 'beta', model: otherModel })
   })
 
-  it('rejects an unknown engine and a change while a turn runs', () => {
+  it('rejects an unknown engine and a change while a turn runs', async () => {
     const t = setupEngines()
+    await t.core.refreshEngines()
     const chat = folderChat(t)
-    expect(() => t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'nope' })).toThrow(
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, engine: 'nope', model: otherModel })).toThrow(
       /Unknown engine "nope"/,
     )
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(() => t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })).toThrow(/turn/)
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, engine: 'beta', model: otherModel })).toThrow(/turn/)
     expect(engineOf(t.core, chat.id)).toBe('alpha')
     expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).engine).toBe('alpha')
   })
 
   it('continues a chat on another engine with the whole conversation', async () => {
     const t = setupEngines()
+    await t.core.refreshEngines()
     const chat = folderChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'first question' })
     await until(() => statusOf(t.core, chat.id) === 'idle')
-    t.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
+    t.handle({ type: 'chat.setModel', chatId: chat.id, engine: 'beta', model: otherModel })
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'second question' })
     await until(() => statusOf(t.core, chat.id) === 'idle')
 
@@ -1710,7 +1798,7 @@ describe('engines', () => {
     await t.core.refreshEngines()
     const chat = folderChat(t)
     expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, model: 'nope' })).toThrow(/model "nope"/)
-    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, thinking: 'nope' })).toThrow(
+    expect(() => t.handle({ type: 'chat.setModel', chatId: chat.id, thinking: 'nope' as never })).toThrow(
       /thinking level "nope"/,
     )
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
@@ -1718,25 +1806,22 @@ describe('engines', () => {
     expect(chatOf(t.core, chat.id)?.model).toBeUndefined()
   })
 
-  it('drops a model or thinking level the new engine does not offer when the engine changes', async () => {
+  it("keeps the chat's own thinking level on another engine only where that model takes it", async () => {
     const alpha = createFakeAdapter([], 0)
-    const betaOffers = { models: FAKE_MODELS.filter((m) => m !== otherModel), thinking: FAKE_THINKING }
+    const betaOffers = { models: FAKE_MODELS, thinking: ['low', 'medium'] as ThinkingLevel[] }
     const detect = async () => ({ installed: true, signedIn: true, ...betaOffers })
     const beta: Adapter = { ...alpha, id: 'beta', detect }
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, beta], 'alpha')
     await t.core.refreshEngines()
-    const thinking = otherThinking
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking })
-    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
-    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', thinking })
-    expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-    const betaModel = betaOffers.models[0]!
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: betaModel, thinking })
-    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'alpha' })
-    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'alpha', model: betaModel, thinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'low' })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'beta', model: otherModel, thinking: 'low' })
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', model: otherModel, thinking: 'low' })
+    expect(() => t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'beta', model: otherModel, thinking: 'high' })).toThrow(
+      /offers no thinking level "high"/,
+    )
   })
 
-  it('keeps a chat whose saved engine is gone and refuses to send', () => {
+  it('keeps a chat whose saved engine is gone, refuses to send, then follows the Chat list once it can run', async () => {
     const t = setupEngines()
     const chat = folderChat(t)
     const saved = JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8'))
@@ -1750,10 +1835,13 @@ describe('engines', () => {
     )
     expect(entriesOf(reopened.core, chat.id)).toEqual([])
     expect(statusOf(reopened.core, chat.id)).toBe('idle')
-    reopened.handle({ type: 'chat.setEngine', chatId: chat.id, engine: 'beta' })
+    // Once the engines are detected, the Chat list holds the default engine's model, and the chat moves onto it.
+    await reopened.core.refreshEngines()
+    expect(engineOf(reopened.core, chat.id)).toBe('alpha')
     reopened.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(reopened.beta).toHaveLength(1)
+    expect(reopened.alpha).toHaveLength(1)
   })
+
 })
 
 describe('settings', () => {
@@ -1763,7 +1851,7 @@ describe('settings', () => {
   it('starts with every engine off, refuses to send, and points at Settings', () => {
     const fake = recording(createFakeAdapter(textScript, 0))
     const t = open(tempDir(), [fake.adapter], 'fake', TEST_STOP_GRACE_MS, [])
-    expect(t.core.engines()).toEqual([{ id: 'fake', enabled: false, installed: false, signedIn: false }])
+    expect(t.core.engines()).toEqual([{ id: 'fake', name: 'Fake', enabled: false, installed: false, signedIn: false }])
     expect(JSON.parse(readFileSync(settingsFile(t), 'utf8')).engines).toEqual({})
     expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow(/"fake" is off.*Settings/)
     expect(fake.calls).toHaveLength(0)
@@ -1779,7 +1867,7 @@ describe('settings', () => {
     t.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
     expect(t.messages.at(-1)).toEqual({
       type: 'engine.updated',
-      engine: { id: 'fake', enabled: true, installed: false, signedIn: false },
+      engine: { id: 'fake', name: 'Fake', enabled: true, installed: false, signedIn: false },
     })
     expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toEqual({ engines: { fake: true }, workFolder: work })
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
@@ -1806,15 +1894,17 @@ describe('settings', () => {
     })
   })
 
-  it('lets a chat switch only to an engine that is on', () => {
+  it('lets a chat pick a model only on an engine that is on', async () => {
     const alpha = createFakeAdapter([], 0)
     const t = open(tempDir(), [{ ...alpha, id: 'alpha' }, { ...alpha, id: 'beta' }], 'alpha', TEST_STOP_GRACE_MS, [
       'alpha',
     ])
-    expect(() => t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })).toThrow(/"beta" is off/)
+    await t.core.refreshEngines()
+    const pick = { type: 'chat.setModel', chatId: 'main', engine: 'beta', model: otherModel } as const
+    expect(() => t.handle(pick)).toThrow(/"beta" is off/)
     t.handle({ type: 'engine.setEnabled', engine: 'beta', enabled: true })
-    t.handle({ type: 'chat.setEngine', chatId: 'main', engine: 'beta' })
-    expect(chatOf(t.core, 'main')?.engine).toBe('beta')
+    t.handle(pick)
+    expect(chatOf(t.core, 'main')).toMatchObject({ engine: 'beta', model: otherModel })
   })
 
   it('gives new chats the default engine when it is on, else the first engine that is on', () => {
@@ -3153,114 +3243,193 @@ describe('models', () => {
     return t.calls.at(-1)!.options.model
   }
 
-  it('saves a list per engine and role in settings.json, tells every client and keeps it after a restart', () => {
+  const row = (model: string, thinking?: ThinkingLevel, engine = 'fake') => ({ engine, model, ...(thinking && { thinking }) })
+  const seeded = { chat: [row(defaultModel, defaultThinking)], planning: [], searching: [], subagents: [] }
+
+  it('fills an empty Chat list from what the engine runs by default, once the engines are detected', async () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
     const t = setup(textScript, garage)
-    const empty = { chat: [], planning: [], searching: [], subagents: [] }
-    expect(t.core.modelLists()).toEqual({ fake: empty })
+    expect(t.core.modelLists()).toEqual({ chat: [], planning: [], searching: [], subagents: [] })
+    await t.core.refreshEngines()
+    expect(t.core.modelLists()).toEqual(seeded)
+    expect(t.messages).toContainEqual({ type: 'models.updated', lists: seeded })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({ theme: 'dark', models: seeded })
+    expect(await sendAndWait(t)).toBe(defaultModel)
+    expect(t.calls.at(-1)!.options.thinking).toBe(defaultThinking)
+  })
 
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'planning', models: [older, newest] })
-    const lists = { ...empty, planning: [older, newest] }
-    expect(t.messages.at(-1)).toEqual({ type: 'models.updated', engine: 'fake', lists })
-    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
-      theme: 'dark',
-      models: { fake: { planning: [older, newest] } },
-    })
+  it('saves one list per role in settings.json, tells every client and keeps it after a restart', async () => {
+    const garage = tempDir()
+    const t = setup(textScript, garage)
+    await t.core.refreshEngines()
+    const planning = [row(older, 'low'), row(newest, 'high')]
+    t.handle({ type: 'models.setList', role: 'planning', models: [...planning, planning[0]!] })
+    const lists = { ...seeded, planning }
+    expect(t.messages.at(-1)).toEqual({ type: 'models.updated', lists })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8')).models).toEqual(lists)
 
-    expect(() => t.handle({ type: 'models.setList', engine: 'nope', role: 'chat', models: [] })).toThrow(/engine/)
-    expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'nope', models: [] } as never)).toThrow(
-      /role/,
-    )
-    for (const models of ['x', [1], ['']]) {
-      expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models } as never)).toThrow(
-        /model ids/,
-      )
+    expect(() => t.handle({ type: 'models.setList', role: 'nope', models: [] } as never)).toThrow(/role/)
+    for (const models of ['x', [1], [newest], [{ model: newest }], [{ engine: 'fake', model: '' }], [row(newest, 'ultra' as never)]]) {
+      expect(() => t.handle({ type: 'models.setList', role: 'chat', models } as never)).toThrow(/list of models/)
     }
+    expect(() => t.handle({ type: 'models.setList', role: 'chat', models: [] })).toThrow(/Chat list needs/)
     t.core.close()
-    expect(setup(textScript, garage).core.modelLists()).toEqual({ fake: lists })
+    expect(setup(textScript, garage).core.modelLists()).toEqual(lists)
   })
 
-  it('starts an unpinned chat on the first listed model the engine offers', async () => {
-    const t = setup(textScript)
+  it("migrates per-engine lists and default thinking into one list per role without losing a row", async () => {
+    const garage = tempDir()
+    const alpha = { ...createFakeAdapter(textScript, 0), id: 'alpha' }
+    const beta = { ...createFakeAdapter(textScript, 0), id: 'beta' }
+    const old = {
+      theme: 'dark',
+      engines: { alpha: true, beta: true },
+      models: {
+        beta: { chat: [newest], planning: [{ model: older, thinking: 'low' }] },
+        alpha: { chat: [{ model: older }, newest], searching: ['gone-model'] },
+        gone: { chat: ['x'] },
+      },
+      defaultThinking: { alpha: 'high', beta: 'minimal' },
+    }
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify(old))
+    const t = open(garage, [beta, alpha], 'alpha')
+    // The default engine's rows come first; a row without a level takes its engine's old default, and one that isn't
+    // a level Hotrod knows (pi's minimal) is filled in from the engine once it's detected.
+    const migrated = {
+      chat: [row(older, 'high', 'alpha'), row(newest, 'high', 'alpha'), row(newest, undefined, 'beta'), row('x', undefined, 'gone')],
+      planning: [row(older, 'low', 'beta')],
+      searching: [row('gone-model', 'high', 'alpha')],
+      subagents: [],
+    }
+    expect(t.core.modelLists()).toEqual(migrated)
+    const saved = JSON.parse(readFileSync(settingsFile(t), 'utf8'))
+    expect(saved).toMatchObject({ theme: 'dark', models: migrated })
+    expect(saved).not.toHaveProperty('defaultThinking')
     await t.core.refreshEngines()
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone', older, newest] })
+    expect(t.core.modelLists().chat[2]).toEqual(row(newest, defaultThinking, 'beta'))
+  })
+
+  it('runs the next model in the list, on another engine, when the first one cannot run', async () => {
+    const alpha = recording({ ...createFakeAdapter(textScript, 0), id: 'alpha' })
+    const beta = recording({ ...createFakeAdapter(textScript, 0), id: 'beta' })
+    const t = open(tempDir(), [alpha.adapter, beta.adapter], 'alpha', TEST_STOP_GRACE_MS, ['beta'])
+    await t.core.refreshEngines()
+    t.handle({ type: 'models.setList', role: 'chat', models: [row(newest, 'high', 'alpha'), row(older, 'low', 'beta')] })
+    expect(chatOf(t.core, 'main')?.engine).toBe('beta')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
+    await until(() => settled(t.core, 'main'))
+    expect(beta.calls.at(-1)!.options).toMatchObject({ model: older, thinking: 'low' })
+
+    t.handle({ type: 'engine.setEnabled', engine: 'alpha', enabled: true })
+    expect(chatOf(t.core, 'main')?.engine).toBe('alpha')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'again' })
+    await until(() => settled(t.core, 'main'))
+    expect(alpha.calls.at(-1)!.options).toMatchObject({ model: newest, thinking: 'high' })
+    expect(beta.calls).toHaveLength(1)
+  })
+
+  // A fake engine whose small model takes only low, and whose model "none" takes no thinking at all.
+  const perModel = () => {
+    const base = createFakeAdapter(textScript, 0)
+    const detect = async (machine: Machine) => ({
+      ...(await base.detect(machine)),
+      models: [...FAKE_MODELS, 'none'],
+      modelThinking: { [older]: ['low'], none: [] } as Record<string, ThinkingLevel[]>,
+    })
+    return setup({ ...base, detect })
+  }
+
+  it("snaps a level the model doesn't take to its nearest one, and gives a model without levels none", async () => {
+    const t = perModel()
+    await t.core.refreshEngines()
+    expect(t.core.engines()[0]?.models).toContainEqual({ id: older, label: older, thinking: ['low'] })
+    t.handle({ type: 'models.setList', role: 'chat', models: [row(older, 'max'), row('none', 'low')] })
+    expect(t.core.modelLists().chat).toEqual([row(older, 'low'), row('none')])
     expect(await sendAndWait(t)).toBe(older)
+    expect(t.calls.at(-1)!.options.thinking).toBe('low')
+    expect(() => t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'high' })).toThrow(
+      /Model "fake-small" offers no thinking level "high"/,
+    )
+    t.handle({ type: 'models.setList', role: 'chat', models: [row('none', 'low')] })
+    expect(await sendAndWait(t)).toBe('none')
+    expect(t.calls.at(-1)!.options).not.toHaveProperty('thinking')
   })
 
-  it("keeps a chat's own pick over the list, and treats a pick the engine no longer offers as unpinned", async () => {
+  it('snaps to the nearest level, the cheaper one on a tie, and to none when the model takes none', () => {
+    expect(snapLevel('xhigh', ['low', 'medium', 'high', 'max'])).toBe('high')
+    expect(snapLevel('off', ['low', 'medium'])).toBe('low')
+    expect(snapLevel('max', ['low', 'medium', 'high'])).toBe('high')
+    expect(snapLevel('medium', ['off', 'max'])).toBe('off')
+    expect(snapLevel('medium', [])).toBeUndefined()
+  })
+
+  it("runs a role's list, else the Chat list while the role's own is empty", async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [older] })
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: newest })
+    const runs = (role: 'planning' | 'subagents') => pickRun(t.core.engines(), t.core.modelLists(), { engine: 'fake', role })
+    expect(runs('subagents')).toMatchObject({ model: defaultModel, thinking: defaultThinking })
+    t.handle({ type: 'models.setList', role: 'planning', models: [row(newest, 'low')] })
+    expect(runs('planning')).toMatchObject({ model: newest, thinking: 'low' })
+    expect(runs('subagents')).toMatchObject({ model: defaultModel })
+  })
+
+  it("runs at the row's level unless the chat picked its own, and picking the row's level follows it again", async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    t.handle({ type: 'models.setList', role: 'chat', models: [row(newest, 'low')] })
     expect(await sendAndWait(t)).toBe(newest)
+    expect(t.calls.at(-1)!.options.thinking).toBe('low')
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'high' })
+    expect(chatOf(t.core, 'main')?.thinking).toBe('high')
+    await sendAndWait(t)
+    expect(t.calls.at(-1)!.options.thinking).toBe('high')
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'low' })
+    expect(chatOf(t.core, 'main')?.thinking).toBeUndefined()
+    expect(() => t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'ultra' as never })).toThrow(/Unknown thinking/)
+  })
+
+  it("keeps a chat's own pick over the list, and refuses to send while that pick can't run", async () => {
+    const t = setup(textScript)
+    await t.core.refreshEngines()
+    t.handle({ type: 'models.setList', role: 'chat', models: [row(older, 'low')] })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'fake', model: newest })
+    expect(await sendAndWait(t)).toBe(newest)
+    // Its own model runs at the level the list gives it there, else the engine's default.
+    expect(t.calls.at(-1)!.options.thinking).toBe(defaultThinking)
 
     const chatFile = join(t.garage, 'chats', 'main', 'chat.json')
     writeFileSync(chatFile, JSON.stringify({ ...JSON.parse(readFileSync(chatFile, 'utf8')), model: 'opus' }))
     t.core.close()
     const reopened = setup(textScript, t.garage)
     await reopened.core.refreshEngines()
+    expect(() => reopened.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow(/no longer offers "opus"/)
+    reopened.handle({ type: 'chat.setModel', chatId: 'main' })
     expect(await sendAndWait(reopened)).toBe(older)
   })
 
-  it("passes the engine's default model and thinking level when the chat and its lists pick none", async () => {
+  it('says which list has nothing that can run', async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
-    expect(await sendAndWait(t)).toBe(defaultModel)
-    expect(t.calls.at(-1)!.options.thinking).toBe(defaultThinking)
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: ['gone'] })
-    expect(await sendAndWait(t)).toBe(defaultModel)
+    t.handle({ type: 'models.setList', role: 'chat', models: [row('gone', 'low')] })
+    expect(() => t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })).toThrow(/Nothing in the Chat model list/)
   })
 
-  it('unpins a model or thinking level the chat would run anyway, so it keeps following Settings', async () => {
+  it('follows the list again when the chat picks the model the list would run anyway', async () => {
     const t = setup(textScript)
     await t.core.refreshEngines()
     const saved = () => JSON.parse(readFileSync(join(t.garage, 'chats', 'main', 'chat.json'), 'utf8'))
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel, thinking: otherThinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'fake', model: otherModel, thinking: otherThinking })
     expect(saved()).toMatchObject({ model: otherModel, thinking: otherThinking })
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel, thinking: defaultThinking })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'fake', model: defaultModel, thinking: defaultThinking })
     expect(saved()).not.toHaveProperty('model')
     expect(saved()).not.toHaveProperty('thinking')
 
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [otherModel] })
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: defaultModel })
+    t.handle({ type: 'models.setList', role: 'chat', models: [row(otherModel, 'low')] })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'fake', model: defaultModel })
     expect(chatOf(t.core, 'main')?.model).toBe(defaultModel)
-    t.handle({ type: 'chat.setModel', chatId: 'main', model: otherModel })
+    t.handle({ type: 'chat.setModel', chatId: 'main', engine: 'fake', model: otherModel })
     expect(chatOf(t.core, 'main')?.model).toBeUndefined()
-  })
-
-  it("starts each engine's default thinking at the engine's own, and saves a change in settings.json", async () => {
-    const garage = tempDir()
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
-    const t = setup(textScript, garage)
-    const fakeInfo = (core: Core) => core.engines().find((e) => e.id === 'fake')
-    await t.core.refreshEngines()
-    expect(fakeInfo(t.core)).toMatchObject({ defaultModel, defaultThinking })
-
-    t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: otherThinking })
-    expect(t.messages.at(-1)).toMatchObject({
-      type: 'engine.updated',
-      engine: { id: 'fake', defaultThinking: otherThinking },
-    })
-    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
-      theme: 'dark',
-      defaultThinking: { fake: otherThinking },
-    })
-    await sendAndWait(t)
-    expect(t.calls.at(-1)!.options.thinking).toBe(otherThinking)
-    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: otherThinking })
-    expect(chatOf(t.core, 'main')?.thinking).toBeUndefined()
-
-    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'nope', thinking: otherThinking })).toThrow(
-      /Unknown engine/,
-    )
-    expect(() => t.handle({ type: 'engine.setDefaultThinking', engine: 'fake', thinking: 'nope' })).toThrow(
-      /thinking level "nope"/,
-    )
-    t.core.close()
-    const reopened = setup(textScript, garage)
-    await reopened.core.refreshEngines()
-    expect(fakeInfo(reopened.core)?.defaultThinking).toBe(otherThinking)
   })
 })
 

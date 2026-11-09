@@ -14,6 +14,10 @@ import { Dialog } from 'radix-ui'
 import {
   editsAnywhere,
   IMAGE_TYPES,
+  levelsOf,
+  ROLE_NAMES,
+  THINKING_LABELS,
+  type ThinkingLevel,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   type Attachment,
@@ -63,11 +67,13 @@ import type { SettingsPage } from './settings.tsx'
 import {
   accountLabel,
   columnSlider,
-  engineOptions,
+  engineName,
+  fromModelKey,
   foldSteps,
   formatBytes,
   listedAccounts,
   MAX_PREVIEW_BYTES,
+  modelKey,
   modelMenu,
   pinState,
   previewText,
@@ -702,7 +708,8 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
         >
           <Chevron />
         </button>
-        <span className="shrink-0">
+        {/* Wraps instead of holding its width: a long name or error would otherwise push the chat sideways. */}
+        <span className="min-w-0 [overflow-wrap:anywhere]">
           Subagent {name} reported
           {item.error && <span> · ended early: {item.error}</span>}
         </span>
@@ -1006,7 +1013,8 @@ export function Chat(props: ChatProps) {
   const archived = chat.archived
   const canChange = connected && chat.status === 'idle' && !archived
   const offers = engines.find((e) => e.id === chat.engine)
-  const engineOff = !offers?.enabled
+  const menu = modelMenu(chat, engines, props.modelLists)
+  const engineOff = !menu.runnable
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
@@ -1076,9 +1084,14 @@ export function Chat(props: ChatProps) {
     if (chat.status !== 'stopping') return send({ type: 'chat.interrupt', chatId: chat.id })
     if (await confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
-  const menu = modelMenu(chat, offers, props.modelLists)
-  const setModel = (model?: string, thinking?: string) =>
-    send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
+  const setModel = (key?: string, thinking?: ThinkingLevel) => {
+    if (!key) return
+    const { engine, model } = fromModelKey(key)
+    // A new model keeps the chat's own thinking level only if it takes it; otherwise its list picks the level again.
+    const takes = levelsOf(engines.find((e) => e.id === engine), model)
+    const pinned = chat.thinking && takes.includes(chat.thinking) ? chat.thinking : undefined
+    send({ type: 'chat.setModel', chatId: chat.id, engine, model, thinking: key === menu.value ? thinking : pinned })
+  }
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
   // A chat's nth reply keeps one name from draft to finished item, so its reveal carries over. Texts already there when
   // the chat was opened show whole; ones that arrive while it's open type out.
@@ -1186,14 +1199,6 @@ export function Chat(props: ChatProps) {
               <span className={WARNING_CHIP}>{workFolder.canSandbox ? 'Edits anywhere' : 'Not sandboxed'}</span>
             </Hint>
           )}
-          <Select
-            variant="chip"
-            label="Engine"
-            value={chat.engine}
-            disabled={!canChange}
-            options={engineOptions(engines, chat.engine).map((o) => ({ ...o, value: o.id }))}
-            onChange={(engine) => send({ type: 'chat.setEngine', chatId: chat.id, engine })}
-          />
           {accounts && listed && !engineOff && (
             <Select
               variant="chip"
@@ -1220,8 +1225,10 @@ export function Chat(props: ChatProps) {
           />
         </header>
         <div
-          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
-          className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
+          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom. The
+          // transcript never scrolls sideways (code blocks and tables scroll on their own), and a gutter on both
+          // edges keeps the column centred under a visible scrollbar, in line with the composer below.
+          className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto p-24 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
           ref={listRef}
           onScroll={scrolled}
           onWheel={userScrolls}
@@ -1237,7 +1244,7 @@ export function Chat(props: ChatProps) {
                       Start a chat in <span className="font-mono">{chat.name}</span>
                     </strong>
                     <span>
-                      Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
+                      Each message starts {engineName(offers) || chat.engine} in {folder ?? 'a scratch folder'}
                     </span>
                   </div>
                 )}
@@ -1335,16 +1342,18 @@ export function Chat(props: ChatProps) {
           {showEngineNote && (
             <div className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-12 text-muted">
               <span className="flex-1">
-                {noEngineOn ? (
-                  'No engine is on. Turn one on in Settings to start chatting.'
-                ) : (
-                  <>
-                    <span className="font-mono">{chat.engine}</span> is off. Pick another engine above, or turn it on in
-                    Settings.
-                  </>
-                )}
+                {noEngineOn
+                  ? 'No engine is on. Turn one on in Settings to start chatting.'
+                  : chat.model
+                    ? `${chat.model} on ${engineName(offers) || chat.engine} can't run: ${offers?.enabled ? 'the engine no longer offers it' : 'the engine is off or gone'}. Pick another model, or go back to the models in Settings.`
+                    : `Nothing in the ${chat.role && props.modelLists?.[chat.role]?.length ? ROLE_NAMES[chat.role] : 'Chat'} model list can run. Add a model, or turn its engine on, in Settings.`}
               </span>
-              <Button variant="primary" size="small" onClick={() => openSettings('engines')}>
+              {chat.model && !noEngineOn && (
+                <Button size="small" disabled={!connected} onClick={() => send({ type: 'chat.setModel', chatId: chat.id })}>
+                  Use Settings' models
+                </Button>
+              )}
+              <Button variant="primary" size="small" onClick={() => openSettings(noEngineOn ? 'engines' : 'models')}>
                 Open Settings
               </Button>
             </div>
@@ -1468,6 +1477,7 @@ export function Chat(props: ChatProps) {
               hide={props.contextOverlay ? props.toggleContext : undefined}
               modUi={props.modUi}
               panelViews={props.panelViews}
+              pickers={window.hotrod}
             />
           </SidePanel>
         )}
@@ -1488,7 +1498,7 @@ type ComposerProps = {
   steers: boolean
   placeholder: string
   menu: ReturnType<typeof modelMenu>
-  setModel: (model?: string, thinking?: string) => void
+  setModel: (key?: string, thinking?: ThinkingLevel) => void
   stop: () => void
   /** Sends the text with the pending attachments; false when it can't be sent now, so the text stays. */
   submit: (text: string, steer?: boolean) => boolean
@@ -1617,26 +1627,27 @@ function Composer(props: ComposerProps) {
           />
         </span>
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
-          {menu.model && (
+          {menu.value && (
             <Select
               variant="chip"
               label="Model"
               hint={MODEL_HINT}
-              value={menu.model}
+              value={menu.value}
               disabled={!canChange}
-              options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
-              onChange={(model) => setModel(model, menu.thinking)}
+              options={menu.choices.map((c) => ({ value: modelKey(c), label: c.label, group: c.group }))}
+              onChange={(key) => setModel(key, menu.thinking)}
             />
           )}
-          {menu.thinking && (
+          {menu.levels.length > 0 && (
             <Select
               variant="chip"
               label="Thinking"
               hint={THINKING_HINT}
-              value={menu.thinking}
+              value={menu.thinking ?? ''}
+              placeholder="Thinking"
               disabled={!canChange}
-              options={menu.levels.map((l) => ({ value: l, label: l }))}
-              onChange={(thinking) => setModel(menu.model, thinking)}
+              options={menu.levels.map((l) => ({ value: l, label: THINKING_LABELS[l] }))}
+              onChange={(thinking) => setModel(menu.value, thinking as ThinkingLevel)}
             />
           )}
           {busy ? (

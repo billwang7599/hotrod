@@ -94,7 +94,6 @@ test("a mod's panel is a tab beside Hotrod's own, and asks the core for its view
   expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual([
     'General',
     'Context',
-    'Permissions',
     'Changes',
   ])
   expect(sent).toEqual([])
@@ -159,4 +158,80 @@ test("a mod's note keeps the panel it opens", () => {
     entry: { at, type: 'mod.note', text: '3 files changed', mod: 'git', panel: 'changes' },
   })
   expect(state.chats[0]!.items).toEqual([{ kind: 'note', text: '3 files changed', mod: 'git', panel: 'changes' }])
+})
+
+test('a row can have a status dot and a link of its own, apart from its action', () => {
+  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  const rows: ModView = {
+    type: 'list',
+    items: [
+      {
+        key: 'web',
+        label: 'web',
+        dot: 'success',
+        link: { text: 'localhost:5173', url: 'http://localhost:5173/' },
+        action: { name: 'open', value: 'web' },
+      },
+      { key: 'plain', label: 'plain' },
+    ],
+  }
+  render({ [panelKey('space', 'git', 'changes')]: { view: rows } })
+  const [web, plain] = [...host.querySelectorAll('[role="tabpanel"] li')]
+  expect(web!.querySelector('[data-tone]')!.getAttribute('data-tone')).toBe('success')
+  expect(web!.querySelector('[data-tone]')!.className).toContain('bg-green')
+  const link = web!.querySelector('a')!
+  expect([link.textContent, link.getAttribute('href'), link.getAttribute('target')]).toEqual([
+    'localhost:5173',
+    'http://localhost:5173/',
+    '_blank',
+  ])
+  expect(link.closest('button')).toBeNull()
+  expect(plain!.querySelector('[data-tone]')).toBeNull()
+  expect(plain!.querySelector('a')).toBeNull()
+})
+
+test('followed output shows its last lines and stays at the end as it grows, unless scrolled up', () => {
+  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  const log = (lines: number): ModView => ({
+    type: 'code',
+    text: Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join('\n'),
+    maxLines: 3,
+    follow: true,
+  })
+  const key = panelKey('space', 'git', 'changes')
+  // jsdom lays nothing out, so the log says how tall it is.
+  const scrolls: number[] = []
+  const pre = () => host.querySelector('[role="tabpanel"] pre') as HTMLPreElement
+  const sized = (el: HTMLPreElement) => {
+    let top = 0
+    Object.defineProperties(el, {
+      scrollHeight: { configurable: true, get: () => 1000 },
+      clientHeight: { configurable: true, get: () => 200 },
+      scrollTop: { configurable: true, get: () => top, set: (value: number) => (scrolls.push(value), (top = value)) },
+    })
+  }
+  render({ [key]: { view: log(5) } })
+  expect([...pre().querySelectorAll('div')].map((d) => d.textContent)).toEqual([
+    '2 earlier lines',
+    'line 3',
+    'line 4',
+    'line 5',
+  ])
+  sized(pre())
+  render({ [key]: { view: log(6) } })
+  expect(scrolls).toEqual([1000])
+  // Scrolled up to read: new lines don't pull it back down.
+  act(() => {
+    pre().scrollTop = 100
+    pre().dispatchEvent(new Event('scroll'))
+  })
+  render({ [key]: { view: log(7) } })
+  expect(scrolls).toEqual([1000, 100])
+  // Back at the end, it follows again.
+  act(() => {
+    pre().scrollTop = 800
+    pre().dispatchEvent(new Event('scroll'))
+  })
+  render({ [key]: { view: log(8) } })
+  expect(scrolls).toEqual([1000, 100, 800, 1000])
 })

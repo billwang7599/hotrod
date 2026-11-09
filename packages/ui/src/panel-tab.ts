@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Which tab the right sidebar shows: general, context, permissions, or a mod's panel as `mod:<mod>/<panel>`. Kept in
+ * Which tab the right sidebar shows: general, context, or a mod's panel as `mod:<mod>/<panel>`. Kept in
  * localStorage, and shared so a note in the chat can open its mod's panel.
  */
 const KEY = 'hotrod.panelTab'
@@ -20,6 +20,10 @@ export function usePanelTab() {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
-    () => localStorage.getItem(KEY) ?? 'context',
+    () => {
+      const saved = localStorage.getItem(KEY)
+      // Permissions was a tab of its own; its switches now live in General.
+      return saved === 'permissions' ? 'general' : (saved ?? 'context')
+    },
   )
 }

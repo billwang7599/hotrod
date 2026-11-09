@@ -115,6 +115,20 @@ export type ModRun = (
   options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; onStdout?: (chunk: string) => void },
 ) => Promise<{ code: number | null; stdout: string; stderr: string }>
 
+// A long-running process a mod started with host.spawn.
+export type ModProcess = {
+  // Its stdout as it arrives. To get stderr too, run it through a shell with 2>&1.
+  onOutput(listener: (chunk: string) => void): void
+  // stderrTail: the end of what it wrote to stderr.
+  onExit(listener: (code: number | null, stderrTail: string) => void): void
+  // Stops it and everything it started (its process group): SIGTERM, then SIGKILL if it hasn't gone after a grace.
+  stop(): void
+}
+
+// chat: run it as that chat's own commands run, sandboxed to its space's work folder and checkouts unless the chat may
+// edit anywhere. cwd defaults to the space's work folder, or / without a chat.
+export type ModSpawnOptions = { cwd?: string; env?: Record<string, string>; chat?: string }
+
 // Plain files of the mod's own, in <garage>/mods/<id>/. Names are relative to that folder and can't leave it.
 export type ModStorage = {
   dir: string
@@ -152,6 +166,9 @@ export type ModHost = {
   note(chatId: string, text: string, options?: { panel?: string }): void
   // Runs a command through the Machine, so it works wherever the core runs. Not sandboxed: it's the mod's own.
   run: ModRun
+  // Starts a long-running command through the Machine and returns once it's started, without waiting for it to end.
+  // Unlike run, nothing times it out. Everything a mod started stops when the mod is turned off or Hotrod quits.
+  spawn(command: string, args: string[], options?: ModSpawnOptions): Promise<ModProcess>
   storage: ModStorage
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
   // Without a chat, for every chat.
@@ -205,6 +222,9 @@ export type McpServer = {
 
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
 
+// A session about to start. tools: it has the Hotrod MCP server, so the mod's tools are offered to it.
+export type ModInstructionsFor = { chat: ChatDetail; tools: boolean }
+
 // progress runs from 0 to 1.
 // A setup can depend on the mod's settings: it is checked again whenever one changes.
 export type ModSetup = {
@@ -233,6 +253,10 @@ export type ModListItem = {
   detail?: string
   mono?: boolean
   badges?: { text: string; tone?: ModTone; hint?: string }[]
+  // A status dot before the label, in this tone.
+  dot?: ModTone
+  // A link at the end of the row, apart from its action.
+  link?: { text: string; url: string }
   selected?: boolean
   action?: ModAction
   hint?: string
@@ -254,8 +278,10 @@ export type ModView =
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ModListItem[]; empty?: string; label?: string }
-  // language 'diff' colours added and removed lines; others are shown plain.
-  | { type: 'code'; text: string; language?: string; maxLines?: number }
+  // language 'diff' colours added and removed lines; others are shown plain. follow: for output that grows, such as a
+  // log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end as lines arrive
+  // unless the user scrolls up.
+  | { type: 'code'; text: string; language?: string; maxLines?: number; follow?: boolean }
   // A card with a title that folds; open says how it starts.
   | { type: 'card'; title: string; badges?: ModListItem['badges']; open?: boolean; children: ModView[] }
   | { type: 'divider' }
@@ -291,6 +317,9 @@ export type Mod = {
   chats?: ModChat[]
   tools?: ModTool[]
   mcpServers?(session: ModSession): McpServer[]
+  // Text for every session's instructions, after where the chat may write and before its memory. Return nothing to add
+  // none. Mods are joined in load order.
+  instructions?(session: ModInstructionsFor, context: ModContext): string | undefined
   setup?: ModSetup
   panels?: ModPanel[]
   commands?: ModCommand[]

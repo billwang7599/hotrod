@@ -17,6 +17,8 @@ import {
   PERMISSION_SWITCHES,
   type ClientMessage,
   type ContextItem,
+  type EngineInfo,
+  type ModelLists,
   type ToolKind,
   type WorkFolder,
 } from '@hotrod/core/shared'
@@ -96,6 +98,8 @@ type RenderOptions = {
   chats?: ChatView[]
   select?: (chatId: string) => void
   steering?: boolean
+  engines?: EngineInfo[]
+  modelLists?: ModelLists
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -125,9 +129,12 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               folder={options.folder}
               chats={[view, ...(options.chats ?? [])]}
               select={options.select}
-              engines={[
-                { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
-              ]}
+              engines={
+                options.engines ?? [
+                  { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
+                ]
+              }
+              modelLists={options.modelLists}
               connected
               send={send}
               openSettings={() => {}}
@@ -745,7 +752,7 @@ test("each panel tab folds its explanations under How this works, not in tooltip
   expect(about().open).toBe(false)
   expect(about().querySelector('summary')!.textContent).toBe('How this works')
   expect(about().textContent).toContain('Folders:')
-  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'Permissions')!
+  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => tab.click())
   expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
   expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
@@ -779,21 +786,33 @@ test('while busy, the empty composer shows its status as a sweeping highlight in
   expect(shimmer()!.getAttribute('data-status')).toBe('waiting')
 })
 
-test('the right panel shows context and permissions as two tabs, remembering the last one', () => {
+test('the right panel has two tabs, General with the permissions and Context, remembering the last one', () => {
   localStorage.clear()
-  const tab = (name: string) =>
-    [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')].find((t) => t.textContent === name)!
+  const tabs = () => [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')]
+  const tab = (name: string) => tabs().find((t) => t.textContent === name)!
   const permission = () => container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)
   render({}, () => {}, { contextOpen: true })
+  expect(tabs().map((t) => t.textContent)).toEqual(['General', 'Context'])
   expect(tab('Context').getAttribute('aria-selected')).toBe('true')
   expect(permission()).toBeNull()
   expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).not.toBeNull()
-  act(() => tab('Permissions').click())
+  act(() => tab('General').click())
+  expect(container.querySelector('aside section[aria-label="Permissions"] h3')!.textContent).toBe('Permissions')
+  expect(container.querySelector('aside section[aria-label="View"]')).not.toBeNull()
   expect(permission()).not.toBeNull()
   expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).toBeNull()
   act(() => root.render(<></>))
   render({}, () => {}, { contextOpen: true })
-  expect(tab('Permissions').getAttribute('aria-selected')).toBe('true')
+  expect(tab('General').getAttribute('aria-selected')).toBe('true')
+  localStorage.clear()
+})
+
+test('a panel saved on the old Permissions tab opens General, where the switches now are', () => {
+  localStorage.setItem('hotrod.panelTab', 'permissions')
+  render({}, () => {}, { contextOpen: true })
+  const selected = container.querySelector('aside [role="tab"][aria-selected="true"]')!
+  expect(selected.textContent).toBe('General')
+  expect(container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)).not.toBeNull()
   localStorage.clear()
 })
 
@@ -815,7 +834,7 @@ test('file paths stay hidden at the top of a space and in the Context panel unti
 
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.setItem('hotrod.panelTab', 'permissions')
+  localStorage.setItem('hotrod.panelTab', 'general')
   const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
     act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
@@ -852,7 +871,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   const { label } = PERMISSIONS.editAnywhere
   const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
-  localStorage.setItem('hotrod.panelTab', 'permissions')
+  localStorage.setItem('hotrod.panelTab', 'general')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('On')
   expect(amber()).toContain('text-amber')
@@ -995,6 +1014,21 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   expect(named(lint, 'Lint')).toBeUndefined()
   expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
   expect(lint.textContent).toContain('No reply')
+})
+
+// jsdom has no layout, so these check the classes that keep the transcript from scrolling sideways at a narrow width.
+test('the transcript never scrolls sideways, and a long report heading wraps instead of widening it', () => {
+  const long = 'ended early: Claude Code exited with code 143 while running a very long command'
+  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Hotrod subagents hands-off for the…', text: '', error: long }] })
+  const list = container.querySelector('[class*="overflow-anchor"]')!
+  expect(list.className).toContain('overflow-x-hidden')
+  // Gutters on both edges keep the column centred under a visible scrollbar, in line with the composer.
+  expect(list.className).toContain('[scrollbar-gutter:stable_both-edges]')
+  const heading = [...container.querySelectorAll('[aria-label^="Report from subagent"] span')].find((s) =>
+    s.textContent?.startsWith('Subagent'),
+  )!
+  expect(heading.className).not.toContain('shrink-0')
+  expect(heading.className).toContain('min-w-0')
 })
 
 test('a report card folds and unfolds on click, and remembers it', () => {
@@ -1162,4 +1196,41 @@ test('a steering message waits in the queue with no way to take it back, then sh
   const items: Item[] = [USER, tool('done', 'a'), { kind: 'user', text: 'use y', midTurn: true }]
   render({ status: 'running', items, queue: [] }, () => {}, { steering: true })
   expect(container.textContent).toContain('Sent mid-turn')
+})
+
+test("the composer offers every engine's models, grouped, and picking one on another engine pins the chat to it", () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const engines: EngineInfo[] = [
+    { id: 'cc', name: 'Claude Code', enabled: true, installed: true, signedIn: true, thinking: ['low', 'high'], models: [{ id: 'opus', label: 'Opus' }] },
+    { id: 'pi', enabled: true, installed: true, signedIn: true, thinking: ['off', 'high'], models: [{ id: 'p/one', label: 'One' }] },
+  ]
+  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus', thinking: 'high' }], planning: [], searching: [], subagents: [] }
+  const sent: ClientMessage[] = []
+  render({ engine: 'cc', thinking: 'high' }, (m) => sent.push(m), { engines, modelLists })
+  const select = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
+  expect(select('Model').textContent).toBe('Opus · Claude Code')
+  expect(select('Thinking').textContent).toBe('High')
+  expect(container.querySelector('button[aria-label="Engine"]')).toBeNull()
+  act(() => select('Model').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect([...document.querySelectorAll('[role="group"]')].map((g) => g.firstElementChild?.textContent)).toEqual([
+    'Claude Code',
+    'pi',
+  ])
+  const item = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith('One · pi'))!
+  act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  // The chat's own level carries over, since pi's model takes it too.
+  expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1', engine: 'pi', model: 'p/one', thinking: 'high' })
+})
+
+test("a chat whose own model can't run says so and offers to go back to Settings' models", () => {
+  const engines: EngineInfo[] = [
+    { id: 'cc', enabled: true, installed: true, signedIn: true, models: [{ id: 'opus', label: 'Opus' }] },
+  ]
+  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus' }], planning: [], searching: [], subagents: [] }
+  const sent: ClientMessage[] = []
+  render({ engine: 'cc', model: 'gone' }, (m) => sent.push(m), { engines, modelLists })
+  expect(container.textContent).toContain("gone on cc can't run")
+  const back = [...container.querySelectorAll('button')].find((b) => b.textContent === "Use Settings' models")!
+  act(() => back.click())
+  expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1' })
 })

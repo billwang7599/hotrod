@@ -5,7 +5,11 @@ import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
   PERMISSION_SWITCHES,
+  fallbackLevel,
+  levelsOf,
   settingProblem,
+  ROLE_NAMES,
+  THINKING_LABELS,
   switchedOn,
   type Account,
   type ClientMessage,
@@ -14,6 +18,8 @@ import {
   type EngineInfo,
   type ModelLists,
   type ModelRole,
+  type ModelRow,
+  type ThinkingLevel,
   type ModInfo,
   type WorkFolder,
 } from '@hotrod/core/shared'
@@ -32,7 +38,7 @@ import {
   Switch,
   useReturnFocus,
 } from './controls.tsx'
-import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
+import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
 import { Appearance } from './themes.tsx'
@@ -42,7 +48,7 @@ type PageProps = {
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextSection, boolean>
   mods: ModInfo[]
-  modelLists: Record<string, ModelLists>
+  modelLists: ModelLists
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean
@@ -66,11 +72,11 @@ const WORK_FOLDER_HINT =
 
 const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every chat; each can choose otherwise in its Context panel.'
 
-const ROLES: Record<ModelRole, { name: string; about: string }> = {
-  chat: { name: 'Chat', about: "Chats you start. Empty runs the engine's default." },
-  planning: { name: 'Planning', about: 'Subagents started to plan. Empty uses Chat.' },
-  searching: { name: 'Searching', about: 'Subagents started to search. Empty uses Chat.' },
-  subagents: { name: 'Subagents', about: 'Every other subagent. Empty uses Chat.' },
+const ROLE_ABOUT: Record<ModelRole, string> = {
+  chat: 'Chats you start.',
+  planning: 'Subagents started to plan.',
+  searching: 'Subagents started to search.',
+  subagents: 'Every other subagent.',
 }
 
 const PAGES = [
@@ -173,20 +179,11 @@ const PAGES = [
     group: 'Options',
     title: 'Models',
     intro:
-      `A ${CHAT_NOUN.one} runs its own pick, else the first model in its list that the engine offers, ` +
-      "else the engine's default.",
+      'Each list runs its first model that can run, on any engine; if that engine is off or stops offering it, the ' +
+      `next one runs. A ${CHAT_NOUN.one}'s own pick in its message box comes first.`,
     body: ({ engines, modelLists, connected, send }: PageProps) => {
-      const on = engines.filter((e) => e.enabled)
-      if (!on.length) return <p className="text-muted">Turn on an engine to order its models.</p>
-      return on.map((engine) => (
-        <EngineModels
-          key={engine.id}
-          engine={engine}
-          lists={modelLists[engine.id] ?? NO_LISTS}
-          connected={connected}
-          send={send}
-        />
-      ))
+      if (!engines.some((e) => e.enabled)) return <p className="text-muted">Turn on an engine to pick models.</p>
+      return <ModelListsSection engines={engines} lists={modelLists} connected={connected} send={send} />
     },
   },
   {
@@ -469,105 +466,123 @@ function SettingRow({ name, description, children, below }: RowProps) {
   )
 }
 
-type EngineModelsProps = {
-  engine: EngineInfo
+type ModelListsProps = {
+  engines: EngineInfo[]
   lists: ModelLists
   connected: boolean
   send: (m: ClientMessage) => void
 }
 
-function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
-  const offered = engine.models ?? []
-  const labelOf = (id: string) => offered.find((m) => m.id === id)?.label
+function ModelListsSection({ engines, lists, connected, send }: ModelListsProps) {
+  const choices = modelChoices(engines)
+  const quiet = engines.filter((e) => e.enabled && !e.models?.length)
+  const engineOf = (id: string) => engines.find((e) => e.id === id)
   return (
-    <section className="flex flex-col not-first:pt-24" aria-label={`${engine.id} models`}>
-      <h3 className="pb-8 font-mono font-semibold">{engine.id}</h3>
-      {!offered.length && (
-        <p className="text-muted">
-          {engine.id} lists no models{engineProblem(engine) && ` (${engineProblem(engine)})`}.
+    <section className="flex flex-col" aria-label="Models">
+      {quiet.map((e) => (
+        <p key={e.id} className="pb-8 text-muted">
+          {engineName(e)} lists no models{engineProblem(e) && ` (${engineProblem(e)})`}.
         </p>
-      )}
-      {offered.length > 0 && (
-        <div className={GROUP}>
-          {MODEL_ROLES.map((role) => {
-            const list = lists[role]
-            const { name, about } = ROLES[role]
-            const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
-            const move = (from: number, to: number) => {
-              const next = [...list]
-              next.splice(to, 0, ...next.splice(from, 1))
-              setList(next)
-            }
-            const items = list.map((id, i) => {
-              const label = labelOf(id)
-              return (
-                <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
-                  <span className="w-16 text-sm text-faint">{i + 1}</span>
-                  <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
-                    {label ?? `${id} (not offered, skipped)`}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Move ${label ?? id} up`}
-                    disabled={!connected || i === 0}
-                    onClick={() => move(i, i - 1)}
-                  >
-                    ↑
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Move ${label ?? id} down`}
-                    disabled={!connected || i === list.length - 1}
-                    onClick={() => move(i, i + 1)}
-                  >
-                    ↓
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Remove ${label ?? id}`}
-                    disabled={!connected}
-                    onClick={() => setList(list.filter((m) => m !== id))}
-                  >
-                    ×
-                  </Button>
-                </li>
-              )
-            })
-            const addable = offered.filter((m) => !list.includes(m.id))
+      ))}
+      <div className={GROUP}>
+        {MODEL_ROLES.map((role) => {
+          const list = lists[role]
+          const [name, about] = [ROLE_NAMES[role], ROLE_ABOUT[role]]
+          const setList = (models: ModelRow[]) => send({ type: 'models.setList', role, models })
+          const move = (from: number, to: number) => {
+            const next = [...list]
+            next.splice(to, 0, ...next.splice(from, 1))
+            setList(next)
+          }
+          const items = list.map((row, i) => {
+            const engine = engineOf(row.engine)
+            const choice = choices.find((c) => c.engine === row.engine && c.model === row.model)
+            const [model, on] = [choice?.name ?? row.model, engineName(engine) || row.engine]
+            const label = `${model} · ${on}`
+            const levels = choice ? levelsOf(engine, row.model) : []
+            const setThinking = (level: string) =>
+              setList(list.map((r, j) => (j === i ? { ...r, thinking: level as ThinkingLevel } : r)))
+            // The Chat list always keeps one model, so what a chat runs is always on show.
+            const removable = role !== 'chat' || list.length > 1
             return (
-              <SettingRow
-                key={role}
-                name={name}
-                description={about}
-                below={items.length > 0 && <ol aria-label={`${engine.id} ${name} models`}>{items}</ol>}
-              >
-                <Select
-                  label={`Add a ${name} model for ${engine.id}`}
-                  value=""
-                  placeholder="Add model…"
-                  disabled={!connected || !addable.length}
-                  options={addable.map((m) => ({ value: m.id, label: m.label }))}
-                  onChange={(model) => setList([...list, model])}
-                />
-              </SettingRow>
+              <li key={modelKey(row)} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
+                <span className="w-16 text-sm text-faint">{i + 1}</span>
+                <span className={`min-w-0 flex-1 truncate ${choice ? '' : 'text-muted'}`}>
+                  {model} <span className="text-faint">· {on}</span>
+                  {!choice && " (can't run, skipped)"}
+                </span>
+                {levels.length > 0 && (
+                  <Select
+                    variant="chip"
+                    label={`Thinking for ${label} in ${name}`}
+                    value={row.thinking && levels.includes(row.thinking) ? row.thinking : ''}
+                    placeholder="Thinking"
+                    disabled={!connected}
+                    options={levels.map((level) => ({ value: level, label: THINKING_LABELS[level] }))}
+                    onChange={setThinking}
+                  />
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${label} up`}
+                  disabled={!connected || i === 0}
+                  onClick={() => move(i, i - 1)}
+                >
+                  ↑
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Move ${label} down`}
+                  disabled={!connected || i === list.length - 1}
+                  onClick={() => move(i, i + 1)}
+                >
+                  ↓
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={`Remove ${label}`}
+                  disabled={!connected || !removable}
+                  onClick={() => setList(list.filter((_, j) => j !== i))}
+                >
+                  ×
+                </Button>
+              </li>
             )
-          })}
-          {engine.defaultThinking && (
-            <SettingRow name="Default thinking">
+          })
+          const addable = choices.filter((c) => !list.some((r) => r.engine === c.engine && r.model === c.model))
+          const add = (key: string) => {
+            const picked = fromModelKey(key)
+            const level = fallbackLevel(engineOf(picked.engine), picked.model)
+            setList([...list, { ...picked, ...(level && { thinking: level }) }])
+          }
+          return (
+            <SettingRow
+              key={role}
+              name={name}
+              description={about}
+              below={
+                items.length > 0 ? (
+                  <ol aria-label={`${name} models`}>{items}</ol>
+                ) : (
+                  role !== 'chat' && <p className="pl-8 text-sm text-muted">Same as Chat</p>
+                )
+              }
+            >
               <Select
-                label={`Default thinking for ${engine.id}`}
-                value={engine.defaultThinking}
-                disabled={!connected}
-                options={(engine.thinking ?? []).map((level) => ({ value: level, label: level }))}
-                onChange={(thinking) => send({ type: 'engine.setDefaultThinking', engine: engine.id, thinking })}
+                label={`Add a ${name} model`}
+                value=""
+                placeholder="Add model…"
+                disabled={!connected || !addable.length}
+                options={addable.map((c) => ({ value: modelKey(c), label: c.label, group: c.group }))}
+                onChange={add}
               />
             </SettingRow>
-          )}
-        </div>
-      )}
+          )
+        })}
+      </div>
     </section>
   )
 }

@@ -42,20 +42,45 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
-export type ModelOption = { id: string; label: string }
+// One set of thinking levels for every engine, cheapest first. Each adapter maps them onto its own flag and says which
+// ones each of its models takes.
+export const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
+
+export const THINKING_LABELS: Record<ThinkingLevel, string> = {
+  off: 'Off',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high',
+  max: 'Max',
+}
+
+export const isThinkingLevel = (value: unknown): value is ThinkingLevel =>
+  THINKING_LEVELS.includes(value as ThinkingLevel)
+
+// thinking: the levels this model takes, when they differ from its engine's list; empty when it takes none.
+export type ModelOption = { id: string; label: string; thinking?: ThinkingLevel[] }
 
 export type EngineStatus = {
   installed: boolean
   signedIn: boolean
   detail?: string
   models?: string[]
-  thinking?: string[]
+  thinking?: ThinkingLevel[]
+  // Per model id, the levels a model takes when they differ from `thinking` ([] when it takes none).
+  modelThinking?: Record<string, ThinkingLevel[]>
+  // What the engine runs with no model or level given. Only used to fill in the Chat model list when it has nothing
+  // that can run, so what runs is always a row the user can see.
   defaultModel?: string
-  defaultThinking?: string
+  defaultThinking?: ThinkingLevel
 }
 
 export type EngineInfo = Omit<EngineStatus, 'models'> & {
   id: string
+  // How the UI names the engine, e.g. "Claude Code"; the id when the adapter gives none.
+  name?: string
   enabled: boolean
   models?: ModelOption[]
   steering?: boolean
@@ -71,7 +96,7 @@ export type SessionOptions = {
   extraDirs?: string[]
   readFiles?: string[]
   model?: string
-  thinking?: string
+  thinking?: ThinkingLevel
   sandbox?: Sandbox
 }
 
@@ -109,6 +134,7 @@ export interface LoginFlow {
 
 export interface Adapter {
   id: string
+  name?: string
   detect(machine: Machine): Promise<EngineStatus>
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
   complete?(machine: Machine, options: CompleteOptions): Promise<string>
@@ -156,6 +182,8 @@ export type ChatInfo = PermissionSwitches & {
   parentMessages?: number
   folders: string[]
   files: string[]
+  // The engine the chat runs on. With `model` set, the two are the chat's own pick and stay put; without it, the core
+  // keeps `engine` on whatever the chat's model list picks.
   engine: string
   archived: boolean
   // Spaces only: pinned ones sit in their own group at the top; `order` is the place within its group, set when the
@@ -165,10 +193,17 @@ export type ChatInfo = PermissionSwitches & {
   createdAt: string
   role?: ModelRole
   model?: string
-  thinking?: string
+  thinking?: ThinkingLevel
   workDir?: string
   worktrees?: Record<string, Worktree>
+  // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
+  doneAt?: string
+  readAt?: string
 }
+
+/** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
+export const isUnread = (chat: Pick<ChatInfo, 'doneAt' | 'readAt'>) =>
+  chat.doneAt !== undefined && (chat.readAt === undefined || chat.doneAt > chat.readAt)
 
 // from: the branch the folder was on when it was checked out.
 export type Worktree = { path: string; branch: string; from?: string }
@@ -189,17 +224,75 @@ export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as con
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
-export type ModelLists = Record<ModelRole, string[]>
-
-export function pickModel(engine: EngineInfo | undefined, lists: ModelLists, chat: Pick<ChatInfo, 'model' | 'role'>) {
-  const offers = (id?: string) => engine?.models?.some((m) => m.id === id) ?? false
-  if (offers(chat.model)) return chat.model
-  const list = lists[chat.role ?? 'chat']
-  return (list?.length ? list : lists.chat).find(offers) ?? engine?.defaultModel
+export const ROLE_NAMES: Record<ModelRole, string> = {
+  chat: 'Chat',
+  planning: 'Planning',
+  searching: 'Searching',
+  subagents: 'Subagents',
 }
 
-export const pickThinking = (engine: EngineInfo | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
-  chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
+// One entry in a role's model list: a model on an engine, and the thinking level it runs at there. `thinking` is left
+// out only for a model that takes no levels, or until its engine has said which it takes.
+export type ModelRow = { engine: string; model: string; thinking?: ThinkingLevel }
+
+// One list per role, shared by every engine; a list can mix engines.
+export type ModelLists = Record<ModelRole, ModelRow[]>
+
+export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
+
+/** A role's list, or the Chat list while the role's own is empty. */
+export const listFor = (lists: ModelLists, role: ModelRole = 'chat') =>
+  (lists[role]?.length ? lists[role] : lists.chat) ?? []
+
+/** The thinking levels a model takes: its own list if its engine gives one, else the engine's. */
+export const levelsOf = (engine: EngineInfo | undefined, model?: string): ThinkingLevel[] =>
+  engine?.models?.find((m) => m.id === model)?.thinking ?? engine?.thinking ?? []
+
+/** The level among `levels` nearest to `level`, the cheaper one on a tie; undefined when there are none. */
+export function snapLevel(level: ThinkingLevel, levels: readonly ThinkingLevel[]): ThinkingLevel | undefined {
+  const at = THINKING_LEVELS.indexOf(level)
+  const distance = (l: ThinkingLevel) => Math.abs(THINKING_LEVELS.indexOf(l) - at)
+  return [...levels].sort((a, b) => distance(a) - distance(b) || THINKING_LEVELS.indexOf(a) - THINKING_LEVELS.indexOf(b))[0]
+}
+
+// The level a model runs at when nothing names one: what its engine runs with no flag, else medium, snapped.
+export const fallbackLevel = (engine: EngineInfo | undefined, model?: string) =>
+  snapLevel(engine?.defaultThinking ?? 'medium', levelsOf(engine, model))
+
+/** Whether `model` can run on `engine` now: the engine is on and offers it. */
+export const canRun = (engine: EngineInfo | undefined, model?: string) =>
+  engine?.enabled === true && model !== undefined && (engine.models?.some((m) => m.id === model) ?? false)
+
+export type Run = { engine: string; model: string; thinking?: ThinkingLevel; pinned: boolean }
+
+/**
+ * What a chat runs: its own model if it picked one (on its engine), else the first row in its role's list (or the
+ * Chat list) that can run, even on another engine. The thinking level is the chat's own, else the row's, else the
+ * fallback, snapped to one the model takes. Undefined when nothing can run; a chat's own pick that can't run doesn't
+ * fall back to the list.
+ */
+export function pickRun(
+  engines: EngineInfo[],
+  lists: ModelLists,
+  chat: Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>,
+): Run | undefined {
+  const engineOf = (id: string) => engines.find((e) => e.id === id)
+  const list = listFor(lists, chat.role)
+  const pinned = chat.model !== undefined
+  const row = pinned
+    ? { engine: chat.engine, model: chat.model!, ...list.find((r) => r.engine === chat.engine && r.model === chat.model) }
+    : list.find((r) => canRun(engineOf(r.engine), r.model))
+  if (!row || !canRun(engineOf(row.engine), row.model)) return undefined
+  const engine = engineOf(row.engine)
+  const levels = levelsOf(engine, row.model)
+  const wanted = chat.thinking ?? row.thinking
+  const thinking = wanted ? snapLevel(wanted, levels) : fallbackLevel(engine, row.model)
+  return { engine: row.engine, model: row.model, ...(thinking && { thinking }), pinned }
+}
+
+/** Whether two runs are the same model on the same engine. */
+export const sameModel = (a?: Pick<Run, 'engine' | 'model'>, b?: Pick<Run, 'engine' | 'model'>) =>
+  a !== undefined && b !== undefined && a.engine === b.engine && a.model === b.model
 
 export type ModInfo = {
   id: string
@@ -291,15 +384,17 @@ export type ChatState = ChatInfo & {
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
-  | { type: 'engine.setDefaultThinking'; engine: string; thinking: string }
   | ({ type: 'chat.create' } & NewChat)
   | { type: 'chat.rename'; chatId: string; name: string }
   | { type: 'chat.archive'; chatId: string; archived: boolean }
   // Moves a space to `index` among the active spaces that are (un)pinned like `pinned`, pinning or unpinning it.
   | { type: 'chat.move'; chatId: string; pinned: boolean; index: number }
   | { type: 'chat.delete'; chatId: string }
-  | { type: 'chat.setEngine'; chatId: string; engine: string }
-  | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
+  // The user has seen the chat's latest turn.
+  | { type: 'chat.read'; chatId: string }
+  // A model of the chat's own (on `engine`, else its current one), or none to follow its model list again; and a
+  // thinking level of its own, or none to take the list's.
+  | { type: 'chat.setModel'; chatId: string; engine?: string; model?: string; thinking?: ThinkingLevel }
   | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
   // steer: hand it to the running turn if its engine can steer; otherwise, or without it, it waits for the turn to end.
   | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[]; steer?: boolean }
@@ -324,7 +419,7 @@ export type ClientMessage =
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'mod.install'; modId: string }
   | { type: 'mod.cancelInstall'; modId: string }
-  | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
+  | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }
@@ -343,7 +438,7 @@ export type CoreMessage =
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
       mods: ModInfo[]
-      modelLists: Record<string, ModelLists>
+      modelLists: ModelLists
       memory: MemorySettings
       workFolder: WorkFolder
     }
@@ -363,7 +458,7 @@ export type CoreMessage =
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   | { type: 'mod.updated'; mod: ModInfo }
-  | { type: 'models.updated'; engine: string; lists: ModelLists }
+  | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   | { type: 'error'; message: string }

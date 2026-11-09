@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ModAction, ModListItem, ModTone, ModView } from '@hotrod/mod-api'
 import { Button, Chevron, Hint } from './controls.tsx'
 
@@ -15,7 +15,18 @@ const TONES: Record<ModTone, string> = {
   warning: 'text-amber',
   error: 'text-red',
 }
+const DOTS: Record<ModTone, string> = {
+  normal: 'bg-text',
+  muted: 'bg-muted',
+  faint: 'bg-faint',
+  accent: 'bg-accent',
+  success: 'bg-green',
+  warning: 'bg-amber',
+  error: 'bg-red',
+}
 const BADGE = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal'
+// How near the end a followed log counts as at the end, in pixels.
+const FOLLOW_PX = 16
 const GAPS = { tight: 'gap-4', normal: 'gap-8', loose: 'gap-18' }
 const JUSTIFY = { start: 'justify-start', between: 'justify-between', end: 'justify-end' }
 const MAX_CODE_LINES = 400
@@ -48,18 +59,36 @@ function lineTone(line: string) {
   return 'text-muted'
 }
 
-function Code({ text, language, maxLines = MAX_CODE_LINES }: { text: string; language?: string; maxLines?: number }) {
+type CodeNode = Extract<ModView, { type: 'code' }>
+
+function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNode, 'type'>) {
   const lines = text.replace(/\n$/, '').split('\n')
-  const shown = lines.slice(0, maxLines)
+  const shown = follow ? lines.slice(-maxLines) : lines.slice(0, maxLines)
   const cut = lines.length - shown.length
+  const pre = useRef<HTMLPreElement>(null)
+  // A followed log stays at its end as it grows, until the user scrolls up to read.
+  const atEnd = useRef(true)
+  useLayoutEffect(() => {
+    if (follow && atEnd.current && pre.current) pre.current.scrollTop = pre.current.scrollHeight
+  }, [follow, text])
+  const onScroll = () => {
+    const el = pre.current
+    if (el) atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight <= FOLLOW_PX
+  }
+  const more = cut > 0 && <div className="px-8 text-faint">{cut} {follow ? 'earlier' : 'more'} lines</div>
   return (
-    <pre className="max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]">
+    <pre
+      ref={pre}
+      onScroll={follow ? onScroll : undefined}
+      className="max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]"
+    >
+      {follow && more}
       {shown.map((line, i) => (
         <div key={i} className={`px-8 whitespace-pre ${language === 'diff' ? lineTone(line) : 'text-muted'}`}>
           {line || ' '}
         </div>
       ))}
-      {cut > 0 && <div className="px-8 text-faint">{cut} more lines</div>}
+      {!follow && more}
     </pre>
   )
 }
@@ -98,6 +127,7 @@ function List({ node, act }: { node: Extract<ModView, { type: 'list' }>; act: Ac
       {node.items.map((item) => {
         const body = (
           <>
+            {item.dot && <span className={`size-7 shrink-0 rounded-full ${DOTS[item.dot]}`} data-tone={item.dot} />}
             <span className={`min-w-0 flex-1 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>{item.label}</span>
             {item.detail && <span className="shrink-0 font-mono text-xs text-faint">{item.detail}</span>}
             <Badges badges={item.badges} />
@@ -105,20 +135,32 @@ function List({ node, act }: { node: Extract<ModView, { type: 'list' }>; act: Ac
         )
         const row = 'flex w-full min-w-0 items-center gap-8 rounded px-6 py-4 text-left'
         return (
-          <li key={item.key}>
-            <Hinted hint={item.hint}>
-              {item.action ? (
-                <button
-                  className={`${row} hover:bg-hover aria-pressed:bg-hover`}
-                  aria-pressed={item.selected ?? undefined}
-                  onClick={() => act(item.action!)}
-                >
-                  {body}
-                </button>
-              ) : (
-                <div className={row}>{body}</div>
-              )}
-            </Hinted>
+          <li key={item.key} className="flex min-w-0 items-center gap-8">
+            <div className="flex min-w-0 flex-1 flex-col">
+              <Hinted hint={item.hint}>
+                {item.action ? (
+                  <button
+                    className={`${row} hover:bg-hover aria-pressed:bg-hover`}
+                    aria-pressed={item.selected ?? undefined}
+                    onClick={() => act(item.action!)}
+                  >
+                    {body}
+                  </button>
+                ) : (
+                  <div className={row}>{body}</div>
+                )}
+              </Hinted>
+            </div>
+            {item.link && (
+              <a
+                className="shrink-0 font-mono text-xs text-accent hover:underline"
+                href={item.link.url}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {item.link.text}
+              </a>
+            )}
           </li>
         )
       })}
@@ -184,7 +226,7 @@ function Node({ node, act }: { node: ModView; act: Act }): ReactNode {
     case 'list':
       return <List node={node} act={act} />
     case 'code':
-      return <Code text={node.text} language={node.language} maxLines={node.maxLines} />
+      return <Code text={node.text} language={node.language} maxLines={node.maxLines} follow={node.follow} />
     case 'card':
       return <Card node={node} act={act} />
     case 'divider':

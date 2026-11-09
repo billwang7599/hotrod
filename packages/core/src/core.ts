@@ -54,9 +54,17 @@ import {
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
   PERMISSION_SWITCHES,
-  pickModel,
-  pickThinking,
+  canRun,
+  fallbackLevel,
+  isThinkingLevel,
+  levelsOf,
+  listFor,
+  pickRun,
+  ROLE_NAMES,
+  sameModel,
+  isUnread,
   settingProblem,
+  snapLevel,
   switchedOn,
   type Adapter,
   type Answers,
@@ -77,14 +85,17 @@ import {
   type MemorySettings,
   type ModelLists,
   type ModelRole,
+  type ModelRow,
   type ModInfo,
   type NewChat,
   type PanelTab,
   type PermissionSwitch,
   type PermissionSwitches,
   type QueuedMessage,
+  type Run,
   type Session,
   type SetupState,
+  type ThinkingLevel,
   type Upload,
   type WorkFolder,
   type Worktree,
@@ -172,12 +183,27 @@ export function openCore(options: {
     engines: Record<string, boolean>
     context?: Partial<Record<ContextSection, boolean>>
     mods?: Record<string, Record<string, unknown>>
-    models?: Record<string, Partial<ModelLists>>
+    // One list per role, shared by every engine. Older Hotrods saved one set of lists per engine, plus a default
+    // thinking level per engine (`defaultThinking`); opening migrates them (migrateModels).
+    models?: Partial<ModelLists>
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
     workFolder?: string
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
+  {
+    const engineOrder = [
+      ...(settings.engines[defaultEngine] ? [defaultEngine] : []),
+      ...adapters.filter((a) => settings.engines[a.id]).map((a) => a.id),
+      ...adapters.map((a) => a.id),
+    ]
+    const migrated = migrateModels(settings.models, settings.defaultThinking, engineOrder)
+    if (migrated) {
+      settings.models = migrated
+      delete settings.defaultThinking
+      saveSettings()
+    }
+  }
   const contextDefaults = (): Record<ContextSection, boolean> => ({
     agents: settings.context?.agents ?? true,
     folders: settings.context?.folders ?? true,
@@ -208,22 +234,14 @@ export function openCore(options: {
     const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
     return { ...info, ...(setup && { setup }) }
   }
-  const listsOf = (engine: string): ModelLists => ({
-    chat: [],
-    planning: [],
-    searching: [],
-    subagents: [],
-    ...settings.models?.[engine],
-  })
+  const modelLists = (): ModelLists =>
+    Object.fromEntries(MODEL_ROLES.map((role) => [role, rowsOf(settings.models?.[role])])) as ModelLists
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
     const status = detected.get(id) ?? { installed: false, signedIn: false }
-    const chosen = settings.defaultThinking?.[id]
-    const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
-    const steering = adapters.find((adapter) => adapter.id === id)?.steering === true
-    const extra = { ...(offersChosen && { defaultThinking: chosen }), ...(steering && { steering }) }
-    return { id, enabled: isEnabled(id), ...status, ...extra }
+    const { name, steering } = adapterFor(id) ?? {}
+    return { id, ...(name && { name }), enabled: isEnabled(id), ...status, ...(steering && { steering }) }
   }
   const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const offered = (engine: string) => {
@@ -260,6 +278,43 @@ export function openCore(options: {
     settings.engines = { ...settings.engines, [engine]: enabled }
     saveSettings()
     broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
+    settleModels()
+  }
+  /** What a chat runs now (see pickRun). */
+  const runOf = (info: Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>): Run | undefined =>
+    pickRun(engineInfos(), modelLists(), info)
+  /**
+   * Once engines have said what they offer: gives each row the level it runs at (the engine's own default for one
+   * with none, the nearest one the model takes for one it no longer does), adds the engine's default model to the Chat
+   * list when nothing in it can run, so what runs is always on screen, and moves chats that follow their list onto
+   * the engine it now picks.
+   */
+  const settleModels = () => {
+    const before = JSON.stringify(modelLists())
+    const settled = Object.fromEntries(
+      MODEL_ROLES.map((role) => [role, modelLists()[role].map((row) => settledRow(engineInfo(row.engine), row))]),
+    ) as ModelLists
+    const engines = engineInfos()
+    if (!settled.chat.some((row) => canRun(engines.find((e) => e.id === row.engine), row.model))) {
+      const preferred = [defaultEngine, ...adapters.map((a) => a.id)].map(engineInfo)
+      const seed = preferred.find((e) => canRun(e, e.defaultModel ?? e.models?.[0]?.id))
+      const model = seed && (seed.defaultModel ?? seed.models![0]!.id)
+      if (seed && model) settled.chat.push(settledRow(seed, { engine: seed.id, model }))
+    }
+    if (JSON.stringify(settled) !== before) {
+      settings.models = settled
+      saveSettings()
+      broadcast({ type: 'models.updated', lists: settled })
+    }
+    followModels()
+  }
+  // A chat that follows its model list sits on the engine the list picks, so its engine, accounts and notes are right.
+  const followModels = () => {
+    for (const chat of chats.values()) {
+      if (chat.info.model !== undefined || chat.status !== 'idle') continue
+      const run = runOf(chat.info)
+      if (run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
+    }
   }
   const saveMod = (mod: Mod, change: Record<string, unknown>) => {
     settings.mods = { ...settings.mods, [mod.id]: { ...settings.mods?.[mod.id], ...change } }
@@ -323,24 +378,21 @@ export function openCore(options: {
     saveMod(mod, { [key]: value })
     if (isOn(mod)) void checkSetup(mod)
   }
-  const setModelList = (engine: string, role: unknown, models: unknown) => {
-    checkEngine(engine)
+  const setModelList = (role: unknown, models: unknown) => {
     if (!MODEL_ROLES.includes(role as ModelRole)) throw new Error(`Unknown model role "${role}"`)
-    if (!Array.isArray(models) || !models.every((id) => typeof id === 'string' && id)) {
-      throw new Error('A model list must be a list of model ids')
+    if (!Array.isArray(models) || !models.every(isRow)) {
+      throw new Error('A model list must be a list of models, each with its engine and a thinking level')
     }
-    settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: models } }
-    saveSettings()
-    broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
-  }
-  const setDefaultThinking = (engine: string, thinking: string) => {
-    checkEngine(engine)
-    if (!offered(engine).thinking.includes(thinking)) {
-      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
+    // A row whose engine isn't here is kept (and skipped), so a list survives an engine that's gone for a while.
+    const rows = rowsOf(models).map((row) => settledRow(engineInfo(row.engine), row))
+    const known = engineInfos()
+    if (role === 'chat' && !rows.length && known.some((e) => e.models?.length)) {
+      throw new Error('The Chat list needs at least one model')
     }
-    settings.defaultThinking = { ...settings.defaultThinking, [engine]: thinking }
+    settings.models = { ...modelLists(), [role as ModelRole]: rows }
     saveSettings()
-    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
+    broadcast({ type: 'models.updated', lists: modelLists() })
+    followModels()
   }
   const setMemory = (engine?: string, model?: string) => {
     if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
@@ -515,6 +567,8 @@ export function openCore(options: {
     unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
+    // Only spaces and Home show unread; a subagent is removed once it reports, so it keeps no read state.
+    if (!chat.info.subagent) updateChat(chat, { doneAt: end.at })
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
@@ -752,6 +806,8 @@ export function openCore(options: {
         append(chatFor(chatId), { at, type: 'mod.note', text, ...(panel !== undefined && { mod: mod.id, panel }) })
       },
       run: runFor(),
+      // Lazily: hosts can be made before the spawning code below is set up.
+      spawn: (command, args, options) => spawnFor(mod)(command, args, options),
       storage: {
         dir,
         read(name) {
@@ -937,10 +993,16 @@ export function openCore(options: {
 
   const createChat = (spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }) => {
     const name = checkName(spec.name)
-    const engine = spec.engine ?? newChatEngine()
-    checkEngine(engine)
-    if (spec.engine !== undefined) checkEnabled(engine)
+    if (spec.engine !== undefined) {
+      checkEngine(spec.engine)
+      checkEnabled(spec.engine)
+    }
     const parent = spec.subagent ? chatFor(spec.parentId ?? '') : undefined
+    const role = parent ? (spec.role ?? 'subagents') : undefined
+    // Named engine: the chat's own pick of that engine's first model in its list, else the engine's default model.
+    // Otherwise it follows its list (a subagent: its role's, else Subagents', else Chat's).
+    const pin = spec.engine === undefined ? undefined : pinOn(spec.engine, role)
+    const engine = spec.engine ?? runOf({ engine: newChatEngine(), role })?.engine ?? newChatEngine()
     if (parent) checkActive(parent)
     if (parent?.info.subagent) throw new Error('A subagent cannot start chats')
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
@@ -954,7 +1016,7 @@ export function openCore(options: {
       ...(parent && parentMemory && {
         parentId: parent.info.id,
         subagent: true,
-        role: spec.role ?? 'subagents',
+        role,
         parentMessages: parentMemory.messages.length,
       }),
       folders,
@@ -962,12 +1024,7 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt: new Date().toISOString(),
-      // A subagent on its parent's engine takes its thinking level, and its model unless a role picks one: the role
-      // the tool call names, or the Subagents model list once the user has filled it in.
-      ...(parent?.info.engine === engine && {
-        thinking: parent.info.thinking,
-        ...(spec.role === undefined && !listsOf(engine).subagents.length && { model: parent.info.model }),
-      }),
+      ...pin,
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parentMemory?.messages.length) {
@@ -1034,37 +1091,58 @@ export function openCore(options: {
     saveMod(mod, { enabled })
     if (enabled) void checkSetup(mod)
     if (!changed) return
+    if (!enabled) stopSpawned(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
   }
 
-  const setEngine = (chat: Chat, engine: string) => {
-    checkEngine(engine)
-    checkEnabled(engine)
-    if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the engine')
-    const { model, thinking } = chat.info
+  /** A chat's own pick on `engine`: the first model of its list there, else the engine's default model. */
+  const pinOn = (engine: string, role?: ModelRole): Pick<ChatInfo, 'model' | 'thinking'> | undefined => {
+    const info = engineInfo(engine)
+    const row = listFor(modelLists(), role).find((r) => r.engine === engine && canRun(info, r.model))
+    if (row) return { model: row.model, ...(row.thinking && { thinking: row.thinking }) }
+    const model = info.defaultModel ?? info.models?.[0]?.id
+    return model ? { model } : undefined
+  }
+
+  const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
+    if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')
+    const { role } = chat.info
+    const on = model === undefined ? undefined : (engine ?? chat.info.engine)
+    if (on !== undefined) {
+      checkEngine(on)
+      checkEnabled(on)
+      if (!offersModel(on, model)) throw new Error(`Engine "${on}" offers no model "${model}"`)
+    }
+    if (thinking !== undefined && !isThinkingLevel(thinking)) throw new Error(`Unknown thinking level "${thinking}"`)
+    // Picking what the list would run anyway follows the list again, so the chat keeps up with Settings.
+    const listed = runOf({ engine: chat.info.engine, role })
+    const own = on !== undefined && !sameModel(listed, { engine: on, model: model! })
+    const runs = own ? runOf({ engine: on!, model, role }) : listed
+    if (thinking && runs && !levelsOf(engineInfo(runs.engine), runs.model).includes(thinking)) {
+      throw new Error(`Model "${runs.model}" offers no thinking level "${thinking}"`)
+    }
+    const settingsLevel = runs && runOf({ engine: runs.engine, model: runs.model, role })?.thinking
     updateChat(chat, {
-      engine,
-      model: offersModel(engine, model) ? model : undefined,
-      thinking: thinking && offered(engine).thinking.includes(thinking) ? thinking : undefined,
+      engine: own ? on : (listed?.engine ?? chat.info.engine),
+      model: own ? model : undefined,
+      thinking: thinking === settingsLevel ? undefined : (thinking as ThinkingLevel | undefined),
     })
   }
 
-  const setModel = (chat: Chat, model?: string, thinking?: string) => {
-    if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')
-    const { engine } = chat.info
-    const offers = offered(engine)
-    if (model && !offersModel(engine, model)) throw new Error(`Engine "${engine}" offers no model "${model}"`)
-    if (thinking && !offers.thinking.includes(thinking)) {
-      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
-    }
-    const info = engineInfo(engine)
-    const unpinned = pickModel(info, listsOf(engine), { role: chat.info.role })
-    updateChat(chat, {
-      model: model === unpinned ? undefined : model,
-      thinking: thinking === info.defaultThinking ? undefined : thinking,
-    })
+  /**
+   * When nothing in a chat's list (or its own pick) can run: an engine that lists no models (not detected yet) still
+   * runs as is, with no model named; anything else says what to fix.
+   */
+  const checkRunnable = (chat: Chat) => {
+    const { engine, model, role } = chat.info
+    if (!adapterFor(engine)) throw new Error(`Engine "${engine}" is not available. Pick another model for this chat.`)
+    checkEnabled(engine)
+    if (!engineInfo(engine).models?.length) return
+    if (model !== undefined) throw new Error(`Engine "${engine}" no longer offers "${model}". Pick another model for this chat.`)
+    const list = role && modelLists()[role].length ? ROLE_NAMES[role] : 'Chat'
+    throw new Error(`Nothing in the ${list} model list can run. Add a model or turn its engine on in Settings → Models.`)
   }
 
   const checkActive = (chat: Chat) => {
@@ -1207,22 +1285,84 @@ export function openCore(options: {
     return made
   }
 
+  // What a sandboxed chat may write in a git folder's repository to use its checkout, and the branches checked out
+  // elsewhere that it may not move.
+  const gitAccess = async (folder: string, workDir: string) => {
+    const gitDir = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    const listed = PROTECT_CHECKED_OUT_BRANCHES ? await git(folder, 'worktree', 'list', '--porcelain') : ''
+    const readOnly = listed.split('\n\n').flatMap((entry) => {
+      const path = entry.match(/^worktree (.+)$/m)?.[1]
+      const ref = entry.match(/^branch (.+)$/m)?.[1]
+      return path && ref && !within(path, workDir) ? [join(gitDir, ref), `${join(gitDir, ref)}.lock`] : []
+    })
+    return { writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
+  }
+
   const checkoutOf = async (space: Chat, folder: string, workDir: string, sandboxed: boolean): Promise<Checkout> => {
     try {
       const worktree = await worktreeOf(space, folder, workDir)
       if (!sandboxed) return { folder, worktree, writable: [], readOnly: [] }
-      const gitDir = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir')
-      const listed = PROTECT_CHECKED_OUT_BRANCHES ? await git(folder, 'worktree', 'list', '--porcelain') : ''
-      const readOnly = listed.split('\n\n').flatMap((entry) => {
-        const path = entry.match(/^worktree (.+)$/m)?.[1]
-        const ref = entry.match(/^branch (.+)$/m)?.[1]
-        return path && ref && !within(path, workDir) ? [join(gitDir, ref), `${join(gitDir, ref)}.lock`] : []
-      })
-      return { folder, worktree, writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
+      return { folder, worktree, ...(await gitAccess(folder, workDir)) }
     } catch (error) {
       throw new Error(`Couldn't check out ${folder} in the work folder: ${messageOf(error)}`)
     }
   }
+
+  // Where a command a mod starts for a chat runs, and its sandbox: the chat's own, over the space's work folder and the
+  // checkouts it has now. Nothing is checked out for it.
+  const commandPlaceOf = async (chat: Chat) => {
+    const editAnywhere = editsAnywhere(...switchesOf(chat))
+    if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
+      throw new Error("Hotrod can't sandbox commands on this system yet. Turn on Edits anywhere for this chat first.")
+    }
+    const workDir = workDirOf(chat)
+    mkdirSync(workDir, { recursive: true })
+    const sandbox = editAnywhere ? undefined : sandboxIn(workDir)
+    if (!sandbox) return { workDir }
+    const worktrees = Object.entries(chainOf(chat)[0]!.info.worktrees ?? {})
+    const access = await Promise.all(
+      worktrees
+        .filter(([folder, { path }]) => existsSync(folder) && existsSync(path))
+        .map(([folder]) => gitAccess(folder, workDir).catch(() => ({ writable: [], readOnly: [] }))),
+    )
+    const readOnly = access.flatMap((a) => a.readOnly)
+    const jail = {
+      ...sandbox,
+      writable: [...sandbox.writable, ...access.flatMap((a) => a.writable)],
+      ...(readOnly.length && { readOnly }),
+    }
+    return { workDir, sandbox: jail }
+  }
+
+  // What each mod has running from host.spawn, so turning the mod off stops it.
+  const spawned = new Map<string, Set<{ kill(): void }>>()
+  const stopSpawned = (mod: Mod) => {
+    for (const proc of spawned.get(mod.id) ?? []) proc.kill()
+  }
+  const spawnFor =
+    (mod: Mod): ModHost['spawn'] =>
+    async (command, args, options = {}) => {
+      if (quitting) throw new Error('Hotrod is quitting')
+      if (!isOn(mod)) throw new Error(`${mod.name} is off`)
+      const chat = options.chat === undefined ? undefined : chatFor(options.chat)
+      const place = chat ? await commandPlaceOf(chat) : undefined
+      const cwd = options.cwd ?? place?.workDir ?? '/'
+      const proc = machine.spawn(command, args, {
+        cwd,
+        ...(options.env && { env: options.env }),
+        ...(place?.sandbox && { sandbox: place.sandbox }),
+      })
+      const running = spawned.get(mod.id) ?? new Set()
+      spawned.set(mod.id, running)
+      running.add(proc)
+      proc.onExit(() => running.delete(proc))
+      // Nothing reads its stdin, but some watchers stop when it closes, so it stays open.
+      return {
+        onOutput: (listener) => proc.onStdout(listener),
+        onExit: (listener) => proc.onExit(listener),
+        stop: () => proc.kill(),
+      }
+    }
 
   // Only a folder Hotrod made for this space, whatever chat.json says.
   const ownWorkDirOf = ({ info }: Chat) =>
@@ -1284,11 +1424,10 @@ export function openCore(options: {
     if (quitting) throw new Error('Hotrod is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
-    const adapter = adapterFor(chat.info.engine)
-    if (!adapter) {
-      throw new Error(`Engine "${chat.info.engine}" is not available. Pick another engine for this chat.`)
-    }
-    checkEnabled(adapter.id)
+    const run = runOf(chat.info)
+    if (run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
+    if (!run) checkRunnable(chat)
+    const adapter = adapterFor(chat.info.engine)!
     const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
       throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
@@ -1333,6 +1472,18 @@ export function openCore(options: {
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
     ]
+    const forSession = { chat: detailOf(chat), tools: zoomable }
+    const modInstructions = watchersOf('instructions').flatMap((mod) => {
+      try {
+        const text = mod.instructions!(forSession, contextOf(mod))
+        if (text === undefined || text === null) return []
+        if (typeof text !== 'string') throw new Error('instructions must return text')
+        return text.trim() ? [text.trim()] : []
+      } catch (error) {
+        modError(mod, error)
+        return []
+      }
+    })
     const attachmentsDir = attachmentsDirOf(chat)
     const folders = items.flatMap((item) => (item.section === 'folders' ? [item.path] : []))
     const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
@@ -1349,7 +1500,8 @@ export function openCore(options: {
             ]
           : []),
       ]
-      const instructions = [...(role ? [role] : []), ...rules, ...memory, ...contextText].join('\n\n')
+      const parts = [...(role ? [role] : []), ...rules, ...modInstructions, ...memory, ...contextText]
+      const instructions = parts.join('\n\n')
       const extraDirs = [
         ...(cwd === workDir ? [] : [workDir]),
         ...checkouts.slice(1).map((c) => c.worktree.path),
@@ -1455,9 +1607,7 @@ export function openCore(options: {
       try {
         chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
         const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
-        const engine = engineInfo(adapter.id)
-        const model = pickModel(engine, listsOf(adapter.id), chat.info)
-        const thinking = pickThinking(engine, chat.info)
+        const { model, thinking } = run ?? {}
         const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
         const images = imagesFor(adapter, attachments)
         const options = {
@@ -1682,6 +1832,7 @@ export function openCore(options: {
         }),
       )
       enginesDetected = true
+      settleModels()
       compactBacklog()
     },
     setEngineEnabled,
@@ -1698,7 +1849,7 @@ export function openCore(options: {
         loadError,
       })),
     ],
-    modelLists: () => Object.fromEntries(adapters.map((adapter) => [adapter.id, listsOf(adapter.id)])),
+    modelLists,
     memory: () => settings.memory ?? {},
     chats: () => shownChats().map(state),
     workFolder,
@@ -1721,8 +1872,6 @@ export function openCore(options: {
       switch (message.type) {
         case 'engine.setEnabled':
           return setEngineEnabled(String(message.engine), message.enabled === true)
-        case 'engine.setDefaultThinking':
-          return setDefaultThinking(String(message.engine), String(message.thinking))
         case 'chat.create':
           return void createChat({
             name: message.name,
@@ -1738,10 +1887,17 @@ export function openCore(options: {
           return moveChat(chatFor(message.chatId), message.pinned === true, message.index)
         case 'chat.delete':
           return deleteChat(chatFor(message.chatId))
-        case 'chat.setEngine':
-          return setEngine(chatFor(message.chatId), String(message.engine))
+        case 'chat.read': {
+          const chat = chatFor(message.chatId)
+          return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
+        }
         case 'chat.setModel':
-          return setModel(chatFor(message.chatId), optionalText(message.model), optionalText(message.thinking))
+          return setModel(
+            chatFor(message.chatId),
+            optionalText(message.engine),
+            optionalText(message.model),
+            optionalText(message.thinking),
+          )
         case 'chat.setPermission': {
           const chat = chatFor(message.chatId)
           const name = checkSwitch(message.name)
@@ -1810,7 +1966,7 @@ export function openCore(options: {
         case 'memory.set':
           return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':
-          return setModelList(String(message.engine), message.role, message.models)
+          return setModelList(message.role, message.models)
         case 'permission.respond':
           return respond(chatFor(message.chatId), message.requestId, message.allow === true)
         case 'question.respond':
@@ -1872,15 +2028,17 @@ function describeModel(id: string) {
   return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
 }
 
-function nameModels({ models, defaultModel, ...status }: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
-  if (!models) return { ...status, ...(defaultModel && { defaultModel }) }
+function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
+  const { models, defaultModel, modelThinking, ...rest } = status
+  if (!models) return { ...rest, ...(defaultModel && { defaultModel }) }
   const providers = [...new Set(models.map(providerOf))]
   const named = models
     .filter((id) => !SNAPSHOT_ID.test(id))
     .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
     .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
   const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
-  return { ...status, models: named.map(({ id, label }) => ({ id, label })), ...(shown && { defaultModel: shown }) }
+  const options = named.map(({ id, label }) => ({ id, label, ...(modelThinking?.[id] && { thinking: modelThinking[id] }) }))
+  return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
 }
 
 const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
@@ -1892,6 +2050,60 @@ const freeName = (base: string, taken: (name: string) => boolean) => {
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+const isRow = (row: unknown): row is ModelRow => {
+  if (typeof row !== 'object' || row === null) return false
+  const { engine, model, thinking } = row as Record<string, unknown>
+  const text = (value: unknown) => typeof value === 'string' && value !== ''
+  return text(engine) && text(model) && (thinking === undefined || isThinkingLevel(thinking))
+}
+
+/** A saved model list as rows, without broken ones or a model listed twice. */
+const rowsOf = (saved: unknown): ModelRow[] =>
+  (Array.isArray(saved) ? saved : []).filter(isRow).flatMap((row, i, rows): ModelRow[] => {
+    if (rows.findIndex((r) => r.engine === row.engine && r.model === row.model) !== i) return []
+    return [{ engine: row.engine, model: row.model, ...(row.thinking && { thinking: row.thinking }) }]
+  })
+
+/**
+ * A row as it runs: at the level its model takes nearest to its own, else at the engine's default, or with none for a
+ * model that takes none. A row whose model the engine doesn't list (or hasn't yet) stays as it is.
+ */
+function settledRow(engine: EngineInfo, row: ModelRow): ModelRow {
+  if (!engine.models?.some((m) => m.id === row.model)) return row
+  const levels = levelsOf(engine, row.model)
+  const thinking = row.thinking ? snapLevel(row.thinking, levels) : fallbackLevel(engine, row.model)
+  return { engine: row.engine, model: row.model, ...(thinking && { thinking }) }
+}
+
+type OldLists = Partial<Record<ModelRole, unknown[]>>
+
+/**
+ * Settings saved per engine (`models: { <engine>: { <role>: [id or {model, thinking}] } }` plus `defaultThinking:
+ * { <engine>: level }`) as the one set of lists: each role's rows from every engine, in `engineOrder` (the default
+ * engine first), each at its own level, else its engine's old default. Undefined when there's nothing to migrate.
+ */
+export function migrateModels(
+  saved: unknown,
+  defaultThinking: Record<string, string> | undefined,
+  engineOrder: string[],
+): ModelLists | undefined {
+  const old = typeof saved === 'object' && saved !== null ? (saved as Record<string, unknown>) : {}
+  const perEngine = Object.values(old).some((value) => typeof value === 'object' && value !== null && !Array.isArray(value))
+  if (!perEngine && defaultThinking === undefined) return undefined
+  if (!perEngine) return Object.fromEntries(MODEL_ROLES.map((role) => [role, rowsOf(old[role])])) as ModelLists
+  const engines = [...new Set([...engineOrder, ...Object.keys(old)])].filter((id) => id in old)
+  const level = (value: unknown) => (isThinkingLevel(value) ? value : undefined)
+  const rowsFor = (role: ModelRole) =>
+    engines.flatMap((engine) =>
+      ((old[engine] as OldLists)?.[role] ?? []).flatMap((entry) => {
+        const { model, thinking } = typeof entry === 'string' ? { model: entry, thinking: undefined } : (entry as any)
+        const runsAt = level(thinking) ?? level(defaultThinking?.[engine])
+        return typeof model === 'string' && model ? [{ engine, model, ...(runsAt && { thinking: runsAt }) }] : []
+      }),
+    )
+  return Object.fromEntries(MODEL_ROLES.map((role) => [role, rowsOf(rowsFor(role))])) as ModelLists
+}
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 

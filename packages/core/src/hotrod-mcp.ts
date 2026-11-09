@@ -161,9 +161,10 @@ const TOOLS: Record<string, Tool> = {
   spawn_subagent: {
     for: 'subagents',
     description:
-      'Start a subagent: a new chat below this one that works on the task, in this folder, with this engine ' +
-      'unless you name another. Its final reply comes back to you as a message when its turn ends, so ' +
-      "don't poll it. Give a role to run it on that role's models. Returns its id.",
+      'Start a subagent: a new chat below this one that works on the task, in this folder, on the models the ' +
+      'user picked for subagents. Its final reply comes back to you as a message when its turn ends, so ' +
+      "don't poll it. Give a role to run it on that role's models, or an engine only if the user asks for one. " +
+      'Returns its id.',
     input: z.object({
       task: z.string().min(1),
       engine: z.string().optional(),
@@ -176,7 +177,7 @@ const TOOLS: Record<string, Tool> = {
         throw new Error(`This chat already has ${running} subagents running; the limit is ${limit}`)
       }
       const name = subagentName(task)
-      const chat = hub.createChat({ parentId: caller.id, name, engine: engine ?? caller.engine, subagent: true, role })
+      const chat = hub.createChat({ parentId: caller.id, name, engine, subagent: true, role })
       hub.send(chat.id, task)
       return { chatId: chat.id }
     },

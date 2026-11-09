@@ -10,6 +10,7 @@ import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
+import { useLooking, useMarkRead } from './unread.ts'
 import {
   dockedPanels,
   folderName,
@@ -39,6 +40,8 @@ declare global {
   interface Window {
     hotrod?: {
       pickFolder(title?: string): Promise<string | null>
+      pickFiles(title?: string): Promise<string[]>
+      pathForFile(file: File): string
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
@@ -122,6 +125,8 @@ function App() {
   const [columnPx, setColumnPx] = useState(() => storedColumn(localStorage.getItem(COLUMN_KEY)))
   useEffect(() => localStorage.setItem(COLUMN_KEY, String(columnPx)), [columnPx])
   const selected = state.chats.find((c) => c.id === state.selectedId)
+  const looking = useLooking()
+  useMarkRead(selected, looking && state.connected, send)
   const select = useCallback((chatId: string) => {
     dispatch({ type: 'select', chatId })
     setOverlay((open) => (open === 'sidebar' ? null : open))
@@ -184,6 +189,7 @@ function App() {
                   <ChatNav
                     chats={state.chats}
                     selectedId={state.selectedId}
+                    looking={looking}
                     connected={connected}
                     send={send}
                     select={select}
@@ -274,7 +280,7 @@ function App() {
                 modUi={state.modUi}
                 panelViews={state.panelViews}
                 contextDefaults={state.contextDefaults}
-                modelLists={state.modelLists[selected.engine]}
+                modelLists={state.modelLists}
                 select={select}
               />
             ) : (

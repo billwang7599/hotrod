@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo } from '@hotrod/core/shared'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo, ThinkingLevel } from '@hotrod/core/shared'
 import type { Account, EngineAccounts } from '@hotrod/core/shared'
 import {
   accountLabel,
@@ -7,7 +7,7 @@ import {
   COLUMN_PX,
   columnSlider,
   dockedPanels,
-  engineOptions,
+  modelChoices,
   familyOf,
   folderName,
   foldSteps,
@@ -17,6 +17,7 @@ import {
   listedAccounts,
   MAX_PREVIEW_BYTES,
   MIN_WINDOW_PX,
+  modelKey,
   modelMenu,
   PANEL_PX,
   pinState,
@@ -59,7 +60,7 @@ const modInfo = (id: string, enabled = false): ModInfo => ({
 })
 const mods = [modInfo('subagents'), modInfo('other')]
 const noLists = { chat: [], planning: [], searching: [], subagents: [] }
-const modelLists = { fake: noLists }
+const modelLists = noLists
 const snapshot = (chats: ChatState[]): Action =>
   ({
     type: 'snapshot',
@@ -225,20 +226,18 @@ describe('reduce', () => {
     expect(removed.selectedId).toBe(MAIN_CHAT_ID)
   })
 
-  it('lists only engines that are on, keeping the chat engine when it is off or unknown', () => {
+  it('offers the models of engines that are on, grouped by engine, naming the engine once two offer models', () => {
+    const opus = { id: 'opus', label: 'Opus' }
     const listed = [
-      { id: 'claude-code', enabled: true, installed: true, signedIn: true },
-      { id: 'pi', enabled: true, installed: true, signedIn: false },
-      { id: 'codex', enabled: true, installed: false, signedIn: false },
-      { id: 'fake', enabled: false, installed: true, signedIn: true },
+      { id: 'claude-code', name: 'Claude Code', enabled: true, installed: true, signedIn: true, models: [opus] },
+      { id: 'pi', enabled: true, installed: true, signedIn: true, models: [{ id: 'a/opus', label: 'Opus' }] },
+      { id: 'fake', enabled: false, installed: true, signedIn: true, models: [opus] },
     ]
-    expect(engineOptions(listed, 'pi')).toEqual([
-      { id: 'claude-code', label: 'claude-code' },
-      { id: 'pi', label: 'pi (not signed in)' },
-      { id: 'codex', label: 'codex (not installed)' },
+    expect(modelChoices(listed)).toEqual([
+      { engine: 'claude-code', model: 'opus', name: 'Opus', label: 'Opus · Claude Code', group: 'Claude Code' },
+      { engine: 'pi', model: 'a/opus', name: 'Opus', label: 'Opus · pi', group: 'pi' },
     ])
-    expect(engineOptions(listed, 'fake').at(-1)).toEqual({ id: 'fake', label: 'fake (off)', disabled: true })
-    expect(engineOptions(listed, 'gone').at(-1)).toEqual({ id: 'gone', label: 'gone (unknown)', disabled: true })
+    expect(modelChoices(listed.slice(0, 1))[0]?.label).toBe('Opus')
   })
 
   it('replaces an engine when it is turned on or off', () => {
@@ -533,10 +532,11 @@ describe('reduce', () => {
     expect(reduce(loaded, { type: 'mod.updated', mod: on }).mods).toEqual([on, mods[1]])
   })
 
-  it('loads the model lists from the snapshot and replaces one engine on update', () => {
-    const lists = { ...noLists, chat: ['b'] }
-    const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', engine: 'pi', lists })
-    expect(state.modelLists).toEqual({ fake: noLists, pi: lists })
+  it('loads the model lists from the snapshot and replaces them on update', () => {
+    const lists = { ...noLists, chat: [{ engine: 'pi', model: 'b', thinking: 'low' as const }] }
+    expect(run(snapshot([chat(MAIN_CHAT_ID)])).modelLists).toEqual(noLists)
+    const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', lists })
+    expect(state.modelLists).toEqual(lists)
   })
 })
 
@@ -670,34 +670,53 @@ describe('chat tree', () => {
 describe('modelMenu', () => {
   const catalog = [
     { id: 'opus-5-5', label: 'Opus 5.5' },
-    { id: 'opus-4-8', label: 'Opus 4.8' },
-    { id: 'haiku-5-5', label: 'Haiku 5.5' },
+    { id: 'opus-4-8', label: 'Opus 4.8', thinking: [] as ThinkingLevel[] },
+    { id: 'haiku-5-5', label: 'Haiku 5.5', thinking: ['low'] as ThinkingLevel[] },
   ]
-  const levels = ['low', 'medium', 'high']
-  const [model, thinking] = ['opus-4-8', 'medium']
-  const offers = { ...engines[0]!, models: catalog, thinking: levels, defaultModel: model, defaultThinking: thinking }
-  const view = (extra: object = {}) => ({ ...reduce(initialState, snapshot([chat('a')])).chats[0]!, ...extra })
+  const levels: ThinkingLevel[] = ['low', 'medium', 'high']
+  const cc = { ...engines[0]!, id: 'cc', models: catalog, thinking: levels, defaultThinking: 'medium' as const }
+  const pi = { ...engines[0]!, id: 'pi', models: [{ id: 'p/one', label: 'One' }], thinking: ['off', 'high'] as ThinkingLevel[] }
+  const row = (engine: string, model: string, thinking?: ThinkingLevel) => ({ engine, model, ...(thinking && { thinking }) })
+  const view = (extra: object = {}) => ({ ...reduce(initialState, snapshot([chat('a')])).chats[0]!, engine: 'cc', ...extra })
 
-  it("selects the engine's default model and thinking level, and offers only real ones", () => {
-    expect(modelMenu(view(), offers, noLists)).toEqual({ model, models: catalog, thinking, levels })
+  it("shows the Chat list's first model that can run, at its row's level, and only the levels it takes", () => {
+    const lists = { ...noLists, chat: [row('cc', 'gone', 'high'), row('cc', 'opus-5-5', 'high')] }
+    const menu = modelMenu(view(), [cc, pi], lists)
+    expect(menu).toMatchObject({ value: modelKey({ engine: 'cc', model: 'opus-5-5' }), thinking: 'high', levels })
+    expect(menu.run).toMatchObject({ engine: 'cc', model: 'opus-5-5', pinned: false })
+    expect(menu.choices.map((c) => c.group)).toEqual(['cc', 'cc', 'cc', 'pi'])
   })
 
-  it("selects the chat's own picks, else the first listed model the engine offers", () => {
-    const lists = { ...noLists, chat: ['gone', 'haiku-5-5'] }
-    expect(modelMenu(view(), offers, lists).model).toBe('haiku-5-5')
-    const picked = modelMenu(view({ model: 'opus-5-5', thinking: 'high' }), offers, lists)
-    expect(picked).toMatchObject({ model: 'opus-5-5', thinking: 'high' })
+  it('falls back to a model on another engine when the first one cannot run', () => {
+    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'high'), row('pi', 'p/one', 'high')] }
+    expect(modelMenu(view(), [{ ...cc, enabled: false }, pi], lists)).toMatchObject({
+      run: { engine: 'pi', model: 'p/one', thinking: 'high' },
+      levels: ['off', 'high'],
+    })
   })
 
-  it("uses a subagent's role list, falling back to the Chat list when it is empty", () => {
-    const lists = { ...noLists, chat: ['opus-5-5'], planning: ['haiku-5-5'] }
-    expect(modelMenu(view({ role: 'planning' }), offers, lists).model).toBe('haiku-5-5')
-    expect(modelMenu(view({ role: 'subagents' }), offers, lists).model).toBe('opus-5-5')
+  it("uses a subagent's role list, else the Chat list while the role's is empty", () => {
+    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'low')], planning: [row('pi', 'p/one', 'off')] }
+    expect(modelMenu(view({ role: 'planning' }), [cc, pi], lists).run).toMatchObject({ engine: 'pi', thinking: 'off' })
+    expect(modelMenu(view({ role: 'subagents' }), [cc, pi], lists).run).toMatchObject({ model: 'opus-5-5' })
   })
 
-  it('selects what will run instead of a pick the engine no longer offers', () => {
-    expect(modelMenu(view({ model: 'opus', thinking: 'ultra' }), offers, noLists)).toMatchObject({ model, thinking })
-    expect(modelMenu(view(), undefined, undefined)).toEqual({ models: [], levels: [] })
+  it("keeps the chat's own picks, snapping its level to the model's, and shows one that can't run", () => {
+    const lists = { ...noLists, chat: [row('cc', 'opus-5-5', 'low')] }
+    expect(modelMenu(view({ thinking: 'max' }), [cc], lists).thinking).toBe('high')
+    const haiku = modelMenu(view({ model: 'haiku-5-5', thinking: 'high' }), [cc], lists)
+    expect(haiku).toMatchObject({ run: { model: 'haiku-5-5', thinking: 'low', pinned: true }, levels: ['low'] })
+    const none = modelMenu(view({ model: 'opus-4-8' }), [cc], lists)
+    expect(none).toMatchObject({ thinking: undefined, levels: [] })
+    const gone = modelMenu(view({ model: 'opus-1' }), [cc], lists)
+    expect(gone).toMatchObject({ run: undefined, runnable: false, value: modelKey({ engine: 'cc', model: 'opus-1' }) })
+    expect(gone.choices.at(-1)).toMatchObject({ model: 'opus-1', label: 'opus-1 (not available)' })
+  })
+
+  it('runs an engine that lists no models as it is, and says so when nothing else can run', () => {
+    const bare = { ...engines[0]!, id: 'cc' }
+    expect(modelMenu(view(), [bare], noLists)).toMatchObject({ run: undefined, runnable: true, value: undefined })
+    expect(modelMenu(view(), [cc], { ...noLists, chat: [row('cc', 'gone')] }).runnable).toBe(false)
   })
 })
 
@@ -712,11 +731,13 @@ describe('storedFlag', () => {
 })
 
 describe('chat width', () => {
-  it('reads the saved width, falling back to the default and never going below the minimum', () => {
+  it('reads the saved width, falling back to the default and clamping it between the minimum and maximum', () => {
     expect(storedColumn(null)).toBe(COLUMN_PX.default)
     expect(storedColumn('wide')).toBe(COLUMN_PX.default)
     expect(storedColumn(String(COLUMN_PX.min + 100))).toBe(COLUMN_PX.min + 100)
     expect(storedColumn(String(COLUMN_PX.min - 100))).toBe(COLUMN_PX.min)
+    expect(storedColumn(String(COLUMN_PX.max * 10))).toBe(COLUMN_PX.max)
+    expect(storedColumn('Infinity')).toBe(COLUMN_PX.default)
   })
 
   it('runs the slider from the minimum to the full pane, clamping the saved width into it', () => {
