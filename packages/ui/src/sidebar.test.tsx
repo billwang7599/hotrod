@@ -132,6 +132,10 @@ test('the sidebar has one New space button, under the spaces; it opens the name 
   expect(more).toEqual([])
   expect(newSpace!.closest('nav')).not.toBeNull()
   expect(newSpace!.hasAttribute('data-hint')).toBe(true)
+  // Full width like the space rows, label on the left: the tooltip adds no wrapper around it.
+  expect(newSpace!.parentElement!.tagName).toBe('NAV')
+  expect(newSpace!.className).toContain('w-full')
+  expect(newSpace!.className).not.toContain('self-end')
   expect(document.querySelector('[role="dialog"]')).toBeNull()
   act(() => newSpace!.click())
   expect(document.querySelector('[role="dialog"]')).not.toBeNull()

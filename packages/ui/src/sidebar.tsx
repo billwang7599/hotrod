@@ -359,14 +359,19 @@ export function ChatNav({
         <AnimatePresence>{groupRows(false).filter(shown).map(row)}</AnimatePresence>
       </div>
       <Hint text={newSpaceKeys && <Keys binding={newSpaceKeys} />} side="right">
+        {/* As wide and tall as a space row, its label under the space names: the + sits where a row's dot does
+            (pl-7 plus the button's 1px border makes the rows' pl-8). */}
         <Button
           variant="ghost"
-          size="small"
-          className="mt-2 self-end"
+          size="none"
+          className="flex h-control w-full shrink-0 items-center gap-8 pr-8 pl-7 text-left"
           disabled={!connected}
           onClick={() => askName({ kind: 'new' })}
         >
-          + New {CHAT_NOUN.one}
+          <span aria-hidden="true" className="flex w-7 shrink-0 justify-center">
+            +
+          </span>
+          New {CHAT_NOUN.one}
         </Button>
       </Hint>
 
