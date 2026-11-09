@@ -499,7 +499,7 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <div className="flex flex-col gap-4">
@@ -1045,7 +1045,7 @@ export function WorkFolderDialog({ open, workFolder, connected, send, toasts, pi
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
                 onSubmit={submit}
               >
@@ -1140,7 +1140,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                 >
                   <Tabs.List
                     aria-label="Settings"
-                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
+                    className="flex w-200 shrink-0 scroll-inset flex-col gap-1 overflow-y-auto border-r bg-panel pt-4 pr-0 pb-12 pl-8 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
                   >
                     {NAV_GROUPS.map((group) => (
                       <Fragment key={group}>
@@ -1160,7 +1160,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                   {pages.map((p) => (
                     <Tabs.Content key={p.id} value={p.id} asChild>
                       <m.div
-                        className="min-h-0 min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2 max-[600px]:px-16"
+                        className="min-h-0 min-w-0 flex-1 scroll-inset overflow-y-auto pt-20 pr-18 pb-32 pl-32 [--scroll-top:48px] focus-visible:-outline-offset-2 max-[600px]:pr-2 max-[600px]:pl-16"
                         initial={MOTION.fade.initial}
                         animate={MOTION.fade.animate}
                       >

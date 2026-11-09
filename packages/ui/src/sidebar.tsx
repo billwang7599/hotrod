@@ -329,7 +329,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
   }
 
   return (
-    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pt-10 pb-8">
+    <nav className="flex flex-1 scroll-inset flex-col gap-1 overflow-y-auto pt-10 pr-0 pb-8 pl-8">
       <AnimatePresence>{tree.active.slice(0, split).filter(shown).map(row)}</AnimatePresence>
       {pinnedRows.length > 0 && (
         <>
@@ -409,7 +409,7 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
                 onSubmit={submit}
               >

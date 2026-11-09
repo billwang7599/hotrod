@@ -177,7 +177,7 @@ export function SearchPalette({ open, close, chats, selectedId, search, connecte
                   />
                   {keys.search && <Keys binding={keys.search} />}
                 </div>
-                <ul id="palette-results" role="listbox" aria-label="Results" className="min-h-0 flex-1 overflow-y-auto p-6">
+                <ul id="palette-results" role="listbox" aria-label="Results" className="min-h-0 flex-1 scroll-inset overflow-y-auto py-6 pl-6">
                   {!trimmed && results.length > 0 && <li className="px-8 pt-4 pb-2 text-xs text-faint">Recent</li>}
                   {results.map((result, i) => (
                     <PaletteRow

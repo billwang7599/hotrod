@@ -372,3 +372,10 @@ function hexToRgb(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
   return `rgb(${r}, ${g}, ${b})`
 }
+
+test("the list and the detail keep their scrollbars inset from the window's edges", () => {
+  show({ marketFailures: {} })
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.querySelector('[role="listbox"]')!.classList).toContain('scroll-inset')
+  expect(dialog.querySelectorAll('.scroll-inset').length).toBe(2)
+})

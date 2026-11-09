@@ -443,3 +443,12 @@ test('Settings → Models lists each role once across engines, each model with i
     models: [{ engine: 'claude-code', model: 'sonnet' }],
   })
 })
+
+test("Settings' scrolling nav and page keep their scrollbars inset, the page's below the close button", () => {
+  renderSettings(workFolder)
+  const nav = dialog().querySelector('[role="tablist"]')!
+  const page = dialog().querySelector('[role="tabpanel"]')!
+  expect(nav.classList).toContain('scroll-inset')
+  expect(page.classList).toContain('scroll-inset')
+  expect(page.className).toContain('[--scroll-top:48px]')
+})

@@ -475,7 +475,7 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
                       </div>
                     )}
                     <div
-                      className="min-h-0 flex-1 overflow-y-auto p-6"
+                      className="min-h-0 flex-1 scroll-inset overflow-y-auto py-6 pl-6"
                       role="listbox"
                       aria-label="Marketplace"
                       aria-busy={loading}
@@ -503,7 +503,7 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
                       <InstallFromFolder {...{ market, connected, send, pickFolder }} />
                     </div>
                   </div>
-                  <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-24 pt-20 pb-24 max-[720px]:px-16">
+                  <div className="min-h-0 min-w-0 flex-1 scroll-inset overflow-y-auto pt-20 pr-10 pb-24 pl-24 max-[720px]:pr-2 max-[720px]:pl-16">
                     {selected ? (
                       <Detail
                         key={marketKey(selected.kind, selected.id)}

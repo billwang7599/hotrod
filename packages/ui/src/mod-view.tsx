@@ -86,7 +86,7 @@ function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNo
     <pre
       ref={pre}
       onScroll={follow ? onScroll : undefined}
-      className="max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]"
+      className="scroll-inset scroll-inset-tight max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]"
     >
       {follow && more}
       {shown.map((line, i) => (

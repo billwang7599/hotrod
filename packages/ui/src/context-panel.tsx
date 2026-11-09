@@ -83,7 +83,7 @@ const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
 const COLLAPSED_KEY = 'kothar.contextCollapsed'
-const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
+const PREVIEW = 'scroll-inset scroll-inset-tight max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
   item: ContextItem
@@ -678,7 +678,7 @@ export function ContextPanel(props: ContextPanelProps) {
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
       <div
-        className="flex flex-1 flex-col gap-18 overflow-y-auto p-12"
+        className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"
         role="tabpanel"
         aria-label={modTab?.title ?? TAB_LABEL[shown]}
       >
