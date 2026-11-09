@@ -424,11 +424,47 @@ export function createProcessesMod(
     }
   }
 
-  const panelView = (spaceId: string, chatId: string): ModView => {
+  // Other mods' rows (host.processes), such as the Browser's: a list item and its buttons, which go back to that mod.
+  const modRowsOf = (host: ModHost, spaceId: string): ModView[] =>
+    host.processes(spaceId).flatMap((row) => [
+      {
+        type: 'list',
+        label: row.label,
+        items: [
+          {
+            key: `${row.mod}:${row.key}`,
+            label: row.label,
+            ...(row.detail && { detail: row.detail }),
+            ...(row.since !== undefined && { since: row.since }),
+            ...(row.dot && { dot: row.dot }),
+            ...(row.hint && { hint: row.hint }),
+          },
+        ],
+      },
+      ...(row.actions.length
+        ? [
+            {
+              type: 'row',
+              children: row.actions.map(
+                (a): ModView => ({
+                  type: 'button',
+                  label: a.label,
+                  ...(a.primary && { variant: 'primary' as const }),
+                  ...(a.hint && { hint: a.hint }),
+                  action: { name: 'mod', value: { mod: row.mod, key: row.key, action: a.name } },
+                }),
+              ),
+            } as const,
+          ]
+        : []),
+    ])
+
+  const panelView = (spaceId: string, chatId: string, host: ModHost): ModView => {
     const list = listOf(spaceId)
-    if (!list.length) return { type: 'empty', text: 'No processes' }
+    const modRows = modRowsOf(host, spaceId)
+    if (!list.length && !modRows.length) return { type: 'empty', text: 'No processes' }
     const open = selected.get(chatId)
-    const children: ModView[] = []
+    const children: ModView[] = [...modRows]
     if (list.some((p) => p.status !== 'running')) {
       const clearButton: ModView = {
         type: 'button',
@@ -558,15 +594,21 @@ export function createProcessesMod(
         // Only once the space has run something: the panel is crowded enough.
         shown(chat, { host }) {
           const spaceId = spaceIdOf(host, chat.id)
-          return !chat.mod && spaceId !== undefined && listOf(spaceId).length > 0
+          return (
+            !chat.mod && spaceId !== undefined && (listOf(spaceId).length > 0 || host.processes(spaceId).length > 0)
+          )
         },
         render(chat, { host }) {
           const spaceId = spaceIdOf(host, chat.id)
-          return spaceId === undefined ? { type: 'empty', text: 'No processes' } : panelView(spaceId, chat.id)
+          return spaceId === undefined ? { type: 'empty', text: 'No processes' } : panelView(spaceId, chat.id, host)
         },
         async onAction(action, chat, { host }) {
           const spaceId = spaceIdOf(host, chat.id)
           if (spaceId === undefined) return
+          if (action.name === 'mod') {
+            const { mod, key, action: name } = (action.value ?? {}) as Record<string, string>
+            return host.processAction(spaceId, String(mod), String(key), String(name))
+          }
           if (action.name === 'clear') {
             clear(spaceId)
             return changed(host, spaceId)
@@ -592,6 +634,10 @@ export function createProcessesMod(
         },
       },
     ],
+    // The rows another mod lists here changed; the tab may need to appear too.
+    onProcessesChanged(spaceId, { host }) {
+      changed(host, spaceId)
+    },
     onChatArchived(chat, archived) {
       if (archived && chat.parentId === undefined) stopSpace(chat.id)
     },

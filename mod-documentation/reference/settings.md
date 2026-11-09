@@ -181,7 +181,7 @@ export default formatter
 How setup behaves:
 
 - Kothar checks again after an install, and whenever one of the mod's settings changes. So a setup can depend on the
-  settings, as the built-in Browser mod's does.
+  settings.
 - `run` here works like [`host.run`](host.md#run): it runs a command and resolves with `{ code, stdout, stderr }`.
 - The user can cancel an install. After that, the next `run` call rejects with "Cancelled".
 

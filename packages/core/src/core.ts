@@ -22,6 +22,8 @@ import type {
   ModInstructionsFor,
   ModPanel,
   ModView,
+  ModWait,
+  ModWaitAnswer,
   ModStorage,
   ModRun,
   ModUse,
@@ -56,6 +58,7 @@ import {
   type ChatEntry,
   type ChatInfo,
   type ChatState,
+  type ChatWait,
   type ChatStatus,
   type ClientMessage,
   type CommandInfo,
@@ -127,6 +130,8 @@ type Chat = {
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Map<string, 'permission' | 'question'>
+  // What mods wait on the user for while the turn runs (ModHost.wait), by mod id.
+  waits: Map<string, ModWait>
   mcpToken?: string
   queue: QueuedMessage[]
   turns: number
@@ -503,7 +508,19 @@ function openLockedCore(options: {
     entries: chat.entries,
     draft: chat.unsavedText,
     queue: chat.queue,
+    ...(chat.waits.size && { waits: waitsOf(chat) }),
   })
+
+  const waitsOf = (chat: Chat): ChatWait[] => [...chat.waits].map(([mod, wait]) => ({ mod, ...wait }))
+  // A mod's wait, or none: the chat waits while any mod or request does, and runs again once none does.
+  const setWait = (chat: Chat, modId: string, wait: ModWait | undefined) => {
+    if (!wait && !chat.waits.has(modId)) return
+    if (wait) chat.waits.set(modId, wait)
+    else chat.waits.delete(modId)
+    broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: waitsOf(chat) })
+    if (wait && chat.status === 'running') setStatus(chat, 'waiting')
+    if (!wait && chat.status === 'waiting' && !chat.pendingRequests.size && !chat.waits.size) setStatus(chat, 'running')
+  }
 
   const append = (chat: Chat, entry: ChatEntry) => {
     chat.entries.push(entry)
@@ -595,6 +612,10 @@ function openLockedCore(options: {
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
     chat.status = status
+    if (status === 'idle' && chat.waits.size) {
+      chat.waits.clear()
+      broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: [] })
+    }
     broadcast({ type: 'chat.status', chatId: chat.info.id, status })
     callMods('onStatusChanged', (mod, context) => mod.onStatusChanged!(detailOf(chat), status, context))
   }
@@ -998,6 +1019,32 @@ function openLockedCore(options: {
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       complete: (request) => completeFor(request),
       refresh: (chatId) => refreshMod(mod, chatId),
+      wait(chatId, wait) {
+        const chat = chatFor(chatId)
+        if (!['running', 'waiting'].includes(chat.status)) throw new Error('A chat waits for the user only while its turn runs')
+        setWait(chat, mod.id, checkWait(wait))
+      },
+      endWait: (chatId) => setWait(chatFor(chatId), mod.id, undefined),
+      processes: (spaceId) =>
+        mods
+          .filter((other) => other !== mod && isOn(other) && other.processes)
+          .flatMap((other) => {
+            try {
+              return other.processes!(String(spaceId), contextOf(other)).map((row) => ({ ...row, mod: other.id }))
+            } catch (error) {
+              modError(other, error)
+              return []
+            }
+          }),
+      async processAction(spaceId, modId, key, action) {
+        const other = modFor(String(modId))
+        if (!isOn(other)) throw new Error(`${other.name} is off`)
+        await other.onProcessAction?.(String(spaceId), String(key), String(action), contextOf(other))
+      },
+      processesChanged: (spaceId) =>
+        callMods('onProcessesChanged', (other, context) =>
+          other === mod ? undefined : other.onProcessesChanged!(String(spaceId), context),
+        ),
       // Only inside a folder some chat could open: a mod can't open a terminal anywhere it likes.
       async openTerminal(path) {
         const real = realOr(String(path))
@@ -1104,6 +1151,22 @@ function openLockedCore(options: {
     }
     if (chats.has(chat.info.id)) await renderPanel(chat, mod, panel)
   }
+  const answerWait = (chat: Chat, modId: string, answer: ModWaitAnswer) => {
+    const wait = chat.waits.get(modId)
+    if (!wait) throw new Error('Nothing is waiting there any more')
+    if ('button' in answer && !wait.buttons.some((b) => b.id === answer.button)) {
+      throw new Error(`No button "${answer.button}"`)
+    }
+    const mod = modFor(modId)
+    callMod(mod, () => mod.onWaitAction?.(detailOf(chat), answer, contextOf(mod)))
+  }
+  const checkWait = (wait: ModWait): ModWait => {
+    if (typeof wait?.text !== 'string' || !Array.isArray(wait.buttons)) throw new Error('A wait needs text and buttons')
+    for (const b of wait.buttons) {
+      if (typeof b?.id !== 'string' || typeof b.label !== 'string') throw new Error('Each button needs an id and a label')
+    }
+    return { text: wait.text, buttons: wait.buttons.map(({ id, label, primary, hint }) => ({ id, label, ...(primary && { primary }), ...(hint && { hint }) })) }
+  }
   const runCommand = (chat: Chat, modId: unknown, commandId: unknown) => {
     const mod = modFor(String(modId))
     if (!isOn(mod)) throw new Error(`${mod.name} is off`)
@@ -1155,6 +1218,7 @@ function openLockedCore(options: {
       status: 'idle',
       unsavedText: '',
       pendingRequests: new Map(),
+      waits: new Map(),
       queue: [],
       turns: 0,
     }
@@ -1333,6 +1397,7 @@ function openLockedCore(options: {
   // What follows a mod starting or stopping to run: its chats show or hide, spawned processes stop, panels update.
   const modSwitched = (mod: Mod, enabled: boolean, family = familyOfMod(mod)) => {
     if (!enabled) stopSpawned(mod)
+    if (!enabled) chats.forEach((chat) => setWait(chat, mod.id, undefined))
     if (enabled) startMod(mod)
     else stopMod(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
@@ -2063,6 +2128,8 @@ function openLockedCore(options: {
     })
     try {
       const message = { text, ...(attachments.length && { attachments }) }
+      // A message sent while mods wait on the user answers them too; it still goes to the agent.
+      for (const modId of chat.waits.keys()) answerWait(chat, modId, { message: text })
       if (steering && canSteer(chat)) {
         checkActive(chat)
         steer(chat, message)
@@ -2114,7 +2181,7 @@ function openLockedCore(options: {
     }
     chat.pendingRequests.delete(entry.requestId)
     append(chat, entry)
-    if (chat.pendingRequests.size === 0) setStatus(chat, 'running')
+    if (chat.pendingRequests.size === 0 && chat.waits.size === 0) setStatus(chat, 'running')
     return chat.session
   }
 
@@ -2257,6 +2324,8 @@ function openLockedCore(options: {
           return setSpaceValue(modFor(String(message.mod)), chatFor(message.chatId), String(message.key), message.value)
         case 'mod.command':
           return runCommand(chatFor(message.chatId), message.mod, message.command)
+        case 'mod.wait.answer':
+          return answerWait(chatFor(message.chatId), String(message.mod), { button: String(message.button) })
         case 'context.add':
           return addContext(chatFor(message.chatId), addable(message.section), message.path)
         case 'context.remove':

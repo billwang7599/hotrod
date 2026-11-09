@@ -13,6 +13,7 @@ import type {
   ModUse,
   ModValues,
   ModView,
+  ModWait,
 } from '@kothar/mod-api'
 
 export type {
@@ -384,7 +385,11 @@ export type ChatState = ChatInfo & {
   entries: ChatEntry[]
   draft: string
   queue: QueuedMessage[]
+  // What mods are waiting on the user for, while the turn runs (ModHost.wait).
+  waits?: ChatWait[]
 }
+
+export type ChatWait = ModWait & { mod: string }
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
@@ -412,6 +417,7 @@ export type ClientMessage =
   | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
   | { type: 'mod.space.set'; chatId: string; mod: string; key: string; value: string | number | boolean }
   | { type: 'mod.command'; chatId: string; mod: string; command: string }
+  | { type: 'mod.wait.answer'; chatId: string; mod: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
@@ -495,6 +501,7 @@ export type CoreMessage =
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
+  | { type: 'chat.waits'; chatId: string; waits: ChatWait[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
   | { type: 'chat.mods'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
   | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }

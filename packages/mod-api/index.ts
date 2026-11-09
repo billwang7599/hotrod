@@ -235,6 +235,37 @@ export type ModHost = {
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
   // Without a chat, for every chat.
   refresh(chatId?: string): void
+  // Puts the chat in waiting for the user, as an unanswered permission request does: amber in the sidebar, with a bar
+  // above the composer showing text and the buttons (a worker's shows in its space too). Clicking one, or the user
+  // sending the chat a message, calls the mod's onWaitAction. Only while the chat's turn runs, as from a tool's run;
+  // calling it again replaces this mod's wait. It goes with endWait, when the turn ends, or when the mod is turned off.
+  wait(chatId: string, wait: ModWait): void
+  endWait(chatId: string): void
+  // The Processes tab's rows from every other mod that's on (Mod.processes) for the space, so a mod that draws the
+  // tab can list them. processAction runs one of a row's actions in the mod that owns it; processesChanged tells the
+  // mods that draw them (onProcessesChanged) that this mod's rows changed.
+  processes(spaceId: string): (ModProcessRow & { mod: string })[]
+  processAction(spaceId: string, mod: string, key: string, action: string): Promise<void>
+  processesChanged(spaceId: string): void
+}
+
+// What waits for the user on a chat: a short line saying what's needed, and its buttons.
+export type ModWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }
+
+// How the user answered a wait: a button, or a message they sent the chat instead (it still goes to the agent).
+export type ModWaitAnswer = { button: string } | { message: string }
+
+// Something of a mod's own that runs in a space, such as its browser, listed in the Processes tab beside the
+// commands agents start. actions are buttons on the row; each comes back to the mod's onProcessAction.
+export type ModProcessRow = {
+  key: string
+  label: string
+  detail?: string
+  // When it started (epoch ms), for a live uptime.
+  since?: number
+  dot?: ModTone
+  hint?: string
+  actions: { name: string; label: string; hint?: string; primary?: boolean }[]
 }
 
 export type ModContext = { values: ModValues; host: ModHost }
@@ -460,6 +491,13 @@ export type Mod = {
   transformOutput?(text: string, chat: ChatDetail, context: ModContext): string
   // A turn ran into its account's usage limit. The core stops the turn first, so the chat is idle here.
   onLimitReached?(limit: LimitReached, context: ModContext): void
+  // The user answered this mod's wait on the chat (host.wait). The wait stays until the mod ends it.
+  onWaitAction?(chat: ChatDetail, answer: ModWaitAnswer, context: ModContext): void | Promise<void>
+  // This mod's rows in the space's Processes tab, now. Called whenever the tab draws.
+  processes?(spaceId: string, context: ModContext): ModProcessRow[]
+  onProcessAction?(spaceId: string, key: string, action: string, context: ModContext): void | Promise<void>
+  // Another mod's rows in the space changed (host.processesChanged): a mod that draws them draws again.
+  onProcessesChanged?(spaceId: string, context: ModContext): void
 }
 
 // A community mod ships as two assets of a GitHub release in its own repo: manifest.json, which is this, and main.mjs,
@@ -492,6 +530,8 @@ export type ModUse =
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
   // onChatArchived, onLimitReached, onStart, onStop
   | 'events'
+  // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
+  // processAction, processesChanged
   | 'panels'
   | 'commands'
   | 'settings'

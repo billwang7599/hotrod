@@ -20,6 +20,7 @@ the missing entry.
 | `complete` | `models` |
 | `chatStorage` | `memory` |
 | `spaceValues`, `setSpaceValue` | `settings` |
+| `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
 | `note`, `error`, `storage`, `refresh` | nothing |
 
 ## Reading chats
@@ -288,3 +289,64 @@ The folder stays when the mod is turned off or uninstalled.
 `refresh(chatId?)` draws the mod's panels and commands for that chat again, and re-renders its open panels. Without a
 chat, it does so for every chat. Call it when what your panels show has changed. See
 [Panels](panels.md#panels).
+
+## Waiting for the user
+
+`wait(chatId, { text, buttons })` puts a running chat in **waiting**, as an unanswered permission request does: it
+turns amber in the sidebar, and a bar above the composer shows `text` and the buttons. A worker's bar shows in its
+space too, where the user is. Each button is `{ id, label, primary?, hint? }`.
+
+When the user clicks a button, Kothar calls the mod's `onWaitAction(chat, { button }, context)`. When they send the chat
+a message instead, it calls `onWaitAction(chat, { message }, context)`, and the message still goes to the agent.
+
+The wait stays until the mod calls `endWait(chatId)`, the turn ends, or the mod is turned off. Calling `wait` again
+replaces the mod's wait. `wait` throws if the chat's turn isn't running, so call it from a tool's `run` or a hook
+that runs during the turn. The usual shape is a tool that waits on a promise the button resolves:
+
+```ts
+let answered: (() => void) | undefined
+
+const mod: Mod = {
+  // ...
+  tools: [
+    {
+      name: 'ask_user',
+      description: 'Waits until the user clicks Done.',
+      inputSchema: { type: 'object', properties: { why: { type: 'string' } } },
+      offered: () => true,
+      async run(input, { caller, host }) {
+        host.wait(caller.id, { text: String(input.why), buttons: [{ id: 'done', label: 'Done', primary: true }] })
+        await new Promise<void>((resolve) => (answered = resolve))
+        host.endWait(caller.id)
+        return 'The user is done.'
+      },
+    },
+  ],
+  onWaitAction: () => answered?.(),
+}
+```
+
+The built-in Browser mod's `ask_user_in_browser` works this way.
+
+## Processes rows
+
+The Processes tab lists the commands agents start. A mod can add rows of its own for something it runs in a space,
+such as the Browser mod's browser, with `processes(spaceId, context)` on the mod (see
+[The mod object](mod.md#optional-fields)):
+
+```ts
+processes: (spaceId) => [
+  { key: 'tunnel', label: 'Tunnel', detail: 'https://abc.example', since: startedAt, dot: 'success',
+    actions: [{ name: 'stop', label: 'Stop' }] },
+],
+onProcessAction(spaceId, key, action) {
+  if (action === 'stop') stopTunnel(spaceId)
+},
+```
+
+Kothar asks for the rows each time the tab draws. When yours change, call `host.processesChanged(spaceId)` so the tab
+draws again. A row's buttons call your `onProcessAction(spaceId, key, action, context)`.
+
+The other calls are for a mod that draws the tab, as the Processes mod does: `processes(spaceId)` returns every other
+mod's rows, each with its `mod` id; `processAction(spaceId, mod, key, action)` runs a row's button in the mod that owns
+it; and its `onProcessesChanged(spaceId, context)` hook runs when another mod calls `processesChanged`.

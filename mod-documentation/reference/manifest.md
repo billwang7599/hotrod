@@ -61,7 +61,7 @@ you turn it on, and holds the mod to it:
 | `tools` | Gives agents tools | `tools` |
 | `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
-| `panels` | Adds panels | `panels` |
+| `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
 | `commands` | Adds commands | `commands` |
 | `settings` | Has settings | `settings`, `spaceSettings`, `settingsVersion`/`migrateSettings`, `host.spaceValues`, `host.setSpaceValue` |
 

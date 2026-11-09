@@ -36,6 +36,8 @@ cover each group in detail.
 | `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
 | `onPermissionRequested` | A policy that answers permission requests | [Events and hooks](events.md#onpermissionrequested) |
 | `transformMessage`, `transformOutput` | Rewrites of messages and replies | [Events and hooks](events.md#transforms) |
+| `onWaitAction` | The user's answer to the mod's wait on a chat | [The host](host.md#waiting-for-the-user) |
+| `processes`, `onProcessAction`, `onProcessesChanged` | Rows of the mod's own in the Processes tab | [The host](host.md#processes-rows) |
 
 ## Chats
 

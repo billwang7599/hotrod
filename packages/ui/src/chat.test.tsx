@@ -946,6 +946,34 @@ test("a worker's permission request waits in its space, which answers it and tur
   expect(card()).toBeNull()
 })
 
+test("a mod's wait shows above the composer with its buttons, in the chat and in its worker's space", () => {
+  const sent: ClientMessage[] = []
+  const wait = {
+    mod: 'browser',
+    text: 'Browser: Log in to GitHub',
+    buttons: [
+      { id: 'open', label: 'Open browser' },
+      { id: 'done', label: 'Done', primary: true },
+    ],
+  }
+  const bar = () => container.querySelector('[aria-label="Waiting for you"]')
+  const space = { ...SPACE, status: 'waiting' as const, items: [USER], waits: [wait] }
+  render(space, (m) => sent.push(m))
+  expect(bar()!.textContent).toContain('Browser: Log in to GitHub')
+  act(() => [...bar()!.querySelectorAll('button')].find((b) => b.textContent === 'Done')!.click())
+  expect(sent.at(-1)).toEqual({ type: 'mod.wait.answer', chatId: 'p1', mod: 'browser', button: 'done' })
+
+  render({ ...SPACE, status: 'running' as const, items: [USER] }, (m) => sent.push(m), {
+    chats: [worker({ status: 'waiting', items: [USER], waits: [wait] })],
+  })
+  expect(bar()!.textContent).toContain('Worker Fix tests: Browser: Log in to GitHub')
+  act(() => [...bar()!.querySelectorAll('button')].find((b) => b.textContent === 'Open browser')!.click())
+  expect(sent.at(-1)).toEqual({ type: 'mod.wait.answer', chatId: 's1', mod: 'browser', button: 'open' })
+
+  render({ ...SPACE, items: [USER] }, () => {})
+  expect(bar()).toBeNull()
+})
+
 test("a worker's own view shows where its request waits, with a way to the space instead of Approve", () => {
   const select = vi.fn()
   render(worker(), () => {}, { chats: [SPACE], select })
