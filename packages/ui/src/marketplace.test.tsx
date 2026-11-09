@@ -396,3 +396,51 @@ test('the Marketplace always opens on All, and picking a kind there lasts only u
   render(view(true))
   expect(pressed()).toBe('All')
 })
+
+test('the list shows as List, Grid or Compact, and the choice is remembered', () => {
+  const market: Market = { catalog: { entries }, themes: [nord], installed: [installedNord()], marketFailures: {} }
+  const views = () => document.querySelector('[role="group"][aria-label="View"]')
+  const list = () => document.querySelector('[role="listbox"]') as HTMLElement
+  show(market)
+  expect(views()!.querySelector('[aria-pressed="true"]')!.textContent).toBe('List')
+  expect(list().dataset.view).toBe('list')
+  act(() => button(views(), 'Grid')!.click())
+  expect(list().dataset.view).toBe('grid')
+  expect(localStorage.getItem('kothar.marketplaceView')).toBe('grid')
+  // Each card is still an option with its name, author, description and install state.
+  const card = option('Nord')!
+  expect(card.textContent).toContain('by ')
+  expect(card.textContent).toContain('Installed')
+  expect(options()).toEqual(['Nord', 'Gruvbox', 'Catppuccin'])
+  act(() => button(views(), 'Compact')!.click())
+  expect(option('Nord')!.textContent).not.toContain(nordEntry.description!)
+  expect(options()).toHaveLength(3)
+
+  // Opened again, it comes back in the view last chosen.
+  act(() => root.unmount())
+  root = createRoot(container)
+  show(market)
+  expect(list().dataset.view).toBe('compact')
+})
+
+test('in the grid, Left and Right on the list move one card, and Down past the end stays put', () => {
+  localStorage.setItem('kothar.marketplaceView', 'grid')
+  show({ catalog: { entries }, themes: [], installed: [], marketFailures: {} })
+  const list = document.querySelector('[role="listbox"]') as HTMLElement
+  const selected = () => document.querySelector('[role="option"][aria-selected="true"]')!.getAttribute('aria-label')
+  const key = (k: string) => act(() => list.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })))
+  expect(selected()).toBe('Nord')
+  key('ArrowRight')
+  expect(selected()).toBe('Gruvbox')
+  key('ArrowLeft')
+  expect(selected()).toBe('Nord')
+  // jsdom lays nothing out, so all three cards count as one row: Down has no row to go to.
+  key('ArrowDown')
+  expect(selected()).toBe('Nord')
+})
+
+test('an unknown saved view falls back to List', () => {
+  localStorage.setItem('kothar.marketplaceView', 'mosaic')
+  show({ catalog: { entries }, themes: [], marketFailures: {} })
+  expect((document.querySelector('[role="listbox"]') as HTMLElement).dataset.view).toBe('list')
+})

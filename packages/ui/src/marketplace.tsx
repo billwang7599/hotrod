@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import type { ModUse } from '@kothar/mod-api'
@@ -309,6 +309,40 @@ const SHOW_FILTERS: { value: ShowFilter; label: string }[] = [
 ]
 const SKELETON_ROWS = 6
 
+// How the list draws its entries: rows with a description beside the details (List), cards that fill the window
+// (Grid), or one line each (Compact). The choice is kept in localStorage.
+export type MarketView = 'list' | 'grid' | 'compact'
+const VIEW_KEY = 'kothar.marketplaceView'
+const VIEWS: { value: MarketView; label: string; hint: string }[] = [
+  { value: 'list', label: 'List', hint: 'Each entry with its description, in a column beside the details' },
+  { value: 'grid', label: 'Grid', hint: 'Cards side by side, to browse many at once' },
+  { value: 'compact', label: 'Compact', hint: 'One line per entry, to see the most at a time' },
+]
+
+function savedView(): MarketView {
+  try {
+    const saved = localStorage.getItem(VIEW_KEY)
+    return VIEWS.some((v) => v.value === saved) ? (saved as MarketView) : 'list'
+  } catch {
+    return 'list'
+  }
+}
+
+function saveView(view: MarketView) {
+  try {
+    localStorage.setItem(VIEW_KEY, view)
+  } catch {
+    // Kept for this window only.
+  }
+}
+
+// How many cards sit in the grid's first row: what ArrowUp and ArrowDown step by.
+function gridColumns(list: HTMLElement | null) {
+  const options = [...(list?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])]
+  const top = options[0]?.offsetTop
+  return Math.max(1, options.filter((o) => o.offsetTop === top).length)
+}
+
 const matches = (row: Row, query: string) => {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   const text = [row.name, row.author, row.description, row.repo, row.id].join(' ').toLowerCase()
@@ -339,6 +373,12 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
   const [show, setShow] = useState<ShowFilter>('all')
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string>()
+  const [view, setView] = useState<MarketView>(savedView)
+  const listRef = useRef<HTMLDivElement>(null)
+  const chooseView = (next: MarketView) => {
+    setView(next)
+    saveView(next)
+  }
   // The catalog answer being replaced by a fresh one, while it's asked for again.
   const [asked, setAsked] = useState<Market['catalog'] | null>(null)
   const loading = catalog === undefined || asked === catalog
@@ -381,11 +421,18 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
     send({ type: 'market.install', kind: row.kind, id: row.id })
   }
 
+  // Up and Down step through the list; in the grid they move a row of cards, and Left and Right (on the list itself,
+  // not in the search box) move one card. Past the end of the grid, nothing moves.
   const move = (e: KeyboardEvent<HTMLElement>) => {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    const grid = view === 'grid'
+    const sideways = grid && e.currentTarget === listRef.current && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && !sideways) return
     e.preventDefault()
     const at = selected ? rows.indexOf(selected) : -1
-    const next = rows[Math.min(rows.length - 1, Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)))]
+    const step = sideways ? 1 : grid ? gridColumns(listRef.current) : 1
+    const by = e.key === 'ArrowDown' || e.key === 'ArrowRight' ? step : -step
+    const to = grid && at >= 0 && (at + by < 0 || at + by >= rows.length) ? at : at + by
+    const next = rows[Math.min(rows.length - 1, Math.max(0, to))]
     if (!next) return
     setPicked(marketKey(next.kind, next.id))
     document.getElementById(optionId(next))?.scrollIntoView?.({ block: 'nearest' })
@@ -436,6 +483,20 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
                       </button>
                     ))}
                   </div>
+                  <div className="flex rounded border bg-panel p-2" role="group" aria-label="View">
+                    {VIEWS.map((v) => (
+                      <Hint key={v.value} text={v.hint}>
+                        <button
+                          type="button"
+                          aria-pressed={view === v.value}
+                          className="h-22 rounded-sm px-10 text-sm text-muted transition-colors hover:text-text aria-pressed:bg-raised aria-pressed:text-text aria-pressed:shadow-raised"
+                          onClick={() => chooseView(v.value)}
+                        >
+                          {v.label}
+                        </button>
+                      </Hint>
+                    ))}
+                  </div>
                   <Select
                     label="Show"
                     value={show}
@@ -463,7 +524,9 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
                   </Button>
                 </Dialog.Close>
                 <div className="flex min-h-0 flex-1 max-[720px]:flex-col">
-                  <div className="flex w-320 shrink-0 flex-col border-r bg-panel max-[720px]:max-h-[45%] max-[720px]:w-auto max-[720px]:border-r-0 max-[720px]:border-b">
+                  <div
+                    className={`flex shrink-0 flex-col border-r bg-panel max-[720px]:max-h-[45%] max-[720px]:w-auto max-[720px]:border-r-0 max-[720px]:border-b ${view === 'grid' ? 'min-w-0 flex-1 max-[720px]:max-h-[60%]' : 'w-320'}`}
+                  >
                     {catalog?.error && !loading && (
                       <div className="flex flex-col items-start gap-8 border-b px-14 py-12" role="alert">
                         <ErrorText>{catalog.error}</ErrorText>
@@ -473,16 +536,19 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
                       </div>
                     )}
                     <div
-                      className="min-h-0 flex-1 scroll-inset overflow-y-auto py-6 pl-6"
+                      ref={listRef}
+                      className={`min-h-0 flex-1 scroll-inset overflow-y-auto py-6 pl-6 ${view === 'grid' ? 'grid auto-rows-min grid-cols-[repeat(auto-fill,minmax(180px,1fr))] content-start gap-8 pr-6' : ''}`}
                       role="listbox"
                       aria-label="Marketplace"
                       aria-busy={loading}
+                      data-view={view}
                       tabIndex={-1}
                       onKeyDown={move}
                     >
                       {rows.map((row) => (
                         <ListRow
                           key={marketKey(row.kind, row.id)}
+                          view={view}
                           row={row}
                           selected={row === selected}
                           busy={marketKey(row.kind, row.id) in pending}
@@ -490,9 +556,9 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
                         />
                       ))}
                       {loading &&
-                        Array.from({ length: rows.length ? 2 : SKELETON_ROWS }, (_, i) => <SkeletonRow key={i} />)}
+                        Array.from({ length: rows.length ? 2 : SKELETON_ROWS }, (_, i) => <SkeletonRow key={i} view={view} />)}
                       {!loading && !rows.length && (
-                        <p className="px-8 py-12 text-sm text-muted">
+                        <p className="col-span-full px-8 py-12 text-sm text-muted">
                           {emptyText(query, kind, show, catalog?.entries !== undefined)}
                         </p>
                       )}
@@ -501,7 +567,9 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
                       <InstallFromFolder {...{ market, connected, send, pickFolder }} />
                     </div>
                   </div>
-                  <div className="min-h-0 min-w-0 flex-1 scroll-inset overflow-y-auto pt-20 pr-10 pb-24 pl-24 max-[720px]:pr-2 max-[720px]:pl-16">
+                  <div
+                    className={`min-h-0 min-w-0 scroll-inset overflow-y-auto pt-20 pr-10 pb-24 pl-24 max-[720px]:pr-2 max-[720px]:pl-16 ${view === 'grid' ? 'w-360 shrink-0 max-[720px]:w-auto max-[720px]:flex-1' : 'flex-1'}`}
+                  >
                     {selected ? (
                       <Detail
                         key={marketKey(selected.kind, selected.id)}
@@ -533,12 +601,37 @@ function emptyText(query: string, kind: MarketKindFilter, show: ShowFilter, list
   return listed ? `No ${what} in the marketplace yet.` : `No ${what} to show.`
 }
 
-function SkeletonRow() {
+function SkeletonRow({ view }: { view: MarketView }) {
   return (
-    <div className="flex flex-col gap-6 rounded px-8 py-10" aria-hidden="true" data-skeleton="">
+    <div
+      className={`flex flex-col gap-6 rounded px-8 ${view === 'compact' ? 'py-6' : 'py-10'} ${view === 'grid' ? 'h-128 border' : ''}`}
+      aria-hidden="true"
+      data-skeleton=""
+    >
       <span className="h-10 w-1/2 rounded-full bg-hover motion-safe:animate-blink" />
-      <span className="h-8 w-5/6 rounded-full bg-hover motion-safe:animate-blink" />
+      {view !== 'compact' && <span className="h-8 w-5/6 rounded-full bg-hover motion-safe:animate-blink" />}
     </div>
+  )
+}
+
+// A card's picture: a theme's colours, or an extension's first letter.
+function Icon({ row }: { row: Row }) {
+  if (row.kind === 'theme' && row.preview) {
+    const { bg, panel, accent } = row.preview.dark
+    return (
+      <span className="flex size-32 shrink-0 overflow-hidden rounded border" style={{ background: bg }} aria-hidden="true">
+        <span className="w-10" style={{ background: panel }} />
+        <span className="m-auto size-10 rounded-full" style={{ background: accent }} />
+      </span>
+    )
+  }
+  return (
+    <span
+      className="grid size-32 shrink-0 place-items-center rounded border bg-raised text-sm font-semibold text-muted"
+      aria-hidden="true"
+    >
+      {row.name.trim().charAt(0).toUpperCase() || '?'}
+    </span>
   )
 }
 
@@ -549,7 +642,52 @@ function Badge({ row }: { row: Row }) {
   return null
 }
 
-function ListRow({ row, selected, busy, pick }: { row: Row; selected: boolean; busy: boolean; pick: () => void }) {
+type RowProps = { row: Row; view: MarketView; selected: boolean; busy: boolean; pick: () => void }
+
+function ListRow({ row, view, selected, busy, pick }: RowProps) {
+  const kindLabel = <span className="text-xs text-faint">{row.kind === 'theme' ? 'Theme' : 'Extension'}</span>
+  const state = busy ? <span className="text-xs text-muted">Installing…</span> : <Badge row={row} />
+  if (view === 'grid') {
+    return (
+      <div
+        id={optionId(row)}
+        role="option"
+        aria-selected={selected}
+        aria-label={row.name}
+        className="flex h-128 cursor-default flex-col gap-6 rounded border bg-bg p-10 transition-colors hover:bg-raised aria-selected:border-accent aria-selected:bg-raised"
+        onClick={pick}
+      >
+        <span className="flex items-center gap-8">
+          <Icon row={row} />
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate">{row.name}</span>
+            {row.author ? <span className="truncate text-xs text-faint">by {row.author}</span> : kindLabel}
+          </span>
+        </span>
+        {row.description && <span className="line-clamp-2 text-sm text-muted">{row.description}</span>}
+        <span className="mt-auto flex items-baseline gap-8">
+          {kindLabel}
+          <span className="ml-auto shrink-0">{state}</span>
+        </span>
+      </div>
+    )
+  }
+  if (view === 'compact') {
+    return (
+      <div
+        id={optionId(row)}
+        role="option"
+        aria-selected={selected}
+        aria-label={row.name}
+        className="flex cursor-default items-baseline gap-8 rounded px-8 py-4 transition-colors hover:bg-raised aria-selected:bg-raised"
+        onClick={pick}
+      >
+        <span className="min-w-0 truncate">{row.name}</span>
+        {kindLabel}
+        <span className="ml-auto shrink-0">{state}</span>
+      </div>
+    )
+  }
   return (
     <div
       id={optionId(row)}
@@ -561,8 +699,8 @@ function ListRow({ row, selected, busy, pick }: { row: Row; selected: boolean; b
     >
       <span className="flex items-baseline gap-8">
         <span className="min-w-0 truncate">{row.name}</span>
-        <span className="text-xs text-faint">{row.kind === 'theme' ? 'Theme' : 'Extension'}</span>
-        <span className="ml-auto shrink-0">{busy ? <span className="text-xs text-muted">Installing…</span> : <Badge row={row} />}</span>
+        {kindLabel}
+        <span className="ml-auto shrink-0">{state}</span>
       </span>
       {row.description && <span className="truncate text-sm text-muted">{row.description}</span>}
       {row.author && <span className="text-xs text-faint">by {row.author}</span>}
