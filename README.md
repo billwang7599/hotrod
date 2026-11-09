@@ -12,8 +12,10 @@ keeps a small core and lets you customize the rest with mods, which work with ev
 ## Mods
 
 A mod is written once and works with every engine. It can add panels and commands, react to chats and turns, answer
-permission requests, rewrite messages, and run commands, all through Kothar's public mod API. See
-[docs/mods.md](docs/mods.md).
+permission requests, rewrite messages, and run commands, all through Kothar's public mod API.
+
+**Mod documentation:** [mod-documentation/](mod-documentation/index.md) covers using, building and publishing mods and
+themes, with the full API reference.
 
 Community mods install from the marketplace in Settings, from their authors' own repos. A mod is code, so it lists what
 it uses through the mod API (running programs, reading chats, answering permission requests and so on). Kothar shows
@@ -22,8 +24,8 @@ off until you turn it on. Mods load when Kothar starts, so turning one on takes 
 
 **Writing a mod or theme:** start from the template
 [billwang7599/kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod) (or
-[kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme) for a theme). Try it with **Settings →
-Marketplace → Install from folder…** before you publish, then follow the
+[kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme) for a theme). Try it with **Install from
+folder…** in the Marketplace window (**Browse…** in Settings → Community mods) before you publish, then follow the
 [author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod) to list it.
 
 ## Themes
