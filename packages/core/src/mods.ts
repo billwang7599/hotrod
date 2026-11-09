@@ -81,6 +81,8 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   read: 'readChats',
   space: 'readChats',
   messages: 'readChats',
+  reaches: 'readChats',
+  reachable: 'readChats',
   chatStorage: 'memory',
   complete: 'models',
   send: 'sendMessages',

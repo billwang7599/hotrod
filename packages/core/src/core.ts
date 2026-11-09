@@ -89,6 +89,7 @@ import {
 import { openModels, type ModelSettings } from './models.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
+import { reaches } from './reach.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 
@@ -859,6 +860,13 @@ export function openCore(options: {
     }
   }
 
+  const seesAll = (chatId: string) => modChats.some((chat) => chat.id === chatId && chat.seesAll)
+  // Whether caller may reach chat, by the rule the core's own reach tools use; both must be chats the user can see.
+  const reachable = (callerId: string, chat: Chat) => {
+    const caller = chats.get(callerId)
+    return !!caller && shown(caller) && shown(chat) && reaches(caller.info, chat.info, seesAll(callerId))
+  }
+
   const hosts = new Map<string, ModHost>()
   const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
   const hostFor = (mod: Mod): ModHost => {
@@ -888,6 +896,11 @@ export function openCore(options: {
         const chat = chats.get(chatId)
         return chat && shown(chat) ? spaceOf(chat) : undefined
       },
+      reaches(callerId, chatId) {
+        const chat = chats.get(String(chatId))
+        return !!chat && reachable(String(callerId), chat)
+      },
+      reachable: (callerId) => shownChats().filter((chat) => reachable(String(callerId), chat)).map(detailOf),
       interrupt: (chatId) => interrupt(chatFor(chatId), false),
       accounts(engine) {
         const found = accounts.list().find((state) => state.engine === engine)
@@ -1943,7 +1956,7 @@ export function openCore(options: {
 
   const mcp = openKotharMcp({
     chats: () => shownChats().map(state),
-    seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
+    seesAll,
     createChild,
     send: (chatId, text) => send(chatFor(chatId), text),
     deliver: (chatId, text) => {

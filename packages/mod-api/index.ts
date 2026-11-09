@@ -180,6 +180,13 @@ export type ModHost = {
   send(chatId: string, text: string): void
   // Every chat the user can see, spaces and workers.
   chats(): ChatDetail[]
+  // Whether the chat callerId may reach chatId, by the rule the core's list_chats, read_chat, send_message and
+  // stop_chat use: a chat reaches its own workers, and a chat that sees every chat (Home) also reaches every other chat
+  // except other chats' workers. No chat reaches itself. A mod tool learns its caller from run's `caller`; check before
+  // reading or messaging a chat the caller named.
+  reaches(callerId: string, chatId: string): boolean
+  // Every chat callerId may reach, by the same rule.
+  reachable(callerId: string): ChatDetail[]
   chat(chatId: string): ChatDetail | undefined
   // The chat's log, oldest first; `last` keeps only the newest entries.
   read(chatId: string, options?: { last?: number }): ChatEntry[]
@@ -259,6 +266,7 @@ export type ModTool = {
   description: string
   inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[] }
   offered(caller: ChatSummary): boolean
+  // caller: the chat whose agent called the tool. host.reaches(caller.id, …) says which chats it may act on.
   run(input: Record<string, unknown>, call: { caller: ChatSummary; values: ModValues; host: ModHost }): unknown
 }
 
@@ -462,7 +470,7 @@ export type ModUse =
   | 'setup'
   // memory, and host.chatStorage
   | 'memory'
-  // Host calls: chats, chat, read, space, messages.
+  // Host calls: chats, chat, read, space, messages, reaches, reachable.
   | 'readChats'
   // send, createChat, retry, continue, interrupt
   | 'sendMessages'

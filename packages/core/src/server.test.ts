@@ -774,6 +774,58 @@ it("lets a mod start a child chat as spawn_worker does, with the Workers mod off
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
 })
 
+// A mod tool that tells what its caller may reach, through the host, next to the core's list_chats.
+const peekMod: Mod = {
+  id: 'peek',
+  name: 'Peek',
+  description: '',
+  enabledByDefault: true,
+  tools: [
+    {
+      name: 'peek',
+      description: 'What the caller may reach',
+      offered: () => true,
+      inputSchema: { type: 'object', properties: { chatId: { type: 'string' } } },
+      run({ chatId }, { caller, host }) {
+        return {
+          caller: caller.id,
+          reachable: host.reachable(caller.id).map((c) => c.id).sort(),
+          ...(typeof chatId === 'string' && { reaches: host.reaches(caller.id, chatId) }),
+        }
+      },
+    },
+  ],
+}
+
+it("tells a mod's tool who called it and what that caller may reach, by the rule list_chats uses", async () => {
+  const { core, json, send } = await startHeld({ mods: [mainMod, peekMod] })
+  workersOn(core, -1)
+  core.handle({ type: 'chat.create', name: 'Alpha' }, () => {})
+  core.handle({ type: 'chat.create', name: 'Beta' }, () => {})
+  const [alpha, beta] = ['Alpha', 'Beta'].map((name) => core.chats().find((c) => c.name === name)!.id) as [string, string]
+  const lead = send(alpha, 'Go')
+  const leadToken = lead.options.kotharMcp!.token
+  const worker = (await json(leadToken, 'spawn_worker', { task: 'Help' })).chatId
+  const home = send('main', 'Hi')
+  const homeToken = home.options.kotharMcp!.token
+  const homeWorker = (await json(homeToken, 'spawn_worker', { task: 'Look' })).chatId
+
+  const listed = async (token: string) => ((await json(token, 'list_chats')) as { id: string }[]).map((c) => c.id).sort()
+  const leadPeek = await json(leadToken, 'peek', { chatId: beta })
+  expect(leadPeek).toEqual({ caller: alpha, reachable: [worker], reaches: false })
+  expect(leadPeek.reachable).toEqual(await listed(leadToken))
+  expect((await json(leadToken, 'peek', { chatId: worker })).reaches).toBe(true)
+
+  const homePeek = await json(homeToken, 'peek', { chatId: worker })
+  expect(homePeek.caller).toBe('main')
+  expect(homePeek.reachable).toEqual([alpha, beta, homeWorker].sort())
+  expect(homePeek.reachable).toEqual(await listed(homeToken))
+  // Another chat's worker stays out of Home's reach, and so does Home itself.
+  expect(homePeek.reaches).toBe(false)
+  expect((await json(homeToken, 'peek', { chatId: 'main' })).reaches).toBe(false)
+  expect((await json(homeToken, 'peek', { chatId: 'nope' })).reaches).toBe(false)
+})
+
 it("gives a worker its parent's latest messages frozen at launch when no memory mod is on", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   workersOn(core, -1)

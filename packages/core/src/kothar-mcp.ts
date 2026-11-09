@@ -4,7 +4,8 @@ import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kothar/mod-
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
-import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
+import { reaches } from './reach.ts'
+import type { ChatInfo, ChatState, ModelRole } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
 export const WORKER_NAME_MAX_CHARS = 40
@@ -58,8 +59,7 @@ type Hub = {
   modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
 }
 
-const reaches = (hub: Hub, caller: ChatState, chat: ChatState) =>
-  chat.worker ? chat.parentId === caller.id : chat.id !== caller.id && hub.seesAll(caller.id)
+const reachesFrom = (hub: Hub, caller: ChatState, chat: ChatState) => reaches(caller, chat, hub.seesAll(caller.id))
 
 export const summaryOf = ({ id, name, engine, parentId, worker }: ChatInfo): ChatSummary => ({
   id,
@@ -102,7 +102,7 @@ const TOOLS: Record<string, Tool> = {
     run({ hub, caller }: Context) {
       return hub
         .chats()
-        .filter((chat) => reaches(hub, caller, chat))
+        .filter((chat) => reachesFrom(hub, caller, chat))
         .map(({ id, name, folders, status, engine, archived }) => ({ id, name, folders, status, engine, archived }))
     },
   },
@@ -199,7 +199,7 @@ export function openKotharMcp(hub: Hub) {
         answer((caller, chats) => {
           const reachable = (chatId: string) => {
             const chat = chats.find((c) => c.id === chatId)
-            if (!chat || !reaches(hub, caller, chat)) throw new Error(`No chat "${chatId}" this chat can reach`)
+            if (!chat || !reachesFrom(hub, caller, chat)) throw new Error(`No chat "${chatId}" this chat can reach`)
             return chat
           }
           return tool.run({ hub, caller, reachable }, input)
