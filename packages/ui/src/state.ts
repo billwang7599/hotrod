@@ -438,7 +438,8 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
 export const MIN_WINDOW_PX = { width: 375, height: 600 }
 export const PANEL_PX = { sidebar: 232, context: 320 }
 const PANE_PADDING_PX = 24
-export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, default: 760 }
+/** The chat column's width. It never exceeds the pane (CSS caps it at 100%); `max` only bounds a saved value. */
+export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, max: 2400, default: 760 }
 
 export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
   const sidebar = widths.sidebar + MIN_WINDOW_PX.width
@@ -448,7 +449,7 @@ export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_P
 
 export function storedColumn(value: string | null) {
   const px = Number(value ?? NaN)
-  return Number.isFinite(px) ? Math.max(Math.round(px), COLUMN_PX.min) : COLUMN_PX.default
+  return Number.isFinite(px) ? Math.min(Math.max(Math.round(px), COLUMN_PX.min), COLUMN_PX.max) : COLUMN_PX.default
 }
 
 export function columnSlider(savedPx: number, paneColumnPx: number) {

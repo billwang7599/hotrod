@@ -1004,6 +1004,21 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   expect(lint.textContent).toContain('No reply')
 })
 
+// jsdom has no layout, so these check the classes that keep the transcript from scrolling sideways at a narrow width.
+test('the transcript never scrolls sideways, and a long report heading wraps instead of widening it', () => {
+  const long = 'ended early: Claude Code exited with code 143 while running a very long command'
+  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Hotrod subagents hands-off for the…', text: '', error: long }] })
+  const list = container.querySelector('[class*="overflow-anchor"]')!
+  expect(list.className).toContain('overflow-x-hidden')
+  // Gutters on both edges keep the column centred under a visible scrollbar, in line with the composer.
+  expect(list.className).toContain('[scrollbar-gutter:stable_both-edges]')
+  const heading = [...container.querySelectorAll('[aria-label^="Report from subagent"] span')].find((s) =>
+    s.textContent?.startsWith('Subagent'),
+  )!
+  expect(heading.className).not.toContain('shrink-0')
+  expect(heading.className).toContain('min-w-0')
+})
+
 test('a report card folds and unfolds on click, and remembers it', () => {
   localStorage.clear()
   reloadSteps()

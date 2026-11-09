@@ -731,11 +731,13 @@ describe('storedFlag', () => {
 })
 
 describe('chat width', () => {
-  it('reads the saved width, falling back to the default and never going below the minimum', () => {
+  it('reads the saved width, falling back to the default and clamping it between the minimum and maximum', () => {
     expect(storedColumn(null)).toBe(COLUMN_PX.default)
     expect(storedColumn('wide')).toBe(COLUMN_PX.default)
     expect(storedColumn(String(COLUMN_PX.min + 100))).toBe(COLUMN_PX.min + 100)
     expect(storedColumn(String(COLUMN_PX.min - 100))).toBe(COLUMN_PX.min)
+    expect(storedColumn(String(COLUMN_PX.max * 10))).toBe(COLUMN_PX.max)
+    expect(storedColumn('Infinity')).toBe(COLUMN_PX.default)
   })
 
   it('runs the slider from the minimum to the full pane, clamping the saved width into it', () => {

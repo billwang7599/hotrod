@@ -708,7 +708,8 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
         >
           <Chevron />
         </button>
-        <span className="shrink-0">
+        {/* Wraps instead of holding its width: a long name or error would otherwise push the chat sideways. */}
+        <span className="min-w-0 [overflow-wrap:anywhere]">
           Subagent {name} reported
           {item.error && <span> · ended early: {item.error}</span>}
         </span>
@@ -1224,8 +1225,10 @@ export function Chat(props: ChatProps) {
           />
         </header>
         <div
-          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom.
-          className="flex flex-1 flex-col overflow-y-auto p-24 [overflow-anchor:none]"
+          // Chrome's scroll anchoring would otherwise drag the view along with output added near the bottom. The
+          // transcript never scrolls sideways (code blocks and tables scroll on their own), and a gutter on both
+          // edges keeps the column centred under a visible scrollbar, in line with the composer below.
+          className="flex flex-1 flex-col overflow-x-hidden overflow-y-auto p-24 [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
           ref={listRef}
           onScroll={scrolled}
           onWheel={userScrolls}
