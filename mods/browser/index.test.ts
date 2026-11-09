@@ -59,11 +59,11 @@ it("runs Playwright MCP on Playwright's Chromium in a window, with the space's o
   })
 })
 
-it("asks before each action and keeps a subagent's profile in memory, as set", () => {
+it("asks before each action and keeps a worker's profile in memory, as set", () => {
   expect(serverFor({ values: { ...chromium, askEachAction: true } }).allowTools).toBe(false)
-  const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true }, values: chromium }).args
-  expect(subagent).toContain('--isolated')
-  expect(subagent).not.toContain('--user-data-dir')
+  const worker = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', worker: true }, values: chromium }).args
+  expect(worker).toContain('--isolated')
+  expect(worker).not.toContain('--user-data-dir')
   expect(serverFor({ sandboxed: false, values: chromium }).args).not.toContain('--no-sandbox')
 })
 
@@ -92,13 +92,13 @@ it('browses in the background by default, through background.ts, which picks Chr
   expect(args).toContain('--no-sandbox')
   expect(args).not.toContain('--extension')
   expect(args).not.toContain('--cdp-endpoint')
-  expect(env?.KOTHAR_BROWSER_SUBAGENT).toBeUndefined()
-  const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true } })
-  expect(subagent.env?.KOTHAR_BROWSER_SUBAGENT).toBe('1')
+  expect(env?.KOTHAR_BROWSER_WORKER).toBeUndefined()
+  const worker = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', worker: true } })
+  expect(worker.env?.KOTHAR_BROWSER_WORKER).toBe('1')
   expect(serverFor({ sandboxed: false }).args).not.toContain('--no-sandbox')
 })
 
-it('runs headless on Chrome with a profile of its own, else on Chromium, and a subagent keeps its in memory', () => {
+it('runs headless on Chrome with a profile of its own, else on Chromium, and a worker keeps its in memory', () => {
   expect(backgroundArgs('/w/.browser', true, false)).toEqual([
     '--browser', 'chrome', '--headless', '--user-data-dir', '/w/.browser/chrome-profile',
   ])
@@ -188,9 +188,9 @@ it("connects to your running Chrome through the Playwright Extension, with its t
   expect(serverFor({ values: chrome }).env).not.toHaveProperty('PLAYWRIGHT_MCP_EXTENSION_TOKEN')
 })
 
-it("gives a subagent the same Chrome as its space, since the extension takes a connection per session", () => {
-  const subagent = { ...space, id: 'def', parentId: 'abc', subagent: true }
-  expect(serverFor({ chat: subagent, values: chrome }).args).toEqual(serverFor({ values: chrome }).args)
+it("gives a worker the same Chrome as its space, since the extension takes a connection per session", () => {
+  const worker = { ...space, id: 'def', parentId: 'abc', worker: true }
+  expect(serverFor({ chat: worker, values: chrome }).args).toEqual(serverFor({ values: chrome }).args)
 })
 
 it('tells agents that get the browser to read snapshots before screenshots, batch form fills and close their tabs', () => {
@@ -222,11 +222,11 @@ it("runs your Chrome headless on the space's copy of your Chrome logins, with Ch
   expect(env).not.toHaveProperty('KOTHAR_LOGINS_TEMPORARY')
 })
 
-it('gives a subagent a copy of its own, removed when its session ends', () => {
-  const subagent = { ...space, id: 'def', parentId: 'abc', subagent: true }
-  const { args, env } = serverFor({ chat: subagent, values: logins })
-  expect(args![2]).toBe('/work/abc/.browser/logins-subagents/def')
-  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins-subagents/def')
+it('gives a worker a copy of its own, removed when its session ends', () => {
+  const worker = { ...space, id: 'def', parentId: 'abc', worker: true }
+  const { args, env } = serverFor({ chat: worker, values: logins })
+  expect(args![2]).toBe('/work/abc/.browser/logins-workers/def')
+  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins-workers/def')
   expect(env).toHaveProperty('KOTHAR_LOGINS_TEMPORARY', '1')
 })
 

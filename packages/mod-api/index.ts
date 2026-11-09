@@ -62,7 +62,7 @@ export type PermissionRequest = Extract<EngineEvent, { type: 'permission.request
 
 export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 
-export type ChatSummary = { id: string; name: string; engine: string; parentId?: string; subagent?: boolean }
+export type ChatSummary = { id: string; name: string; engine: string; parentId?: string; worker?: boolean }
 
 // What a mod can know about any chat. A space is a top-level chat; mod is set on a mod's own chat (Home).
 export type ChatDetail = ChatSummary & {
@@ -94,7 +94,7 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 export type ChatEntry = { at: string } & (
   // midTurn: sent while a turn ran, and taken in by it at this point (steering).
   | { type: 'user.message'; text: string; attachments?: Attachment[]; midTurn?: true }
-  | { type: 'subagent.report'; text: string; chatId: string; name: string; error?: string }
+  | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
   // panel: clicking the note opens that panel of the mod's.
@@ -142,7 +142,7 @@ export type ModHost = {
   createChat(spec: { name: string; folders?: string[]; files?: string[]; engine?: string }): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
-  // Every chat the user can see, spaces and subagents.
+  // Every chat the user can see, spaces and workers.
   chats(): ChatDetail[]
   chat(chatId: string): ChatDetail | undefined
   // The chat's log, oldest first; `last` keeps only the newest entries.

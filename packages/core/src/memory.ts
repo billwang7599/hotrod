@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import type { Attachment, ChatEntry, CompletionRequest, SubagentReport } from './shared.ts'
+import type { Attachment, ChatEntry, CompletionRequest, WorkerReport } from './shared.ts'
 
 export const LINE_MAX_CHARS = 280
 export const LINE_CHARS_PER_LEVEL = 40
@@ -78,9 +78,9 @@ export type Summaries = ReturnType<typeof openSummaries>
 type Block = { id: number; n: number }
 type LineOf = (id: number, n: number) => string | undefined
 
-export type Report = { text: string; report: SubagentReport }
+export type Report = { text: string; report: WorkerReport }
 
-// How a subagent's report reads to its lead, in memory and in the prompt that delivers it.
+// How a worker's report reads to its lead, in memory and in the prompt that delivers it.
 export function reportText({ text, report: { chatId, name, error } }: Report) {
   const early = error ? `\n\n(The turn ended early: ${error})` : ''
   return `Report from worker "${name}" (${chatId}):\n\n${text || '(No reply)'}${early}`
@@ -100,7 +100,7 @@ export function messagesOf(entries: ChatEntry[]): MemoryMessage[] {
       const kind = entry.text.startsWith('[subagent "') ? 'work' : 'user'
       add(kind, entry.at, withAttachments(entry.text, entry.attachments))
     }
-    if (entry.type === 'subagent.report') {
+    if (entry.type === 'worker.report') {
       const { text, chatId, name, error } = entry
       add('work', entry.at, reportText({ text, report: { chatId, name, ...(error && { error }) } }))
     }

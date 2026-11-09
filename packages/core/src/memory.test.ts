@@ -111,8 +111,8 @@ describe('messagesOf', () => {
       { at: at(10), type: 'turn.completed', error: 'Interrupted' },
       { at: at(11), type: 'session.ended' },
       { at: at(12), type: 'session.ended', error: 'Claude Code exited with code 1' },
-      { at: at(13), type: 'subagent.report', chatId: 'ef56ab78', name: 'Docs', text: 'Found it' },
-      { at: at(14), type: 'subagent.report', chatId: 'ef56ab79', name: 'Lint', text: '', error: 'Interrupted' },
+      { at: at(13), type: 'worker.report', chatId: 'ef56ab78', name: 'Docs', text: 'Found it' },
+      { at: at(14), type: 'worker.report', chatId: 'ef56ab79', name: 'Lint', text: '', error: 'Interrupted' },
     ]
     expect(messagesOf(entries)).toEqual([
       { id: 0, kind: 'user', at: at(0), text: 'list the folder\n\nAttached files:\n- /g/a.png (image/png)' },
@@ -203,7 +203,7 @@ describe('memoryPrompt', () => {
     expect(memoryPrompt([], store(), 'hi', { zoom: true })).toBe('hi')
   })
 
-  it("frames subagents' reports as theirs, before any words from the user", () => {
+  it("frames workers' reports as theirs, before any words from the user", () => {
     const report = { text: 'Found it', report: { chatId: 'ef56ab78', name: 'Docs' } }
     const found = 'Report from worker "Docs" (ef56ab78):\n\nFound it'
     expect(memoryPrompt([], store(), '', { zoom: true }, [report])).toBe(found)

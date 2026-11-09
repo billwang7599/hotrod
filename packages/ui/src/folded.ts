@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 
-/** Chats whose subagents are folded away in the sidebar. Unfolded by default, kept in localStorage. */
+/** Chats whose workers are folded away in the sidebar. Unfolded by default, kept in localStorage. */
 const KEY = 'kothar.foldedChats'
 const listeners = new Set<() => void>()
 

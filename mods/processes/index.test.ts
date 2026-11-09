@@ -42,7 +42,7 @@ const at = '2026-01-01T00:00:00.000Z'
 async function start(options: { logMaxBytes?: number } = {}) {
   const garage = tempDir()
   const work = join(garage, 'work')
-  // A space and its subagent, saved as if from before, so the subagent exists without running a model.
+  // A space and its worker, saved as if from before, so the worker exists without running a model.
   const spaceId = 'space001'
   const workDir = join(work, spaceId)
   mkdirSync(workDir, { recursive: true })
@@ -52,7 +52,7 @@ async function start(options: { logMaxBytes?: number } = {}) {
     writeFileSync(join(garage, 'chats', id, 'chat.json'), JSON.stringify(chat))
   }
   saved(spaceId, { name: 'Web', folders: [], files: [], archived: false, workDir })
-  saved('sub001', { name: 'Builder', parentId: spaceId, subagent: true })
+  saved('sub001', { name: 'Builder', parentId: spaceId, worker: true })
 
   const spawned: { command: string; args: string[]; cwd: string; sandbox?: Sandbox }[] = []
   const machine: Machine = {
@@ -227,7 +227,7 @@ describe('the tools', () => {
     await expect(t.tool('read_output', { id: 'p9' })).rejects.toThrow(/No process "p9"/)
   })
 
-  it('belong to the space: a subagent’s process is the lead’s to see and stop', async () => {
+  it('belong to the space: a worker’s process is the lead’s to see and stop', async () => {
     const t = await start()
     await t.tool('start_process', { command: 'sleep 300', name: 'watch' }, 'sub001')
     const listed = await t.tool('list_processes', {})
@@ -296,7 +296,7 @@ const buttons = (view: ModView) => partsOf(view).flatMap((part) => (part.type ==
 const code = (view: ModView) => partsOf(view).find((part) => part.type === 'code')
 
 describe('the Processes tab', () => {
-  it('shows once the space has a process, in the space and its subagents, and goes once they are cleared', async () => {
+  it('shows once the space has a process, in the space and its workers, and goes once they are cleared', async () => {
     const t = await start()
     expect(t.tabs()).toEqual([])
     await t.tool('start_process', { command: 'echo hi', name: 'once' })

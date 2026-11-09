@@ -157,7 +157,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       }
       return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
     }
-    case 'subagent.report': {
+    case 'worker.report': {
       const { chatId, name, text, error } = entry
       return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
     }
@@ -324,7 +324,7 @@ export function reduce(state: State, action: Action): State {
       return {
         ...state,
         chats: state.chats.some((c) => c.id === action.chat.id) ? state.chats : [...state.chats, toView(action.chat)],
-        // A subagent appears under its space without taking the view from the chat the user is reading.
+        // A worker appears under its space without taking the view from the chat the user is reading.
         selectedId: action.chat.parentId ? state.selectedId : action.chat.id,
       }
     case 'chat.updated':
@@ -339,7 +339,7 @@ export function reduce(state: State, action: Action): State {
       const chats = state.chats.filter((c) => c.id !== action.chatId)
       const removed = familyOf(state.chats, action.chatId)
       if (!removed.some((c) => c.id === state.selectedId)) return keepSelection({ ...state, chats })
-      // A subagent goes once it's done, with any below it; whoever was watching lands on the chat above them.
+      // A worker goes once it's done, with any below it; whoever was watching lands on the chat above them.
       const parentId = removed[0]?.parentId
       return keepSelection({ ...state, chats, selectedId: parentId ?? state.selectedId })
     }
@@ -456,7 +456,7 @@ export function chatTree(chats: ChatView[]) {
   const below = (chat: ChatView, archived: boolean) =>
     chats
       .filter((c) => c.parentId === chat.id && c.archived === archived)
-      .sort((a, b) => Number(!!b.subagent) - Number(!!a.subagent) || newestFirst(a, b))
+      .sort((a, b) => Number(!!b.worker) - Number(!!a.worker) || newestFirst(a, b))
   const walk = (chat: ChatView, depth: number, archived: boolean): TreeRow[] => [
     { chat, depth },
     ...below(chat, archived).flatMap((c) => walk(c, depth + 1, archived)),
@@ -495,13 +495,13 @@ const pendingIn = (chat: ChatView): Permission[] =>
             : [],
       )
 
-export type SubagentRequest = { chat: ChatView; permission: Permission }
+export type WorkerRequest = { chat: ChatView; permission: Permission }
 
-/** Permission requests waiting in the subagents below a chat, which the user answers from that chat. */
-export const subagentRequests = (chats: ChatView[], chatId: string): SubagentRequest[] =>
+/** Permission requests waiting in the workers below a chat, which the user answers from that chat. */
+export const workerRequests = (chats: ChatView[], chatId: string): WorkerRequest[] =>
   familyOf(chats, chatId)
     .slice(1)
-    .filter((c) => c.subagent && !c.archived)
+    .filter((c) => c.worker && !c.archived)
     .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
 
 export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {

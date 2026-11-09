@@ -634,7 +634,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
-  // A subagent follows its space's switches unless it has its own.
+  // A worker follows its space's switches unless it has its own.
   const above = chat ? lineOf(chats, chat).slice(1) : []
   // The space's work folder, once its first message has picked one.
   const workDir = chat && !chat.mod ? (above.at(-1) ?? chat).workDir : undefined

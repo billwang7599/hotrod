@@ -146,11 +146,11 @@ describe('space order', () => {
   const A = chat({ id: 'a', order: 0 })
   const B = chat({ id: 'b', order: 1 })
   const P = chat({ id: 'p', order: 0, pinned: true })
-  const SUB = chat({ id: 's', parentId: 'a', subagent: true })
+  const SUB = chat({ id: 's', parentId: 'a', worker: true })
   const OLD = chat({ id: 'old', archived: true })
   const chats = [B, SUB, A, OLD, P, HOME]
 
-  test('Home, then pinned, then the other spaces; no subagents or archived ones', () => {
+  test('Home, then pinned, then the other spaces; no workers or archived ones', () => {
     expect(spaceOrder(chats).map((c) => c.id)).toEqual(['main', 'p', 'a', 'b'])
     expect(spaceOrder(chats.filter((c) => c !== HOME)).map((c) => c.id)).toEqual(['p', 'a', 'b'])
   })
@@ -163,7 +163,7 @@ describe('space order', () => {
     expect(stepSpace(chats, 'a', -1)).toBe('p')
   })
 
-  test('from a subagent, up is its space and down the next space', () => {
+  test('from a worker, up is its space and down the next space', () => {
     expect(stepSpace(chats, 's', -1)).toBe('a')
     expect(stepSpace(chats, 's', 1)).toBe('b')
   })

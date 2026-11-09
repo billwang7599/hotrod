@@ -160,8 +160,8 @@ test('the open chat of a window the user is away from stays unread until they co
   expect(bold()).toEqual([])
 })
 
-test('a finished, unseen subagent is never bold, nor is the space its fold hides it in', async () => {
-  const chats = [chat('space'), finished('sub', { parentId: 'space', subagent: true }), chat('other')]
+test('a finished, unseen worker is never bold, nor is the space its fold hides it in', async () => {
+  const chats = [chat('space'), finished('sub', { parentId: 'space', worker: true }), chat('other')]
   render(chats, 'other')
   expect(host.querySelector('nav button[data-chat-id="sub"]')).not.toBeNull()
   expect(bold()).toEqual([])

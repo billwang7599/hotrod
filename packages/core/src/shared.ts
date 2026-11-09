@@ -186,7 +186,7 @@ export type ChatInfo = PermissionSwitches & {
   name: string
   mod?: string
   parentId?: string
-  subagent?: boolean
+  worker?: boolean
   parentMessages?: number
   folders: string[]
   files: string[]
@@ -236,7 +236,7 @@ export type WorkFolder = PermissionSwitches & {
 // Layers nearest first: a chat, the chats above it, then the work folder's defaults.
 export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('editAnywhere', ...layers)
 
-export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
+export const MODEL_ROLES = ['chat', 'planning', 'searching', 'workers'] as const
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
@@ -244,7 +244,7 @@ export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',
   planning: 'Planning',
   searching: 'Searching',
-  subagents: 'Workers',
+  workers: 'Workers',
 }
 
 // One entry in a role's model list: a model on an engine, and the thinking level it runs at there. `thinking` is left
@@ -254,7 +254,7 @@ export type ModelRow = { engine: string; model: string; thinking?: ThinkingLevel
 // One list per role, shared by every engine; a list can mix engines.
 export type ModelLists = Record<ModelRole, ModelRow[]>
 
-export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
+export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], workers: [] }
 
 /** The thinking levels a model takes: its own list if its engine gives one, else the engine's. */
 export const levelsOf = (engine: EngineInfo | undefined, model?: string): ThinkingLevel[] =>
@@ -347,15 +347,15 @@ export type { Attachment } from '@kothar/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
-// A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
-export type SubagentReport = { chatId: string; name: string; error?: string }
+// A worker's final reply to its lead: which worker, and why its turn ended early, if it did.
+export type WorkerReport = { chatId: string; name: string; error?: string }
 
 // steering: handed to the running turn, waiting for its next tool boundary; it can't be taken back.
 export type QueuedMessage = {
   id: string
   text: string
   attachments?: Attachment[]
-  report?: SubagentReport
+  report?: WorkerReport
   steering?: true
 }
 
@@ -431,7 +431,7 @@ export type ClientMessage =
   // Copies a folder on this computer (a mod or themes) as a local install; replies market.localInstalled or
   // market.localFailed.
   | { type: 'market.installLocal'; path: string }
-  // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
+  // Searches the message text of Home (while its mod is on) and every space, not workers. Replies search.results with
   // the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
   // Opens the user's terminal app at one of the chat's folders: a context folder, its space's work folder or a

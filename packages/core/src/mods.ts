@@ -113,7 +113,7 @@ export function guardHost(host: ModHost, mod: { name: string }, uses: readonly M
 // and only for mods the user turned on; loadError says why one that's on didn't load.
 export type CommunityMod = CommunityInstall & { mod?: Mod; loadError?: string }
 
-// Loads <garage>/aftermarket/<id>/main.mjs for each mod that's on. A mod that's off is never imported, so installing
+// Loads <garage>/community/<id>/main.mjs for each mod that's on. A mod that's off is never imported, so installing
 // one runs none of its code.
 export async function loadCommunityMods(garage: string, isOn: (id: string) => boolean): Promise<CommunityMod[]> {
   const loaded: CommunityMod[] = []

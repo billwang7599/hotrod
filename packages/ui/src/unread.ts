@@ -19,11 +19,11 @@ function subscribe(changed: () => void) {
 export const useLooking = () => useSyncExternalStore(subscribe, looking)
 
 /**
- * Bold in the sidebar: a space (or Home) finished a turn the user hasn't seen. Subagents never are; running and
+ * Bold in the sidebar: a space (or Home) finished a turn the user hasn't seen. Workers never are; running and
  * waiting chats have their dot instead, and the chat open in a window the user is looking at is being seen right now.
  */
 export const showsUnread = (chat: ChatView, open: boolean) =>
-  !chat.subagent && chat.status === 'idle' && isUnread(chat) && !open
+  !chat.worker && chat.status === 'idle' && isUnread(chat) && !open
 
 /**
  * Marks the open chat read whenever it has an unseen turn while the user looks at this window. `seen` is false while

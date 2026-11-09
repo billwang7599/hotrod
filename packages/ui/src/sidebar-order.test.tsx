@@ -44,7 +44,7 @@ const HOME = chat({ id: 'main', name: 'Home', mod: 'home', createdAt: '2025-01-0
 const A = chat({ id: 'a', name: 'Alpha', order: 0 })
 const B = chat({ id: 'b', name: 'Beta', order: 1 })
 const C = chat({ id: 'c', name: 'Gamma', order: 2 })
-const WORKER = chat({ id: 'w', name: 'Worker', parentId: 'a', subagent: true })
+const WORKER = chat({ id: 'w', name: 'Worker', parentId: 'a', worker: true })
 
 function render(chats: ChatView[], connected = true) {
   act(() =>
@@ -80,7 +80,7 @@ const menuItems = (name: string) => {
   return [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
 }
 
-test('spaces follow their saved order, pinned ones in their own group on top, subagents under their space', () => {
+test('spaces follow their saved order, pinned ones in their own group on top, workers under their space', () => {
   render([C, HOME, { ...B, pinned: true, order: 0 }, WORKER, A, chat({ id: 'n', name: 'New' })])
   expect(container.querySelector('#pinned-label')?.textContent).toBe('Pinned')
   expect(names(group('pinned'))).toEqual(['Beta'])
@@ -108,7 +108,7 @@ test('dragging a space onto another moves it there, with a drop line while over 
   expect(sent).toEqual([{ type: 'chat.move', chatId: 'c', pinned: false, index: 0 }])
   expect(container.querySelector('[data-drop]')).toBeNull()
 
-  // After a space with subagents, the line sits below its last subagent, and it lands after the space.
+  // After a space with workers, the line sits below its last worker, and it lands after the space.
   fire(rowOf('Gamma'), 'dragstart')
   fire(rowOf('Alpha'), 'dragover', 10)
   const line = container.querySelector('[data-drop="after"]')!
@@ -117,8 +117,8 @@ test('dragging a space onto another moves it there, with a drop line while over 
   expect(sent.at(-1)).toEqual({ type: 'chat.move', chatId: 'c', pinned: false, index: 1 })
 })
 
-test('dropping a space into the pinned group pins it; a subagent row can’t be dragged', () => {
-  render([{ ...A, pinned: true }, B, C, chat({ id: 'w2', name: 'Helper', parentId: 'b', subagent: true })])
+test('dropping a space into the pinned group pins it; a worker row can’t be dragged', () => {
+  render([{ ...A, pinned: true }, B, C, chat({ id: 'w2', name: 'Helper', parentId: 'b', worker: true })])
   fire(rowOf('Gamma'), 'dragstart')
   fire(rowOf('Alpha'), 'dragover', 10)
   fire(rowOf('Alpha'), 'drop', 10)

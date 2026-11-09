@@ -266,7 +266,7 @@ describe('terminal.open', () => {
     expect(t.results()).toEqual([{ type: 'terminal.result', chatId: chat.id, path: folder, error: 'No terminal app found' }])
   })
 
-  it('opens its space’s work folder and checkouts, from a subagent too', async () => {
+  it('opens its space’s work folder and checkouts, from a worker too', async () => {
     const t = start()
     const workDir = join(t.garage, 'work', 'space1')
     const checkout = join(workDir, 'app')
@@ -282,7 +282,7 @@ describe('terminal.open', () => {
       workDir,
       worktrees: { '/src/app': { path: checkout, branch: 'kothar/app' } },
     })
-    save('sub1', { name: 'Sub', parentId: 'space1', subagent: true })
+    save('sub1', { name: 'Sub', parentId: 'space1', worker: true })
     // A core opened on that garage loads them.
     cores.pop()?.close(true)
     const adapter = createFakeAdapter([], 0)

@@ -759,16 +759,16 @@ test("each panel tab folds its explanations under How this works, not in tooltip
   localStorage.clear()
 })
 
-test('a subagent is view only: no composer, just a Stop button while it runs', () => {
+test('a worker is view only: no composer, just a Stop button while it runs', () => {
   const sent: ClientMessage[] = []
-  render({ subagent: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))
+  render({ worker: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))
   expect(container.querySelector('textarea')).toBeNull()
   const bar = container.querySelector('[aria-label="Worker"]')!
   expect(bar.textContent).toContain('view only')
   const stop = [...bar.querySelectorAll('button')].find((b) => b.textContent === 'Stop')!
   act(() => stop.click())
   expect(sent.at(-1)).toEqual({ type: 'chat.interrupt', chatId: 'c1' })
-  render({ subagent: true, parentId: 'p1', status: 'idle' })
+  render({ worker: true, parentId: 'p1', status: 'idle' })
   expect(container.querySelector('[aria-label="Worker"] button')).toBeNull()
 })
 
@@ -922,13 +922,13 @@ const pendingTool = (outcome: 'pending' | 'allowed') =>
     summary: 'rm -rf build',
     permission: { requestId: 'r1', name: 'Bash', toolKind: 'shell', summary: 'rm -rf build', input: {}, outcome },
   })
-const subagent = (change: Partial<ChatView> = {}) =>
-  viewOf({ id: 's1', name: 'Fix tests', parentId: 'p1', subagent: true, status: 'waiting', items: [USER, pendingTool('pending')], ...change })
+const worker = (change: Partial<ChatView> = {}) =>
+  viewOf({ id: 's1', name: 'Fix tests', parentId: 'p1', worker: true, status: 'waiting', items: [USER, pendingTool('pending')], ...change })
 
-test("a subagent's permission request waits in its space, which answers it and turns the down button amber", () => {
+test("a worker's permission request waits in its space, which answers it and turns the down button amber", () => {
   const sent: ClientMessage[] = []
   const space = { ...SPACE, status: 'running' as const, items: [USER, REPLY], draft: 'More' }
-  render(space, (m) => sent.push(m), { chats: [subagent()] })
+  render(space, (m) => sent.push(m), { chats: [worker()] })
   const card = () => container.querySelector('[aria-label="Request from worker Fix tests"]')
   expect(card()!.textContent).toContain('Worker Fix tests wants to run Bash')
   expect(card()!.textContent).toContain('rm -rf build')
@@ -940,15 +940,15 @@ test("a subagent's permission request waits in its space, which answers it and t
   act(() => approve.click())
   expect(sent.at(-1)).toEqual({ type: 'permission.respond', chatId: 's1', requestId: 'r1', allow: true })
 
-  render(space, () => {}, { chats: [subagent({ status: 'running', items: [USER, pendingTool('allowed')] })] })
+  render(space, () => {}, { chats: [worker({ status: 'running', items: [USER, pendingTool('allowed')] })] })
   expect(card()).toBeNull()
-  render(space, () => {}, { chats: [subagent({ status: 'stopping' })] })
+  render(space, () => {}, { chats: [worker({ status: 'stopping' })] })
   expect(card()).toBeNull()
 })
 
-test("a subagent's own view shows where its request waits, with a way to the space instead of Approve", () => {
+test("a worker's own view shows where its request waits, with a way to the space instead of Approve", () => {
   const select = vi.fn()
-  render(subagent(), () => {}, { chats: [SPACE], select })
+  render(worker(), () => {}, { chats: [SPACE], select })
   expect(container.textContent).toContain('Waiting for approval in Space')
   const buttons = [...container.querySelectorAll('button')]
   expect(buttons.some((b) => b.textContent === 'Approve')).toBe(false)
@@ -956,9 +956,9 @@ test("a subagent's own view shows where its request waits, with a way to the spa
   expect(select).toHaveBeenCalledWith('p1')
 })
 
-test("a subagent without its own choice shows thinking and tool calls the way its space does", () => {
+test("a worker without its own choice shows thinking and tool calls the way its space does", () => {
   const steps: Item[] = [tool('done', 'a.txt'), { kind: 'text', text: 'Installing them.' }, tool('done', '', { toolId: 't2' })]
-  const sub = subagent({ status: 'idle', items: [USER, ...steps, { kind: 'text', text: 'All set' }] })
+  const sub = worker({ status: 'idle', items: [USER, ...steps, { kind: 'text', text: 'All set' }] })
   render(sub, () => {}, { chats: [SPACE] })
   expect(foldButton()?.textContent).toBe('3 steps')
   act(() => showStepsIn('p1', true))
@@ -969,7 +969,7 @@ test("a subagent without its own choice shows thinking and tool calls the way it
   act(() => reloadSteps())
 })
 
-test("the sidebar shows a space as waiting while a subagent below it waits for approval", () => {
+test("the sidebar shows a space as waiting while a worker below it waits for approval", () => {
   const dot = (name: string) =>
     [...container.querySelectorAll('nav button, button')]
       .find((b) => b.textContent?.startsWith(name))
@@ -985,21 +985,21 @@ test("the sidebar shows a space as waiting while a subagent below it waits for a
         </LazyMotion>,
       ),
     )
-  nav([SPACE, subagent()])
+  nav([SPACE, worker()])
   expect(dot('Space')).toBe('waiting')
   expect(dot('Fix tests')).toBe('waiting')
-  nav([SPACE, subagent({ status: 'running', items: [USER, pendingTool('allowed')] })])
+  nav([SPACE, worker({ status: 'running', items: [USER, pendingTool('allowed')] })])
   expect(dot('Space')).toBe('idle')
 })
 
-test("shows a subagent's report as a report card, not as the user's message", () => {
+test("shows a worker's report as a report card, not as the user's message", () => {
   const selected: string[] = []
   const report = (chatId: string, name: string, text: string, error?: string) =>
     ({ kind: 'report', chatId, name, text, ...(error && { error }) }) as const
   render(
     { items: [USER, report('s1', 'Docs', 'Found **it**'), report('s2', 'Lint', '', 'Interrupted')] },
     () => {},
-    { chats: [viewOf({ id: 's1', name: 'Docs', subagent: true, parentId: 'c1' })], select: (id) => selected.push(id) },
+    { chats: [viewOf({ id: 's1', name: 'Docs', worker: true, parentId: 'c1' })], select: (id) => selected.push(id) },
   )
   const docs = container.querySelector('[aria-label="Report from worker Docs"]')!
   expect(docs.textContent).toContain('Worker Docs reported')
@@ -1009,7 +1009,7 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   act(() => named(docs, 'Docs')!.click())
   expect(selected).toEqual(['s1'])
 
-  // A removed subagent's name is plain text; a report with no reply says so.
+  // A removed worker's name is plain text; a report with no reply says so.
   const lint = container.querySelector('[aria-label="Report from worker Lint"]')!
   expect(named(lint, 'Lint')).toBeUndefined()
   expect(lint.textContent).toContain('Worker Lint reported · ended early: Interrupted')
@@ -1019,7 +1019,7 @@ test("shows a subagent's report as a report card, not as the user's message", ()
 // jsdom has no layout, so these check the classes that keep the transcript from scrolling sideways at a narrow width.
 test('the transcript never scrolls sideways, and a long report heading wraps instead of widening it', () => {
   const long = 'ended early: Claude Code exited with code 143 while running a very long command'
-  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Kothar subagents hands-off for the…', text: '', error: long }] })
+  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Kothar workers hands-off for the…', text: '', error: long }] })
   const list = container.querySelector('[class*="overflow-anchor"]')!
   expect(list.className).toContain('overflow-x-hidden')
   // Gutters on both edges keep the column centred under a visible scrollbar, in line with the composer.
@@ -1062,7 +1062,7 @@ test('a report card folds and unfolds on click, and remembers it', () => {
   reloadSteps()
 })
 
-test('subagent reports fold by default from Settings, and each chat overrides that in its General tab', () => {
+test('worker reports fold by default from Settings, and each chat overrides that in its General tab', () => {
   Element.prototype.scrollIntoView = vi.fn()
   localStorage.clear()
   reloadSteps()
@@ -1099,7 +1099,7 @@ test('subagent reports fold by default from Settings, and each chat overrides th
   reloadSteps()
 })
 
-test("labels a queued subagent report as the subagent's", () => {
+test("labels a queued worker report as the worker's", () => {
   const queue = [{ id: 'q1', text: 'Found it', report: { chatId: 's1', name: 'Docs' } }]
   render({ status: 'running', items: [USER], queue })
   const queued = container.querySelector('[aria-label="Queued messages"]')!
@@ -1227,7 +1227,7 @@ test("a chat whose own model can't run says so and offers to go back to Settings
   const engines: EngineInfo[] = [
     { id: 'cc', enabled: true, installed: true, signedIn: true, models: [{ id: 'opus', label: 'Opus' }] },
   ]
-  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus' }], planning: [], searching: [], subagents: [] }
+  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus' }], planning: [], searching: [], workers: [] }
   const sent: ClientMessage[] = []
   render({ engine: 'cc', model: 'gone' }, (m) => sent.push(m), { engines, modelLists })
   expect(container.textContent).toContain("gone on cc can't run")

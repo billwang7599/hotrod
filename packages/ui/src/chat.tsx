@@ -83,7 +83,7 @@ import {
   type Permission,
   type State,
   lineOf,
-  subagentRequests,
+  workerRequests,
 } from './state.ts'
 import { revealIn, takeReveal } from './search.tsx'
 
@@ -406,23 +406,23 @@ type PromptProps = {
   chat: ChatView
   connected: boolean
   send: (m: ClientMessage) => void
-  // Set in a subagent's own view: its requests are answered in this chat, its space, not here.
+  // Set in a worker's own view: its requests are answered in this chat, its space, not here.
   space?: ChatView
   select?: (chatId: string) => void
-  // Set in a space, on the requests of a subagent below it.
-  fromSubagent?: boolean
+  // Set in a space, on the requests of a worker below it.
+  fromWorker?: boolean
 }
 
-function PermissionPrompt({ permission, chat, connected, send, space, select, fromSubagent }: PromptProps) {
+function PermissionPrompt({ permission, chat, connected, send, space, select, fromWorker }: PromptProps) {
   const respond = (allow: boolean) =>
     send({ type: 'permission.respond', chatId: chat.id, requestId: permission.requestId, allow })
   return (
     <div
       className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised"
-      aria-label={fromSubagent ? `Request from worker ${chat.name}` : undefined}
+      aria-label={fromWorker ? `Request from worker ${chat.name}` : undefined}
     >
       <div className="text-body">
-        {fromSubagent ? (
+        {fromWorker ? (
           <>
             Worker <strong>{chat.name}</strong> wants to run <strong>{permission.name}</strong>
           </>
@@ -670,7 +670,7 @@ type ItemProps = {
   send: (m: ClientMessage) => void
   space?: ChatView
   select?: (chatId: string) => void
-  // Opens a chat that still exists, for a subagent's report.
+  // Opens a chat that still exists, for a worker's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
   // Opens a mod's panel in the right sidebar, for a mod's note.
@@ -681,7 +681,7 @@ type ItemProps = {
 
 type Report = Extract<Item, { kind: 'report' }>
 
-/** A subagent's report: unfolded or folded by the chat's setting until the user opens or closes it. */
+/** A worker's report: unfolded or folded by the chat's setting until the user opens or closes it. */
 function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; at?: number; open?: () => void }) {
   const opens = useContext(ReportsOpen)
   const key = at === undefined ? undefined : reportCardKey(chatId, at)
@@ -961,9 +961,9 @@ export function Chat(props: ChatProps) {
   const space = line.at(-1)!
   const stepsShown = useStepsShown(chat.id, ...line.slice(1).map((c) => c.id))
   const reportsShown = useReportsShown(chat.id, ...line.slice(1).map((c) => c.id))
-  const viewOnly = !!chat.subagent
-  // Subagents never ask in their own view: their requests wait in the space above them.
-  const requests = viewOnly ? [] : subagentRequests(props.chats, chat.id)
+  const viewOnly = !!chat.worker
+  // Workers never ask in their own view: their requests wait in the space above them.
+  const requests = viewOnly ? [] : workerRequests(props.chats, chat.id)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
@@ -1417,7 +1417,7 @@ export function Chat(props: ChatProps) {
             >
               {requests.map(({ chat: below, permission }) => (
                 <li key={`${below.id}-${permission.requestId}`}>
-                  <PermissionPrompt permission={permission} chat={below} connected={connected} send={send} fromSubagent />
+                  <PermissionPrompt permission={permission} chat={below} connected={connected} send={send} fromWorker />
                 </li>
               ))}
             </ul>

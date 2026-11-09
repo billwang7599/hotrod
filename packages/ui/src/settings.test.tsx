@@ -112,7 +112,7 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={[]}
-              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -202,7 +202,7 @@ function renderMods(mods: ModInfo[], page: SettingsPage, sent: ClientMessage[] =
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={mods}
-              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -374,7 +374,7 @@ test('Settings → Models lists each role once across engines, each model with i
       { engine: 'pi', model: 'p/one', thinking: 'off' },
     ],
     searching: [],
-    subagents: [],
+    workers: [],
   }
   const sent: ClientMessage[] = []
   act(() =>

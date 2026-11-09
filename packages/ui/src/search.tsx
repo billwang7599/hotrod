@@ -37,7 +37,7 @@ type Result = { key: string; chat: ChatView; hit?: SearchHit }
 
 /**
  * What the palette lists: with no query, recent chats (the open one last, so Enter goes back to the one before);
- * otherwise chats whose name matches, then the core's message matches. Home and spaces only, never subagents.
+ * otherwise chats whose name matches, then the core's message matches. Home and spaces only, never workers.
  */
 export function paletteResults(
   chats: ChatView[],
@@ -45,7 +45,7 @@ export function paletteResults(
   query: string,
   hits: SearchHit[] | undefined,
 ): Result[] {
-  const listed = chats.filter((c) => !c.subagent)
+  const listed = chats.filter((c) => !c.worker)
   const q = query.trim().toLowerCase()
   if (!q) {
     const recent = [...listed].sort((a, b) => lastActive(b).localeCompare(lastActive(a)))

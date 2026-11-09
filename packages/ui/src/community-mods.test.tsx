@@ -82,7 +82,7 @@ function settings(mods: ModInfo[], sent: ClientMessage[] = [], extra: Extra = { 
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
       mods={mods}
-      modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
       connected
@@ -244,7 +244,7 @@ test("a mod's own settings page lists what it uses", () => {
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
       mods={[withSettings]}
-      modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
       connected

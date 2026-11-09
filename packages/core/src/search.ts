@@ -13,7 +13,7 @@ const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 const textOf = (entry: ChatEntry): { kind: SearchHit['kind']; text: string } | undefined => {
   if (entry.type === 'user.message') return { kind: 'user', text: entry.text }
   if (entry.type === 'text.completed') return { kind: 'text', text: entry.text }
-  if (entry.type === 'subagent.report') return { kind: 'report', text: entry.text }
+  if (entry.type === 'worker.report') return { kind: 'report', text: entry.text }
   return undefined
 }
 

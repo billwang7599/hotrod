@@ -25,9 +25,9 @@ export function findChrome(): string | undefined {
 }
 
 // Chrome and Chromium can't share a profile (their versions differ), and each locks its own to one browser at a time,
-// so a subagent, which runs beside its space, keeps its profile in memory.
-export function backgroundArgs(dir: string, chrome: boolean, subagent: boolean): string[] {
-  const profile = subagent ? ['--isolated'] : ['--user-data-dir', join(dir, chrome ? 'chrome-profile' : 'profile')]
+// so a worker, which runs beside its space, keeps its profile in memory.
+export function backgroundArgs(dir: string, chrome: boolean, worker: boolean): string[] {
+  const profile = worker ? ['--isolated'] : ['--user-data-dir', join(dir, chrome ? 'chrome-profile' : 'profile')]
   return ['--browser', chrome ? 'chrome' : 'chromium', '--headless', ...profile]
 }
 
@@ -39,7 +39,7 @@ async function main([command, ...args]: string[]) {
   if (command !== 'run') throw new Error(`Unknown command ${command}`)
   const [dir, cli, ...cliArgs] = args
   if (!dir || !cli) throw new Error('Usage: background.ts run <.browser folder> <Playwright MCP cli.js> ...args')
-  const extra = backgroundArgs(dir, !!findChrome(), !!process.env.KOTHAR_BROWSER_SUBAGENT)
+  const extra = backgroundArgs(dir, !!findChrome(), !!process.env.KOTHAR_BROWSER_WORKER)
   process.argv = [process.argv[0]!, cli, ...cliArgs, ...extra]
   await import(pathToFileURL(cli).href)
 }

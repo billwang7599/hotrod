@@ -58,8 +58,8 @@ const modInfo = (id: string, enabled = false): ModInfo => ({
   settings: [{ key: 'limit', label: 'Limit', type: 'number', default: 4 }],
   values: { limit: 4 },
 })
-const mods = [modInfo('subagents'), modInfo('other')]
-const noLists = { chat: [], planning: [], searching: [], subagents: [] }
+const mods = [modInfo('workers'), modInfo('other')]
+const noLists = { chat: [], planning: [], searching: [], workers: [] }
 const modelLists = noLists
 const snapshot = (chats: ChatState[]): Action =>
   ({
@@ -158,7 +158,7 @@ describe('reduce', () => {
     expect(run(snapshot([chat('a')]), { type: 'chat.removed', chatId: 'a' }).selectedId).toBe('')
   })
 
-  it("shows a subagent's report as a report, also when an old log saved it as a user message", () => {
+  it("shows a worker's report as a report, also when an old log saved it as a user message", () => {
     const state = run(
       snapshot([
         chat('a', [
@@ -167,7 +167,7 @@ describe('reduce', () => {
           { at, type: 'user.message', text: '[subagent: not a report' },
         ]),
       ]),
-      entry('a', { type: 'subagent.report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' }),
+      entry('a', { type: 'worker.report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' }),
     )
     expect(items(state)).toEqual([
       { kind: 'report', chatId: 'ab12cd34', name: 'Docs', text: 'Found **it**\n\nin the FAQ' },
@@ -177,14 +177,14 @@ describe('reduce', () => {
     ])
   })
 
-  it('adds a subagent without switching the view to it', () => {
+  it('adds a worker without switching the view to it', () => {
     const sub: Action = { type: 'chat.added', chat: chat('s', [], { name: 'Search', parentId: 'c' }) }
     const state = run(snapshot([chat(MAIN_CHAT_ID), chat('c')]), { type: 'select', chatId: 'c' }, sub)
     expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'c', 's'])
     expect(state.selectedId).toBe('c')
   })
 
-  it('moves the view up to the closest chat still here when the viewed subagent is removed', () => {
+  it('moves the view up to the closest chat still here when the viewed worker is removed', () => {
     const tree = [chat(MAIN_CHAT_ID), chat('c'), chat('s', [], { parentId: 'c' }), chat('t', [], { parentId: 's' })]
     const removed = (chatId: string): Action => ({ type: 'chat.removed', chatId })
     const on = (chatId: string) => run(snapshot(tree), { type: 'select', chatId })
@@ -532,7 +532,7 @@ describe('reduce', () => {
   it('loads the mods from the snapshot and replaces only the one that changed', () => {
     const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
     expect(loaded.mods).toEqual(mods)
-    const on = { ...modInfo('subagents', true), values: { limit: -1 } }
+    const on = { ...modInfo('workers', true), values: { limit: -1 } }
     expect(reduce(loaded, { type: 'mod.updated', mod: on }).mods).toEqual([on, mods[1]])
   })
 
@@ -576,7 +576,7 @@ describe('foldSteps', () => {
     expect(fold).toEqual({ at: 1, steps: [tool('t1'), text('Installing'), tool('t2')] })
   })
 
-  it("starts a new turn at a subagent's report, like at a message from the user", () => {
+  it("starts a new turn at a worker's report, like at a message from the user", () => {
     const report: Item = { kind: 'report', chatId: 's1', name: 'Docs', text: 'Found it' }
     expect(shown([user('a'), tool('t1'), text('Waiting'), report, tool('t2'), text('Done')]))
       .toEqual(['a', 't1', 'Waiting', 'Found it', 't2', 'Done'])
@@ -630,14 +630,14 @@ describe('chat tree', () => {
     view('old'),
     view('new', {}, later),
     view(MAIN_CHAT_ID),
-    view('s1', { parentId: 'old', subagent: true }),
-    view('s0', { parentId: MAIN_CHAT_ID, subagent: true }),
+    view('s1', { parentId: 'old', worker: true }),
+    view('s0', { parentId: MAIN_CHAT_ID, worker: true }),
     view('gone', { archived: true }),
-    view('gone-s', { parentId: 'gone', subagent: true, archived: true }),
+    view('gone-s', { parentId: 'gone', worker: true, archived: true }),
     view('orphan', { parentId: 'nope' }, '2026-11-06T12:00:00.000Z'),
   ]
 
-  it("shows a mod's chat first, then the spaces newest first, each with its subagents below it", () => {
+  it("shows a mod's chat first, then the spaces newest first, each with its workers below it", () => {
     expect(rows(chatTree(chats).active)).toEqual(['0 main', '1 s0', '0 new', '0 orphan', '0 old', '1 s1'])
     const spaces = chats.filter((c) => c.id !== MAIN_CHAT_ID && c.parentId !== MAIN_CHAT_ID)
     expect(rows(chatTree(spaces).active)).toEqual(['0 new', '0 orphan', '0 old', '1 s1'])
@@ -656,7 +656,7 @@ describe('chat tree', () => {
     const tree = [
       view(MAIN_CHAT_ID),
       view('a', { folders: ['/code/app', '/code/lib'] }),
-      view('s', { parentId: 'a', subagent: true }),
+      view('s', { parentId: 'a', worker: true }),
       view('b'),
     ]
     expect(folderOf(tree, tree[1]!)).toBe('/code/app')

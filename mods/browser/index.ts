@@ -292,7 +292,7 @@ const browser: Mod = {
     }
     if (usesBackground(values)) {
       args.unshift(BACKGROUND, 'run', dir)
-      if (chat.subagent) env.KOTHAR_BROWSER_SUBAGENT = '1'
+      if (chat.worker) env.KOTHAR_BROWSER_WORKER = '1'
       // Chrome and Chromium can't start their own sandboxes inside Kothar's.
       if (sandboxed) args.push('--no-sandbox')
       if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH
@@ -300,22 +300,22 @@ const browser: Mod = {
       // The user's browser, as it is: Playwright attaches over CDP and leaves it running when the session ends.
       args.push('--cdp-endpoint', endpointOf(values))
     } else if (usesChrome(values)) {
-      // The extension takes a connection per session, each in a tab group of its own, so subagents share Chrome too.
+      // The extension takes a connection per session, each in a tab group of its own, so workers share Chrome too.
       args.push('--extension', '--browser', 'chrome')
       const token = String(values.extensionToken ?? '').trim()
       if (token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token
     } else if (usesLogins(values)) {
-      // A subagent gets a copy of its own, since Chrome locks a profile to one browser at a time.
-      const copy = chat.subagent ? join(dir, 'logins-subagents', chat.id) : join(dir, 'logins')
-      if (chat.subagent) env.KOTHAR_LOGINS_TEMPORARY = '1'
+      // A worker gets a copy of its own, since Chrome locks a profile to one browser at a time.
+      const copy = chat.worker ? join(dir, 'logins-workers', chat.id) : join(dir, 'logins')
+      if (chat.worker) env.KOTHAR_LOGINS_TEMPORARY = '1'
       args.unshift(LOGINS, 'run', copy)
       args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
       if (sandboxed) args.push('--no-sandbox')
     } else {
       // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless.
       args.push('--browser', 'chromium')
-      // A space's subagents run beside it, and Chromium locks a profile to one browser at a time.
-      args.push(...(chat.subagent ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
+      // A space's workers run beside it, and Chromium locks a profile to one browser at a time.
+      args.push(...(chat.worker ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
       // Chromium can't start its own sandbox inside Kothar's.
       if (sandboxed) args.push('--no-sandbox')
       if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH

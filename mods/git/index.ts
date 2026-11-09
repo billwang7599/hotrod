@@ -304,7 +304,7 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
   }
   const cleansUp = (values: ModValues) => values.cleanup === true
 
-  // A turn of the space or one of its subagents shows in the space's tab and its own.
+  // A turn of the space or one of its workers shows in the space's tab and its own.
   const refreshAround = (host: ModHost, chat: ChatDetail) => {
     host.refresh(chat.id)
     if (chat.parentId && host.chat(chat.parentId)) host.refresh(chat.parentId)
@@ -378,7 +378,7 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       },
     ],
     async onTurnStarted({ chat }, { host }) {
-      if (chat.mod || chat.subagent) return
+      if (chat.mod || chat.worker) return
       const shots = new Map<string, Snapshot>()
       for (const target of targetsOf(host, chat.id)) shots.set(target.path, await snapshot(host.run, target.path))
       before.set(chat.id, shots)
@@ -388,7 +388,7 @@ export function createGitMod(options: { now?: () => number } = {}): Mod {
       const shots = before.get(chat.id)
       before.delete(chat.id)
       forget(host, chat.id)
-      if (!chat.subagent && shots) {
+      if (!chat.worker && shots) {
         const counts: { branch: string; files: number }[] = []
         for (const target of targetsOf(host, chat.id)) {
           const after = await snapshot(host.run, target.path)

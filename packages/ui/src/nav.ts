@@ -1,6 +1,6 @@
 import { chatTree, type ChatView } from './state.ts'
 
-/** Home (when its mod is on) and the spaces, top to bottom as the sidebar lists them; no subagents or archived ones. */
+/** Home (when its mod is on) and the spaces, top to bottom as the sidebar lists them; no workers or archived ones. */
 export const spaceOrder = (chats: ChatView[]): ChatView[] =>
   chatTree(chats)
     .active.filter((r) => r.depth === 0)
@@ -12,7 +12,7 @@ function rootOf(chats: ChatView[], chat: ChatView): ChatView {
 }
 
 /**
- * The entry one step up or down from the open chat, or undefined at either end. From a subagent, up goes to its own
+ * The entry one step up or down from the open chat, or undefined at either end. From a worker, up goes to its own
  * space and down to the space after it. From nothing or an archived chat, down starts at the top and up at the bottom.
  */
 export function stepSpace(chats: ChatView[], selectedId: string, by: -1 | 1): string | undefined {

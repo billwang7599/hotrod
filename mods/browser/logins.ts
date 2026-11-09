@@ -94,7 +94,7 @@ async function main([command, ...args]: string[]) {
   if (command !== 'run') throw new Error(`Unknown command ${command}`)
   const [copyDir, cli, ...cliArgs] = args
   if (!copyDir || !cli) throw new Error('Usage: logins.ts run <copy folder> <Playwright MCP cli.js> ...args')
-  // A subagent's copy is its own, so it can run beside its space's browser, and goes when its session does.
+  // A worker's copy is its own, so it can run beside its space's browser, and goes when its session does.
   if (process.env.KOTHAR_LOGINS_TEMPORARY) {
     process.on('exit', () => {
       try {

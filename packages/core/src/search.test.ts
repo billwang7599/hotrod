@@ -69,11 +69,11 @@ describe('the core', () => {
     writeFileSync(join(dir, 'log.jsonl'), entries.map((e) => JSON.stringify(e) + '\n').join(''))
   }
 
-  it('answers search with hits from spaces, not subagents, under the request id', () => {
+  it('answers search with hits from spaces, not workers, under the request id', () => {
     const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-search-')))
     dirs.push(garage)
     chatOnDisk(garage, 'space', { name: 'Space' }, [user('2026-01-01T00:00:01Z', 'deploy the widget')])
-    chatOnDisk(garage, 'sub', { name: 'Sub', subagent: true, parentId: 'space' }, [
+    chatOnDisk(garage, 'sub', { name: 'Sub', worker: true, parentId: 'space' }, [
       user('2026-01-01T00:00:02Z', 'widget task'),
     ])
     const adapter = createFakeAdapter([], 0)

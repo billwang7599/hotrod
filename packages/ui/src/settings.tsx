@@ -95,7 +95,7 @@ const ROLE_ABOUT: Record<ModelRole, string> = {
   chat: 'Chats you start.',
   planning: 'Workers started to plan.',
   searching: 'Workers started to search.',
-  subagents: 'Every other worker.',
+  workers: 'Every other worker.',
 }
 
 const PAGES = [

@@ -16,7 +16,7 @@ import {
 } from './shared.ts'
 
 // Model choice, in one place. Settings keep one priority list per role, each an ordered list of {engine, model,
-// thinking} rows that can mix engines; this module reads and writes them and decides what every chat, subagent and
+// thinking} rows that can mix engines; this module reads and writes them and decides what every chat, worker and
 // summary runs on. Adapters only say what they offer (EngineStatus) and run what they're handed (SessionOptions). The
 // Kothar MCP server and the UI never choose: they name a role at most, and the UI shows the Run the core sends.
 
@@ -93,7 +93,7 @@ export function openModels({
     lists,
     runOf,
 
-    /** The engine a new chat sits on: the one its list (a subagent's role list, else Chat's) runs first. */
+    /** The engine a new chat sits on: the one its list (a worker's role list, else Chat's) runs first. */
     engineFor: (role?: ModelRole) => runOf({ engine: firstOn(), role })?.engine ?? firstOn(),
 
     /** A chat's own pick on `engine`: the first model of its list there, else the engine's default model. */

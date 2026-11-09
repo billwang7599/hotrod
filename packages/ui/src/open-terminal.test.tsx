@@ -29,7 +29,7 @@ const space: ChatView = {
   workDir: '/work/space',
   worktrees: { '/code/app': { path: '/work/space/app', branch: 'kothar/app' } },
 }
-const sub: ChatView = { ...base, id: 'sub', name: 'Sub', parentId: 'space', subagent: true }
+const sub: ChatView = { ...base, id: 'sub', name: 'Sub', parentId: 'space', worker: true }
 const folder: ContextItem = { section: 'folders', path: '/code/app', from: 'space', enabled: true, text: '' }
 
 let root: Root
@@ -85,7 +85,7 @@ test('a folder card opens the terminal at the folder, and at its checkout', () =
   ])
 })
 
-test('the General tab opens the space’s work folder, from a subagent too', () => {
+test('the General tab opens the space’s work folder, from a worker too', () => {
   render('general', 'sub')
   expect(host.querySelector('section[aria-label="Work folder"]')!.textContent).toContain('/work/space')
   act(() => button('Open the work folder in Terminal')!.click())

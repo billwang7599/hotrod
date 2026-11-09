@@ -4,7 +4,7 @@ import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModVi
 
 // Long-running commands (dev servers, watchers) that a space's agents start with start_process. An engine's own
 // background shell dies with its session, which ends with every turn; these belong to the space instead, so they keep
-// running between messages, outlive the subagent that started them, and stop when someone stops them, the space goes,
+// running between messages, outlive the worker that started them, and stop when someone stops them, the space goes,
 // the mod is turned off or Kothar quits. Each one runs through the Machine (host.spawn), sandboxed as the space's own
 // commands are, with its output in a plain log file in the mod's storage. The Processes tab shows them to the user,
 // once a space has one.
@@ -124,7 +124,7 @@ export function createProcessesMod(
   // Per chat, why its last Open in Terminal failed, shown under the buttons until the next try.
   const terminalErrors = new Map<string, { proc: string; error: string }>()
 
-  // The space's tab and its subagents' show the same processes, so all of them are drawn again.
+  // The space's tab and its workers' show the same processes, so all of them are drawn again.
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   const redraw = (host: ModHost, spaceId: string) => {
     clearTimeout(pending.get(spaceId))

@@ -346,7 +346,7 @@ function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: (kin
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
       mods={[]}
-      modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
       market={{ catalog: { entries }, themes: [], marketFailures: {} }}
