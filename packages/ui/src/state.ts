@@ -4,6 +4,7 @@ import type {
   Account,
   Answers,
   Attachment,
+  CatalogEntry,
   ChatEntry,
   ChatInfo,
   ChatState,
@@ -84,6 +85,10 @@ export type State = {
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
+  // The marketplace's catalog, absent until asked for and answered; and the last failed install of each theme, counted
+  // so the same error twice still reads as a new answer.
+  catalog?: { entries?: CatalogEntry[]; error?: string }
+  themeFailures: Record<string, { error: string; count: number }>
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
@@ -110,6 +115,7 @@ export const initialState: State = {
   mods: [],
   modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
+  themeFailures: {},
   panelViews: {},
   toasts: [],
   nextToastId: 1,
@@ -367,11 +373,17 @@ export function reduce(state: State, action: Action): State {
       return state
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
-    case 'themes.updated':
-      return { ...state, themes: action.themes }
+    case 'themes.updated': {
+      const installed = new Set(action.themes.map((theme) => theme.id))
+      const themeFailures = Object.fromEntries(Object.entries(state.themeFailures).filter(([id]) => !installed.has(id)))
+      return { ...state, themes: action.themes, themeFailures }
+    }
     case 'marketplace.catalog':
-    case 'theme.installFailed':
-      return state
+      return { ...state, catalog: { entries: action.entries, error: action.error } }
+    case 'theme.installFailed': {
+      const count = (state.themeFailures[action.id]?.count ?? 0) + 1
+      return { ...state, themeFailures: { ...state.themeFailures, [action.id]: { error: action.error, count } } }
+    }
     case 'error':
       return {
         ...state,

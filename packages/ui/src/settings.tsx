@@ -40,6 +40,7 @@ import {
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
+import { MarketplacePage, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 
@@ -53,7 +54,11 @@ type PageProps = {
   chooseWorkFolder: () => void
   connected: boolean
   send: (m: ClientMessage) => void
+  // Installed themes and the marketplace's catalog.
+  market?: Market
 }
+
+const NO_MARKET: Market = { themeFailures: {} }
 
 type Page = {
   id: string
@@ -159,6 +164,15 @@ const PAGES = [
         <ShownSteps />
         <ShownReports />
       </>
+    ),
+  },
+  {
+    id: 'marketplace',
+    group: 'Options',
+    title: 'Marketplace',
+    intro: 'More themes, beyond Default and Glass. Installed themes show in Appearance.',
+    body: ({ market = NO_MARKET, connected, send }: PageProps) => (
+      <MarketplacePage market={market} connected={connected} send={send} />
     ),
   },
   {

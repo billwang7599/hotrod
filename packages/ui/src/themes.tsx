@@ -289,6 +289,7 @@ export function Appearance() {
           </button>
         ))}
       </div>
+      <p className="pt-8 text-sm text-muted">More themes are in the Marketplace.</p>
     </>
   )
 }

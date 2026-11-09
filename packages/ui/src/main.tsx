@@ -1,6 +1,6 @@
 // First, so preferences saved before the rename move to their new keys before any module reads them.
 import './renamed-storage.ts'
-import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -147,6 +147,8 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
+  const { catalog, themes, themeFailures } = state
+  const market = useMemo(() => ({ catalog, themes, themeFailures }), [catalog, themes, themeFailures])
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
     const picked = await window.kothar.pickFolder()
@@ -283,6 +285,7 @@ function App() {
               modelLists={state.modelLists}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
+              market={market}
               connected={connected}
               send={send}
               page={settingsPage}
