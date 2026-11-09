@@ -1,9 +1,10 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -18,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
+import { LOCK_FILE } from './garage-lock.ts'
 import { WORKERS_MOD } from './kothar-mcp.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
@@ -158,6 +160,20 @@ function folderChat(t: ReturnType<typeof open>, dir = tempDir()) {
 
 function stubAdapter(start: Adapter['start']): Adapter {
   return { id: 'stub', detect: async () => ({ installed: true, signedIn: true }), start }
+}
+
+// Every file under a folder with its bytes and times, to show nothing there changed.
+function snapshot(dir: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const walk = (at: string) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else out[path.slice(dir.length)] = `${statSync(path).mtimeMs} ${readFileSync(path, 'base64')}`
+    }
+  }
+  walk(dir)
+  return out
 }
 
 async function until(check: () => boolean) {
@@ -2777,6 +2793,79 @@ describe('quit', () => {
     t.handle({ type: 'chat.send', chatId: busy.id, text: 'go' })
     void t.core.close()
     expect(() => t.handle({ type: 'chat.send', chatId: idle.id, text: 'hi' })).toThrow(/quitting/)
+  })
+})
+
+describe('one core per garage', () => {
+  it('a second Kothar on a garage in use fails at once and changes nothing there', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+    })
+    const garage = tempDir()
+    // The first Kothar is another process: a lock with its live pid, and a worker mid-turn in a space mid-turn.
+    const other = spawn('sleep', ['30'], { stdio: 'ignore' })
+    try {
+      const t = open(garage, [adapter], adapter.id)
+      const space = createChat(t, { name: 'Space' })
+      t.handle({ type: 'chat.send', chatId: space.id, text: 'go' })
+      await until(() => emits.length === 1)
+      const base = { engine: adapter.id, archived: false, createdAt: at, folders: [], files: [] }
+      const worker = { id: 'w1', name: 'Worker', parentId: space.id, worker: true, ...base }
+      mkdirSync(join(garage, 'chats', worker.id))
+      writeFileSync(join(garage, 'chats', worker.id, 'chat.json'), JSON.stringify(worker))
+      writeFileSync(join(garage, 'chats', worker.id, 'log.jsonl'), JSON.stringify({ at, type: 'turn.started' }) + '\n')
+      await t.core.close(true)
+      cores = cores.filter((core) => core !== t.core)
+      writeFileSync(join(garage, LOCK_FILE), JSON.stringify({ pid: other.pid, token: 'theirs' }) + '\n')
+      const before = snapshot(garage)
+
+      expect(() => open(garage, [adapter], adapter.id)).toThrow(
+        `Kothar is already running on this garage: ${garage} (pid ${other.pid})`,
+      )
+      expect(snapshot(garage)).toEqual(before)
+      expect(existsSync(join(garage, 'chats', worker.id, 'log.jsonl'))).toBe(true)
+    } finally {
+      other.kill()
+    }
+  })
+
+  it('takes over a lock whose process is gone, and gives it up on close', async () => {
+    const garage = tempDir()
+    const gone = spawn('true', [], { stdio: 'ignore' })
+    await new Promise((resolve) => gone.once('exit', resolve))
+    writeFileSync(join(garage, LOCK_FILE), JSON.stringify({ pid: gone.pid, token: 'stale' }) + '\n')
+    const t = setup(textScript, garage)
+    expect(JSON.parse(readFileSync(join(garage, LOCK_FILE), 'utf8')).pid).toBe(process.pid)
+    await t.core.close(true)
+    expect(existsSync(join(garage, LOCK_FILE))).toBe(false)
+  })
+
+  it('a chat whose folder is deleted mid-turn stops, with an error, and the core runs on', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const closed: number[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt() {}, interrupt() {}, respond() {}, close: () => closed.push(emits.length) }
+    })
+    const t = setup(adapter)
+    const chat = createChat(t, { name: 'Gone' })
+    const other = createChat(t, { name: 'Other' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'go' })
+    await until(() => emits.length === 1)
+    rmSync(join(t.garage, 'chats', chat.id), { recursive: true, force: true })
+
+    const tool = { toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls' } as const
+    expect(() => emits[0]!({ type: 'tool.started', ...tool, input: {} })).not.toThrow()
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringContaining('is gone') })
+    expect(statusOf(t.core, chat.id)).toBe('idle')
+    expect(closed).toEqual([1])
+    expect(() => emits[0]!({ type: 'turn.completed' })).not.toThrow()
+
+    t.handle({ type: 'chat.send', chatId: other.id, text: 'still here' })
+    await until(() => emits.length === 2)
+    expect(statusOf(t.core, other.id)).toBe('running')
   })
 })
 

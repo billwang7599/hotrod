@@ -91,6 +91,7 @@ import { openModels, type ModelSettings } from './models.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
 import { reaches } from './reach.ts'
+import { lockGarage } from './garage-lock.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 
@@ -142,7 +143,32 @@ type Chat = {
 
 export type Core = ReturnType<typeof openCore>
 
-export function openCore(options: {
+type CoreOptions = Parameters<typeof openLockedCore>[0]
+
+// The core holds its garage from before it reads anything until it closes (garage-lock.ts), so a second core on the
+// same garage fails here and changes nothing.
+export function openCore(options: CoreOptions) {
+  mkdirSync(options.garage, { recursive: true })
+  const release = lockGarage(realpathSync(options.garage))
+  let core: ReturnType<typeof openLockedCore>
+  try {
+    core = openLockedCore(options)
+  } catch (error) {
+    release()
+    throw error
+  }
+  const close = core.close
+  core.close = async (force = false) => {
+    try {
+      await close(force)
+    } finally {
+      release()
+    }
+  }
+  return core
+}
+
+function openLockedCore(options: {
   garage: string
   adapters: Adapter[]
   defaultEngine: string
@@ -656,6 +682,24 @@ export function openCore(options: {
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
     sweepMergedWorktrees(chainOf(chat)[0]!)
+  }
+
+  // A write for an engine event failed. If the chat's folder is gone, its session stops and it goes idle; either way
+  // the user sees why, and the core runs on.
+  const lostChat = (chat: Chat, error: unknown) => {
+    const gone = !existsSync(chat.dir)
+    broadcast({
+      type: 'error',
+      message: gone
+        ? `"${chat.info.name}" stopped: its folder ${chat.dir} is gone (${messageOf(error)})`
+        : `"${chat.info.name}": ${messageOf(error)}`,
+    })
+    if (!gone) return
+    stopSession(chat)
+    chat.pendingRequests.clear()
+    chat.turn = undefined
+    setStatus(chat, 'idle')
+    if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
   }
 
   const reportErrors = (run: () => void) => {
@@ -1788,7 +1832,18 @@ export function openCore(options: {
       let session: Session | undefined
       // Where each tool sits in chat.turn.tools, counting from 1.
       const toolIds = new Map<string, number>()
-      const emit = (event: EngineEvent) => {
+      // Engine events arrive from an adapter's stdout handler, where a throw would take the whole app down. A write
+      // that fails (the chat's folder was deleted under it, say) is reported instead; with the folder gone, the chat's
+      // session stops.
+      const guarded = (run: () => void) => {
+        try {
+          run()
+        } catch (error) {
+          lostChat(chat, error)
+        }
+      }
+      const emit = (event: EngineEvent) => guarded(() => handleEvent(event))
+      const handleEvent = (event: EngineEvent) => {
         if (chat.session !== session) return
         const at = new Date().toISOString()
         for (const mod of watchersOf('onEvent')) callMod(mod, () => mod.onEvent!(detailOf(chat), event, contextOf(mod)))
@@ -1855,7 +1910,7 @@ export function openCore(options: {
         chat.pendingRequests.set(requestId, 'permission')
         void fromMods.then((verdict) => {
           if (chat.session !== session || chat.pendingRequests.get(requestId) !== 'permission') return
-          settle(verdict ?? own)
+          guarded(() => settle(verdict ?? own))
         })
       }
 

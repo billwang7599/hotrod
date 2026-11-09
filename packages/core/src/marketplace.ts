@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, s
 import { isAbsolute, join } from 'node:path'
 import type { ModManifest, ModUse } from '@kothar/mod-api'
 import { moveCommunityDir } from './vocab-move.ts'
+import { garageHolder } from './garage-lock.ts'
 import {
   type CatalogEntry,
   checkCatalog,
@@ -56,7 +57,9 @@ export type CommunityInstall = { manifest: ModManifest; item: InstalledItem; dir
 // The community mods installed in the garage: each <garage>/community/<id>/ with a valid manifest.json, its main.mjs
 // and installed.json. Folders that don't pass are skipped and left on disk.
 export function installedMods(garage: string): CommunityInstall[] {
-  moveCommunityDir(garage)
+  // Moving folders is for the core that holds the garage; one reading it before (or without) the lock leaves them.
+  const holder = garageHolder(garage)
+  if (holder === undefined || holder === process.pid) moveCommunityDir(garage)
   const root = communityDir(garage)
   if (!existsSync(root)) return []
   return readdirSync(root)

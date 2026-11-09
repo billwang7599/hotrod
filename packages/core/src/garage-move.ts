@@ -11,6 +11,7 @@ import {
 } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
+import { garageHolder } from './garage-lock.ts'
 import type { Machine } from './shared.ts'
 
 // Kothar was called Hotrod. On the first launch after the rename, the old garage moves to Kothar's own folder, once,
@@ -136,7 +137,7 @@ export async function moveGarage(options: {
 }): Promise<string> {
   const { from, to, machine, inUse, rename = renameSync, log = console.error } = options
   if (existsSync(to) || !existsSync(from)) return to
-  if (await inUse()) {
+  if (garageHolder(from) !== undefined || (await inUse())) {
     log(`Kothar is using ${from} for now, since another Kothar or Hotrod seems to be running on it`)
     return from
   }
