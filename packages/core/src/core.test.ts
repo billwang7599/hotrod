@@ -34,6 +34,7 @@ import {
   bySpaceOrder,
   pickRun,
   snapLevel,
+  isUnread,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
@@ -1500,6 +1501,70 @@ describe('chat', () => {
     expect(prompt.match(/<\/message>/gi)).toHaveLength(3)
     expect(prompt.match(/<message id="1" kind="tool">([\s\S]*?)<\/message>/)?.[1]).toContain('after-call')
     expect(prompt.match(/<message id="2" kind="echo">([\s\S]*?)<\/message>/)?.[1]).toContain('after-result')
+  })
+})
+
+describe('read state', () => {
+  const finish = async (t: ReturnType<typeof setup>, chatId: string) => {
+    t.handle({ type: 'chat.send', chatId, text: 'hi' })
+    await until(() => statusOf(t.core, chatId) === 'idle')
+  }
+
+  it('marks a chat unread when a turn ends, until the user reads it', async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(false)
+    await finish(t, chat.id)
+    const done = chatOf(t.core, chat.id)!
+    expect(done.doneAt).toBe(entriesOf(t.core, chat.id).at(-1)?.at)
+    expect(isUnread(done)).toBe(true)
+    // Every window hears it, after the status.
+    const types = t.messages.map((m) => m.type)
+    expect(types.lastIndexOf('chat.updated')).toBeGreaterThan(types.lastIndexOf('chat.status'))
+
+    t.handle({ type: 'chat.read', chatId: chat.id })
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(false)
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.updated', chat: { id: chat.id, readAt: expect.any(String) } })
+    // Reading it again changes nothing.
+    const count = t.messages.length
+    t.handle({ type: 'chat.read', chatId: chat.id })
+    expect(t.messages).toHaveLength(count)
+
+    await finish(t, chat.id)
+    expect(isUnread(chatOf(t.core, chat.id)!)).toBe(true)
+  })
+
+  it('keeps read state across a restart', async () => {
+    const t = setup(textScript)
+    const read = folderChat(t)
+    const unread = folderChat(t)
+    await finish(t, read.id)
+    await finish(t, unread.id)
+    t.handle({ type: 'chat.read', chatId: read.id })
+    t.core.close()
+
+    const reopened = setup(textScript, t.garage)
+    expect(isUnread(chatOf(reopened.core, read.id)!)).toBe(false)
+    expect(isUnread(chatOf(reopened.core, unread.id)!)).toBe(true)
+    const file = JSON.parse(readFileSync(join(t.garage, 'chats', unread.id, 'chat.json'), 'utf8'))
+    expect(file).toMatchObject({ doneAt: expect.any(String) })
+    expect(file.readAt).toBeUndefined()
+  })
+
+  it("doesn't mark chats from before read state existed unread, only their next turn", async () => {
+    const t = setup(textScript)
+    const chat = folderChat(t)
+    await finish(t, chat.id)
+    t.core.close()
+    // An older Hotrod wrote neither time.
+    const file = join(t.garage, 'chats', chat.id, 'chat.json')
+    const { doneAt: _done, readAt: _read, ...old } = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify(old))
+
+    const reopened = setup(textScript, t.garage)
+    expect(isUnread(chatOf(reopened.core, chat.id)!)).toBe(false)
+    await finish(reopened, chat.id)
+    expect(isUnread(chatOf(reopened.core, chat.id)!)).toBe(true)
   })
 })
 

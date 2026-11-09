@@ -62,6 +62,7 @@ import {
   pickRun,
   ROLE_NAMES,
   sameModel,
+  isUnread,
   settingProblem,
   snapLevel,
   switchedOn,
@@ -566,6 +567,7 @@ export function openCore(options: {
     unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
+    updateChat(chat, { doneAt: end.at })
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
@@ -1806,6 +1808,10 @@ export function openCore(options: {
           return moveChat(chatFor(message.chatId), message.pinned === true, message.index)
         case 'chat.delete':
           return deleteChat(chatFor(message.chatId))
+        case 'chat.read': {
+          const chat = chatFor(message.chatId)
+          return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
+        }
         case 'chat.setModel':
           return setModel(
             chatFor(message.chatId),

@@ -5,6 +5,7 @@ import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
 import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
+import { showsUnread } from './unread.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
 const DOTS: Record<ChatStatus, string> = {
@@ -75,6 +76,8 @@ type RowProps = {
   selected: boolean
   // Shown as the chat's status while a subagent below it waits for approval, since the user answers it here.
   status: ChatStatus
+  // Bold: it, or a subagent its fold hides, finished a turn the user hasn't seen.
+  unread: (chat: ChatView) => boolean
   showEngine: boolean
   select: () => void
   menu?: MenuItem[]
@@ -83,11 +86,14 @@ type RowProps = {
 }
 
 function ChatRow(props: RowProps) {
-  const { row, animate, title, selected, status: own, showEngine, select, menu, fold, reorder } = props
+  const { row, animate, title, selected, status: own, unread: unreadOf, showEngine, select, menu, fold, reorder } = props
   const { chat, depth } = row
   const status = fold?.folded ? BUSIEST.find((s) => [own, ...fold.hidden.map((c) => c.status)].includes(s))! : own
+  const unread = unreadOf(chat) || (fold?.folded === true && fold.hidden.some(unreadOf))
   const highlight = selected
     ? 'bg-raised text-text'
+    : unread
+    ? 'text-text hover:bg-raised has-data-[state=open]:bg-raised'
     : 'text-muted hover:bg-raised hover:text-text has-data-[state=open]:bg-raised has-data-[state=open]:text-text'
   const engineHidden = menu
     ? 'group-hover/row:hidden group-focus-within/row:hidden group-has-data-[state=open]/row:hidden'
@@ -112,7 +118,9 @@ function ChatRow(props: RowProps) {
       >
         <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} data-status={status} />
         {chat.mod === 'home' && <HouseIcon />}
-        <span className="min-w-0 flex-1 truncate">{chat.name}</span>
+        <span className={`min-w-0 flex-1 truncate ${unread ? 'font-semibold' : ''}`} data-unread={unread || undefined}>
+          {chat.name}
+        </span>
         {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
         {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
@@ -157,13 +165,15 @@ export type NameRequest = { kind: 'new' } | { kind: 'rename'; chatId: string; na
 type SidebarProps = {
   chats: ChatView[]
   selectedId: string
+  // The user is looking at this window, so the open chat is being seen.
+  looking?: boolean
   connected: boolean
   send: (m: ClientMessage) => void
   select: (chatId: string) => void
   askName: (request: NameRequest) => void
 }
 
-export function ChatNav({ chats, selectedId, connected, send, select, askName }: SidebarProps) {
+export function ChatNav({ chats, selectedId, looking = true, connected, send, select, askName }: SidebarProps) {
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
@@ -293,6 +303,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
     ]
   }
   const pinnedRows = groupRows(true)
+  const unreadOf = (chat: ChatView) => showsUnread(chat, looking && chat.id === selectedId)
   const row = (row: TreeRow) => {
     const { chat } = row
     const folder = folderOf(chats, chat) ?? 'Not tied to a folder'
@@ -307,6 +318,7 @@ export function ChatNav({ chats, selectedId, connected, send, select, askName }:
         title={`${chat.name}: ${folder}`}
         selected={chat.id === selectedId}
         status={asksBelow ? 'waiting' : chat.status}
+        unread={unreadOf}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
         menu={chat.mod || chat.subagent ? undefined : chatMenu(chat)}

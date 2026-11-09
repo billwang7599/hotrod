@@ -196,7 +196,14 @@ export type ChatInfo = PermissionSwitches & {
   thinking?: ThinkingLevel
   workDir?: string
   worktrees?: Record<string, Worktree>
+  // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
+  doneAt?: string
+  readAt?: string
 }
+
+/** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
+export const isUnread = (chat: Pick<ChatInfo, 'doneAt' | 'readAt'>) =>
+  chat.doneAt !== undefined && (chat.readAt === undefined || chat.doneAt > chat.readAt)
 
 // from: the branch the folder was on when it was checked out.
 export type Worktree = { path: string; branch: string; from?: string }
@@ -383,6 +390,8 @@ export type ClientMessage =
   // Moves a space to `index` among the active spaces that are (un)pinned like `pinned`, pinning or unpinning it.
   | { type: 'chat.move'; chatId: string; pinned: boolean; index: number }
   | { type: 'chat.delete'; chatId: string }
+  // The user has seen the chat's latest turn.
+  | { type: 'chat.read'; chatId: string }
   // A model of the chat's own (on `engine`, else its current one), or none to follow its model list again; and a
   // thinking level of its own, or none to take the list's.
   | { type: 'chat.setModel'; chatId: string; engine?: string; model?: string; thinking?: ThinkingLevel }

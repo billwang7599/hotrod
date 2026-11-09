@@ -10,6 +10,7 @@ import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { startAppearance } from './themes.tsx'
+import { useLooking, useMarkRead } from './unread.ts'
 import {
   dockedPanels,
   folderName,
@@ -122,6 +123,8 @@ function App() {
   const [columnPx, setColumnPx] = useState(() => storedColumn(localStorage.getItem(COLUMN_KEY)))
   useEffect(() => localStorage.setItem(COLUMN_KEY, String(columnPx)), [columnPx])
   const selected = state.chats.find((c) => c.id === state.selectedId)
+  const looking = useLooking()
+  useMarkRead(selected, looking && state.connected, send)
   const select = useCallback((chatId: string) => {
     dispatch({ type: 'select', chatId })
     setOverlay((open) => (open === 'sidebar' ? null : open))
@@ -184,6 +187,7 @@ function App() {
                   <ChatNav
                     chats={state.chats}
                     selectedId={state.selectedId}
+                    looking={looking}
                     connected={connected}
                     send={send}
                     select={select}
