@@ -159,6 +159,30 @@ test("offers an update when the author's latest release has another version", ()
   expect(button(row('Nord'), 'Updating…')).toBeTruthy()
 })
 
+test('links the changes beside Update, from the installed tag to the new one, with the notes on hover', () => {
+  const newer = { ...nordEntry, latest: { ...nordEntry.latest!, tag: 'v1.1.0', notes: 'Warmer greens.' } }
+  const old = installedNord({ version: '0.9.0' })
+  show({ catalog: { entries: [newer] }, themes: [{ ...nord, version: '0.9.0' }], installed: [old], marketFailures: {} })
+  const link = [...row('Nord')!.querySelectorAll('a')].find((a) => a.textContent === 'See changes')!
+  expect(link.getAttribute('href')).toBe(`https://github.com/${REPO}/compare/v1.0.0...v1.1.0`)
+  expect(link.getAttribute('target')).toBe('_blank')
+  expect(link.dataset.hint).toBe('')
+  expect(button(row('Nord'), `Update to ${nord.version}`)).toBeTruthy()
+})
+
+test('shows no changes link without a stored tag, or without an update', () => {
+  const newer = { ...nordEntry, latest: { ...nordEntry.latest!, tag: 'v1.1.0' } }
+  const seeChanges = () => [...row('Nord')!.querySelectorAll('a')].some((a) => a.textContent === 'See changes')
+  const legacy: InstalledItem = { kind: 'theme', id: 'nord', name: 'Nord', version: '0.9.0', source: 'legacy' }
+  show({ catalog: { entries: [newer] }, themes: [nord], installed: [legacy], marketFailures: {} })
+  expect(button(row('Nord'), `Update to ${nord.version}`)).toBeTruthy()
+  expect(seeChanges()).toBe(false)
+  show({ catalog: { entries: [newer] }, themes: [nord], installed: [installedNord({ tag: undefined, version: '0.9.0' })], marketFailures: {} })
+  expect(seeChanges()).toBe(false)
+  show({ catalog: { entries: [newer] }, themes: [nord], installed: [installedNord()], marketFailures: {} })
+  expect(seeChanges()).toBe(false)
+})
+
 test("says why an entry's release couldn't be read, and offers no install", () => {
   const broken = { ...nordEntry, latest: undefined, problem: `${REPO} has no published release` }
   show({ catalog: { entries: [broken] }, themes: [], installed: [], marketFailures: {} })

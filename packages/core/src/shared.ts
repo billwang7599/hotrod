@@ -520,9 +520,10 @@ export type CatalogEntry = {
   repo: string
 }
 
-// A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem).
+// A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem). notes: the start of
+// the release's notes, if it has any.
 export type MarketEntry = CatalogEntry & {
-  latest?: { tag: string; version: string; preview?: ThemePreview; uses?: ModUse[] }
+  latest?: { tag: string; version: string; notes?: string; preview?: ThemePreview; uses?: ModUse[] }
   problem?: string
 }
 
@@ -537,6 +538,13 @@ export type InstalledItem = {
   repo?: string
   tag?: string
   path?: string
+}
+
+// GitHub's compare view from the installed release's tag to the latest one, to read before updating. None for an item
+// installed from a folder or by an older Kothar (no tag), from another repo than the catalog's now, or already current.
+export function changesUrl(item: InstalledItem, repo: string, latestTag: string): string | undefined {
+  if (item.source !== 'marketplace' || !item.tag || item.repo !== repo || item.tag === latestTag) return undefined
+  return `https://github.com/${repo}/compare/${encodeURIComponent(item.tag)}...${encodeURIComponent(latestTag)}`
 }
 
 export const MAX_THEME_BYTES = 64 * 1024

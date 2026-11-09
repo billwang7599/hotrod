@@ -28,11 +28,13 @@ const MAX_RELEASE_BYTES = 1024 * 1024
 const FETCH_TIMEOUT_MS = 15_000
 // GitHub allows 60 API requests an hour without a token, so a repo's latest release is asked for at most this often.
 const RELEASE_CACHE_MS = 10 * 60_000
+// How much of a release's notes the listing carries: enough for a tooltip; the rest is on GitHub.
+const MAX_NOTES_CHARS = 600
 
 export type Fetch = (url: string, init?: { signal?: AbortSignal; headers?: Record<string, string> }) => Promise<Response>
 
 type Asset = { name: string; size: number; download: string; api: string }
-type Release = { tag: string; assets: Asset[] }
+type Release = { tag: string; assets: Asset[]; notes?: string }
 
 // installed.json, beside what it describes: where it came from and the sha256 of each file as installed.
 type InstallRecord = { version: string; installedAt: string; sha256: Record<string, string> } & (
@@ -198,10 +200,12 @@ export function openMarketplace(options: {
         try {
           if (entry.kind === 'mod') {
             const { release, manifest } = await latestMod(entry)
-            return { ...entry, latest: { tag: release.tag, version: manifest.version, uses: manifest.uses } }
+            const notes = release.notes && { notes: release.notes }
+            return { ...entry, latest: { tag: release.tag, version: manifest.version, ...notes, uses: manifest.uses } }
           }
           const { release, theme } = await latestTheme(entry)
-          return { ...entry, latest: { tag: release.tag, version: theme.version, preview: previewOf(theme) } }
+          const notes = release.notes && { notes: release.notes }
+          return { ...entry, latest: { tag: release.tag, version: theme.version, ...notes, preview: previewOf(theme) } }
         } catch (error) {
           return { ...entry, problem: messageOf(error) }
         }
@@ -395,7 +399,7 @@ function itemOf(kind: MarketKind, about: { id: string; name: string; version: st
 
 // Only what Kothar uses of GitHub's answer, and only links that stay on GitHub.
 function releaseOf(value: unknown, repo: string): Release {
-  const release = value as { tag_name?: unknown; assets?: unknown }
+  const release = value as { tag_name?: unknown; assets?: unknown; body?: unknown }
   if (typeof release?.tag_name !== 'string' || !Array.isArray(release.assets)) {
     throw new Error(`GitHub's answer about ${repo}'s latest release isn't one Kothar can read`)
   }
@@ -407,7 +411,9 @@ function releaseOf(value: unknown, repo: string): Release {
     if (typeof api !== 'string' || !api.startsWith(`${GITHUB_API}/repos/${repo}/releases/assets/`)) return []
     return [{ name, size, download, api }]
   })
-  return { tag: release.tag_name, assets }
+  const body = typeof release.body === 'string' ? release.body.trim() : ''
+  const notes = body.length > MAX_NOTES_CHARS ? `${body.slice(0, MAX_NOTES_CHARS - 1).trimEnd()}…` : body
+  return { tag: release.tag_name, assets, ...(notes && { notes }) }
 }
 
 class HttpError extends Error {

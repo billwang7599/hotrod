@@ -6,7 +6,8 @@ import type { CatalogEntry } from './shared.ts'
 
 export const CATALOG_URL = 'https://example.test/catalog.json'
 
-export type FakeRepo = { tag: string; files: Record<string, string | Uint8Array<ArrayBuffer>> } | undefined
+// notes: the release's notes (GitHub's body).
+export type FakeRepo = { tag: string; files: Record<string, string | Uint8Array<ArrayBuffer>>; notes?: string } | undefined
 
 export function fakeGitHub(
   catalog: CatalogEntry[] | string,
@@ -34,7 +35,7 @@ export function fakeGitHub(
         browser_download_url: `https://github.com/${latest[1]}/releases/download/${tag}/${name}`,
         url: `${GITHUB_API}/repos/${latest[1]}/releases/assets/${i}`,
       }))
-      return new Response(JSON.stringify({ tag_name: tag, assets }))
+      return new Response(JSON.stringify({ tag_name: tag, assets, ...(repo.notes !== undefined && { body: repo.notes }) }))
     }
     const download = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/releases\/download\/([^/]+)\/([^/]+)$/.exec(url)
     if (download) {

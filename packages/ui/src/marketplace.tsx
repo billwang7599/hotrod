@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import type { ModUse } from '@kotharhq/mod-api'
 import {
+  changesUrl,
   MOD_USES,
   previewOf,
   type ClientMessage,
@@ -33,8 +34,10 @@ type Row = {
   author?: string
   description?: string
   repo?: string
-  // The version the author's latest release carries, and why it couldn't be read.
+  // The version the author's latest release carries, its tag and notes, and why it couldn't be read.
   latest?: string
+  latestTag?: string
+  notes?: string
   problem?: string
   preview?: ThemePreview
   uses?: ModUse[]
@@ -59,7 +62,13 @@ function rowsOf({ catalog, themes = [], installed = [] }: Market, kind: MarketKi
         author,
         description,
         repo,
-        ...(latest && { latest: latest.version, preview: latest.preview, uses: latest.uses }),
+        ...(latest && {
+          latest: latest.version,
+          latestTag: latest.tag,
+          notes: latest.notes,
+          preview: latest.preview,
+          uses: latest.uses,
+        }),
         ...(problem && { problem }),
         listed: true,
         installed: items.get(id),
@@ -87,6 +96,22 @@ function rowsOf({ catalog, themes = [], installed = [] }: Market, kind: MarketKi
 // An installed item the marketplace has a different version of. Local installs follow their folder, not a release.
 const outdated = (row: Row) =>
   row.installed !== undefined && row.installed.source !== 'local' && row.latest !== undefined && row.latest !== row.installed.version
+
+// Beside Update: GitHub's compare view from the installed release to the latest, with the latest's notes on hover.
+function SeeChanges({ row }: { row: Row }) {
+  const href = row.installed && row.repo && row.latestTag && changesUrl(row.installed, row.repo, row.latestTag)
+  if (!href) return null
+  const hint = row.notes
+    ? `${row.latest}: ${row.notes}`
+    : `What changed from ${row.installed!.tag} to ${row.latestTag}, on GitHub. Updates are never reviewed by Kothar.`
+  return (
+    <Hint text={hint} align="end">
+      <a className="px-6 text-sm text-accent underline-offset-2 hover:underline" href={href} target="_blank" rel="noreferrer">
+        See changes
+      </a>
+    </Hint>
+  )
+}
 
 function Swatches({ preview, name }: { preview?: ThemePreview; name: string }) {
   if (!preview) return null
@@ -383,6 +408,7 @@ function Section({ title, rows, empty, warning, market, pending, connected, send
                       {inUse === row.id ? 'In use' : 'Use'}
                     </Button>
                   )}
+                  {canInstall && update && <SeeChanges row={row} />}
                   {canInstall && (!row.installed || update) && (
                     <Button
                       variant={row.installed ? 'default' : 'primary'}

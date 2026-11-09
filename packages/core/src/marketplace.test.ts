@@ -6,7 +6,7 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import { MARKETPLACE_URL, openMarketplace, sha256, type Fetch } from './marketplace.ts'
-import { checkCatalog, checkTheme, previewOf, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
+import { changesUrl, checkCatalog, checkTheme, previewOf, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
 
 const themeFile = (id: string): ThemeFile =>
@@ -202,6 +202,40 @@ describe('the marketplace', () => {
     expect(market.themes()).toEqual([newer])
     expect(market.installed()[0]).toMatchObject({ version: '2.0.0', tag: 'v2' })
     expect(readdirSync(join(garage, 'themes'))).toEqual(['nord'])
+  })
+
+  it('links the changes from the installed release to the latest, with its notes, when there is an update', async () => {
+    const garage = tempGarage()
+    await open(garage, served([nord], 'v1').fetch).install('theme', 'nord')
+    const newer = { ...nord, version: '2.0.0' }
+    const notes = `Warmer greens.\n\n${'x'.repeat(700)}`
+    const { fetch } = fakeGitHub([entryOf(newer)], { [REPO]: { tag: 'v2', files: { 'nord.json': bytesOf(newer) }, notes } })
+    const market = open(garage, fetch)
+    const [entry] = await market.listing()
+    expect(entry!.latest).toMatchObject({ tag: 'v2', version: '2.0.0' })
+    expect(entry!.latest!.notes!.startsWith('Warmer greens.')).toBe(true)
+    expect(entry!.latest!.notes!.length).toBeLessThanOrEqual(600)
+    const [installed] = market.installed()
+    expect(changesUrl(installed!, entry!.repo, entry!.latest!.tag)).toBe(`https://github.com/${REPO}/compare/v1...v2`)
+    // Already current, or the catalog now points at another repo: nothing to compare.
+    expect(changesUrl(installed!, entry!.repo, 'v1')).toBeUndefined()
+    expect(changesUrl(installed!, 'someone/fork', 'v2')).toBeUndefined()
+  })
+
+  it('gives no changes link for an install without a stored tag', async () => {
+    const garage = tempGarage()
+    const folder = join(garage, 'my-themes')
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'nord.json'), bytesOf(nord))
+    const market = open(garage, served([nord], 'v2').fetch)
+    market.installLocal(folder)
+    const [entry] = await market.listing()
+    const [installed] = market.installed()
+    expect(installed).toMatchObject({ source: 'local' })
+    expect(installed!.tag).toBeUndefined()
+    expect(changesUrl(installed!, entry!.repo, entry!.latest!.tag)).toBeUndefined()
+    // And a release without notes lists none.
+    expect(entry!.latest!.notes).toBeUndefined()
   })
 
   it("falls back to GitHub's API when the download link fails", async () => {
