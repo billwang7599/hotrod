@@ -177,6 +177,30 @@ describe('theme table', () => {
     }
   })
 
+  it('keeps button labels readable on the built-in accents', () => {
+    for (const id of ['default', 'glass'] as const)
+      for (const scheme of SCHEMES) {
+        const { accent, 'on-accent': onAccent } = THEMES[id][scheme]
+        expect(contrast(onAccent, accent), `${id} ${scheme}`).toBeGreaterThanOrEqual(3)
+      }
+  })
+
+  it('keeps the accent apart from amber, which only means Kothar needs you', () => {
+    for (const id of ['default', 'glass'] as const)
+      for (const scheme of SCHEMES) {
+        const { accent, amber } = THEMES[id][scheme]
+        const hue = (hex: string) => {
+          const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
+          const max = Math.max(r, g, b)
+          const d = max - Math.min(r, g, b)
+          const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+          return (h * 60 + 360) % 360
+        }
+        const apart = Math.abs(hue(accent) - hue(amber))
+        expect(Math.min(apart, 360 - apart), `${id} ${scheme}`).toBeGreaterThan(90)
+      }
+  })
+
   it('keeps body text readable on every background', () => {
     for (const [id, theme] of Object.entries(THEMES))
       for (const scheme of SCHEMES) {
