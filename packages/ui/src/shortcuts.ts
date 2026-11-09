@@ -46,6 +46,7 @@ const actions: ShortcutAction[] = [
   { id: 'newSpace', label: 'New space', defaultKeys: 'Mod+N', menu: true },
   { id: 'newSpaceFromFolder', label: 'New space from folder', defaultKeys: 'Mod+Shift+O', desktopOnly: true, menu: true },
   { id: 'settings', label: 'Settings', defaultKeys: 'Mod+,', menu: true },
+  { id: 'marketplace', label: 'Marketplace', defaultKeys: null },
 ]
 
 const listeners = new Set<() => void>()

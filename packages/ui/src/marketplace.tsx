@@ -1,4 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { AnimatePresence, m } from 'motion/react'
+import { Dialog } from 'radix-ui'
 import type { ModUse } from '@kothar/mod-api'
 import {
   changesUrl,
@@ -12,7 +14,7 @@ import {
   type ThemeFile,
   type ThemePreview,
 } from '@kothar/core/shared'
-import { Button, confirm, ErrorText, GROUP, Hint } from './controls.tsx'
+import { Button, confirm, ErrorText, Hint, MOTION, Select, useReturnFocus } from './controls.tsx'
 import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
@@ -292,171 +294,386 @@ function InstallFromFolder({ market, connected, send, pickFolder }: Props) {
   )
 }
 
-export function MarketplacePage({ market, connected, send, pickFolder }: Props) {
+export type MarketKindFilter = 'all' | MarketKind
+type ShowFilter = 'all' | 'installed' | 'updates'
+
+const KIND_FILTERS: { value: MarketKindFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'theme', label: 'Themes' },
+  { value: 'mod', label: 'Mods' },
+]
+const SHOW_FILTERS: { value: ShowFilter; label: string }[] = [
+  { value: 'all', label: 'Everything' },
+  { value: 'installed', label: 'Installed' },
+  { value: 'updates', label: 'Updates available' },
+]
+const SKELETON_ROWS = 6
+
+const matches = (row: Row, query: string) => {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const text = [row.name, row.author, row.description, row.repo, row.id].join(' ').toLowerCase()
+  return words.every((word) => text.includes(word))
+}
+
+// What the list shows: catalog entries and installed items of the kinds picked, that pass the filter and the search.
+export function shownRows(market: Market, kind: MarketKindFilter, show: ShowFilter, query: string): Row[] {
+  const kinds: MarketKind[] = kind === 'all' ? ['theme', 'mod'] : [kind]
+  return kinds
+    .flatMap((k) => rowsOf(market, k))
+    .filter((row) => (show === 'installed' ? !!row.installed : show === 'updates' ? outdated(row) && row.listed : true))
+    .filter((row) => matches(row, query))
+}
+
+type DialogProps = Props & {
+  open: boolean
+  close: () => void
+  // The kinds shown first: themes from Appearance, mods from Community mods.
+  kind?: MarketKindFilter
+}
+
+// The Marketplace: its own window over the app, like Obsidian's community plugin browser. A searchable list on the
+// left, the picked entry on the right.
+export function MarketplaceDialog({ open, close, kind: startKind = 'all', market, connected, send, pickFolder }: DialogProps) {
+  const focus = useReturnFocus()
   const { catalog } = market
   const { pending, start } = usePending(market)
+  const [kind, setKind] = useState<MarketKindFilter>(startKind)
+  const [show, setShow] = useState<ShowFilter>('all')
+  const [query, setQuery] = useState('')
+  const [picked, setPicked] = useState<string>()
+  // The catalog answer being replaced by a fresh one, while it's asked for again.
+  const [asked, setAsked] = useState<Market['catalog'] | null>(null)
+  const loading = catalog === undefined || asked === catalog
+  const list = useCallback(() => {
+    setAsked(catalog)
+    send({ type: 'marketplace.list' })
+  }, [catalog, send])
 
+  const [wasOpen, setWasOpen] = useState(false)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setKind(startKind)
+      setShow('all')
+      setQuery('')
+      setPicked(undefined)
+    }
+  }
+  // Each time it opens: asked once, and again after a failure.
   useEffect(() => {
-    if (connected) send({ type: 'marketplace.list' })
-  }, [connected, send])
+    if (open && connected && (catalog === undefined || catalog.error)) list()
+  }, [open, connected])
+
+  const rows = shownRows(market, kind, show, query)
+  const selected = rows.find((row) => marketKey(row.kind, row.id) === picked) ?? rows[0]
+  const updates = shownRows(market, kind, 'updates', '').length
 
   const install = async (row: Row) => {
     if (row.kind === 'mod' && !row.installed) {
-      const ok = await confirm(
-        `Install ${row.name}? It stays off until you turn it on in Community mods.\n\n` +
+      const ok = await confirm({
+        text: `Install ${row.name}?`,
+        body:
+          'It stays off until you turn it on in Community mods.\n\n' +
           (row.uses?.length ? `It says it:\n${usesText(row.uses)}` : 'It says it uses nothing through the mod API.'),
-      )
+        ok: 'Install',
+      })
       if (!ok) return
     }
     start(marketKey(row.kind, row.id))
     send({ type: 'market.install', kind: row.kind, id: row.id })
   }
 
+  const move = (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    const at = selected ? rows.indexOf(selected) : -1
+    const next = rows[Math.min(rows.length - 1, Math.max(0, at + (e.key === 'ArrowDown' ? 1 : -1)))]
+    if (!next) return
+    setPicked(marketKey(next.kind, next.id))
+    document.getElementById(optionId(next))?.scrollIntoView?.({ block: 'nearest' })
+  }
+
   return (
-    <>
-      <InstallFromFolder {...{ market, connected, send, pickFolder }} />
-      {catalog === undefined && <p className="pb-12 text-sm text-muted">Loading the marketplace…</p>}
-      {catalog?.error && (
-        <div className="flex flex-wrap items-center gap-x-12 gap-y-6 pb-12">
-          <ErrorText>{catalog.error}</ErrorText>
-          <Button disabled={!connected} onClick={() => send({ type: 'marketplace.list' })}>
-            Try again
-          </Button>
-        </div>
-      )}
-      <Section
-        title="Themes"
-        rows={rowsOf(market, 'theme')}
-        empty={catalog?.entries ? 'No themes in the marketplace yet.' : undefined}
-        {...{ market, pending, connected, send, install }}
-      />
-      <Section
-        title="Mods"
-        rows={rowsOf(market, 'mod')}
-        empty={catalog?.entries ? 'No mods in the marketplace yet.' : undefined}
-        warning={MOD_WARNING}
-        {...{ market, pending, connected, send, install }}
-      />
-    </>
+    <Dialog.Root open={open} onOpenChange={(open) => open || close()}>
+      <AnimatePresence>
+        {open && (
+          <Dialog.Portal forceMount>
+            <Dialog.Overlay forceMount asChild>
+              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+            </Dialog.Overlay>
+            <Dialog.Content
+              forceMount
+              asChild
+              aria-describedby={undefined}
+              onOpenAutoFocus={focus.remember}
+              onCloseAutoFocus={focus.restore}
+            >
+              <m.div
+                className="fixed inset-0 m-auto flex h-[min(680px,calc(100vh-32px))] w-[min(980px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border bg-bg text-text shadow-overlay"
+                {...MOTION.pop}
+              >
+                <header className="flex shrink-0 flex-wrap items-center gap-x-12 gap-y-8 border-b py-10 pr-48 pl-16">
+                  <Dialog.Title className="text-[16px] font-semibold">Marketplace</Dialog.Title>
+                  <input
+                    type="search"
+                    className="h-control min-w-160 flex-1 rounded border bg-panel px-8"
+                    placeholder="Search themes and mods"
+                    aria-label="Search the marketplace"
+                    value={query}
+                    autoFocus
+                    spellCheck={false}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={move}
+                  />
+                  <div className="flex rounded border bg-panel p-2" role="group" aria-label="Kind">
+                    {KIND_FILTERS.map((f) => (
+                      <button
+                        key={f.value}
+                        type="button"
+                        aria-pressed={kind === f.value}
+                        className="h-22 rounded-sm px-10 text-sm text-muted transition-colors hover:text-text aria-pressed:bg-raised aria-pressed:text-text aria-pressed:shadow-raised"
+                        onClick={() => setKind(f.value)}
+                      >
+                        {f.label}
+                      </button>
+                    ))}
+                  </div>
+                  <Select
+                    label="Show"
+                    value={show}
+                    options={SHOW_FILTERS.map((f) =>
+                      f.value === 'updates' && updates ? { ...f, label: `${f.label} (${updates})` } : f,
+                    )}
+                    onChange={(value) => setShow(value as ShowFilter)}
+                  />
+                  <Hint text="Check the marketplace again">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Refresh"
+                      className="grid place-items-center"
+                      disabled={!connected || loading}
+                      onClick={list}
+                    >
+                      ↻
+                    </Button>
+                  </Hint>
+                </header>
+                <Dialog.Close asChild>
+                  <Button variant="ghost" size="icon" aria-label="Close" className="absolute top-12 right-12">
+                    ×
+                  </Button>
+                </Dialog.Close>
+                <div className="flex min-h-0 flex-1 max-[720px]:flex-col">
+                  <div className="flex w-320 shrink-0 flex-col border-r bg-panel max-[720px]:max-h-[45%] max-[720px]:w-auto max-[720px]:border-r-0 max-[720px]:border-b">
+                    {catalog?.error && !loading && (
+                      <div className="flex flex-col items-start gap-8 border-b px-14 py-12" role="alert">
+                        <ErrorText>{catalog.error}</ErrorText>
+                        <Button size="small" disabled={!connected} onClick={list}>
+                          Retry
+                        </Button>
+                      </div>
+                    )}
+                    <div
+                      className="min-h-0 flex-1 overflow-y-auto p-6"
+                      role="listbox"
+                      aria-label="Marketplace"
+                      aria-busy={loading}
+                      tabIndex={-1}
+                      onKeyDown={move}
+                    >
+                      {rows.map((row) => (
+                        <ListRow
+                          key={marketKey(row.kind, row.id)}
+                          row={row}
+                          selected={row === selected}
+                          busy={marketKey(row.kind, row.id) in pending}
+                          pick={() => setPicked(marketKey(row.kind, row.id))}
+                        />
+                      ))}
+                      {loading &&
+                        Array.from({ length: rows.length ? 2 : SKELETON_ROWS }, (_, i) => <SkeletonRow key={i} />)}
+                      {!loading && !rows.length && (
+                        <p className="px-8 py-12 text-sm text-muted">
+                          {emptyText(query, kind, show, catalog?.entries !== undefined)}
+                        </p>
+                      )}
+                    </div>
+                    <div className="shrink-0 border-t px-12 pt-10">
+                      <InstallFromFolder {...{ market, connected, send, pickFolder }} />
+                    </div>
+                  </div>
+                  <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-24 pt-20 pb-24 max-[720px]:px-16">
+                    {selected ? (
+                      <Detail
+                        key={marketKey(selected.kind, selected.id)}
+                        {...{ market, connected, send, install }}
+                        row={selected}
+                        busy={marketKey(selected.kind, selected.id) in pending}
+                      />
+                    ) : loading ? (
+                      <p className="text-sm text-muted">Loading the marketplace…</p>
+                    ) : null}
+                  </div>
+                </div>
+              </m.div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        )}
+      </AnimatePresence>
+    </Dialog.Root>
   )
 }
 
-type SectionProps = {
-  title: string
-  rows: Row[]
-  empty?: string
-  warning?: string
+const optionId = (row: Row) => `market-${row.kind}-${row.id}`
+
+function emptyText(query: string, kind: MarketKindFilter, show: ShowFilter, listed: boolean) {
+  const what = kind === 'theme' ? 'themes' : kind === 'mod' ? 'mods' : 'themes or mods'
+  if (query.trim()) return `Nothing matches “${query.trim()}”.`
+  if (show === 'updates') return 'Everything installed is up to date.'
+  if (show === 'installed') return `No ${what} installed.`
+  return listed ? `No ${what} in the marketplace yet.` : `No ${what} to show.`
+}
+
+function SkeletonRow() {
+  return (
+    <div className="flex flex-col gap-6 rounded px-8 py-10" aria-hidden="true" data-skeleton="">
+      <span className="h-10 w-1/2 rounded-full bg-hover motion-safe:animate-blink" />
+      <span className="h-8 w-5/6 rounded-full bg-hover motion-safe:animate-blink" />
+    </div>
+  )
+}
+
+function Badge({ row }: { row: Row }) {
+  if (outdated(row)) return <span className="text-xs text-accent">Update</span>
+  if (row.installed?.source === 'local') return <span className="text-xs text-amber">Local</span>
+  if (row.installed) return <span className="text-xs text-green">Installed</span>
+  return null
+}
+
+function ListRow({ row, selected, busy, pick }: { row: Row; selected: boolean; busy: boolean; pick: () => void }) {
+  return (
+    <div
+      id={optionId(row)}
+      role="option"
+      aria-selected={selected}
+      aria-label={row.name}
+      className="flex cursor-default flex-col gap-2 rounded px-8 py-8 transition-colors hover:bg-raised aria-selected:bg-raised"
+      onClick={pick}
+    >
+      <span className="flex items-baseline gap-8">
+        <span className="min-w-0 truncate">{row.name}</span>
+        <span className="text-xs text-faint">{row.kind === 'theme' ? 'Theme' : 'Mod'}</span>
+        <span className="ml-auto shrink-0">{busy ? <span className="text-xs text-muted">Installing…</span> : <Badge row={row} />}</span>
+      </span>
+      {row.description && <span className="truncate text-sm text-muted">{row.description}</span>}
+      {row.author && <span className="text-xs text-faint">by {row.author}</span>}
+    </div>
+  )
+}
+
+type DetailProps = {
+  row: Row
+  busy: boolean
   market: Market
-  pending: Record<string, number>
   connected: boolean
   send: (m: ClientMessage) => void
   install: (row: Row) => void
 }
 
-function Section({ title, rows, empty, warning, market, pending, connected, send, install }: SectionProps) {
+function Detail({ row, busy, market, connected, send, install }: DetailProps) {
   const { theme: inUse } = useAppearance()
+  const failure = market.marketFailures[marketKey(row.kind, row.id)]
+  const update = outdated(row)
+  const canInstall = row.listed && row.latest !== undefined
+  const info = market.mods?.find((m) => m.id === row.id)
   return (
-    <section className="pb-16">
-      <div className="pb-8 font-semibold">{title}</div>
-      {warning && <p className="pb-8 text-sm text-amber">{warning}</p>}
-      {!rows.length && empty && <p className="text-sm text-muted">{empty}</p>}
-      {rows.length > 0 && (
-        <div className={GROUP} aria-label={`Marketplace ${title.toLowerCase()}`} role="list">
-          {rows.map((row) => {
-            const key = marketKey(row.kind, row.id)
-            const busy = key in pending
-            const failure = market.marketFailures[key]
-            const update = outdated(row)
-            const canInstall = row.listed && row.latest !== undefined
-            return (
-              <div
-                key={key}
-                role="listitem"
-                aria-label={row.name}
-                className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t"
-              >
-                <Swatches preview={row.preview} name={row.name} />
-                <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
-                  <span className="flex flex-wrap items-baseline gap-x-8">
-                    <span>{row.name}</span>
-                    {row.author && <span className="text-xs text-faint">by {row.author}</span>}
-                    {row.installed && <Source item={row.installed} />}
-                    {!row.installed && row.latest && <span className="text-xs text-faint">{row.latest}</span>}
-                  </span>
-                  {row.description && <span className="text-sm text-muted">{row.description}</span>}
-                  {row.repo && (
-                    <a
-                      className="w-fit text-xs text-faint underline-offset-2 hover:underline"
-                      href={`https://github.com/${row.repo}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {row.repo}
-                    </a>
-                  )}
-                  {!row.listed && row.installed?.source === 'marketplace' && catalog(market) && (
-                    <span className="text-sm text-faint">No longer in the marketplace</span>
-                  )}
-                  {row.kind === 'mod' && row.uses && <UsesList uses={row.uses} />}
-                  {row.kind === 'mod' && row.installed && <ModStatus info={market.mods?.find((m) => m.id === row.id)} communityMods={market.communityMods ?? false} />}
-                  {row.problem && <span className="text-sm text-amber">{row.problem}</span>}
-                </div>
-                <div className="flex items-center gap-6">
-                  {row.kind === 'theme' && row.theme && (
-                    <Button
-                      variant={inUse === row.id ? 'default' : 'primary'}
-                      disabled={inUse === row.id}
-                      onClick={() => chooseAppearance({ theme: row.id })}
-                    >
-                      {inUse === row.id ? 'In use' : 'Use'}
-                    </Button>
-                  )}
-                  {canInstall && update && <SeeChanges row={row} />}
-                  {canInstall && (!row.installed || update) && (
-                    <Button
-                      variant={row.installed ? 'default' : 'primary'}
-                      disabled={!connected || busy}
-                      onClick={() => void install(row)}
-                    >
-                      {busy
-                        ? row.installed
-                          ? 'Updating…'
-                          : 'Installing…'
-                        : row.installed
-                          ? `Update to ${row.latest}`
-                          : 'Install'}
-                    </Button>
-                  )}
-                  {row.installed?.source === 'local' && row.installed.path && (
-                    <Button
-                      disabled={!connected}
-                      onClick={() => send({ type: 'market.installLocal', path: row.installed!.path! })}
-                    >
-                      Reinstall
-                    </Button>
-                  )}
-                  {row.installed && (
-                    <Button
-                      variant="ghost"
-                      disabled={!connected || busy}
-                      onClick={() => send({ type: 'market.uninstall', kind: row.kind, id: row.id })}
-                    >
-                      Uninstall
-                    </Button>
-                  )}
-                </div>
-                {failure && !busy && (
-                  <div className="basis-full">
-                    <ErrorText>{failure.error}</ErrorText>
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+    <article className="flex max-w-[64ch] flex-col gap-14" aria-label={row.name}>
+      <div className="flex flex-col gap-4">
+        <h3 className="flex flex-wrap items-baseline gap-x-10 text-[18px] font-semibold">
+          {row.name}
+          <span className="text-sm font-normal text-faint">{row.kind === 'theme' ? 'Theme' : 'Mod'}</span>
+        </h3>
+        <span className="flex flex-wrap items-baseline gap-x-10 text-sm text-muted">
+          {row.author && <span>by {row.author}</span>}
+          {row.repo && (
+            <a
+              className="text-faint underline-offset-2 hover:underline"
+              href={`https://github.com/${row.repo}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              github.com/{row.repo}
+            </a>
+          )}
+        </span>
+        <span className="flex flex-wrap gap-x-12 text-sm">
+          {row.latest && <span className="text-muted">Latest {row.latest}</span>}
+          {row.installed && <Source item={row.installed} />}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-6">
+        {row.kind === 'theme' && row.theme && (
+          <Button
+            variant={inUse === row.id ? 'default' : 'primary'}
+            disabled={inUse === row.id}
+            onClick={() => chooseAppearance({ theme: row.id })}
+          >
+            {inUse === row.id ? 'In use' : 'Use'}
+          </Button>
+        )}
+        {canInstall && (!row.installed || update) && (
+          <Button variant={row.installed ? 'default' : 'primary'} disabled={!connected || busy} onClick={() => void install(row)}>
+            {busy ? (row.installed ? 'Updating…' : 'Installing…') : row.installed ? `Update to ${row.latest}` : 'Install'}
+          </Button>
+        )}
+        {canInstall && update && <SeeChanges row={row} />}
+        {row.installed?.source === 'local' && row.installed.path && (
+          <Button disabled={!connected} onClick={() => send({ type: 'market.installLocal', path: row.installed!.path! })}>
+            Reinstall
+          </Button>
+        )}
+        {row.installed && (
+          <Button
+            variant="ghost"
+            disabled={!connected || busy}
+            onClick={() => send({ type: 'market.uninstall', kind: row.kind, id: row.id })}
+          >
+            Uninstall
+          </Button>
+        )}
+      </div>
+      {busy && <Progress label={row.installed ? `Updating ${row.name}` : `Installing ${row.name}`} />}
+      {failure && !busy && <ErrorText>{failure.error}</ErrorText>}
+      {row.problem && <p className="text-sm text-amber">{row.problem}</p>}
+      {!row.listed && row.installed?.source === 'marketplace' && market.catalog?.entries && (
+        <p className="text-sm text-faint">No longer in the marketplace</p>
       )}
-    </section>
+      {row.kind === 'mod' && row.installed && <ModStatus info={info} communityMods={market.communityMods ?? false} />}
+      {row.description && <p className="text-body leading-[1.5]">{row.description}</p>}
+      {row.kind === 'theme' && <Swatches preview={row.preview} name={row.name} />}
+      {row.kind === 'mod' && row.uses && (
+        <section className="flex flex-col gap-6">
+          <h4 className="text-sm font-semibold">What it says it uses</h4>
+          <UsesList uses={row.uses} />
+          <p className="text-sm text-amber">{MOD_WARNING}</p>
+        </section>
+      )}
+      {row.notes && (
+        <section className="flex flex-col gap-6">
+          <h4 className="text-sm font-semibold">Release notes{row.latest && `, ${row.latest}`}</h4>
+          <p className="text-sm leading-[1.5] whitespace-pre-line text-muted">{row.notes}</p>
+        </section>
+      )}
+    </article>
   )
 }
 
-const catalog = (market: Market) => market.catalog?.entries !== undefined
+// An install has no steps to count, so the bar only says it's under way.
+function Progress({ label }: { label: string }) {
+  return (
+    <div role="progressbar" aria-label={label} className="h-3 w-full max-w-240 overflow-hidden rounded-full bg-hover">
+      <div className="indeterminate h-full w-1/3 rounded-full bg-accent" />
+    </div>
+  )
+}

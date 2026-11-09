@@ -335,3 +335,19 @@
     animation: blink 1s steps(2) infinite;
   }
 }
+
+/* The Marketplace's install bar: no steps to count, so a band slides across while it runs. */
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .indeterminate {
+    animation: indeterminate 1.2s ease-in-out infinite;
+  }
+}

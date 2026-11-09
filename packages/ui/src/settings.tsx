@@ -42,7 +42,7 @@ import {
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { MarketplacePage, MOD_WARNING, modStatus, UsesList, type Market } from './marketplace.tsx'
+import { MOD_WARNING, modStatus, UsesList, type Market, type MarketKindFilter } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
@@ -65,11 +65,11 @@ type PageProps = {
   communityMods?: boolean
   restart?: RestartState
   running?: number
+  // Opens the Marketplace window over Settings, showing one kind first.
+  openMarketplace?: (kind?: MarketKindFilter) => void
 }
 
 const NO_RESTART: RestartState = { changes: [], canRestart: false }
-
-const NO_MARKET: Market = { marketFailures: {} }
 
 type Page = {
   id: string
@@ -168,22 +168,13 @@ const PAGES = [
     id: 'appearance',
     group: 'Options',
     title: 'Appearance',
-    body: () => (
+    body: ({ openMarketplace }: PageProps) => (
       <>
-        <Appearance />
+        <Appearance browse={openMarketplace && (() => openMarketplace('theme'))} />
         <ShownPaths />
         <ShownSteps />
         <ShownReports />
       </>
-    ),
-  },
-  {
-    id: 'marketplace',
-    group: 'Options',
-    title: 'Marketplace',
-    intro: 'Themes from their authors\' own repos, beyond Default and Glass. Installed themes show in Appearance.',
-    body: ({ market = NO_MARKET, connected, send, pickFolder }: PageProps) => (
-      <MarketplacePage market={market} connected={connected} send={send} pickFolder={pickFolder} />
     ),
   },
   {
@@ -273,7 +264,8 @@ export async function setCommunityMods(enabled: boolean, send: (m: ClientMessage
   send({ type: 'communityMods.setEnabled', enabled })
 }
 
-function CommunityModsPage({ mods, connected, send, communityMods = false, restart = NO_RESTART, running = 0 }: PageProps) {
+function CommunityModsPage(props: PageProps) {
+  const { mods, connected, send, communityMods = false, restart = NO_RESTART, running = 0, openMarketplace } = props
   const community = mods.filter((m) => m.community)
   const turn = async (m: ModInfo, enabled: boolean) => {
     if (enabled) {
@@ -314,7 +306,10 @@ function CommunityModsPage({ mods, connected, send, communityMods = false, resta
           />
         </SettingRow>
       </div>
-      <p className="pb-12 text-sm text-amber">{MOD_WARNING}</p>
+      <div className="flex items-start gap-16 pb-12">
+        <p className="flex-1 text-sm text-amber">{MOD_WARNING}</p>
+        {openMarketplace && <Button onClick={() => openMarketplace('mod')}>Browse…</Button>}
+      </div>
       {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
       {community.length > 0 && (
         <div className={`${GROUP} transition-opacity ${communityMods ? '' : 'opacity-60'}`} aria-disabled={!communityMods}>
