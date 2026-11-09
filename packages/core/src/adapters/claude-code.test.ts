@@ -42,6 +42,7 @@ describe('claudeCode adapter', () => {
           '--settings', '{"autoMemoryEnabled":false,"attribution":false}',
           '--thinking-display', 'summarized',
           '--disallowedTools', 'Agent', 'Task',
+          '--replay-user-messages',
         ],
       },
     ])
@@ -412,6 +413,52 @@ describe('claudeCode adapter', () => {
     expect(fake.sent()[1]).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } })
     fake.stdout(fixture('interrupted'))
     expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+  })
+
+  it('writes a steered message with a uuid and reports where the turn took it in', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Fix it')
+    session.steer!('s1', 'Use y instead', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    session.steer!('s2', 'And z')
+    const [, first, second] = fake.sent()
+    expect(first).toMatchObject({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'Use y instead' }, { type: 'image' }] },
+    })
+    expect(first.uuid).toMatch(/^[0-9a-f-]{36}$/)
+    const line = (msg: object) => fake.stdout(JSON.stringify(msg) + '\n')
+    line({ type: 'assistant', message: { id: 'm1', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] } })
+    line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a' }] } })
+    line({ type: 'command_lifecycle', command_uuid: first.uuid, state: 'queued' })
+    line({ type: 'command_lifecycle', command_uuid: first.uuid, state: 'started' })
+    // The replay of a message already landed, and of one Hotrod never steered, change nothing.
+    line({ type: 'user', isReplay: true, uuid: first.uuid, message: { role: 'user', content: 'Use y instead' } })
+    line({ type: 'user', isReplay: true, uuid: 'not-ours', message: { role: 'user', content: 'Fix it' } })
+    line({ type: 'user', isReplay: true, uuid: second.uuid, message: { role: 'user', content: 'And z' } })
+    expect(events.slice(1)).toEqual([
+      expect.objectContaining({ type: 'tool.started', toolId: 't1' }),
+      { type: 'tool.completed', toolId: 't1', output: 'a', isError: false },
+      { type: 'steer.landed', id: 's1' },
+      { type: 'steer.landed', id: 's2' },
+    ])
+  })
+
+  it("hands back a steer the turn didn't take in, withdrawing it so Claude Code starts no turn for it", () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Say hi')
+    session.steer!('s1', 'Also bye')
+    const uuid = fake.sent()[1].uuid
+    fake.stdout(fixture('text'))
+    expect(events.slice(-2)).toEqual([{ type: 'steer.returned', id: 's1' }, { type: 'turn.completed' }])
+    expect(fake.sent().at(-1)).toMatchObject({
+      type: 'control_request',
+      request: { subtype: 'cancel_async_message', message_uuid: uuid },
+    })
+  })
+
+  it('says its sessions can steer', () => {
+    expect(claudeCode.steering).toBe(true)
+    expect(startSession().session.steer).toBeTypeOf('function')
   })
 
   it('joins a line split across chunks', () => {

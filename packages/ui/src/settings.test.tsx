@@ -125,6 +125,9 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
 }
 
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
+  expect(PERMISSION_SWITCHES).toContain('autoFetch')
+  expect(PERMISSIONS.autoFetch.label).toBe('Fetch web pages without asking')
+  expect(PERMISSION_DEFAULTS.autoFetch).toBe(true)
   for (const name of PERMISSION_SWITCHES) {
     const toggle = () =>
       dialog().querySelector(`[aria-label="${PERMISSIONS[name].label}"]`) as HTMLButtonElement
@@ -254,6 +257,19 @@ test("a mod's page shows its setup, with Install while it is missing, even when 
   renderMods([setupMod(true, { status: 'ready', message: 'Browser installed' })], 'mod:browser', sent)
   expect(dialog().textContent).toContain('Browser installed')
   expect([...dialog().querySelectorAll('button')].some((b) => b.textContent === 'Install')).toBe(false)
+})
+
+test("a mod's web addresses are links, in its setup and its settings", () => {
+  const url = 'https://chromewebstore.google.com/detail/playwright-extension/abc'
+  const token: ModSetting = { key: 'token', label: 'Token', description: `Copy it from ${url}.`, type: 'text', default: '' }
+  const mod = setupMod(true, { status: 'missing' }, [token])
+  renderMods([{ ...mod, setup: { ...mod.setup!, description: `Add it (${url}), then wait.` } }], 'mod:browser')
+  const links = [...dialog().querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])
+  expect(links).toEqual([
+    [url, url],
+    [url, url],
+  ])
+  expect(dialog().textContent).toContain(`Add it (${url}), then wait.`)
 })
 
 test("a mod's text setting saves on blur and resets to its default while it differs", () => {

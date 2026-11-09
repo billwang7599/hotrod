@@ -82,14 +82,18 @@ export const FAKE_MODELS = ['fake-large', 'fake-small']
 export const FAKE_THINKING = ['low', 'high']
 export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
 
-// A script can depend on the session, such as which account it runs on (options.accountDir).
+// A script can depend on the session, such as which account it runs on (options.accountDir). With steering, a
+// steered message lands after the next tool result, like Claude Code's and pi's; one still waiting when the script
+// ends is returned.
 export function createFakeAdapter(
   script: FakeStep[] | ((options: SessionOptions) => FakeStep[]) = demoScript,
   delayMs = 40,
+  { steering = false }: { steering?: boolean } = {},
 ): Adapter {
   return {
     id: 'fake',
     imageInput: true,
+    ...(steering && { steering }),
     async complete(_machine, { prompt }) {
       const keys = [...prompt.matchAll(/<item key="([^"]+)"/g)].map(([, key]) => key)
       return JSON.stringify({ summaries: keys.map((key) => ({ key, text: `summary of ${key}` })) })
@@ -130,11 +134,21 @@ export function createFakeAdapter(
       let timer: ReturnType<typeof setTimeout> | undefined
       let pending: { requestId: string; toolId?: string; output: string; rest: FakeStep[] } | undefined
       let active = false
+      let steers: string[] = []
 
       const stop = () => {
         active = false
         clearTimeout(timer)
         pending = undefined
+      }
+      const settleSteers = (type: 'steer.landed' | 'steer.returned') => {
+        const ids = steers
+        steers = []
+        for (const id of ids) emit({ type, id })
+      }
+      const completeTool = (event: Extract<EngineEvent, { type: 'tool.completed' }>) => {
+        emit(event)
+        settleSteers('steer.landed')
       }
       const play = (steps: FakeStep[]) => {
         timer = setTimeout(() => {
@@ -142,6 +156,7 @@ export function createFakeAdapter(
           const [step, ...rest] = steps
           if (!step) {
             active = false
+            settleSteers('steer.returned')
             return emit({ type: 'turn.completed' })
           }
           if (step.type === 'question') {
@@ -151,7 +166,8 @@ export function createFakeAdapter(
             return emit({ type: 'question.asked', requestId, ...asked })
           }
           if (step.type !== 'permission') {
-            emit(step)
+            if (step.type === 'tool.completed') completeTool(step)
+            else emit(step)
             return play(rest)
           }
           const { type, output, ...request } = step
@@ -173,7 +189,7 @@ export function createFakeAdapter(
           if (!pending || pending.requestId !== requestId) return
           const { toolId, output, rest } = pending
           pending = undefined
-          if (toolId) emit({ type: 'tool.completed', toolId, output: allow ? output : message, isError: !allow })
+          if (toolId) completeTool({ type: 'tool.completed', toolId, output: allow ? output : message, isError: !allow })
           play(rest)
         },
         answer(requestId, answers) {
@@ -183,15 +199,22 @@ export function createFakeAdapter(
           const output = answers
             ? Object.entries(answers).map(([question, picked]) => `${question} ${picked.join(', ')}`).join('\n')
             : 'The user declined to answer.'
-          if (toolId) emit({ type: 'tool.completed', toolId, output, isError: !answers })
+          if (toolId) completeTool({ type: 'tool.completed', toolId, output, isError: !answers })
           play(rest)
         },
         interrupt() {
           if (!active) return
           stop()
+          settleSteers('steer.returned')
           emit({ type: 'turn.completed', error: 'Interrupted' })
         },
         close: stop,
+        ...(steering && {
+          steer(id: string) {
+            if (active) steers.push(id)
+            else emit({ type: 'steer.returned', id })
+          },
+        }),
       }
     },
   }

@@ -2,6 +2,7 @@
   "name": "@hotrod/desktop",
   "productName": "Hotrod",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "main": "src/main.ts",
   "dependencies": {

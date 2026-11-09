@@ -1,3 +1,4 @@
+import type { ModView } from '@hotrod/mod-api'
 import { bySpaceOrder, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
@@ -7,6 +8,7 @@ import type {
   ChatInfo,
   ChatState,
   ChatStatus,
+  CommandInfo,
   ContextItem,
   ContextSection,
   CoreMessage,
@@ -14,6 +16,7 @@ import type {
   EngineInfo,
   ModelLists,
   ModInfo,
+  PanelTab,
   QueuedMessage,
   Question,
   ToolKind,
@@ -31,7 +34,7 @@ export type Permission = {
 }
 
 export type Item =
-  | { kind: 'user'; text: string; attachments?: Attachment[] }
+  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true }
   | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
@@ -53,7 +56,8 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
-  | { kind: 'note'; text: string }
+  // mod and panel: clicking the note opens that mod's panel.
+  | { kind: 'note'; text: string; mod?: string; panel?: string }
 
 export type ChatView = ChatInfo & {
   status: ChatStatus
@@ -75,6 +79,9 @@ export type State = {
   modelLists: Record<string, ModelLists>
   workFolder: WorkFolder
   context?: { chatId: string; items: ContextItem[] }
+  // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
+  modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  panelViews: Record<string, { view?: ModView; error?: string }>
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -97,6 +104,7 @@ export const initialState: State = {
   mods: [],
   modelLists: {},
   workFolder: { defaultPath: '', canSandbox: true },
+  panelViews: {},
   toasts: [],
   nextToastId: 1,
 }
@@ -117,7 +125,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
         const replyText = reply === NO_REPLY ? '' : reply!
         return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
       }
-      return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+      return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
     }
     case 'subagent.report': {
       const { chatId, name, text, error } = entry
@@ -192,8 +200,10 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       )
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
-    case 'mod.note':
-      return [...items, { kind: 'note', text: entry.text }]
+    case 'mod.note': {
+      const { text, mod, panel } = entry
+      return [...items, { kind: 'note', text, ...(mod && panel && { mod, panel }) }]
+    }
     // The turn's error or a mod's note says it.
     case 'limit.reached':
     case 'turn.started':
@@ -210,7 +220,10 @@ const waiting = (item: Item) =>
   (item.kind === 'permission' && item.outcome === 'pending') ||
   (item.kind === 'tool' && (item.state === 'waiting' || item.permission?.outcome === 'pending'))
 
-// The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits.
+const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pending'
+
+// The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits. A question
+// waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   let turn: Shown[] = []
@@ -218,8 +231,12 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
-    if (live || end < 2) rows.push(...turn)
-    else rows.push({ at: turn[0]!.at, steps: turn.slice(0, end).map((s) => s.item) }, ...turn.slice(end))
+    const steps = turn.slice(0, end).filter((s) => !asking(s.item))
+    if (live || steps.length < 2) rows.push(...turn)
+    else {
+      const kept = turn.slice(0, end).filter((s) => asking(s.item))
+      rows.push({ at: steps[0]!.at, steps: steps.map((s) => s.item) }, ...kept, ...turn.slice(end))
+    }
     turn = []
   }
   items.forEach((item, at) => {
@@ -315,6 +332,17 @@ export function reduce(state: State, action: Action): State {
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, items: action.items } }
+    case 'chat.mods': {
+      if (action.chatId !== state.selectedId) return state
+      const { chatId, panels, commands } = action
+      return { ...state, modUi: { chatId, panels, commands } }
+    }
+    case 'mod.panel': {
+      if (action.chatId !== state.selectedId) return state
+      const { view, error } = action
+      const key = panelKey(action.chatId, action.mod, action.panel)
+      return { ...state, panelViews: { ...state.panelViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
+    }
     case 'context.file': {
       const { context } = state
       if (!context) return state
@@ -340,11 +368,13 @@ export function reduce(state: State, action: Action): State {
     case 'connection':
       return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
-      return { ...state, selectedId: action.chatId, context: undefined }
+      return { ...state, selectedId: action.chatId, context: undefined, modUi: undefined, panelViews: {} }
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
 }
+
+export const panelKey = (chatId: string, mod: string, panel: string) => `${chatId}/${mod}/${panel}`
 
 const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.createdAt)
 

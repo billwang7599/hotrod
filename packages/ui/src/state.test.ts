@@ -588,6 +588,13 @@ describe('foldSteps', () => {
     expect(shown([...twoTurns, asking])).toEqual(['a', '3 steps', 'Done', 'b', 't3', 'Hmm', 't4', 't5'])
   })
 
+  it('keeps a question waiting for an answer out of the folded steps, and folds it once answered', () => {
+    const question = (outcome: 'pending' | 'answered'): Item => ({ kind: 'question', requestId: 'q1', questions: [], outcome })
+    expect(shown([...twoTurns, question('pending')])).toEqual(['a', '3 steps', 'Done', 'b', '3 steps', 'question'])
+    expect(shown([user('a'), tool('t1'), question('pending')])).toEqual(['a', 't1', 'question'])
+    expect(shown([...twoTurns, question('answered'), text('Ok')])).toEqual(['a', '3 steps', 'Done', 'b', '4 steps', 'Ok'])
+  })
+
   it('folds a turn without a reply up to its error line, keeping a reply above the error', () => {
     const interrupted: Item = { kind: 'error', text: 'Interrupted' }
     expect(shown([user('a'), tool('t1'), text('Looking'), tool('t2'), interrupted])).toEqual([

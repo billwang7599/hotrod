@@ -628,8 +628,11 @@ describe('worktrees', () => {
     expect(options).toMatchObject({ cwd: tree, extraDirs: [dir] })
     expect(readFileSync(join(tree, 'README.md'), 'utf8')).toBe('committed\n')
     expect(git(tree, 'branch', '--show-current')).toBe(branch)
-    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [repo]: { path: tree, branch } })
-    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).worktrees).toEqual({ [repo]: { path: tree, branch } })
+    // from: the branch the folder was on.
+    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [repo]: { path: tree, branch, from: 'main' } })
+    expect(JSON.parse(readFileSync(chatFile(t, chat.id), 'utf8')).worktrees).toEqual({
+      [repo]: { path: tree, branch, from: 'main' },
+    })
     expect(options?.instructions).toContain(`${CHECKOUT_RULES}\n- ${repo}: ${tree} (branch ${branch})`)
 
     await sessionOf(t, chat.id)
@@ -690,8 +693,8 @@ describe('worktrees', () => {
     await sessionOf(t, second.id)
     const dir = join(t.garage, 'work', second.id)
     expect(chatOf(t.core, second.id)?.worktrees).toEqual({
-      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2' },
-      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app' },
+      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2', from: 'main' },
+      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app', from: 'main' },
     })
   })
 
@@ -1176,6 +1179,46 @@ describe('commands', () => {
     t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: true })
     expect(await turn(t)).toBe('waiting')
+  })
+
+  const fetchScript: FakeStep[] = [
+    ...(['WebFetch', 'WebSearch'] as const).flatMap((name, i): FakeStep[] => {
+      const call = { toolId: `f${i}`, name, kind: 'fetch' as const, summary: 'example.com', input: { url: 'https://example.com' } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, output: 'page' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+
+  it('fetches web pages without asking by default, even without the sandbox, and asks once the switch is off', async () => {
+    const t = setup(fetchScript)
+    const space = createChat(t, { name: 'Space' })
+    expect(await turn(t, space.id)).toBe('idle')
+    expect(resolved(t, space.id).map((e) => e.auto)).toEqual([true, true])
+
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'permission.setDefault', name: 'autoFetch', enabled: false })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).autoFetch).toBe(false)
+    expect(await turn(t, space.id)).toBe('waiting')
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoFetch', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+  })
+
+  it("asks before a subagent fetches while its space's fetch switch is off", async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoFetch', enabled: false })
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: new Date().toISOString() }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+    const t = setup(fetchScript, first.garage)
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'fetch' })
+    await until(() => statusOf(t.core, 'sub') !== 'running')
+    expect(statusOf(t.core, 'sub')).toBe('waiting')
+    t.handle({ type: 'chat.interrupt', chatId: 'sub', force: true })
+    await until(() => settled(t.core, 'sub'))
   })
 
   it('asks before every command while a chat runs without the sandbox', async () => {
@@ -1950,6 +1993,114 @@ describe('queue', () => {
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
     expect(() => t.handle({ type: 'chat.send', chatId: chat.id, text: '  ' })).toThrow(/empty/)
     expect(queueOf(t.core, chat.id)).toEqual([])
+  })
+})
+
+describe('steering', () => {
+  const steerer = (script: FakeStep[]) => setup(createFakeAdapter(script, 0, { steering: true }))
+  const queued = (core: Core, id: string) => chatOf(core, id)?.queue ?? []
+  const users = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [{ text: e.text, midTurn: e.midTurn }] : []))
+  const replyOnly: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
+
+  it('logs a steered message where the turn took it in, after the tool result, and starts no other turn', async () => {
+    const t = steerer(permissionScript)
+    const chat = folderChat(t)
+    expect(t.core.engines()[0]).toMatchObject({ steering: true })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'use y instead', steer: true })
+    expect(queued(t.core, chat.id)).toMatchObject([{ text: 'use y instead', steering: true }])
+    expect(() => t.handle({ type: 'chat.unqueue', chatId: chat.id, id: queued(t.core, chat.id)[0]!.id })).toThrow(
+      /already with the engine/,
+    )
+
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+
+    expect(types(entriesOf(t.core, chat.id)).slice(-4)).toEqual([
+      'tool.completed',
+      'user.message',
+      'text.completed',
+      'turn.completed',
+    ])
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'use y instead', midTurn: true },
+    ])
+    expect(queued(t.core, chat.id)).toEqual([])
+    expect(t.calls).toHaveLength(1)
+    const log = readFileSync(join(t.garage, 'chats', chat.id, 'log.jsonl'), 'utf8')
+    expect(log).toContain('"text":"use y instead","midTurn":true')
+  })
+
+  it('puts a steer the turn never took in back at the front of the queue and sends it after the turn', async () => {
+    const t = steerer(replyOnly)
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'later' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    expect(queued(t.core, chat.id).map((q) => [q.text, q.steering])).toEqual([
+      ['later', undefined],
+      ['nudge', true],
+    ])
+    await until(() => t.calls.length === 2)
+    expect(t.calls[1]?.prompt?.endsWith('nudge\n\nlater')).toBe(true)
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'nudge\n\nlater', midTurn: undefined },
+    ])
+  })
+
+  it('queues without steer (Alt+Enter), and on Enter when the engine cannot steer', async () => {
+    for (const t of [steerer(permissionScript), setup(permissionScript)]) {
+      const chat = folderChat(t)
+      t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+      await until(() => statusOf(t.core, chat.id) === 'waiting')
+      const steer = t.core.engines()[0]?.steering !== true
+      t.handle({ type: 'chat.send', chatId: chat.id, text: 'two', ...(steer && { steer }) })
+      expect(queued(t.core, chat.id)).toMatchObject([{ text: 'two' }])
+      expect(queued(t.core, chat.id)[0]?.steering).toBeUndefined()
+      const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+      if (request?.type !== 'permission.requested') throw new Error('no request')
+      t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+      await until(() => t.calls.length === 2)
+      expect(users(t.core, chat.id).map((u) => u.midTurn)).toEqual([undefined, undefined])
+    }
+  })
+
+  it('returns a pending steer to the queue on Stop, which sends it next like any queued message', async () => {
+    const t = steerer(permissionScript)
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => t.calls.length === 2)
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'nudge', midTurn: undefined },
+    ])
+  })
+
+  it('returns pending steers when the session dies without saying', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const steered: string[] = []
+    const t = setup({
+      ...stubAdapter((_machine, _options, emit) => {
+        emits.push(emit)
+        return { prompt() {}, interrupt() {}, respond() {}, close() {}, steer: (_id, text) => steered.push(text) }
+      }),
+      steering: true,
+    })
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    expect(steered).toEqual(['nudge'])
+    emits[0]?.({ type: 'session.ended', error: 'crashed' })
+    expect(users(t.core, chat.id).map((u) => u.text)).toEqual(['go', 'nudge'])
   })
 })
 
@@ -2894,7 +3045,9 @@ describe('context', () => {
     const chat = createChat(t, { name: 'App', folders: [repo] })
 
     t.handle({ type: 'context.set', chatId: chat.id, path: repo, enabled: false })
-    const updated = t.messages.at(-1)
+    // Mods' tabs follow, since a folder can change which a chat gets.
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.mods', chatId: chat.id })
+    const updated = t.messages.at(-2)
     if (updated?.type !== 'chat.context') throw new Error('no chat.context')
     expect(updated.chatId).toBe(chat.id)
     expect(updated.items.find((i) => i.path === repo)?.enabled).toBe(false)
@@ -3419,6 +3572,72 @@ describe('mods', () => {
       expect(checks).toEqual(['check'])
       expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
       expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
+    })
+
+    it("gives a setup the mod's values, describes it by them, and checks again when one changes", async () => {
+      const seen: unknown[] = []
+      const picky: Mod = {
+        ...tool,
+        settings: [
+          {
+            key: 'kind',
+            label: 'Kind',
+            type: 'select',
+            options: [
+              { value: 'a', label: 'A' },
+              { value: 'b', label: 'B' },
+            ],
+            default: 'a',
+          },
+        ],
+        setup: {
+          description: (values) => `Sets up ${values.kind}.`,
+          check: async (_run, values) => (seen.push(values.kind), { ready: values.kind === 'b' }),
+          install: async () => {},
+        },
+      }
+      const t = open(tempDir(), [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [picky])
+      const setupOf = () => t.core.mods()[0]!.setup!
+      await until(() => setupOf().status === 'missing')
+      expect(setupOf().description).toBe('Sets up a.')
+      t.handle({ type: 'mod.setValue', modId: 'tool', key: 'kind', value: 'b' })
+      await until(() => setupOf().status === 'ready')
+      expect(setupOf().description).toBe('Sets up b.')
+      expect(seen).toEqual(['a', 'b'])
+    })
+
+    it('stops a setup that runs several commands at its next one once cancelled', async () => {
+      const runs: string[] = []
+      let next = () => {}
+      const machine: Machine = {
+        ...sandboxingMachine,
+        async run(command) {
+          runs.push(command)
+          if (command === 'step') await new Promise<void>((resolve) => (next = resolve))
+          return { code: 1, stdout: '', stderr: '' }
+        },
+      }
+      const steps: Mod = {
+        ...tool,
+        setup: {
+          description,
+          check: async (run) => ({ ready: (await run('check', [])).code === 0 }),
+          async install(run) {
+            for (;;) await run('step', [])
+          },
+        },
+      }
+      const adapter = createFakeAdapter(textScript, 0)
+      const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [steps], machine)
+      const setupOf = () => t.core.mods()[0]!.setup!
+      await until(() => setupOf().status === 'missing')
+      t.handle({ type: 'mod.install', modId: 'tool' })
+      await until(() => runs.at(-1) === 'step')
+      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      next()
+      await until(() => setupOf().status === 'missing')
+      expect(setupOf().error).toBeUndefined()
+      expect(runs).toEqual(['check', 'step', 'check'])
     })
   })
 })

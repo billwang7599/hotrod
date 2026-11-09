@@ -6,9 +6,10 @@ import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
+import { DRAFT_SAVE_MS } from './drafts.ts'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
-import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
+import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
 import { ChatNav } from './sidebar.tsx'
 import {
   GLOBAL_CONTEXT,
@@ -94,6 +95,7 @@ type RenderOptions = {
   folder?: string
   chats?: ChatView[]
   select?: (chatId: string) => void
+  steering?: boolean
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -123,7 +125,9 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               folder={options.folder}
               chats={[view, ...(options.chats ?? [])]}
               select={options.select}
-              engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
+              engines={[
+                { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
+              ]}
               connected
               send={send}
               openSettings={() => {}}
@@ -247,14 +251,14 @@ const scrollTo = (top: number) =>
     list().dispatchEvent(new Event('scroll'))
   })
 
-function type(text: string) {
+function type(text: string, keys: KeyboardEventInit = {}) {
   const area = container.querySelector('textarea')!
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, text)
     area.dispatchEvent(new Event('input', { bubbles: true }))
   })
   act(() => {
-    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...keys }))
   })
 }
 
@@ -692,6 +696,21 @@ test('an answered question shrinks to a row of its answers that folds with the s
   expect(rowButtons()[0]!.querySelector('[data-verdict]')?.textContent).toBe('Skipped')
 })
 
+test('with steps folded, a question waiting for an answer shows below the fold, not inside it', () => {
+  const steps: Item[] = [tool('done'), { kind: 'thinking', text: 'Which format?' }, tool('done', '', { toolId: 't2' })]
+  render({ status: 'waiting', items: [USER, ...steps, question()] })
+  const fold = foldButton()!
+  expect(fold.textContent).toBe('3 steps')
+  expect(fold.getAttribute('aria-expanded')).toBe('false')
+  expect(container.textContent).not.toContain('Which format?')
+  expect(card()).not.toBeNull()
+  expect(before(fold, card()!)).toBe(true)
+  const composer = container.querySelector('textarea')!
+  expect(composer.placeholder || composer.getAttribute('aria-placeholder')).toBe(
+    'Waiting for your answer… Enter queues a message',
+  )
+})
+
 test('the down button points at a question waiting below', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
   scrollTo(0)
@@ -967,14 +986,83 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   expect(docs.textContent).toContain('Subagent Docs reported')
   expect(docs.querySelector('strong')?.textContent).toBe('it')
   expect(docs.closest('.self-end')).toBeNull()
-  act(() => docs.querySelector('button')!.click())
+  const named = (card: Element, name: string) => [...card.querySelectorAll('button')].find((b) => b.textContent === name)
+  act(() => named(docs, 'Docs')!.click())
   expect(selected).toEqual(['s1'])
 
   // A removed subagent's name is plain text; a report with no reply says so.
   const lint = container.querySelector('[aria-label="Report from subagent Lint"]')!
-  expect(lint.querySelector('button')).toBeNull()
+  expect(named(lint, 'Lint')).toBeUndefined()
   expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
   expect(lint.textContent).toContain('No reply')
+})
+
+test('a report card folds and unfolds on click, and remembers it', () => {
+  localStorage.clear()
+  reloadSteps()
+  const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: '## Found **it**\n\nMore detail' }]
+  render({ items })
+  const card = () => container.querySelector('[aria-label="Report from subagent Docs"]')!
+  const chevron = () => card().querySelector<HTMLButtonElement>('button[aria-expanded]')!
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+  expect(card().textContent).toContain('More detail')
+
+  act(() => chevron().click())
+  expect(chevron().getAttribute('aria-expanded')).toBe('false')
+  expect(chevron().getAttribute('aria-label')).toBe('Unfold report')
+  const preview = [...card().querySelectorAll('button')].at(-1)!
+  expect(preview.textContent).toBe('Found it')
+
+  // The choice survives a reload, for this card only.
+  act(() => reloadSteps())
+  render({ items })
+  expect(chevron().getAttribute('aria-expanded')).toBe('false')
+  render({ id: 'c2', items })
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+
+  render({ items })
+  act(() => [...card().querySelectorAll('button')].at(-1)!.click())
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+  expect(card().textContent).toContain('More detail')
+  localStorage.clear()
+  reloadSteps()
+})
+
+test('subagent reports fold by default from Settings, and each chat overrides that in its General tab', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.clear()
+  reloadSteps()
+  const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: 'Found it\n\nMore detail' }]
+  const expanded = () =>
+    container
+      .querySelector('[aria-label="Report from subagent Docs"] button[aria-expanded]')!
+      .getAttribute('aria-expanded')
+  render({ items }, () => {}, { contextOpen: true })
+  expect(expanded()).toBe('true')
+
+  act(() => showReportsByDefault(false))
+  expect(expanded()).toBe('false')
+
+  const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
+  act(() => general.click())
+  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Subagent reports"]')!
+  expect(select().textContent).toBe('Folded')
+  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Unfolded', 'Folded'])
+  const unfolded = options.find((o) => o.textContent?.replace('✓', '') === 'Unfolded')!
+  act(() => unfolded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(select().textContent).toBe('Unfolded')
+  expect(expanded()).toBe('true')
+
+  // Another chat still follows Settings.
+  render({ id: 'c2', items }, () => {}, { contextOpen: true })
+  expect(expanded()).toBe('false')
+  expect(select().textContent).toBe('Folded')
+
+  act(() => showReportsByDefault(true))
+  localStorage.clear()
+  reloadSteps()
 })
 
 test("labels a queued subagent report as the subagent's", () => {
@@ -1024,15 +1112,54 @@ test('an unsent message stays in its chat across a switch and a reload, and is c
   localStorage.clear()
 })
 
-test('a message queued during a turn clears its draft too', () => {
+test('a draft is saved once typing pauses, and a message queued during a turn clears it', () => {
   localStorage.clear()
+  vi.useFakeTimers()
   const box = () => container.querySelector('textarea')!
   render({ status: 'running' })
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'later')
     box().dispatchEvent(new Event('input', { bubbles: true }))
   })
+  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  act(() => vi.advanceTimersByTime(DRAFT_SAVE_MS))
   expect(localStorage.getItem('hotrod.drafts')).toContain('later')
   act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  vi.useRealTimers()
+})
+
+test('while a turn runs, Enter steers when the engine can and ⌥Enter queues; otherwise Enter queues', () => {
+  const sent: ClientMessage[] = []
+  const shimmer = () => container.querySelector('.shimmer')?.textContent
+  render({ status: 'running', items: [USER] }, (m) => sent.push(m), { steering: true })
+  expect(shimmer()).toBe('Working… Enter steers · ⌥Enter queues')
+  type('use y')
+  type('then z', { altKey: true })
+  render({ status: 'running', items: [USER] }, (m) => sent.push(m))
+  expect(shimmer()).toBe('Working… Enter queues a message')
+  type('plain')
+  render({ status: 'idle', items: [USER] }, (m) => sent.push(m), { steering: true })
+  type('fresh')
+  expect(sent.filter((m) => m.type === 'chat.send')).toEqual([
+    { type: 'chat.send', chatId: 'c1', text: 'use y', steer: true },
+    { type: 'chat.send', chatId: 'c1', text: 'then z' },
+    { type: 'chat.send', chatId: 'c1', text: 'plain' },
+    { type: 'chat.send', chatId: 'c1', text: 'fresh' },
+  ])
+})
+
+test('a steering message waits in the queue with no way to take it back, then shows in place marked as sent mid-turn', () => {
+  const queue = [
+    { id: 'q1', text: 'use y', steering: true as const },
+    { id: 'q2', text: 'later' },
+  ]
+  render({ status: 'running', items: [USER], queue }, () => {}, { steering: true })
+  const queued = container.querySelector('[aria-label="Queued messages"]')!
+  expect(queued.textContent).toContain('At the next step:use y')
+  expect(queued.querySelectorAll('[aria-label="Remove from queue"]')).toHaveLength(1)
+  expect(queued.textContent).toContain('Sends when this turn ends')
+  const items: Item[] = [USER, tool('done', 'a'), { kind: 'user', text: 'use y', midTurn: true }]
+  render({ status: 'running', items, queue: [] }, () => {}, { steering: true })
+  expect(container.textContent).toContain('Sent mid-turn')
 })

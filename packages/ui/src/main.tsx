@@ -271,6 +271,8 @@ function App() {
                 setColumnPx={setColumnPx}
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
+                modUi={state.modUi}
+                panelViews={state.panelViews}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists[selected.engine]}
                 select={select}

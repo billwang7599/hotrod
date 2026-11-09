@@ -12,7 +12,19 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { Mod, ModHost, ModRun } from '@hotrod/mod-api'
+import type {
+  ChatDetail,
+  Mod,
+  ModAction,
+  ModContext,
+  ModHost,
+  ModPanel,
+  ModRun,
+  PermissionRequest,
+  PermissionVerdict,
+  SpaceDetail,
+  TurnSummary,
+} from '@hotrod/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
 import {
@@ -54,6 +66,7 @@ import {
   type ChatState,
   type ChatStatus,
   type ClientMessage,
+  type CommandInfo,
   type ContextItem,
   type ContextSection,
   type CoreMessage,
@@ -66,6 +79,7 @@ import {
   type ModelRole,
   type ModInfo,
   type NewChat,
+  type PanelTab,
   type PermissionSwitch,
   type PermissionSwitches,
   type QueuedMessage,
@@ -115,6 +129,8 @@ type Chat = {
   limit?: { message: string; resetsAt?: string }
   // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
   produced?: boolean
+  // What the running turn has done so far, for onTurnCompleted.
+  turn?: { text: string; tools: TurnSummary['tools'] }
 }
 
 export type Core = ReturnType<typeof openCore>
@@ -183,8 +199,13 @@ export function openCore(options: {
   const installs = new Map<string, AbortController>()
   const modInfo = (mod: Mod): ModInfo => {
     const { id, name, description, settings: declared = [] } = mod
-    const setup = mod.setup && { description: mod.setup.description, ...(setups.get(id) ?? { status: 'checking' }) }
-    const info = { id, name, description, enabled: isOn(mod), settings: declared, values: modValues(mod) }
+    const values = modValues(mod)
+    const about = mod.setup?.description
+    const setup = mod.setup && {
+      description: typeof about === 'function' ? about(values) : about!,
+      ...(setups.get(id) ?? { status: 'checking' }),
+    }
+    const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
     return { ...info, ...(setup && { setup }) }
   }
   const listsOf = (engine: string): ModelLists => ({
@@ -200,7 +221,9 @@ export function openCore(options: {
     const status = detected.get(id) ?? { installed: false, signedIn: false }
     const chosen = settings.defaultThinking?.[id]
     const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
-    return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
+    const steering = adapters.find((adapter) => adapter.id === id)?.steering === true
+    const extra = { ...(offersChosen && { defaultThinking: chosen }), ...(steering && { steering }) }
+    return { id, enabled: isEnabled(id), ...status, ...extra }
   }
   const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const offered = (engine: string) => {
@@ -250,14 +273,17 @@ export function openCore(options: {
   const runFor =
     (signal?: AbortSignal): ModRun =>
     (command, args, options) =>
-      machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
+      // A setup that runs several commands stops at its next one once cancelled.
+      signal?.aborted
+        ? Promise.reject(new Error('Cancelled'))
+        : machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
   const checkSetup = async (mod: Mod, installError?: string) => {
     if (!mod.setup || installs.has(mod.id)) return
     const { message } = setups.get(mod.id) ?? {}
     setSetup(mod, { status: 'checking', ...(message && { message }) })
     let checked: Omit<SetupState, 'description'>
     try {
-      const result = await mod.setup.check(runFor())
+      const result = await mod.setup.check(runFor(), modValues(mod))
       checked = { status: result.ready ? 'ready' : 'missing', ...(result.message && { message: result.message }) }
     } catch (error) {
       checked = { status: 'missing', error: messageOf(error) }
@@ -278,7 +304,7 @@ export function openCore(options: {
       const update = { ...(text && { progressText: text }), ...(progress !== undefined && { progress }) }
       setSetup(mod, { ...setups.get(mod.id)!, ...update })
     }
-    void mod.setup.install(runFor(controller.signal), report).then(
+    void mod.setup.install(runFor(controller.signal), report, modValues(mod)).then(
       () => {
         installs.delete(mod.id)
         return checkSetup(mod)
@@ -295,6 +321,7 @@ export function openCore(options: {
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
     saveMod(mod, { [key]: value })
+    if (isOn(mod)) void checkSetup(mod)
   }
   const setModelList = (engine: string, role: unknown, models: unknown) => {
     checkEngine(engine)
@@ -425,6 +452,7 @@ export function openCore(options: {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
     chat.status = status
     broadcast({ type: 'chat.status', chatId: chat.info.id, status })
+    callMods('onStatusChanged', (mod, context) => mod.onStatusChanged!(detailOf(chat), status, context))
   }
 
   const chatFor = (chatId: string) => {
@@ -480,15 +508,26 @@ export function openCore(options: {
     chat.limit = undefined
     // A turn the core stopped for its limit shows the limit, not "Interrupted".
     const end = limit && ended.error ? { ...ended, error: limit.message } : ended
-    if (chat.unsavedText) append(chat, { at: end.at, type: 'text.completed', text: chat.unsavedText })
+    if (chat.unsavedText) completeText(chat, end.at, chat.unsavedText)
     chat.unsavedText = ''
     append(chat, end)
     stopSession(chat)
+    unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
+    const turn = chat.turn ?? { text: '', tools: [] }
+    chat.turn = undefined
+    const detail = detailOf(chat)
+    const files = [...new Set(turn.tools.flatMap((t) => (t.kind === 'edit' && t.path ? [t.path] : [])))]
+    const summary = { chat: detail, ...(end.error && { error: end.error }), ...turn, files }
+    const sessionError = end.type === 'session.ended' ? end.error : undefined
+    callMods('onSessionEnded', (mod, context) =>
+      mod.onSessionEnded!({ chat: detail, ...(sessionError && { error: sessionError }) }, context),
+    )
+    callMods('onTurnCompleted', (mod, context) => mod.onTurnCompleted!(summary, context))
     if (limit) reportLimit(chat, account, limit)
     // A mod sent the message again, so the turn goes on.
     if (chat.status !== 'idle') return
@@ -528,13 +567,14 @@ export function openCore(options: {
       ...(resetsAt && { resetsAt }),
     }
     for (const mod of limitWatchers()) {
-      reportErrors(() => mod.onLimitReached!(limit, { values: modValues(mod), host: modHost }))
+      callMod(mod, () => mod.onLimitReached!(limit, contextOf(mod)))
     }
   }
 
   // A turn's input is the subagent reports and the message it started with, logged together at its start.
   const retry = (chat: Chat) => {
-    const isInput = (e: ChatEntry) => e.type === 'user.message' || e.type === 'subagent.report'
+    // A message steered into the turn isn't what started it.
+    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'subagent.report'
     const end = chat.entries.findLastIndex(isInput)
     if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
     const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
@@ -560,32 +600,274 @@ export function openCore(options: {
     send(chat, '', [], [], text)
   }
 
-  const modHost: ModHost = {
-    createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
-    send: (chatId, text) => send(chatFor(chatId), text),
-    accounts(engine) {
-      const found = accounts.list().find((state) => state.engine === engine)
-      if (!found) return undefined
-      const list = found.accounts.map(({ id, name, signedIn }) => ({
-        id,
-        name,
-        ...(signedIn !== undefined && { signedIn }),
-      }))
-      return { engine, active: found.active, accounts: list }
-    },
-    useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
-    retry: (chatId) => retry(chatFor(chatId)),
-    continue: (chatId, text) => continueTurn(chatFor(chatId), text),
-    note: (chatId, text) => append(chatFor(chatId), { at: new Date().toISOString(), type: 'mod.note', text }),
+  const detailOf = (chat: Chat): ChatDetail => ({
+    ...summaryOf(chat.info),
+    status: chat.status,
+    archived: chat.info.archived,
+    ...(chat.info.mod && { mod: chat.info.mod }),
+    folders: chat.info.folders,
+    files: chat.info.files,
+    createdAt: chat.info.createdAt,
+  })
+
+  const spaceOf = (chat: Chat): SpaceDetail => {
+    const { id, name, workDir, folders, worktrees = {} } = chainOf(chat)[0]!.info
+    return {
+      id,
+      name,
+      ...(workDir && { workDir }),
+      folders: folders.map((path) => ({ path, git: existsSync(join(path, '.git')) })),
+      checkouts: Object.entries(worktrees).map(([folder, { path, branch, from }]) => ({
+        folder,
+        path,
+        branch,
+        ...(from && { from }),
+      })),
+    }
+  }
+
+  const modError = (mod: Mod, error: unknown) =>
+    broadcast({ type: 'error', message: `${mod.name}: ${messageOf(error)}` })
+
+  // Runs one of a mod's hooks; a throw or a rejection shows as an error and goes no further.
+  const callMod = (mod: Mod, run: () => unknown) => {
+    try {
+      const result = run()
+      if (result instanceof Promise) result.catch((error) => modError(mod, error))
+    } catch (error) {
+      modError(mod, error)
+    }
+  }
+
+  type Hook = { [K in keyof Mod]-?: NonNullable<Mod[K]> extends (...args: never[]) => unknown ? K : never }[keyof Mod]
+  const watchersOf = (hook: Hook) => mods.filter((mod) => isOn(mod) && mod[hook])
+  const callMods = (hook: Hook, run: (mod: Mod, context: ModContext) => unknown) => {
+    if (quitting) return
+    for (const mod of watchersOf(hook)) callMod(mod, () => run(mod, contextOf(mod)))
+  }
+
+  // Each mod's text transform in turn; one that throws leaves the text as it was.
+  const transformed = (hook: 'transformMessage' | 'transformOutput', chat: Chat, text: string) =>
+    watchersOf(hook).reduce((current, mod) => {
+      try {
+        const next = mod[hook]!(current, detailOf(chat), contextOf(mod))
+        if (typeof next !== 'string') throw new Error(`${hook} must return text`)
+        return next
+      } catch (error) {
+        modError(mod, error)
+        return current
+      }
+    }, text)
+
+  const completeText = (chat: Chat, at: string, text: string) => {
+    const done = transformed('transformOutput', chat, text)
+    if (chat.turn) chat.turn.text = done
+    append(chat, { at, type: 'text.completed', text: done })
+  }
+
+  // The first mod with a verdict answers; a mod's promise is waited for before asking the next.
+  const modVerdict = (
+    request: PermissionRequest,
+    chat: Chat,
+  ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
+    const watchers = watchersOf('onPermissionRequested')
+    const checked = (mod: Mod, verdict: PermissionVerdict | undefined) => {
+      if (verdict === undefined || verdict === null) return undefined
+      if (typeof verdict.allow === 'boolean') return verdict
+      modError(mod, new Error('A permission verdict needs allow: true or false'))
+      return undefined
+    }
+    const ask = (from: number): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
+      for (let i = from; i < watchers.length; i++) {
+        const mod = watchers[i]!
+        let answer: ReturnType<NonNullable<Mod['onPermissionRequested']>>
+        try {
+          answer = mod.onPermissionRequested!(request, detailOf(chat), contextOf(mod))
+        } catch (error) {
+          modError(mod, error)
+          continue
+        }
+        if (answer instanceof Promise) {
+          return answer.then(
+            (verdict) => checked(mod, verdict) ?? ask(i + 1),
+            (error) => (modError(mod, error), ask(i + 1)),
+          )
+        }
+        const verdict = checked(mod, answer)
+        if (verdict) return verdict
+      }
+      return undefined
+    }
+    return ask(0)
+  }
+
+  const hosts = new Map<string, ModHost>()
+  const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
+  const hostFor = (mod: Mod): ModHost => {
+    const known = hosts.get(mod.id)
+    if (known) return known
+    const dir = join(garage, 'mods', mod.id)
+    const fileOf = (name: string) => {
+      const path = resolve(dir, String(name))
+      if (path === dir || !within(path, dir)) throw new Error(`"${name}" is outside ${mod.name}'s storage`)
+      return path
+    }
+    const host: ModHost = {
+      createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
+      send: (chatId, text) => enqueue(chatFor(chatId), { text }),
+      chats: () => shownChats().map(detailOf),
+      chat(chatId) {
+        const chat = chats.get(chatId)
+        return chat && shown(chat) ? detailOf(chat) : undefined
+      },
+      read(chatId, options) {
+        const { entries } = chatFor(chatId)
+        const last = options?.last
+        return last === undefined ? [...entries] : last > 0 ? entries.slice(-last) : []
+      },
+      space(chatId) {
+        const chat = chats.get(chatId)
+        return chat && shown(chat) ? spaceOf(chat) : undefined
+      },
+      interrupt: (chatId) => interrupt(chatFor(chatId), false),
+      accounts(engine) {
+        const found = accounts.list().find((state) => state.engine === engine)
+        if (!found) return undefined
+        const list = found.accounts.map(({ id, name, signedIn }) => ({
+          id,
+          name,
+          ...(signedIn !== undefined && { signedIn }),
+        }))
+        return { engine, active: found.active, accounts: list }
+      },
+      useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
+      retry: (chatId) => retry(chatFor(chatId)),
+      continue: (chatId, text) => continueTurn(chatFor(chatId), text),
+      note(chatId, text, options) {
+        const panel = options?.panel
+        if (panel !== undefined && !mod.panels?.some((p) => p.id === panel)) {
+          throw new Error(`${mod.name} has no panel "${panel}"`)
+        }
+        const at = new Date().toISOString()
+        append(chatFor(chatId), { at, type: 'mod.note', text, ...(panel !== undefined && { mod: mod.id, panel }) })
+      },
+      run: runFor(),
+      storage: {
+        dir,
+        read(name) {
+          try {
+            return readFileSync(fileOf(name), 'utf8')
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+            throw error
+          }
+        },
+        write(name, text) {
+          const path = fileOf(name)
+          mkdirSync(dirname(path), { recursive: true })
+          writeFileSync(path, text)
+        },
+        remove: (name) => rmSync(fileOf(name), { force: true }),
+      },
+      refresh: (chatId) => refreshMod(mod, chatId),
+    }
+    hosts.set(mod.id, host)
+    return host
+  }
+
+  // Mod panels and commands: which a chat gets, and the views of panels the UI has asked for.
+  type Offered = { shown?(chat: ChatDetail, context: ModContext): boolean }
+  const offeredBy = (mod: Mod, item: Offered, chat: Chat) => {
+    if (!item.shown) return true
+    try {
+      return item.shown(detailOf(chat), contextOf(mod)) === true
+    } catch (error) {
+      modError(mod, error)
+      return false
+    }
+  }
+  const modsOf = (chat: Chat): Extract<CoreMessage, { type: 'chat.mods' }> => {
+    const on = mods.filter(isOn)
+    const panels = on.flatMap((mod) =>
+      (mod.panels ?? []).flatMap((p): PanelTab[] =>
+        offeredBy(mod, p, chat) ? [{ mod: mod.id, id: p.id, title: p.title }] : [],
+      ),
+    )
+    const commands = on.flatMap((mod) =>
+      (mod.commands ?? []).flatMap((c): CommandInfo[] =>
+        offeredBy(mod, c, chat) ? [{ mod: mod.id, id: c.id, label: c.label, ...(c.hint && { hint: c.hint }) }] : [],
+      ),
+    )
+    return { type: 'chat.mods', chatId: chat.info.id, panels, commands }
+  }
+  const openPanels = new Map<string, Set<string>>()
+  const renders = new Map<string, number>()
+  const panelOf = (modId: unknown, panelId: unknown) => {
+    const mod = modFor(String(modId))
+    if (!isOn(mod)) throw new Error(`${mod.name} is off`)
+    const panel = mod.panels?.find((p) => p.id === panelId)
+    if (!panel) throw new Error(`${mod.name} has no panel "${panelId}"`)
+    return { mod, panel }
+  }
+  const renderPanel = async (chat: Chat, mod: Mod, panel: ModPanel) => {
+    const key = `${chat.info.id}\n${mod.id}\n${panel.id}`
+    const turn = (renders.get(key) ?? 0) + 1
+    renders.set(key, turn)
+    const base = { type: 'mod.panel' as const, chatId: chat.info.id, mod: mod.id, panel: panel.id }
+    let shownView: Extract<CoreMessage, { type: 'mod.panel' }>
+    try {
+      shownView = { ...base, view: await panel.render(detailOf(chat), contextOf(mod)) }
+    } catch (error) {
+      shownView = { ...base, error: messageOf(error) }
+    }
+    // An older render that finishes late doesn't replace a newer one.
+    if (renders.get(key) === turn && chats.has(chat.info.id)) broadcast(shownView)
+  }
+  const openPanel = (chat: Chat, modId: unknown, panelId: unknown) => {
+    const { mod, panel } = panelOf(modId, panelId)
+    const open = openPanels.get(chat.info.id) ?? new Set()
+    open.add(`${mod.id}\n${panel.id}`)
+    openPanels.set(chat.info.id, open)
+    void renderPanel(chat, mod, panel)
+  }
+  const refreshMod = (mod: Mod, chatId?: string) => {
+    if (!isOn(mod)) return
+    const targets = chatId === undefined ? shownChats() : [chatFor(chatId)]
+    for (const chat of targets) {
+      broadcast(modsOf(chat))
+      for (const panel of mod.panels ?? []) {
+        if (openPanels.get(chat.info.id)?.has(`${mod.id}\n${panel.id}`)) void renderPanel(chat, mod, panel)
+      }
+    }
+  }
+  const panelAction = async (chat: Chat, modId: unknown, panelId: unknown, action: ModAction) => {
+    const { mod, panel } = panelOf(modId, panelId)
+    if (typeof action?.name !== 'string') throw new Error('A panel action needs a name')
+    try {
+      await panel.onAction?.(action, detailOf(chat), contextOf(mod))
+    } catch (error) {
+      modError(mod, error)
+    }
+    if (chats.has(chat.info.id)) await renderPanel(chat, mod, panel)
+  }
+  const runCommand = (chat: Chat, modId: unknown, commandId: unknown) => {
+    const mod = modFor(String(modId))
+    if (!isOn(mod)) throw new Error(`${mod.name} is off`)
+    const command = mod.commands?.find((c) => c.id === commandId)
+    if (!command || !offeredBy(mod, command, chat)) throw new Error(`${mod.name} has no command "${commandId}" here`)
+    callMod(mod, () => command.run(detailOf(chat), contextOf(mod)))
   }
 
   const removeChats = (family: Chat[]) => {
     for (const c of family) {
       stopSession(c)
+      const detail = detailOf(c)
       chats.delete(c.info.id)
+      openPanels.delete(c.info.id)
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
       removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
+      callMods('onChatRemoved', (mod, context) => mod.onChatRemoved!(detail, context))
     }
   }
 
@@ -693,6 +975,7 @@ export function openCore(options: {
       writeFileSync(join(chat.dir, PARENT_VIEW_FILE), view)
     }
     broadcast({ type: 'chat.added', chat: state(chat) })
+    callMods('onChatCreated', (mod, context) => mod.onChatCreated!(detailOf(chat), context))
     return chat.info
   }
 
@@ -714,6 +997,9 @@ export function openCore(options: {
     const family = familyOf(chat)
     family.forEach(checkRemovable)
     family.forEach((c) => updateChat(c, { archived }))
+    for (const c of family) {
+      callMods('onChatArchived', (mod, context) => mod.onChatArchived!(detailOf(c), archived, context))
+    }
   }
 
   const moveChat = (chat: Chat, pinned: boolean, index: unknown) => {
@@ -750,6 +1036,7 @@ export function openCore(options: {
     if (!changed) return
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
+    if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
   }
 
   const setEngine = (chat: Chat, engine: string) => {
@@ -816,7 +1103,10 @@ export function openCore(options: {
   }
 
   const broadcastContext = (chat: Chat) =>
-    familyOf(chat).forEach((c) => broadcast({ type: 'chat.context', chatId: c.info.id, items: contextItems(c) }))
+    familyOf(chat).forEach((c) => {
+      broadcast({ type: 'chat.context', chatId: c.info.id, items: contextItems(c) })
+      broadcast(modsOf(c))
+    })
 
   const setContext = (chat: Chat, path: unknown, enabled: boolean) => {
     checkActive(chat)
@@ -899,8 +1189,9 @@ export function openCore(options: {
       const branch = freeName(`hotrod/${slug.replace(/^-|-$/g, '') || 'space'}`, (b) => branches.includes(b))
       const taken = Object.values(space.info.worktrees ?? {}).map((w) => w.path)
       const path = freeName(join(workDir, basename(folder)), (p) => taken.includes(p) || existsSync(p))
+      const from = await git(folder, 'rev-parse', '--abbrev-ref', 'HEAD').catch(() => '')
       await git(folder, 'worktree', 'add', '--no-track', '-b', branch, path, 'HEAD')
-      worktree = { path, branch }
+      worktree = { path, branch, ...(from && from !== 'HEAD' && { from }) }
     }
     updateChat(space, { worktrees: { ...space.info.worktrees, [folder]: worktree } })
     return worktree
@@ -1004,7 +1295,7 @@ export function openCore(options: {
     }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
-    const message = withAttachments(text, attachments)
+    const message = withAttachments(text ? transformed('transformMessage', chat, text) : text, attachments)
     const zoomable = takesMcp(adapter.id)
     const prompt = continuation
       ? continuationPrompt(messagesOf(chat.entries), chat.summaries, continuation, { zoom: zoomable })
@@ -1017,7 +1308,10 @@ export function openCore(options: {
         append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
       }
     }
+    chat.turn = { text: '', tools: [] }
     setStatus(chat, 'running')
+    const started = { chat: detailOf(chat), text: continuation ?? text, continued: continuation !== undefined }
+    callMods('onTurnStarted', (mod, context) => mod.onTurnStarted!(started, context))
 
     const items = contextItems(chat).filter((item) => item.enabled)
     const contextText = items.flatMap(({ section, path, text, binary }) => {
@@ -1077,16 +1371,32 @@ export function openCore(options: {
           return { allow: false, message }
         }
         const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
+        // Fetching writes nothing, so it needs no sandbox.
+        if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
         if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
         return { allow: true }
       }
 
       let session: Session | undefined
+      // Where each tool sits in chat.turn.tools, counting from 1.
+      const toolIds = new Map<string, number>()
       const emit = (event: EngineEvent) => {
         if (chat.session !== session) return
         const at = new Date().toISOString()
+        for (const mod of watchersOf('onEvent')) callMod(mod, () => mod.onEvent!(detailOf(chat), event, contextOf(mod)))
+        if (event.type === 'tool.started') {
+          const { name, kind, summary, path } = event
+          chat.turn?.tools.push({ name, kind, summary, ...(path !== undefined && { path }) })
+          toolIds.set(event.toolId, chat.turn?.tools.length ?? 0)
+        }
+        if (event.type === 'tool.completed' && event.isError) {
+          const tool = chat.turn?.tools[(toolIds.get(event.toolId) ?? 0) - 1]
+          if (tool) tool.isError = true
+        }
         if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
+        if (event.type === 'steer.landed') return landSteer(chat, event.id, at)
+        if (event.type === 'steer.returned') return unsteer(chat, event.id)
         if (['text.delta', 'text.completed', 'thinking.delta', 'tool.started'].includes(event.type)) chat.produced = true
         if (event.type === 'text.delta') {
           chat.unsavedText += event.text
@@ -1097,7 +1407,10 @@ export function openCore(options: {
           broadcast({ type: 'chat.thinking', chatId: chat.info.id, text: event.text })
           return
         }
-        if (event.type === 'text.completed') chat.unsavedText = ''
+        if (event.type === 'text.completed') {
+          chat.unsavedText = ''
+          return completeText(chat, at, event.text)
+        }
         append(chat, { at, ...event })
         if (event.type === 'limit.reached') {
           const { message, resetsAt } = event
@@ -1111,14 +1424,32 @@ export function openCore(options: {
           return setStatus(chat, 'waiting')
         }
         if (event.type !== 'permission.requested') return
-        const verdict = verdictOf(event)
-        if (!verdict) {
-          chat.pendingRequests.set(event.requestId, 'permission')
-          return setStatus(chat, 'waiting')
+        if (event.kind === 'edit' && event.path !== undefined) {
+          const tool = chat.turn?.tools[(toolIds.get(event.toolId ?? '') ?? 0) - 1]
+          if (tool && tool.path === undefined) tool.path = event.path
         }
         const { requestId } = event
-        append(chat, { at, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
-        session?.respond(requestId, verdict.allow, verdict.message)
+        const settle = (verdict: PermissionVerdict | undefined) => {
+          if (!verdict) {
+            chat.pendingRequests.set(requestId, 'permission')
+            return setStatus(chat, 'waiting')
+          }
+          chat.pendingRequests.delete(requestId)
+          const resolvedAt = new Date().toISOString()
+          append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
+          session?.respond(requestId, verdict.allow, verdict.message)
+        }
+        const own = verdictOf(event)
+        // The core's denials stand; otherwise a mod's policy goes first.
+        if (own?.allow === false) return settle(own)
+        const fromMods = modVerdict(event, chat)
+        if (!(fromMods instanceof Promise)) return settle(fromMods ?? own)
+        // Pending, so the user can still answer it while a mod decides; whoever answers first wins.
+        chat.pendingRequests.set(requestId, 'permission')
+        void fromMods.then((verdict) => {
+          if (chat.session !== session || chat.pendingRequests.get(requestId) !== 'permission') return
+          settle(verdict ?? own)
+        })
       }
 
       try {
@@ -1128,11 +1459,7 @@ export function openCore(options: {
         const model = pickModel(engine, listsOf(adapter.id), chat.info)
         const thinking = pickThinking(engine, chat.info)
         const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
-        const images = adapter.imageInput
-          ? attachments
-              .filter((a) => IMAGE_TYPES.includes(a.mimeType))
-              .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
-          : []
+        const images = imagesFor(adapter, attachments)
         const options = {
           cwd,
           instructions,
@@ -1174,6 +1501,44 @@ export function openCore(options: {
     )
   }
 
+  const imagesFor = (adapter: Adapter, attachments: Attachment[]) =>
+    adapter.imageInput
+      ? attachments
+          .filter((a) => IMAGE_TYPES.includes(a.mimeType))
+          .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
+      : []
+
+  // Steering: the message waits in the queue, marked, until the turn takes it in at its next tool boundary.
+  const canSteer = (chat: Chat) => chat.session?.steer !== undefined && ['running', 'waiting'].includes(chat.status)
+
+  const steer = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
+    const session = chat.session!
+    const adapter = adapterFor(chat.info.engine)!
+    const { text, attachments = [] } = message
+    const id = randomBytes(4).toString('hex')
+    const sent = withAttachments(text ? transformed('transformMessage', chat, text) : text, attachments)
+    const images = imagesFor(adapter, attachments)
+    setQueue(chat, [...chat.queue, { id, ...message, steering: true }])
+    session.steer!(id, sent, images)
+  }
+
+  // Logged where the engine took it in, between a tool's result and the rest of the turn.
+  const landSteer = (chat: Chat, id: string, at: string) => {
+    const landed = chat.queue.find((q) => q.id === id && q.steering)
+    if (!landed) return
+    setQueue(chat, chat.queue.filter((q) => q !== landed))
+    const { text, attachments } = landed
+    append(chat, { at, type: 'user.message', text, ...(attachments && { attachments }), midTurn: true })
+  }
+
+  // A steered message the turn didn't take in goes back to the front of the queue, as typed. Without an id, every one.
+  const unsteer = (chat: Chat, id?: string) => {
+    const back = chat.queue.filter((q) => q.steering && (id === undefined || q.id === id))
+    if (!back.length) return
+    const plain = back.map(({ steering, ...q }) => q)
+    setQueue(chat, [...plain, ...chat.queue.filter((q) => !back.includes(q))])
+  }
+
   const setQueue = (chat: Chat, queue: QueuedMessage[]) => {
     chat.queue = queue
     broadcast({ type: 'chat.queue', chatId: chat.info.id, queue })
@@ -1201,7 +1566,7 @@ export function openCore(options: {
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
   }
 
-  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown) => {
+  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown, steering = false) => {
     if (uploads !== undefined && !Array.isArray(uploads)) throw new Error('Attachments must be a list')
     const files = (uploads ?? []).map((upload: Partial<Upload>) => {
       const { name, mimeType, base64 } = upload ?? {}
@@ -1237,7 +1602,11 @@ export function openCore(options: {
       }
     })
     try {
-      enqueue(chat, { text, ...(attachments.length && { attachments }) })
+      const message = { text, ...(attachments.length && { attachments }) }
+      if (steering && canSteer(chat)) {
+        checkActive(chat)
+        steer(chat, message)
+      } else enqueue(chat, message)
     } catch (error) {
       for (const { path } of attachments) rmSync(path, { force: true })
       throw error
@@ -1245,7 +1614,6 @@ export function openCore(options: {
   }
 
   const mcp = openHotrodMcp({
-    host: modHost,
     chats: () => shownChats().map(state),
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,
@@ -1256,7 +1624,9 @@ export function openCore(options: {
     },
     memory: (chatId) => memoryOf(chatFor(chatId)),
     modTools: () =>
-      mods.filter(isOn).flatMap((mod) => (mod.tools ?? []).map((tool) => ({ tool, values: modValues(mod) }))),
+      mods
+        .filter(isOn)
+        .flatMap((mod) => (mod.tools ?? []).map((tool) => ({ tool, values: modValues(mod), host: hostFor(mod) }))),
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
@@ -1379,11 +1749,12 @@ export function openCore(options: {
           return updateChat(chat, { [name]: typeof message.enabled === 'boolean' ? message.enabled : undefined })
         }
         case 'chat.send':
-          return sendMessage(chatFor(message.chatId), message.text, message.attachments)
+          return sendMessage(chatFor(message.chatId), message.text, message.attachments, message.steer === true)
         case 'chat.unqueue': {
           const chat = chatFor(message.chatId)
           const removed = chat.queue.find((q) => q.id === message.id)
           if (!removed) return
+          if (removed.steering) throw new Error('That message is already with the engine, so it can no longer be taken back')
           for (const { path } of removed.attachments ?? []) rmSync(path, { force: true })
           return setQueue(chat, chat.queue.filter((q) => q !== removed))
         }
@@ -1391,8 +1762,20 @@ export function openCore(options: {
           return interrupt(chatFor(message.chatId), message.force === true)
         case 'context.get': {
           const chat = chatFor(message.chatId)
-          return reply({ type: 'chat.context', chatId: chat.info.id, items: contextItems(chat) })
+          reply({ type: 'chat.context', chatId: chat.info.id, items: contextItems(chat) })
+          return reply(modsOf(chat))
         }
+        case 'mod.panel.get':
+          return openPanel(chatFor(message.chatId), message.mod, message.panel)
+        case 'mod.panel.action': {
+          const chat = chatFor(message.chatId)
+          panelOf(message.mod, message.panel)
+          return void panelAction(chat, message.mod, message.panel, message.action).catch((error) =>
+            broadcast({ type: 'error', message: messageOf(error) }),
+          )
+        }
+        case 'mod.command':
+          return runCommand(chatFor(message.chatId), message.mod, message.command)
         case 'context.add':
           return addContext(chatFor(message.chatId), addable(message.section), message.path)
         case 'context.remove':

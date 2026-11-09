@@ -71,6 +71,7 @@ export const pi: Adapter = {
   id: 'pi',
   imageInput: true,
   hotrodMcp: true,
+  steering: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
@@ -137,12 +138,26 @@ export const pi: Adapter = {
       ...(sandbox && { sandbox: jailed(sandbox) }),
     })
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
+    // Each steer command's request id, to match a refusal to its message.
+    const steerIds = new Map<string, string>()
     let buffer = ''
     let turnError: string | undefined
     let closed = false
+    // Steered messages not yet taken in, oldest first. pi's user messages carry no id, and it delivers steers in order,
+    // so each user message after the prompt's is the oldest waiting steer.
+    let steers: string[] = []
+    let promptSeen = false
+    let steeredBefore = false
+    const settleSteer = (type: 'steer.landed' | 'steer.returned', id = steers[0]) => {
+      if (id === undefined || !steers.includes(id)) return
+      steers = steers.filter((s) => s !== id)
+      emit({ type, id })
+    }
 
     const endTurn = (error?: string) => {
       turnError = undefined
+      for (const id of steers) emit({ type: 'steer.returned', id })
+      steers = []
       if (error && error !== 'Interrupted' && LIMIT_ERROR.test(error)) emit({ type: 'limit.reached', message: error })
       emit({ type: 'turn.completed', ...(error && { error }) })
     }
@@ -158,6 +173,11 @@ export const pi: Adapter = {
         }
         case 'message_end': {
           const message = msg.message ?? {}
+          if (message.role === 'user') {
+            if (promptSeen) settleSteer('steer.landed')
+            promptSeen = true
+            return
+          }
           if (message.role !== 'assistant') return
           for (const block of message.content ?? []) {
             if (block.type === 'text' && block.text) emit({ type: 'text.completed', text: block.text })
@@ -168,7 +188,9 @@ export const pi: Adapter = {
         case 'tool_execution_start': {
           const kind = kindOf(msg.toolName)
           const summary = summarize(kind, msg.args)
-          emit({ type: 'tool.started', toolId: msg.toolCallId, name: msg.toolName, kind, summary, input: msg.args })
+          const path = kind === 'edit' || kind === 'read' ? msg.args?.path : undefined
+          const { toolCallId: toolId, toolName: name, args: input } = msg
+          emit({ type: 'tool.started', toolId, name, kind, summary, input, ...(typeof path === 'string' && { path }) })
           return
         }
         case 'tool_execution_end':
@@ -179,6 +201,7 @@ export const pi: Adapter = {
           endTurn(msg.aborted ? 'Interrupted' : turnError)
           return
         case 'response':
+          if (msg.command === 'steer' && !msg.success) return settleSteer('steer.returned', steerIds.get(msg.id))
           if (msg.command !== 'prompt') return
           if (!msg.success) endTurn(msg.error || 'pi rejected the prompt')
           else if (msg.data?.disposition === 'handled') endTurn()
@@ -209,10 +232,22 @@ export const pi: Adapter = {
     return {
       prompt(text, images = []) {
         const attached = images.map(({ mimeType, base64 }) => ({ type: 'image', data: base64, mimeType }))
+        promptSeen = false
         send({ type: 'prompt', message: text, ...(attached.length && { images: attached }) })
         emit({ type: 'turn.started' })
       },
+      steer(id, text, images = []) {
+        const attached = images.map(({ mimeType, base64 }) => ({ type: 'image', data: base64, mimeType }))
+        // Every waiting steer at the next tool boundary, not one per model call.
+        if (!steeredBefore) send({ type: 'set_steering_mode', mode: 'all' })
+        steeredBefore = true
+        steers.push(id)
+        steerIds.set(`steer-${id}`, id)
+        send({ type: 'steer', id: `steer-${id}`, message: text, ...(attached.length && { images: attached }) })
+      },
       interrupt() {
+        // Otherwise pi runs waiting steers after the abort; they go back to Hotrod's queue at the turn's end.
+        if (steers.length) send({ type: 'clear_queue' })
         send({ type: 'abort' })
       },
       respond() {},

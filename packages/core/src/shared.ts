@@ -1,40 +1,17 @@
-import type { McpServer, ModSetting, ModValues } from '@hotrod/mod-api'
+import type {
+  Answers,
+  Attachment,
+  ChatEntry,
+  ChatStatus,
+  EngineEvent,
+  McpServer,
+  ModAction,
+  ModSetting,
+  ModValues,
+  ModView,
+} from '@hotrod/mod-api'
 
-export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
-
-export type Question = {
-  header: string
-  question: string
-  options: { label: string; description: string }[]
-  multiSelect: boolean
-}
-
-// Keyed by question text: the labels picked, then any text the user typed. Sent without answers, a question is declined.
-export type Answers = Record<string, string[]>
-
-export type EngineEvent =
-  | { type: 'turn.started' }
-  | { type: 'text.delta'; text: string }
-  | { type: 'text.completed'; text: string }
-  | { type: 'thinking.delta'; text: string }
-  | { type: 'tool.started'; toolId: string; name: string; kind: ToolKind; summary: string; input: unknown }
-  | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
-  | {
-      type: 'permission.requested'
-      requestId: string
-      toolId?: string
-      name: string
-      kind: ToolKind
-      summary: string
-      path?: string
-      command?: string
-      input: unknown
-    }
-  | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
-  // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
-  | { type: 'limit.reached'; message: string; resetsAt?: string }
-  | { type: 'turn.completed'; error?: string }
-  | { type: 'session.ended'; error?: string }
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@hotrod/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -77,7 +54,12 @@ export type EngineStatus = {
   defaultThinking?: string
 }
 
-export type EngineInfo = Omit<EngineStatus, 'models'> & { id: string; enabled: boolean; models?: ModelOption[] }
+export type EngineInfo = Omit<EngineStatus, 'models'> & {
+  id: string
+  enabled: boolean
+  models?: ModelOption[]
+  steering?: boolean
+}
 
 export type SessionOptions = {
   cwd: string
@@ -110,6 +92,9 @@ export interface Session {
   interrupt(): void
   respond(requestId: string, allow: boolean, message?: string): void
   answer?(requestId: string, answers?: Answers): void
+  // Steering: hands the running turn a message to take in at its next tool boundary. The session later emits
+  // steer.landed (where it entered the turn) or steer.returned (not taken in) for the id. Only engines that can.
+  steer?(id: string, text: string, images?: ImageInput[]): void
   close(): void
 }
 
@@ -129,6 +114,8 @@ export interface Adapter {
   complete?(machine: Machine, options: CompleteOptions): Promise<string>
   imageInput?: boolean
   hotrodMcp?: boolean
+  // Its sessions have steer, so the UI can say Enter steers.
+  steering?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
@@ -147,7 +134,7 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true }
+export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true, autoFetch: true }
 
 export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
 
@@ -183,7 +170,8 @@ export type ChatInfo = PermissionSwitches & {
   worktrees?: Record<string, Worktree>
 }
 
-export type Worktree = { path: string; branch: string }
+// from: the branch the folder was on when it was checked out.
+export type Worktree = { path: string; branch: string; from?: string }
 
 /** How spaces sort in the sidebar: pinned first, then unordered (newest first), then by `order`. */
 export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>, b: typeof a): number {
@@ -269,30 +257,30 @@ export const looksBinary = (bytes: Uint8Array) => bytes.subarray(0, BINARY_SNIFF
 
 export type NewChat = { name: string; engine?: string; folders?: string[]; files?: string[] }
 
-export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
-
-export type ChatEntry = { at: string } & (
-  | { type: 'user.message'; text: string; attachments?: Attachment[] }
-  | ({ type: 'subagent.report'; text: string } & SubagentReport)
-  | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
-  | { type: 'question.resolved'; requestId: string; answers?: Answers }
-  | { type: 'mod.note'; text: string }
-  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
-)
-
 export const MAX_ATTACHMENT_BYTES = 20_000_000
 // Base64 grows by a third, which keeps 75 MB of files under the WebSocket's 100 MiB message limit.
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type Attachment = { name: string; path: string; mimeType: string; size: number }
+export type { Attachment } from '@hotrod/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
 // A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
 export type SubagentReport = { chatId: string; name: string; error?: string }
 
-export type QueuedMessage = { id: string; text: string; attachments?: Attachment[]; report?: SubagentReport }
+// steering: handed to the running turn, waiting for its next tool boundary; it can't be taken back.
+export type QueuedMessage = {
+  id: string
+  text: string
+  attachments?: Attachment[]
+  report?: SubagentReport
+  steering?: true
+}
+
+// A mod's tab in the right sidebar, and a mod's action in the General tab, for one chat.
+export type PanelTab = { mod: string; id: string; title: string }
+export type CommandInfo = { mod: string; id: string; label: string; hint?: string }
 
 export type ChatState = ChatInfo & {
   status: ChatStatus
@@ -313,12 +301,17 @@ export type ClientMessage =
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
   | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
-  | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
+  // steer: hand it to the running turn if its engine can steer; otherwise, or without it, it waits for the turn to end.
+  | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[]; steer?: boolean }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'question.respond'; chatId: string; requestId: string; answers?: Answers }
+  // Replies with chat.context and chat.mods.
   | { type: 'context.get'; chatId: string }
+  | { type: 'mod.panel.get'; chatId: string; mod: string; panel: string }
+  | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
+  | { type: 'mod.command'; chatId: string; mod: string; command: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
@@ -365,6 +358,8 @@ export type CoreMessage =
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
+  | { type: 'chat.mods'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   | { type: 'mod.updated'; mod: ModInfo }

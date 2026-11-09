@@ -12,7 +12,7 @@ import { loadMods } from './mods.ts'
 import { startServer } from './server.ts'
 import type { Adapter, Machine } from './shared.ts'
 
-const registered: Adapter[] = [claudeCode, pi, createFakeAdapter()]
+const registered: Adapter[] = [claudeCode, pi, createFakeAdapter(undefined, undefined, { steering: true })]
 const STOCK_MODS_DIR = fileURLToPath(new URL('../../../mods/', import.meta.url))
 
 export async function startCore(

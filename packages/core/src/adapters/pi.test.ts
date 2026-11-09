@@ -177,6 +177,50 @@ describe('pi adapter', () => {
     expect(events.at(-2)?.type).toBe('turn.completed')
   })
 
+  it('steers a message in with the steer command and reports it landed at the next user message', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Run ls')
+    session.steer!('s1', 'Use -la', [{ mimeType: 'image/png', base64: 'aGk=' }])
+    session.steer!('s2', 'Then stop')
+    expect(fake.sent().slice(1)).toEqual([
+      { type: 'set_steering_mode', mode: 'all' },
+      { type: 'steer', id: 'steer-s1', message: 'Use -la', images: [{ type: 'image', data: 'aGk=', mimeType: 'image/png' }] },
+      { type: 'steer', id: 'steer-s2', message: 'Then stop' },
+    ])
+    const user = (text: string) => line({ type: 'message_end', message: { role: 'user', content: [{ type: 'text', text }] } })
+    fake.stdout(user('Run ls'))
+    fake.stdout(line({ type: 'response', id: 'steer-s1', command: 'steer', success: true, data: { disposition: 'queued' } }))
+    fake.stdout(line({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'bash', args: { command: 'ls' } }))
+    fake.stdout(line({ type: 'tool_execution_end', toolCallId: 't1', result: { content: [{ type: 'text', text: 'a' }] } }))
+    fake.stdout(user('Use -la'))
+    fake.stdout(line({ type: 'agent_settled', aborted: false }))
+    expect(events.map((e) => (e.type.startsWith('steer.') ? e : e.type))).toEqual([
+      'turn.started',
+      'tool.started',
+      'tool.completed',
+      { type: 'steer.landed', id: 's1' },
+      { type: 'steer.returned', id: 's2' },
+      'turn.completed',
+    ])
+    expect(pi.steering).toBe(true)
+  })
+
+  it('hands back a steer pi refuses, and clears waiting steers before an abort', () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Go')
+    session.steer!('s1', 'Nope')
+    fake.stdout(line({ type: 'response', id: 'steer-s1', command: 'steer', success: false, error: 'not running' }))
+    expect(events.at(-1)).toEqual({ type: 'steer.returned', id: 's1' })
+    session.steer!('s2', 'Wait')
+    session.interrupt()
+    expect(fake.sent().slice(-2)).toEqual([{ type: 'clear_queue' }, { type: 'abort' }])
+    fake.stdout(line({ type: 'agent_settled', aborted: true }))
+    expect(events.slice(-2)).toEqual([
+      { type: 'steer.returned', id: 's2' },
+      { type: 'turn.completed', error: 'Interrupted' },
+    ])
+  })
+
   it('sends abort and reports the turn as interrupted, even mid tool call', () => {
     const { fake, events, session } = startSession()
     session.prompt('Run the bash command: sleep 30. Then reply with one word.')

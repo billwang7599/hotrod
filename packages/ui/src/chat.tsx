@@ -30,10 +30,19 @@ import {
 } from '@hotrod/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
+import { choosePanelTab, modTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
-import { draftOf, saveDraft } from './drafts.ts'
+import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
-import { StepsOpen, useStepsShown } from './steps.ts'
+import {
+  openReportCard,
+  reportCardKey,
+  ReportsOpen,
+  StepsOpen,
+  useReportCardChoice,
+  useReportsShown,
+  useStepsShown,
+} from './steps.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -65,6 +74,7 @@ import {
   type ChatView,
   type Item,
   type Permission,
+  type State,
   lineOf,
   subagentRequests,
 } from './state.ts'
@@ -72,6 +82,7 @@ import {
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
+const STEER_HINT = 'Enter steers it in at the next step · ⌥Enter queues · ⌘Enter interrupts and sends'
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const MODEL_HINT = 'Model'
@@ -95,6 +106,11 @@ const PLACEHOLDERS: Record<ChatStatus, string> = {
   stopping: 'Stopping… Enter queues a message',
 }
 const ANSWER_PLACEHOLDER = 'Waiting for your answer… Enter queues a message'
+// When the engine can steer, Enter hands a message to the running turn and ⌥Enter queues it.
+const STEER_PLACEHOLDERS: Partial<Record<ChatStatus, string>> = {
+  running: 'Working… Enter steers · ⌥Enter queues',
+  waiting: 'Waiting for your approval… Enter steers · ⌥Enter queues',
+}
 const ASSISTANT = 'min-w-0 text-body leading-[1.6] wrap-break-word'
 const TOOL_NAME = 'shrink-0 font-mono text-sm leading-[normal] font-semibold'
 const TOOL_INPUT = 'min-w-0 flex-1 truncate font-mono text-sm leading-[normal] text-muted'
@@ -649,34 +665,74 @@ type ItemProps = {
   // Opens a chat that still exists, for a subagent's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
+  // Opens a mod's panel in the right sidebar, for a mod's note.
+  openPanel?: (mod: string, panel: string) => void
+  // The item's index in the chat, for choices kept per item (a report card's fold).
+  at?: number
 }
 
-function ItemView({ item, chat, contextItems, connected, send, space, select, openChat, revealOf }: ItemProps) {
+type Report = Extract<Item, { kind: 'report' }>
+
+/** A subagent's report: unfolded or folded by the chat's setting until the user opens or closes it. */
+function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; at?: number; open?: () => void }) {
+  const opens = useContext(ReportsOpen)
+  const key = at === undefined ? undefined : reportCardKey(chatId, at)
+  const chosen = useReportCardChoice(key ?? '')
+  const [local, setLocal] = useState<boolean>()
+  const shown = (key ? chosen : local) ?? opens
+  const toggle = () => (key ? openReportCard(key, !shown) : setLocal(!shown))
+  const name = open ? (
+    <button type="button" className="font-medium text-text hover:underline" onClick={open}>
+      {item.name}
+    </button>
+  ) : (
+    <span className="font-medium text-text">{item.name}</span>
+  )
+  const preview = item.text.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').trim() || 'No reply'
+  return (
+    <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
+      <div className="flex min-w-0 items-center gap-6 text-sm text-muted">
+        <button
+          type="button"
+          className="group -ml-4 flex h-20 items-center rounded px-4 hover:bg-raised"
+          aria-label={shown ? 'Fold report' : 'Unfold report'}
+          aria-expanded={shown}
+          data-open={shown || undefined}
+          onClick={toggle}
+        >
+          <Chevron />
+        </button>
+        <span className="shrink-0">
+          Subagent {name} reported
+          {item.error && <span> · ended early: {item.error}</span>}
+        </span>
+        {!shown && (
+          <button type="button" className="min-w-0 truncate text-left text-faint hover:text-muted" onClick={toggle}>
+            {preview}
+          </button>
+        )}
+      </div>
+      <AnimatePresence initial={false}>
+        {shown && (
+          <m.div {...MOTION.collapse}>
+            {item.text ? (
+              <Markdown className={ASSISTANT} text={item.text} />
+            ) : (
+              <div className="text-sm text-muted">No reply</div>
+            )}
+          </m.div>
+        )}
+      </AnimatePresence>
+    </section>
+  )
+}
+
+function ItemView(props: ItemProps) {
+  const { item, chat, contextItems, connected, send, space, select, openChat, revealOf, openPanel } = props
   const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
-    case 'report': {
-      const open = openChat?.(item.chatId)
-      const name = open ? (
-        <button type="button" className="font-medium text-text hover:underline" onClick={open}>
-          {item.name}
-        </button>
-      ) : (
-        <span className="font-medium text-text">{item.name}</span>
-      )
-      return (
-        <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
-          <div className="text-sm text-muted">
-            Subagent {name} reported
-            {item.error && <span> · ended early: {item.error}</span>}
-          </div>
-          {item.text ? (
-            <Markdown className={ASSISTANT} text={item.text} />
-          ) : (
-            <div className="text-sm text-muted">No reply</div>
-          )}
-        </section>
-      )
-    }
+    case 'report':
+      return <ReportCard item={item} chatId={chat.id} at={props.at} open={openChat?.(item.chatId)} />
     case 'user':
       return (
         <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
@@ -694,6 +750,7 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
               ))}
             </div>
           )}
+          {item.midTurn && <span className="text-xs text-faint">Sent mid-turn</span>}
           {item.text && (
             <div className="flex items-start gap-6">
               <CopyButton label="Copy message" text={item.text} className="mt-6" />
@@ -719,8 +776,18 @@ function ItemView({ item, chat, contextItems, connected, send, space, select, op
       ) : (
         <ErrorText>{item.text}</ErrorText>
       )
-    case 'note':
-      return <div className="text-sm text-muted">{item.text}</div>
+    case 'note': {
+      const { mod, panel } = item
+      if (!mod || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
+      return (
+        <button
+          className="w-fit text-left text-sm text-muted underline decoration-faint underline-offset-2 hover:text-text"
+          onClick={() => openPanel(mod, panel)}
+        >
+          {item.text}
+        </button>
+      )
+    }
     case 'thinking':
       return (
         <Row quiet summary={<span className="italic">Thinking…</span>}>
@@ -852,6 +919,8 @@ type ChatProps = {
   contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
+  modUi?: State['modUi']
+  panelViews?: State['panelViews']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
   columnPx: number
@@ -865,15 +934,9 @@ export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const paths = usePathsShown()
   const listed = accounts && listedAccounts(accounts)
-  const [text, setTyped] = useState(() => draftOf(props.chat.id))
-  const setText = (typed: string) => {
-    setTyped(typed)
-    saveDraft(chat.id, typed)
-  }
   const [pending, setPending] = useState<Pending[]>([])
   const pendingRef = useRef(pending)
   pendingRef.current = pending
-  const fileInput = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -887,6 +950,7 @@ export function Chat(props: ChatProps) {
   const line = lineOf(props.chats, chat)
   const space = line.at(-1)!
   const stepsShown = useStepsShown(chat.id, ...line.slice(1).map((c) => c.id))
+  const reportsShown = useReportsShown(chat.id, ...line.slice(1).map((c) => c.id))
   const viewOnly = !!chat.subagent
   // Subagents never ask in their own view: their requests wait in the space above them.
   const requests = viewOnly ? [] : subagentRequests(props.chats, chat.id)
@@ -946,16 +1010,17 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
-  const working = busy && !archived && !text
   const asking = chat.status === 'waiting' || requests.length > 0
   const questionWaits = asking && chat.items.some((i) => i.kind === 'question' && i.outcome === 'pending')
-  const placeholder = questionWaits ? ANSWER_PLACEHOLDER : PLACEHOLDERS[chat.status]
+  const steers = offers?.steering === true && (chat.status === 'running' || chat.status === 'waiting')
+  const placeholder = questionWaits
+    ? ANSWER_PLACEHOLDER
+    : ((steers ? STEER_PLACEHOLDERS[chat.status] : undefined) ?? PLACEHOLDERS[chat.status])
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle' && !viewOnly
   const last = chat.items.at(-1)
   const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
-  const hasContent = text.trim() !== '' || pending.length > 0
   const unattach = (removed: Pending[]) => {
     removed.forEach((p) => p.preview && URL.revokeObjectURL(p.preview))
     setPending((list) => list.filter((p) => !removed.includes(p)))
@@ -992,18 +1057,17 @@ export function Chat(props: ChatProps) {
     }
   }
   const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files')
-  const submit = () => {
-    if (!canAttach || !hasContent) return
+  const submit = (text: string, steer = false) => {
+    if (!canAttach || (text.trim() === '' && !pending.length)) return false
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
-    send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
+    const steering = steer && steers
+    send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }), ...(steering && { steer: true }) })
     following.current = true
     toBottom()
-    setText('')
     unattach(pending)
+    return true
   }
-  const interruptAndSend = async () => {
-    if (!canQueue) return
-    submit()
+  const interrupt = async () => {
     if (chat.status !== 'stopping' && (await confirm(INTERRUPT_SEND_TEXT))) {
       send({ type: 'chat.interrupt', chatId: chat.id })
     }
@@ -1051,6 +1115,10 @@ export function Chat(props: ChatProps) {
     openChat: (chatId: string) => {
       const select = props.select
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
+    },
+    openPanel: (mod: string, panel: string) => {
+      choosePanelTab(modTabId(mod, panel))
+      if (!props.contextOpen) props.toggleContext()
     },
   }
 
@@ -1162,49 +1230,51 @@ export function Chat(props: ChatProps) {
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
             <StepsOpen.Provider value={stepsShown}>
-              {chat.items.length === 0 && !chat.draft && (
-                <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                  <strong className="text-body font-semibold text-text">
-                    Start a chat in <span className="font-mono">{chat.name}</span>
-                  </strong>
-                  <span>
-                    Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
-                  </span>
-                </div>
-              )}
-              {foldSteps(chat.items, stepsShown).map((row) => {
-                const kind = 'item' in row ? row.item.kind : 'steps'
-                return (
-                  <m.div
-                    key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                    className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
-                    initial={kind !== 'text' && enter}
-                    animate={MOTION.rise.animate}
-                  >
-                    {'steps' in row ? (
-                      <Row quiet summary={`${row.steps.length} steps`}>
-                        <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
-                          {row.steps.map((item, i) => (
-                            <ItemView key={i} item={item} {...itemProps} />
-                          ))}
-                        </div>
-                      </Row>
-                    ) : (
-                      <ItemView item={row.item} {...itemProps} />
-                    )}
+              <ReportsOpen.Provider value={reportsShown}>
+                {chat.items.length === 0 && !chat.draft && (
+                  <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+                    <strong className="text-body font-semibold text-text">
+                      Start a chat in <span className="font-mono">{chat.name}</span>
+                    </strong>
+                    <span>
+                      Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
+                    </span>
+                  </div>
+                )}
+                {foldSteps(chat.items, stepsShown).map((row) => {
+                  const kind = 'item' in row ? row.item.kind : 'steps'
+                  return (
+                    <m.div
+                      key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                      className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
+                      initial={kind !== 'text' && enter}
+                      animate={MOTION.rise.animate}
+                    >
+                      {'steps' in row ? (
+                        <Row quiet summary={`${row.steps.length} steps`}>
+                          <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
+                            {row.steps.map((item, i) => (
+                              <ItemView key={i} item={item} {...itemProps} />
+                            ))}
+                          </div>
+                        </Row>
+                      ) : (
+                        <ItemView item={row.item} at={row.at} {...itemProps} />
+                      )}
+                    </m.div>
+                  )
+                })}
+                {chat.draft && (
+                  <m.div initial={enter} animate={MOTION.rise.animate}>
+                    <StreamingText name={draftKey} text={chat.draft} from={draftFrom} smooth={!reduceMotion} />
                   </m.div>
-                )
-              })}
-              {chat.draft && (
-                <m.div initial={enter} animate={MOTION.rise.animate}>
-                  <StreamingText name={draftKey} text={chat.draft} from={draftFrom} smooth={!reduceMotion} />
-                </m.div>
-              )}
-              {awaitingOutput && (
-                <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
-                  <Dots label="Working" />
-                </m.div>
-              )}
+                )}
+                {awaitingOutput && (
+                  <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                    <Dots label="Working" />
+                  </m.div>
+                )}
+              </ReportsOpen.Provider>
             </StepsOpen.Provider>
           </div>
         </div>
@@ -1288,6 +1358,7 @@ export function Chat(props: ChatProps) {
                       <m.li key={q.id} {...MOTION.collapse}>
                         <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
                           <span className="flex min-w-0 flex-1 items-center gap-6" title={q.text}>
+                            {q.steering && <span className="shrink-0 text-faint">At the next step:</span>}
                             {q.report && <span className="shrink-0 text-faint">Subagent {q.report.name} reported:</span>}
                             {q.text && <span className="truncate">{q.text}</span>}
                             {q.attachments && (
@@ -1297,20 +1368,22 @@ export function Chat(props: ChatProps) {
                               </span>
                             )}
                           </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Remove from queue"
-                            disabled={!connected}
-                            onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
-                          >
-                            ×
-                          </Button>
+                          {!q.steering && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label="Remove from queue"
+                              disabled={!connected}
+                              onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
+                            >
+                              ×
+                            </Button>
+                          )}
                         </div>
                       </m.li>
                     ))}
                   </AnimatePresence>
-                  <li className="text-sm text-faint">Sends when this turn ends</li>
+                  {chat.queue.some((q) => !q.steering) && <li className="text-sm text-faint">Sends when this turn ends</li>}
                 </ul>
               </m.div>
             )}
@@ -1351,156 +1424,24 @@ export function Chat(props: ChatProps) {
             </div>
           )}
           {!showEngineNote && !viewOnly && (
-            <div
-              className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
-            >
-              {pending.length > 0 && (
-                <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
-                  {pending.map((p) => (
-                    <li key={p.id} className="relative min-w-0">
-                      {p.preview ? (
-                        <img
-                          src={p.preview}
-                          alt={p.name}
-                          title={p.name}
-                          className="block size-48 rounded-lg border object-cover shadow-raised"
-                        />
-                      ) : (
-                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
-                          <FileLabel name={p.name} size={p.size} />
-                        </div>
-                      )}
-                      <Hint text="Remove">
-                        <button
-                          className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
-                          aria-label={`Remove ${p.name}`}
-                          onClick={() => unattach([p])}
-                        >
-                          ×
-                        </button>
-                      </Hint>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="relative">
-                {working && (
-                  <span
-                    className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
-                    data-status={chat.status}
-                    aria-hidden="true"
-                  >
-                    {placeholder}
-                  </span>
-                )}
-                <textarea
-                  className="block max-h-[calc(12lh+16px)] min-h-[calc(1lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
-                  value={text}
-                  rows={1}
-                  placeholder={working ? undefined : archived ? 'Archived' : placeholder}
-                  aria-placeholder={working ? placeholder : undefined}
-                  disabled={!(canSend || canQueue)}
-                  onChange={(e) => setText(e.target.value)}
-                  onPaste={(e) => {
-                    const { types, files } = e.clipboardData
-                    if (types.includes('text/plain') || !files.length) return
-                    e.preventDefault()
-                    void attach([...files])
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
-                    e.preventDefault()
-                    const emptyWithQueue = !hasContent && chat.queue.length > 0
-                    if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
-                    else submit()
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-8 px-6 pb-6">
-                <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Hint text="Attach files">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="grid shrink-0 place-items-center"
-                      aria-label="Attach files"
-                      disabled={!canAttach}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      <PaperclipIcon />
-                    </Button>
-                  </Hint>
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
-                    onChange={(e) => {
-                      void attach([...(e.target.files ?? [])])
-                      e.target.value = ''
-                    }}
-                  />
-                </span>
-                <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
-                  {menu.model && (
-                    <Select
-                      variant="chip"
-                      label="Model"
-                      hint={MODEL_HINT}
-                      value={menu.model}
-                      disabled={!canChange}
-                      options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
-                      onChange={(model) => setModel(model, menu.thinking)}
-                    />
-                  )}
-                  {menu.thinking && (
-                    <Select
-                      variant="chip"
-                      label="Thinking"
-                      hint={THINKING_HINT}
-                      value={menu.thinking}
-                      disabled={!canChange}
-                      options={menu.levels.map((l) => ({ value: l, label: l }))}
-                      onChange={(thinking) => setModel(menu.model, thinking)}
-                    />
-                  )}
-                  {busy ? (
-                    <>
-                      {hasContent && (
-                        <Hint text={QUEUE_HINT}>
-                          <Button size="small" disabled={!canQueue} onClick={submit}>
-                            Queue
-                          </Button>
-                        </Hint>
-                      )}
-                      <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
-                        <Button
-                          variant="danger"
-                          className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
-                          disabled={!connected}
-                          onClick={stop}
-                        >
-                          {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                        </Button>
-                      </Hint>
-                    </>
-                  ) : (
-                    <Hint text={SEND_HINT}>
-                      <span className="flex">
-                        <Button
-                          variant="primary"
-                          className="disabled:pointer-events-none"
-                          disabled={!canSend || !hasContent}
-                          onClick={submit}
-                        >
-                          Send
-                        </Button>
-                      </span>
-                    </Hint>
-                  )}
-                </span>
-              </div>
-            </div>
+            <Composer
+              key={chat.id}
+              chat={chat}
+              connected={connected}
+              pending={pending}
+              unattach={unattach}
+              attach={attach}
+              canSend={canSend}
+              canQueue={canQueue}
+              canChange={canChange}
+              steers={steers}
+              placeholder={placeholder}
+              menu={menu}
+              setModel={setModel}
+              stop={stop}
+              submit={submit}
+              interrupt={interrupt}
+            />
           )}
           <Hint text="Chat width">
             <input
@@ -1525,10 +1466,215 @@ export function Chat(props: ChatProps) {
               connected={connected}
               send={send}
               hide={props.contextOverlay ? props.toggleContext : undefined}
+              modUi={props.modUi}
+              panelViews={props.panelViews}
             />
           </SidePanel>
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+type ComposerProps = {
+  chat: ChatView
+  connected: boolean
+  pending: Pending[]
+  unattach: (removed: Pending[]) => void
+  attach: (files: File[]) => Promise<void>
+  canSend: boolean
+  canQueue: boolean
+  canChange: boolean
+  steers: boolean
+  placeholder: string
+  menu: ReturnType<typeof modelMenu>
+  setModel: (model?: string, thinking?: string) => void
+  stop: () => void
+  /** Sends the text with the pending attachments; false when it can't be sent now, so the text stays. */
+  submit: (text: string, steer?: boolean) => boolean
+  /** Offers to stop the turn, so what's queued sends now. */
+  interrupt: () => void
+}
+
+/**
+ * The message box. It keeps what's typed in its own state, so a keystroke re-renders only the box, never the
+ * transcript above it, and the draft is written to localStorage once typing pauses.
+ */
+function Composer(props: ComposerProps) {
+  const { chat, connected, pending, unattach, attach, canSend, canQueue, canChange, steers, placeholder, menu } = props
+  const { setModel, stop } = props
+  const [text, setTyped] = useState(() => draftOf(chat.id))
+  const setText = (typed: string) => {
+    setTyped(typed)
+    saveDraftSoon(chat.id, typed)
+  }
+  useEffect(() => flushDrafts, [])
+  const fileInput = useRef<HTMLInputElement>(null)
+  const archived = chat.archived
+  const busy = chat.status !== 'idle'
+  const working = busy && !archived && !text
+  const canAttach = canSend || canQueue
+  const hasContent = text.trim() !== '' || pending.length > 0
+  const submit = (steer = false) => {
+    if (!props.submit(text, steer)) return
+    setTyped('')
+    saveDraft(chat.id, '')
+  }
+  const interruptAndSend = () => {
+    if (!canQueue) return
+    submit()
+    props.interrupt()
+  }
+  return (
+    <div
+      className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
+    >
+      {pending.length > 0 && (
+        <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
+          {pending.map((p) => (
+            <li key={p.id} className="relative min-w-0">
+              {p.preview ? (
+                <img
+                  src={p.preview}
+                  alt={p.name}
+                  title={p.name}
+                  className="block size-48 rounded-lg border object-cover shadow-raised"
+                />
+              ) : (
+                <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
+                  <FileLabel name={p.name} size={p.size} />
+                </div>
+              )}
+              <Hint text="Remove">
+                <button
+                  className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
+                  aria-label={`Remove ${p.name}`}
+                  onClick={() => unattach([p])}
+                >
+                  ×
+                </button>
+              </Hint>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="relative">
+        {working && (
+          <span
+            className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
+            data-status={chat.status}
+            aria-hidden="true"
+          >
+            {placeholder}
+          </span>
+        )}
+        <textarea
+          className="block max-h-[calc(12lh+16px)] min-h-[calc(1lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
+          value={text}
+          rows={1}
+          placeholder={working ? undefined : archived ? 'Archived' : placeholder}
+          aria-placeholder={working ? placeholder : undefined}
+          disabled={!(canSend || canQueue)}
+          onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const { types, files } = e.clipboardData
+            if (types.includes('text/plain') || !files.length) return
+            e.preventDefault()
+            void attach([...files])
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            const emptyWithQueue = !hasContent && chat.queue.length > 0
+            if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
+            else submit(!e.altKey)
+          }}
+        />
+      </div>
+      <div className="flex items-center gap-8 px-6 pb-6">
+        <span className="flex min-w-0 flex-1 items-center gap-6">
+          <Hint text="Attach files">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="grid shrink-0 place-items-center"
+              aria-label="Attach files"
+              disabled={!canAttach}
+              onClick={() => fileInput.current?.click()}
+            >
+              <PaperclipIcon />
+            </Button>
+          </Hint>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              void attach([...(e.target.files ?? [])])
+              e.target.value = ''
+            }}
+          />
+        </span>
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
+          {menu.model && (
+            <Select
+              variant="chip"
+              label="Model"
+              hint={MODEL_HINT}
+              value={menu.model}
+              disabled={!canChange}
+              options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
+              onChange={(model) => setModel(model, menu.thinking)}
+            />
+          )}
+          {menu.thinking && (
+            <Select
+              variant="chip"
+              label="Thinking"
+              hint={THINKING_HINT}
+              value={menu.thinking}
+              disabled={!canChange}
+              options={menu.levels.map((l) => ({ value: l, label: l }))}
+              onChange={(thinking) => setModel(menu.model, thinking)}
+            />
+          )}
+          {busy ? (
+            <>
+              {hasContent && (
+                <Hint text={steers ? STEER_HINT : QUEUE_HINT}>
+                  <Button size="small" disabled={!canQueue} onClick={() => submit()}>
+                    Queue
+                  </Button>
+                </Hint>
+              )}
+              <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                <Button
+                  variant="danger"
+                  className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                  disabled={!connected}
+                  onClick={stop}
+                >
+                  {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                </Button>
+              </Hint>
+            </>
+          ) : (
+            <Hint text={SEND_HINT}>
+              <span className="flex">
+                <Button
+                  variant="primary"
+                  className="disabled:pointer-events-none"
+                  disabled={!canSend || !hasContent}
+                  onClick={() => submit()}
+                >
+                  Send
+                </Button>
+              </span>
+            </Hint>
+          )}
+        </span>
+      </div>
     </div>
   )
 }
