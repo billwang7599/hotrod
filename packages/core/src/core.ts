@@ -19,7 +19,12 @@ import type {
   ModContext,
   ModManifest,
   ModHost,
+  ModInstructionsFor,
   ModPanel,
+  ModView,
+  ModWait,
+  ModWaitAnswer,
+  ModStorage,
   ModRun,
   ModUse,
   PermissionRequest,
@@ -29,19 +34,7 @@ import type {
 } from '@kothar/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_MOD, summaryOf } from './kothar-mcp.ts'
-import {
-  MEMORY_INSTRUCTIONS,
-  continuationPrompt,
-  memoryPrompt,
-  memoryView,
-  messagesOf,
-  openCompactor,
-  openSummaries,
-  withAttachments,
-  type Report,
-  ZOOM_INSTRUCTIONS,
-  type Summaries,
-} from './memory.ts'
+import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { realPath } from './machine.ts'
 import { type Fetch, installedMods, openMarketplace } from './marketplace.ts'
 import { type CommunityMod, guardHost, valuesOf } from './mods.ts'
@@ -65,9 +58,11 @@ import {
   type ChatEntry,
   type ChatInfo,
   type ChatState,
+  type ChatWait,
   type ChatStatus,
   type ClientMessage,
   type CommandInfo,
+  type CompletionRequest,
   type ContextItem,
   type ContextSection,
   type CoreMessage,
@@ -78,8 +73,10 @@ import {
   type ModelRole,
   type InstalledItem,
   type MarketKind,
+  type MemoryMessage,
   MOD_USES,
   type ModInfo,
+  MODEL_ROLES,
   type NewChat,
   type PanelTab,
   type PermissionSwitch,
@@ -96,11 +93,15 @@ import {
 import { openModels, type ModelSettings } from './models.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
+import { reaches } from './reach.ts'
+import { lockGarage } from './garage-lock.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
+// A chat's own files, which mods' chat storage can't touch.
+const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
 const OUTSIDE_EDIT_ADVICE = 'Work there, or ask the user to allow edits outside the work folder for this chat.'
@@ -129,9 +130,10 @@ type Chat = {
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Map<string, 'permission' | 'question'>
+  // What mods wait on the user for while the turn runs (ModHost.wait), by mod id.
+  waits: Map<string, ModWait>
   mcpToken?: string
   queue: QueuedMessage[]
-  summaries: Summaries
   turns: number
   // The account the running turn started on, and the limit it ran into, if any.
   account?: string
@@ -146,7 +148,32 @@ type Chat = {
 
 export type Core = ReturnType<typeof openCore>
 
-export function openCore(options: {
+type CoreOptions = Parameters<typeof openLockedCore>[0]
+
+// The core holds its garage from before it reads anything until it closes (garage-lock.ts), so a second core on the
+// same garage fails here and changes nothing.
+export function openCore(options: CoreOptions) {
+  mkdirSync(options.garage, { recursive: true })
+  const release = lockGarage(realpathSync(options.garage))
+  let core: ReturnType<typeof openLockedCore>
+  try {
+    core = openLockedCore(options)
+  } catch (error) {
+    release()
+    throw error
+  }
+  const close = core.close
+  core.close = async (force = false) => {
+    try {
+      await close(force)
+    } finally {
+      release()
+    }
+  }
+  return core
+}
+
+function openLockedCore(options: {
   garage: string
   adapters: Adapter[]
   defaultEngine: string
@@ -156,7 +183,6 @@ export function openCore(options: {
   // Mods installed in the garage from the marketplace or a folder; see loadCommunityMods.
   community?: CommunityMod[]
   stopGraceMs?: number
-  compactDebounceMs?: number
   marketplaceUrl?: string
   githubToken?: string
   fetch?: Fetch
@@ -166,7 +192,7 @@ export function openCore(options: {
   // Opens the user's terminal app at a folder; choice is settings.json's terminal. Tests pass a stub.
   openTerminal?: (dir: string, choice?: string) => Promise<void>
 }) {
-  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
+  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
   mkdirSync(options.garage, { recursive: true })
   // Context paths are saved resolved, so attachment paths must be too for a pin to match its file.
   const garage = realpathSync(options.garage)
@@ -234,6 +260,8 @@ export function openCore(options: {
     ModelSettings & {
       context?: Partial<Record<ContextSection, boolean>>
       mods?: Record<string, Record<string, unknown>>
+      // The version of each mod's saved settings (Mod.settingsVersion), once one has been migrated.
+      modVersions?: Record<string, number>
       workFolder?: string
       // The master switch for community mods; off unless the user turned it on.
       communityMods?: boolean
@@ -248,6 +276,8 @@ export function openCore(options: {
     files: settings.context?.files ?? true,
   })
   const brokenMods = options.brokenMods ?? []
+  // Mods whose saved settings failed to migrate at load, and why; shown on the mod like a load error.
+  const settingsErrors = new Map<string, string>()
   const modFor = (id: string) => {
     const mod = mods.find((m) => m.id === id)
     if (mod) return mod
@@ -276,7 +306,8 @@ export function openCore(options: {
     }
     // A community mod shows its own switch; the master switch is beside it in the UI.
     const enabled = community.has(id) ? ownSwitch(mod) : isOn(mod)
-    const info = { id, name, description, enabled, settings: declared, values }
+    const settingsError = settingsErrors.get(id)
+    const info = { id, name, description, enabled, settings: declared, values, ...(settingsError && { loadError: settingsError }) }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
     const { source, repo, path } = from?.item ?? {}
@@ -413,6 +444,20 @@ export function openCore(options: {
     saveMod(mod, { [key]: value })
     if (isOn(mod)) void checkSetup(mod)
   }
+  // A space's own values for a mod's spaceSettings: the space a worker is in, else the chat itself.
+  const spaceChat = (chat: Chat) => chainOf(chat)[0]!
+  const spaceValuesOf = (mod: Mod, chat: Chat) =>
+    valuesOf(mod, spaceChat(chat).info.modValues?.[mod.id], mod.spaceSettings)
+  const setSpaceValue = (mod: Mod, chat: Chat, key: string, value: unknown) => {
+    const setting = mod.spaceSettings?.find((s) => s.key === key)
+    if (!setting) throw new Error(`${mod.name} has no space setting "${key}"`)
+    const problem = settingProblem(setting, value)
+    if (problem) throw new Error(`${setting.label} ${problem}`)
+    const space = spaceChat(chat)
+    const modValues = { ...space.info.modValues, [mod.id]: { ...space.info.modValues?.[mod.id], [key]: value } }
+    updateChat(space, { modValues })
+    refreshMod(mod)
+  }
   const setMemory = (engine?: string, model?: string) => {
     if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
     if (engine !== undefined) {
@@ -445,7 +490,7 @@ export function openCore(options: {
     settings.workFolder = path
     saveSettings()
     broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
-    compactBacklog()
+    startMods()
   }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
@@ -463,7 +508,19 @@ export function openCore(options: {
     entries: chat.entries,
     draft: chat.unsavedText,
     queue: chat.queue,
+    ...(chat.waits.size && { waits: waitsOf(chat) }),
   })
+
+  const waitsOf = (chat: Chat): ChatWait[] => [...chat.waits].map(([mod, wait]) => ({ mod, ...wait }))
+  // A mod's wait, or none: the chat waits while any mod or request does, and runs again once none does.
+  const setWait = (chat: Chat, modId: string, wait: ModWait | undefined) => {
+    if (!wait && !chat.waits.has(modId)) return
+    if (wait) chat.waits.set(modId, wait)
+    else chat.waits.delete(modId)
+    broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: waitsOf(chat) })
+    if (wait && chat.status === 'running') setStatus(chat, 'waiting')
+    if (!wait && chat.status === 'waiting' && !chat.pendingRequests.size && !chat.waits.size) setStatus(chat, 'running')
+  }
 
   const append = (chat: Chat, entry: ChatEntry) => {
     chat.entries.push(entry)
@@ -480,7 +537,6 @@ export function openCore(options: {
   })
   void accounts.refresh()
 
-  const memoryOf = (chat: Chat) => ({ messages: messagesOf(chat.entries), summaries: chat.summaries })
   const modServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
     const session = { chat: summaryOf(chat.info), workDir, sandboxed }
     const servers = mods
@@ -497,37 +553,69 @@ export function openCore(options: {
     return settings.workFolder
   }
 
-  const compactor = openCompactor({
-    chat: (chatId) => {
-      const chat = chats.get(chatId)
-      return chat && memoryOf(chat)
-    },
-    async complete(request) {
-      const { engine, model } = models.memory()
-      const adapter = engine === undefined ? undefined : adapterFor(engine)
-      if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
-      checkEnabled(adapter.id)
-      const cwd = join(chosenWorkFolder(), 'home')
-      mkdirSync(cwd, { recursive: true })
-      const sandbox = sandboxIn(cwd)
-      const options = { ...request, cwd, model, ...accounts.sessionFor(adapter.id), ...(sandbox && { sandbox }) }
-      return adapter.complete(machine, options)
-    },
-    onFailure: (reason) => broadcast({ type: 'error', message: `Memory summaries are failing: ${reason}. Retrying.` }),
-    ...(compactDebounceMs !== undefined && { debounceMs: compactDebounceMs }),
-  })
+  // A one-shot call on the model picked for summaries, for mods (host.complete), run in Home's scratch folder.
+  const completeFor = async (request: CompletionRequest) => {
+    const { engine, model } = models.memory()
+    const adapter = engine === undefined ? undefined : adapterFor(engine)
+    if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
+    checkEnabled(adapter.id)
+    const cwd = join(chosenWorkFolder(), 'home')
+    mkdirSync(cwd, { recursive: true })
+    const sandbox = sandboxIn(cwd)
+    const options = { ...request, cwd, model, ...accounts.sessionFor(adapter.id), ...(sandbox && { sandbox }) }
+    return adapter.complete(machine, options)
+  }
   let enginesDetected = false
-  // Summaries need a detected engine and a work folder to run in, so the backlog waits for both.
-  const compactBacklog = () => {
-    if (!enginesDetected || !settings.workFolder) return
-    const lastAt = (chat: Chat) => chat.entries.at(-1)?.at ?? ''
-    const byActivity = [...chats.values()].sort((a, b) => lastAt(a).localeCompare(lastAt(b)))
-    for (const chat of byActivity) compactor.touch(chat.info.id)
+  // Mods' background work (onStart) waits until model calls can run: engines detected and a work folder chosen.
+  const startedMods = new Set<string>()
+  const startMod = (mod: Mod) => {
+    if (quitting || !enginesDetected || !settings.workFolder || !isOn(mod) || startedMods.has(mod.id)) return
+    if (!mod.onStart) return
+    startedMods.add(mod.id)
+    callMod(mod, () => mod.onStart!(contextOf(mod)))
+  }
+  const startMods = () => mods.forEach(startMod)
+  const stopMod = (mod: Mod) => {
+    if (!startedMods.delete(mod.id)) return
+    callMod(mod, () => mod.onStop?.(contextOf(mod)))
+  }
+  // The mod that provides memory: the first that's on with one. Without it, the core's window.
+  const memoryMod = () => mods.find((mod) => isOn(mod) && mod.memory)
+  const viewOf = (chat: Chat, messages: MemoryMessage[], tools: boolean) => {
+    if (!messages.length) return ''
+    const mod = memoryMod()
+    if (mod) {
+      try {
+        const view = mod.memory!.view({ chat: detailOf(chat), messages, tools }, contextOf(mod))
+        if (typeof view !== 'string') throw new Error('memory.view must return text')
+        return view
+      } catch (error) {
+        modError(mod, error)
+      }
+    }
+    return windowView(messages)
+  }
+  const memoryInstructions = (forSession: ModInstructionsFor) => {
+    const mod = memoryMod()
+    if (!mod?.memory?.instructions) return []
+    try {
+      const text = mod.memory.instructions(forSession, contextOf(mod))
+      if (text === undefined || text === null) return []
+      if (typeof text !== 'string') throw new Error('memory.instructions must return text')
+      return text.trim() ? [text.trim()] : []
+    } catch (error) {
+      modError(mod, error)
+      return []
+    }
   }
 
   const setStatus = (chat: Chat, status: ChatStatus) => {
     if (chat.status === status || (chat.status === 'stopping' && status !== 'idle')) return
     chat.status = status
+    if (status === 'idle' && chat.waits.size) {
+      chat.waits.clear()
+      broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: [] })
+    }
     broadcast({ type: 'chat.status', chatId: chat.info.id, status })
     callMods('onStatusChanged', (mod, context) => mod.onStatusChanged!(detailOf(chat), status, context))
   }
@@ -596,7 +684,6 @@ export function openCore(options: {
     if (!chat.info.worker) updateChat(chat, { doneAt: end.at })
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
-    compactor.touch(chat.info.id)
     const turn = chat.turn ?? { text: '', tools: [] }
     chat.turn = undefined
     const detail = detailOf(chat)
@@ -616,6 +703,24 @@ export function openCore(options: {
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
     sweepMergedWorktrees(chainOf(chat)[0]!)
+  }
+
+  // A write for an engine event failed. If the chat's folder is gone, its session stops and it goes idle; either way
+  // the user sees why, and the core runs on.
+  const lostChat = (chat: Chat, error: unknown) => {
+    const gone = !existsSync(chat.dir)
+    broadcast({
+      type: 'error',
+      message: gone
+        ? `"${chat.info.name}" stopped: its folder ${chat.dir} is gone (${messageOf(error)})`
+        : `"${chat.info.name}": ${messageOf(error)}`,
+    })
+    if (!gone) return
+    stopSession(chat)
+    chat.pendingRequests.clear()
+    chat.turn = undefined
+    setStatus(chat, 'idle')
+    if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
   }
 
   const reportErrors = (run: () => void) => {
@@ -687,6 +792,7 @@ export function openCore(options: {
     folders: chat.info.folders,
     files: chat.info.files,
     createdAt: chat.info.createdAt,
+    ...(chat.info.parentMessages !== undefined && { parentMessages: chat.info.parentMessages }),
   })
 
   const spaceOf = (chat: Chat): SpaceDetail => {
@@ -810,19 +916,56 @@ export function openCore(options: {
     await openTerminalAt(path)
   }
 
+  // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.
+  const storageAt = (dir: string, what: string, reserved: string[] = []): ModStorage => {
+    const fileOf = (name: string) => {
+      const path = resolve(dir, String(name))
+      const top = path.slice(dir.length + 1).split(sep)[0]!
+      if (path === dir || !within(path, dir) || reserved.some((own) => own.toLowerCase() === top.toLowerCase())) throw new Error(`"${name}" is outside ${what}`)
+      return path
+    }
+    const writable = (name: string) => {
+      const path = fileOf(name)
+      mkdirSync(dirname(path), { recursive: true })
+      return path
+    }
+    return {
+      dir,
+      read(name) {
+        try {
+          return readFileSync(fileOf(name), 'utf8')
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+          throw error
+        }
+      },
+      write: (name, text) => writeFileSync(writable(name), text),
+      append: (name, text) => appendFileSync(writable(name), text),
+      remove: (name) => rmSync(fileOf(name), { force: true }),
+    }
+  }
+
+  const seesAll = (chatId: string) => modChats.some((chat) => chat.id === chatId && chat.seesAll)
+  // Whether caller may reach chat, by the rule the core's own reach tools use; both must be chats the user can see.
+  const reachable = (callerId: string, chat: Chat) => {
+    const caller = chats.get(callerId)
+    return !!caller && shown(caller) && shown(chat) && reaches(caller.info, chat.info, seesAll(callerId))
+  }
+
   const hosts = new Map<string, ModHost>()
   const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
   const hostFor = (mod: Mod): ModHost => {
     const known = hosts.get(mod.id)
     if (known) return known
     const dir = join(garage, 'mods', mod.id)
-    const fileOf = (name: string) => {
-      const path = resolve(dir, String(name))
-      if (path === dir || !within(path, dir)) throw new Error(`"${name}" is outside ${mod.name}'s storage`)
-      return path
-    }
     const host: ModHost = {
-      createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
+      createChat({ name, folders, files, engine, parentId, role }) {
+        if (parentId === undefined) {
+          if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
+          return createChat({ name, folders, files, engine })
+        }
+        return createChild(String(parentId), { name, engine, role, folders, files })
+      },
       send: (chatId, text) => enqueue(chatFor(chatId), { text }),
       chats: () => shownChats().map(detailOf),
       chat(chatId) {
@@ -838,6 +981,13 @@ export function openCore(options: {
         const chat = chats.get(chatId)
         return chat && shown(chat) ? spaceOf(chat) : undefined
       },
+      spaceValues: (chatId) => spaceValuesOf(mod, chatFor(chatId)),
+      setSpaceValue: (chatId, key, value) => setSpaceValue(mod, chatFor(chatId), String(key), value),
+      reaches(callerId, chatId) {
+        const chat = chats.get(String(chatId))
+        return !!chat && reachable(String(callerId), chat)
+      },
+      reachable: (callerId) => shownChats().filter((chat) => reachable(String(callerId), chat)).map(detailOf),
       interrupt: (chatId) => interrupt(chatFor(chatId), false),
       accounts(engine) {
         const found = accounts.list().find((state) => state.engine === engine)
@@ -860,27 +1010,41 @@ export function openCore(options: {
         const at = new Date().toISOString()
         append(chatFor(chatId), { at, type: 'mod.note', text, ...(panel !== undefined && { mod: mod.id, panel }) })
       },
+      error: (text) => modError(mod, String(text)),
       run: runFor(),
       // Lazily: hosts can be made before the spawning code below is set up.
       spawn: (command, args, options) => spawnFor(mod)(command, args, options),
-      storage: {
-        dir,
-        read(name) {
-          try {
-            return readFileSync(fileOf(name), 'utf8')
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-            throw error
-          }
-        },
-        write(name, text) {
-          const path = fileOf(name)
-          mkdirSync(dirname(path), { recursive: true })
-          writeFileSync(path, text)
-        },
-        remove: (name) => rmSync(fileOf(name), { force: true }),
-      },
+      storage: storageAt(dir, `${mod.name}'s storage`),
+      chatStorage: (chatId) => storageAt(chatFor(chatId).dir, `${mod.name}'s files in this chat`, CHAT_OWN_FILES),
+      messages: (chatId) => messagesOf(chatFor(chatId).entries),
+      complete: (request) => completeFor(request),
       refresh: (chatId) => refreshMod(mod, chatId),
+      wait(chatId, wait) {
+        const chat = chatFor(chatId)
+        if (!['running', 'waiting'].includes(chat.status)) throw new Error('A chat waits for the user only while its turn runs')
+        setWait(chat, mod.id, checkWait(wait))
+      },
+      endWait: (chatId) => setWait(chatFor(chatId), mod.id, undefined),
+      processes: (spaceId) =>
+        mods
+          .filter((other) => other !== mod && isOn(other) && other.processes)
+          .flatMap((other) => {
+            try {
+              return other.processes!(String(spaceId), contextOf(other)).map((row) => ({ ...row, mod: other.id }))
+            } catch (error) {
+              modError(other, error)
+              return []
+            }
+          }),
+      async processAction(spaceId, modId, key, action) {
+        const other = modFor(String(modId))
+        if (!isOn(other)) throw new Error(`${other.name} is off`)
+        await other.onProcessAction?.(String(spaceId), String(key), String(action), contextOf(other))
+      },
+      processesChanged: (spaceId) =>
+        callMods('onProcessesChanged', (other, context) =>
+          other === mod ? undefined : other.onProcessesChanged!(String(spaceId), context),
+        ),
       // Only inside a folder some chat could open: a mod can't open a terminal anywhere it likes.
       async openTerminal(path) {
         const real = realOr(String(path))
@@ -931,6 +1095,21 @@ export function openCore(options: {
     if (!panel) throw new Error(`${mod.name} has no panel "${panelId}"`)
     return { mod, panel }
   }
+  // Fills in a panel's switches and pickers from the space's values and the settings they're for.
+  const withControls = (mod: Mod, chat: Chat, view: ModView): ModView => {
+    if (view.type === 'stack' || view.type === 'row' || view.type === 'card') {
+      return { ...view, children: view.children.map((child) => withControls(mod, chat, child)) }
+    }
+    if (view.type !== 'switch' && view.type !== 'picker') return view
+    const setting = mod.spaceSettings?.find((s) => s.key === view.setting)
+    const kind = view.type === 'switch' ? 'boolean' : 'select'
+    if (setting?.type !== kind) throw new Error(`${mod.name} has no ${kind} space setting "${view.setting}"`)
+    const value = spaceValuesOf(mod, chat)[setting.key]!
+    const label = view.label ?? setting.label
+    if (view.type === 'switch') return { ...view, label, value: value === true }
+    const options = setting.type === 'select' ? setting.options : []
+    return { ...view, label, value: value as string | number, options }
+  }
   const renderPanel = async (chat: Chat, mod: Mod, panel: ModPanel) => {
     const key = `${chat.info.id}\n${mod.id}\n${panel.id}`
     const turn = (renders.get(key) ?? 0) + 1
@@ -938,7 +1117,7 @@ export function openCore(options: {
     const base = { type: 'mod.panel' as const, chatId: chat.info.id, mod: mod.id, panel: panel.id }
     let shownView: Extract<CoreMessage, { type: 'mod.panel' }>
     try {
-      shownView = { ...base, view: await panel.render(detailOf(chat), contextOf(mod)) }
+      shownView = { ...base, view: withControls(mod, chat, await panel.render(detailOf(chat), contextOf(mod))) }
     } catch (error) {
       shownView = { ...base, error: messageOf(error) }
     }
@@ -971,6 +1150,22 @@ export function openCore(options: {
       modError(mod, error)
     }
     if (chats.has(chat.info.id)) await renderPanel(chat, mod, panel)
+  }
+  const answerWait = (chat: Chat, modId: string, answer: ModWaitAnswer) => {
+    const wait = chat.waits.get(modId)
+    if (!wait) throw new Error('Nothing is waiting there any more')
+    if ('button' in answer && !wait.buttons.some((b) => b.id === answer.button)) {
+      throw new Error(`No button "${answer.button}"`)
+    }
+    const mod = modFor(modId)
+    callMod(mod, () => mod.onWaitAction?.(detailOf(chat), answer, contextOf(mod)))
+  }
+  const checkWait = (wait: ModWait): ModWait => {
+    if (typeof wait?.text !== 'string' || !Array.isArray(wait.buttons)) throw new Error('A wait needs text and buttons')
+    for (const b of wait.buttons) {
+      if (typeof b?.id !== 'string' || typeof b.label !== 'string') throw new Error('Each button needs an id and a label')
+    }
+    return { text: wait.text, buttons: wait.buttons.map(({ id, label, primary, hint }) => ({ id, label, ...(primary && { primary }), ...(hint && { hint }) })) }
   }
   const runCommand = (chat: Chat, modId: unknown, commandId: unknown) => {
     const mod = modFor(String(modId))
@@ -1023,8 +1218,8 @@ export function openCore(options: {
       status: 'idle',
       unsavedText: '',
       pendingRequests: new Map(),
+      waits: new Map(),
       queue: [],
-      summaries: openSummaries(join(dir, 'summaries.jsonl')),
       turns: 0,
     }
     if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
@@ -1060,6 +1255,33 @@ export function openCore(options: {
     rmSync(chat.dir, { recursive: true, force: true })
   }
 
+  // Once at load: each mod whose settings are saved at an older version than its settingsVersion migrates them, the
+  // global values and every space's together, and they're saved with the new version. A throw saves nothing.
+  for (const mod of mods) {
+    const version = mod.settingsVersion
+    const from = settings.modVersions?.[mod.id] ?? 0
+    if (!version || from >= version) continue
+    try {
+      if (!mod.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
+      const global = settings.mods?.[mod.id]
+      const migratedGlobal = global && mod.migrateSettings({ ...global }, from, {})
+      const spaces = [...chats.values()].flatMap((chat) => {
+        const saved = chat.info.modValues?.[mod.id]
+        return saved ? [{ chat, values: mod.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
+      })
+      for (const { chat, values } of spaces) {
+        chat.info = { ...chat.info, modValues: { ...chat.info.modValues, [mod.id]: values } }
+        saveChat(chat)
+      }
+      if (migratedGlobal) settings.mods = { ...settings.mods, [mod.id]: migratedGlobal }
+      settings.modVersions = { ...settings.modVersions, [mod.id]: version }
+      saveSettings()
+    } catch (error) {
+      settingsErrors.set(mod.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
+      modError(mod, error)
+    }
+  }
+
   const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }) => {
     const name = checkName(spec.name)
     if (spec.engine !== undefined) {
@@ -1078,15 +1300,15 @@ export function openCore(options: {
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
-    const parentMemory = parent && memoryOf(parent)
+    const parentMessages = parent && messagesOf(parent.entries)
     const info: ChatInfo = {
       id,
       name,
-      ...(parent && parentMemory && {
+      ...(parent && parentMessages && {
         parentId: parent.info.id,
         worker: true,
         role,
-        parentMessages: parentMemory.messages.length,
+        parentMessages: parentMessages.length,
       }),
       folders,
       files,
@@ -1096,13 +1318,19 @@ export function openCore(options: {
       ...pin,
     }
     const chat = loadChat(join(chatsDir, id), info)
-    if (parentMemory?.messages.length) {
-      const view = memoryView(parentMemory.messages, parentMemory.summaries, { zoom: takesMcp(engine) })
-      writeFileSync(join(chat.dir, PARENT_VIEW_FILE), view)
+    if (parent && parentMessages?.length) {
+      writeFileSync(join(chat.dir, PARENT_VIEW_FILE), viewOf(parent, parentMessages, takesMcp(engine)))
     }
     broadcast({ type: 'chat.added', chat: state(chat) })
     callMods('onChatCreated', (mod, context) => mod.onChatCreated!(detailOf(chat), context))
     return chat.info
+  }
+
+  // A chat below another, for one task: what spawn_worker and a mod's host.createChat with a parentId both make.
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
+    if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
+    if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -1169,6 +1397,9 @@ export function openCore(options: {
   // What follows a mod starting or stopping to run: its chats show or hide, spawned processes stop, panels update.
   const modSwitched = (mod: Mod, enabled: boolean, family = familyOfMod(mod)) => {
     if (!enabled) stopSpawned(mod)
+    if (!enabled) chats.forEach((chat) => setWait(chat, mod.id, undefined))
+    if (enabled) startMod(mod)
+    else stopMod(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
@@ -1561,9 +1792,8 @@ export function openCore(options: {
     mkdirSync(workDir, { recursive: true })
     const message = withAttachments(text ? transformed('transformMessage', chat, text) : text, attachments)
     const zoomable = takesMcp(adapter.id)
-    const prompt = continuation
-      ? continuationPrompt(messagesOf(chat.entries), chat.summaries, continuation, { zoom: zoomable })
-      : memoryPrompt(messagesOf(chat.entries), chat.summaries, message, { zoom: zoomable }, reports)
+    const view = viewOf(chat, messagesOf(chat.entries), zoomable)
+    const prompt = continuation ? continuationPrompt(view, continuation) : seededPrompt(view, message, reports)
     const at = new Date().toISOString()
     if (!continuation) {
       chat.produced = false
@@ -1588,16 +1818,13 @@ export function openCore(options: {
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
     const role = modChatOf(chat)?.instructions
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
-    const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
-    const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
     const spawns = zoomable && !chat.info.worker && isOn(WORKERS_MOD)
+    const forSession = { chat: detailOf(chat), tools: zoomable }
     const memory = [
       ...(spawns ? [String(modValues(WORKERS_MOD).instructions)] : []),
-      MEMORY_INSTRUCTIONS,
-      ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
-      ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
+      ...memoryInstructions(forSession),
+      ...(parentView ? [`Your parent chat's memory when it started you:\n\n${parentView}`] : []),
     ]
-    const forSession = { chat: detailOf(chat), tools: zoomable }
     const modInstructions = watchersOf('instructions').flatMap((mod) => {
       try {
         const text = mod.instructions!(forSession, contextOf(mod))
@@ -1670,7 +1897,18 @@ export function openCore(options: {
       let session: Session | undefined
       // Where each tool sits in chat.turn.tools, counting from 1.
       const toolIds = new Map<string, number>()
-      const emit = (event: EngineEvent) => {
+      // Engine events arrive from an adapter's stdout handler, where a throw would take the whole app down. A write
+      // that fails (the chat's folder was deleted under it, say) is reported instead; with the folder gone, the chat's
+      // session stops.
+      const guarded = (run: () => void) => {
+        try {
+          run()
+        } catch (error) {
+          lostChat(chat, error)
+        }
+      }
+      const emit = (event: EngineEvent) => guarded(() => handleEvent(event))
+      const handleEvent = (event: EngineEvent) => {
         if (chat.session !== session) return
         const at = new Date().toISOString()
         for (const mod of watchersOf('onEvent')) callMod(mod, () => mod.onEvent!(detailOf(chat), event, contextOf(mod)))
@@ -1737,7 +1975,7 @@ export function openCore(options: {
         chat.pendingRequests.set(requestId, 'permission')
         void fromMods.then((verdict) => {
           if (chat.session !== session || chat.pendingRequests.get(requestId) !== 'permission') return
-          settle(verdict ?? own)
+          guarded(() => settle(verdict ?? own))
         })
       }
 
@@ -1890,6 +2128,8 @@ export function openCore(options: {
     })
     try {
       const message = { text, ...(attachments.length && { attachments }) }
+      // A message sent while mods wait on the user answers them too; it still goes to the agent.
+      for (const modId of chat.waits.keys()) answerWait(chat, modId, { message: text })
       if (steering && canSteer(chat)) {
         checkActive(chat)
         steer(chat, message)
@@ -1902,8 +2142,8 @@ export function openCore(options: {
 
   const mcp = openKotharMcp({
     chats: () => shownChats().map(state),
-    seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
-    createChat,
+    seesAll,
+    createChild,
     send: (chatId, text) => send(chatFor(chatId), text),
     deliver: (chatId, text) => {
       const chat = chatFor(chatId)
@@ -1918,7 +2158,6 @@ export function openCore(options: {
       const { enabled, values } = modInfo(WORKERS_MOD)
       return { enabled, limit: Number(values.limit) }
     },
-    memory: (chatId) => memoryOf(chatFor(chatId)),
     modTools: () =>
       mods
         .filter(isOn)
@@ -1942,7 +2181,7 @@ export function openCore(options: {
     }
     chat.pendingRequests.delete(entry.requestId)
     append(chat, entry)
-    if (chat.pendingRequests.size === 0) setStatus(chat, 'running')
+    if (chat.pendingRequests.size === 0 && chat.waits.size === 0) setStatus(chat, 'running')
     return chat.session
   }
 
@@ -1980,7 +2219,7 @@ export function openCore(options: {
       enginesDetected = true
       models.settle()
       followModels()
-      compactBacklog()
+      startMods()
     },
     setEngineEnabled,
     contextDefaults,
@@ -2081,8 +2320,12 @@ export function openCore(options: {
             broadcast({ type: 'error', message: messageOf(error) }),
           )
         }
+        case 'mod.space.set':
+          return setSpaceValue(modFor(String(message.mod)), chatFor(message.chatId), String(message.key), message.value)
         case 'mod.command':
           return runCommand(chatFor(message.chatId), message.mod, message.command)
+        case 'mod.wait.answer':
+          return answerWait(chatFor(message.chatId), String(message.mod), { button: String(message.button) })
         case 'context.add':
           return addContext(chatFor(message.chatId), addable(message.section), message.path)
         case 'context.remove':
@@ -2220,7 +2463,7 @@ export function openCore(options: {
     },
     async close(force = false) {
       quitting = true
-      compactor.close()
+      for (const mod of mods) stopMod(mod)
       for (const chat of chats.values()) {
         if (chat.status === 'idle') stopSession(chat)
         else interrupt(chat, force)

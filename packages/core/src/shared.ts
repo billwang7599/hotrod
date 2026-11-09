@@ -1,8 +1,10 @@
 import type {
+  ModelRole as ApiModelRole,
   Answers,
   Attachment,
   ChatEntry,
   ChatStatus,
+  CompletionRequest,
   EngineEvent,
   McpServer,
   ModAction,
@@ -11,9 +13,20 @@ import type {
   ModUse,
   ModValues,
   ModView,
+  ModWait,
 } from '@kothar/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kothar/mod-api'
+export type {
+  Answers,
+  ChatEntry,
+  ChatStatus,
+  CompletionRequest,
+  EngineEvent,
+  MemoryMessage,
+  MessageKind,
+  Question,
+  ToolKind,
+} from '@kothar/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -103,8 +116,6 @@ export type SessionOptions = {
 }
 
 export type ImageInput = { mimeType: string; base64: string }
-
-export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 export type CompleteOptions = CompletionRequest & {
   cwd: string
@@ -207,6 +218,8 @@ export type ChatInfo = PermissionSwitches & {
   // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
   doneAt?: string
   readAt?: string
+  // Spaces only: each mod's spaceSettings as saved, by mod id.
+  modValues?: Record<string, Record<string, unknown>>
 }
 
 /** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
@@ -239,6 +252,9 @@ export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('ed
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'workers'] as const
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
+// The mod API names the same roles; this fails to compile if the two lists drift apart.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+export const ROLES_MATCH_MOD_API: Same<ModelRole, ApiModelRole> = true
 
 export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',
@@ -369,7 +385,11 @@ export type ChatState = ChatInfo & {
   entries: ChatEntry[]
   draft: string
   queue: QueuedMessage[]
+  // What mods are waiting on the user for, while the turn runs (ModHost.wait).
+  waits?: ChatWait[]
 }
+
+export type ChatWait = ModWait & { mod: string }
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
@@ -395,7 +415,9 @@ export type ClientMessage =
   | { type: 'context.get'; chatId: string }
   | { type: 'mod.panel.get'; chatId: string; mod: string; panel: string }
   | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
+  | { type: 'mod.space.set'; chatId: string; mod: string; key: string; value: string | number | boolean }
   | { type: 'mod.command'; chatId: string; mod: string; command: string }
+  | { type: 'mod.wait.answer'; chatId: string; mod: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
@@ -479,6 +501,7 @@ export type CoreMessage =
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
+  | { type: 'chat.waits'; chatId: string; waits: ChatWait[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
   | { type: 'chat.mods'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
   | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
@@ -601,6 +624,8 @@ export const MOD_USES: Record<ModUse, string> = {
   permissions: 'Approves or denies agents\' requests for you',
   sendMessages: 'Sends messages and starts chats as you',
   accounts: 'Sees and switches your engine accounts',
+  models: 'Makes model calls on your accounts',
+  memory: 'Decides what agents remember of each chat',
   readChats: 'Reads your chats',
   transforms: 'Rewrites your messages or agents\' replies',
   instructions: 'Adds to every agent\'s instructions',

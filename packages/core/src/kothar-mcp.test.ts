@@ -6,7 +6,6 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ModHost, ModTool, ModValues } from '@kothar/mod-api'
 import { openKotharMcp, WORKER_NAME_MAX_CHARS } from './kothar-mcp.ts'
-import { messagesOf, openSummaries, zoom } from './memory.ts'
 import type { ChatEntry, ChatState, NewChat } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -61,13 +60,8 @@ async function start(workers = { enabled: false, limit: 4 }) {
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
     modTools: () => modTools.map((entry) => ({ ...entry, host })),
-    createChat: (spec) => created(spec),
+    createChild: (parentId, spec) => created({ parentId, ...spec, worker: true }),
     workers: () => workers,
-    memory(chatId) {
-      const found = chats.find((c) => c.id === chatId)
-      if (!found) throw new Error(`Unknown chat "${chatId}"`)
-      return { messages: messagesOf(found.entries), summaries: openSummaries(join(dir, `${chatId}.jsonl`)) }
-    },
     send(chatId, text) {
       calls.push(['send', chatId, text])
     },
@@ -132,16 +126,16 @@ describe('Kothar MCP server', () => {
     expect((await rpc(token, 'tools/list')).status).toBe(401)
   })
 
-  it('gives a chat that neither sees every chat nor spawns workers only zoom and date', async () => {
-    const { mcp, names } = await start()
-    expect(await names('bbbb0001')).toEqual(['date', 'zoom'])
-    expect(await names('cccc0001')).toEqual(['date', 'zoom'])
+  it('gives no token to a chat that neither sees every chat, spawns workers nor gets a mod tool', async () => {
+    const { mcp } = await start()
+    expect(mcp.grant('bbbb0001')).toBeUndefined()
+    expect(mcp.grant('cccc0001')).toBeUndefined()
     expect(mcp.grant('nope')).toBeUndefined()
   })
 
   it('offers the chat tools to a chat that sees every chat', async () => {
     const { names } = await start()
-    expect(await names('main')).toEqual(['date', 'list_chats', 'read_chat', 'send_message', 'stop_chat', 'zoom'])
+    expect(await names('main')).toEqual(['list_chats', 'read_chat', 'send_message', 'stop_chat'])
   })
 
   it('lists every other chat to a chat that sees every chat', async () => {
@@ -238,7 +232,7 @@ describe('Kothar MCP server', () => {
       offered: (caller) => caller.id !== 'bbbb0001',
       async run(input, { caller, values, host }) {
         if (input.name === 'fail') throw new Error('No such luck')
-        const made = host.createChat({ name: String(input.name), folders: ['/tmp/x'], parentId: 'aaaa0001' } as never)
+        const made = host.createChat({ name: String(input.name), folders: ['/tmp/x'] })
         host.send(made.id, 'Go')
         return { caller: caller.id, worker: caller.worker ?? false, values, chatId: made.id }
       },
@@ -248,11 +242,10 @@ describe('Kothar MCP server', () => {
       const { modTools, names, mcp } = await start()
       modTools.push({ tool: make, values: { size: 2 } })
       expect(await names('main')).toContain('make')
-      expect(await names('aaaa0001')).toEqual(['date', 'make', 'zoom'])
-      expect(await names('bbbb0001')).toEqual(['date', 'zoom'])
+      expect(await names('aaaa0001')).toEqual(['make'])
+      expect(mcp.grant('bbbb0001')).toBeUndefined()
       modTools.splice(0)
-      expect(await names('aaaa0001')).toEqual(['date', 'zoom'])
-      expect(mcp.grant('aaaa0001')).toBeDefined()
+      expect(mcp.grant('aaaa0001')).toBeUndefined()
     })
 
     it('runs it with the caller, its values and a host that makes top-level chats and starts them', async () => {
@@ -286,16 +279,15 @@ describe('Kothar MCP server', () => {
     it('offers spawn_worker to every chat but a worker, only while the mod is on', async () => {
       const off = await start()
       expect(await off.names('main')).not.toContain('spawn_worker')
-      expect(await off.names('bbbb0001')).toEqual(['date', 'zoom'])
+      expect(off.mcp.grant('bbbb0001')).toBeUndefined()
 
       const { names, mcp, chats } = await on()
       expect(await names('main')).toContain('spawn_worker')
-      const tools = ['date', 'list_chats', 'read_chat', 'send_message', 'spawn_worker', 'stop_chat', 'zoom']
+      const tools = ['list_chats', 'read_chat', 'send_message', 'spawn_worker', 'stop_chat']
       expect(await names('aaaa0001')).toEqual(tools)
       expect(await names('bbbb0001')).toEqual(tools)
       chats.push(chat('eeee0001', { parentId: 'bbbb0001', worker: true }))
-      expect(await names('eeee0001')).toEqual(['date', 'zoom'])
-      expect(mcp.grant('eeee0001')).toBeDefined()
+      expect(mcp.grant('eeee0001')).toBeUndefined()
     })
 
     it('refuses to spawn once the mod is turned off mid-session', async () => {
@@ -373,41 +365,6 @@ describe('Kothar MCP server', () => {
       expect((await tool(grant('main'), 'send_message', { chatId: 's1', text: 'hi' })).isError).toBe(true)
       expect(await tool(grant('bbbb0001'), 'send_message', { chatId: 's2', text: 'hi' })).toMatchObject({
         isError: false,
-      })
-    })
-  })
-
-  describe('memory', () => {
-    it("zooms into and dates the caller's own messages only", async () => {
-      const { chats, tool, grant } = await start()
-      const own = messagesOf(chats.find((c) => c.id === 'aaaa0001')!.entries)
-      const token = grant('aaaa0001')
-      expect(await tool(token, 'zoom', { id: 2 })).toEqual({ isError: false, text: zoom(own, openSummaries(''), 2) })
-      expect((await tool(token, 'zoom', { id: 0, n: 4 })).text).toBe(
-        '0+2|user: build it talk: on it\n2+2|user: and test it talk: done',
-      )
-      expect(await tool(token, 'date', { id: 3 })).toEqual({ isError: false, text: at })
-      expect(await tool(grant('main'), 'zoom', { id: 2 })).toEqual({
-        isError: true,
-        text: 'No message 2; this chat has messages 0 to 1',
-      })
-    })
-
-    it('lets a worker read its parent as it was at launch, and no other chat', async () => {
-      const { chats, tool, grant } = await start()
-      chats.push(chat('s1', { parentId: 'aaaa0001', worker: true, parentMessages: 2, entries: said('go') }))
-      const token = grant('s1')
-      expect((await tool(token, 'zoom', { id: 1, parent: true })).text).toMatch(/^1\|talk, .*\n\non it$/)
-      expect(await tool(token, 'date', { id: 0, parent: true })).toEqual({ isError: false, text: at })
-      expect(await tool(token, 'zoom', { id: 2, parent: true })).toEqual({
-        isError: true,
-        text: 'No message 2; this chat has messages 0 to 1',
-      })
-      expect((await tool(token, 'zoom', { id: 0, n: 4, parent: true })).text).toBe('0+2|user: build it talk: on it')
-      expect((await tool(token, 'zoom', { id: 0 })).text).toMatch(/\n\ngo$/)
-      expect(await tool(grant('cccc0001'), 'zoom', { id: 0, parent: true })).toEqual({
-        isError: true,
-        text: "Only a worker can read its parent chat's memory",
       })
     })
   })

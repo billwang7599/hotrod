@@ -1,6 +1,6 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ModAction, ModListItem, ModTone, ModView } from '@kothar/mod-api'
-import { Button, Chevron, Hint } from './controls.tsx'
+import { Button, Chevron, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
 
 /**
@@ -33,6 +33,50 @@ const JUSTIFY = { start: 'justify-start', between: 'justify-between', end: 'just
 const MAX_CODE_LINES = 400
 
 type Act = (action: ModAction) => void
+// Saves one of the mod's space settings, for a panel's switches and pickers.
+type SetValue = (key: string, value: string | number | boolean) => void
+const SetValueContext = createContext<SetValue | undefined>(undefined)
+
+function SettingSwitch({ node }: { node: Extract<ModView, { type: 'switch' }> }) {
+  const set = useContext(SetValueContext)
+  const label = node.label ?? node.setting
+  const row = (
+    <label className="flex min-w-0 items-center justify-between gap-12">
+      <span className="min-w-0 wrap-anywhere">{label}</span>
+      <Switch
+        label={label}
+        checked={node.value === true}
+        disabled={node.disabled || !set}
+        onChange={(checked) => set?.(node.setting, checked)}
+      />
+    </label>
+  )
+  return <Hinted hint={node.hint}>{row}</Hinted>
+}
+
+function SettingPicker({ node }: { node: Extract<ModView, { type: 'picker' }> }) {
+  const set = useContext(SetValueContext)
+  const label = node.label ?? node.setting
+  const options = node.options ?? []
+  const picked = options.find((o) => String(o.value) === String(node.value))
+  return (
+    <div className="flex min-w-0 items-center justify-between gap-12">
+      <span className="min-w-0 wrap-anywhere">{label}</span>
+      <Select
+        label={label}
+        hint={node.hint}
+        value={picked === undefined ? '' : String(picked.value)}
+        options={options.map((o) => ({ value: String(o.value), label: o.label }))}
+        disabled={node.disabled || !set}
+        // A select's values may be numbers; send back the option's own value, not its string.
+        onChange={(value) => {
+          const option = options.find((o) => String(o.value) === value)
+          if (option) set?.(node.setting, option.value)
+        }}
+      />
+    </div>
+  )
+}
 
 function Hinted({ hint, children }: { hint?: string; children: ReactNode }) {
   return hint ? (
@@ -252,13 +296,21 @@ function Node({ node, act }: { node: ModView; act: Act }): ReactNode {
       return <hr className="border-border" />
     case 'empty':
       return <p className="text-sm text-faint">{node.text}</p>
+    case 'switch':
+      return <SettingSwitch node={node} />
+    case 'picker':
+      return <SettingPicker node={node} />
     default:
       return null
   }
 }
 
-export function ModViewer({ view, error, act }: { view?: ModView; error?: string; act: Act }) {
+export function ModViewer({ view, error, act, set }: { view?: ModView; error?: string; act: Act; set?: SetValue }) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>
-  return <Node node={view} act={act} />
+  return (
+    <SetValueContext.Provider value={set}>
+      <Node node={view} act={act} />
+    </SetValueContext.Provider>
+  )
 }

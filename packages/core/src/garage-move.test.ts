@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { createFakeAdapter } from './adapters/fake.ts'
+import { LOCK_FILE } from './garage-lock.ts'
 import { moveGarage, movedPaths, portInUse } from './garage-move.ts'
 import { localMachine } from './machine.ts'
 import { defaultGarage } from './main.ts'
@@ -78,6 +79,17 @@ it('keeps using the old garage where it is while another core runs on it, or if 
   expect(logged.join('\n')).toContain('EXDEV')
   expect(existsSync(garage)).toBe(false)
   expect(existsSync(join(old, 'settings.json'))).toBe(true)
+})
+
+it('leaves the old garage where it is while a Kothar holds its lock, on any port', async () => {
+  const { old, garage } = home()
+  oldGarage(old)
+  const other = spawn('sleep', ['30'], { stdio: 'ignore' })
+  cleanups.push(() => void other.kill())
+  writeFileSync(join(old, LOCK_FILE), JSON.stringify({ pid: other.pid, token: 'theirs' }))
+  const options = { from: old, to: garage, machine: localMachine, inUse: async () => false, ...quiet }
+  expect(await moveGarage(options)).toBe(old)
+  expect(existsSync(garage)).toBe(false)
 })
 
 it('a garage set in the environment is used as is, with nothing moved', async () => {

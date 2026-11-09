@@ -1,9 +1,10 @@
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -18,18 +19,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
+import { LOCK_FILE } from './garage-lock.ts'
 import { WORKERS_MOD } from './kothar-mcp.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
-import {
-  COMPACT_MIN_CHARS,
-  COMPLETE_TIMEOUT_MS,
-  MEMORY_INSTRUCTIONS,
-  MESSAGE_MAX_CHARS,
-  messagesOf,
-  openSummaries,
-  pendingOf,
-} from './memory.ts'
+import { WINDOW_MAX_CHARS } from './memory.ts'
 import {
   ASK_FIRST_COMMANDS,
   bySpaceOrder,
@@ -168,6 +162,20 @@ function stubAdapter(start: Adapter['start']): Adapter {
   return { id: 'stub', detect: async () => ({ installed: true, signedIn: true }), start }
 }
 
+// Every file under a folder with its bytes and times, to show nothing there changed.
+function snapshot(dir: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  const walk = (at: string) => {
+    for (const entry of readdirSync(at, { withFileTypes: true })) {
+      const path = join(at, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else out[path.slice(dir.length)] = `${statSync(path).mtimeMs} ${readFileSync(path, 'base64')}`
+    }
+  }
+  walk(dir)
+  return out
+}
+
 async function until(check: () => boolean) {
   for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
   if (!check()) throw new Error('timed out')
@@ -185,6 +193,7 @@ const settled = (core: Core, id: string) => (statusOf(core, id) ?? 'idle') === '
 const entriesOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.entries ?? []
 const types = (entries: ChatEntry[]) => entries.map((e) => e.type)
 const chatFile = (t: { garage: string }, id: string) => join(t.garage, 'chats', id, 'chat.json')
+const rulesOf = (t: { garage: string }, folder: string) => `${WRITE_RULES}\nYour work folder: ${join(t.garage, 'work', folder)}`
 const byId = (chats: ChatState[]) => chats.toSorted((a, b) => a.id.localeCompare(b.id))
 
 beforeEach(() => {
@@ -1557,8 +1566,7 @@ describe('chat', () => {
     )
 
     const instructions = withoutRules(t.calls[1]?.options.instructions)
-    expect(instructions.startsWith(MEMORY_INSTRUCTIONS)).toBe(true)
-    expect(instructions).toContain('GLOBAL RULES')
+    expect(instructions.startsWith('GLOBAL RULES')).toBe(true)
     expect(instructions).toContain('REPO RULES')
     expect(instructions.indexOf('GLOBAL RULES')).toBeLessThan(instructions.indexOf('REPO RULES'))
     expect(instructions.indexOf('REPO RULES')).toBeLessThan(instructions.indexOf('PERSONAL RULES'))
@@ -2562,9 +2570,8 @@ describe('interrupt', () => {
 
 })
 
-describe('memory', () => {
-  const longReply = (id: number) => `reply ${id} `.padEnd((MESSAGE_MAX_CHARS * 3) / 4, '.')
-
+describe('history', () => {
+  const longReply = (id: number) => `reply ${id} `.padEnd(3_000, '.')
   function writeLog(garage: string, chatId: string, count: number) {
     const dir = join(garage, 'chats', chatId)
     mkdirSync(dir, { recursive: true })
@@ -2574,176 +2581,146 @@ describe('memory', () => {
     writeFileSync(join(dir, 'log.jsonl'), entries.map((e) => JSON.stringify(e) + '\n').join(''))
   }
 
-  function setupMemory(
-    options: {
-      garage?: string
-      script?: FakeStep[]
-      complete?: Adapter['complete']
-      others?: Adapter[]
-      models?: string[]
-      work?: false
-    } = {},
-  ) {
-    const { garage = tempDir(), script = textScript, others = [] } = options
-    const models = options.models ?? [...FAKE_MODELS, SUMMARY_MODELS[0]!]
-    const plain = createFakeAdapter(script, 0)
-    const fake: Adapter = { ...plain, detect: async (machine) => ({ ...(await plain.detect(machine)), models }) }
-    const completions: CompleteOptions[] = []
-    const complete = options.complete ?? fake.complete!
-    const { adapter, calls } = recording({
-      ...fake,
-      complete(machine, request) {
-        completions.push(request)
-        return complete(machine, request)
-      },
-    })
-    const adapters = [...others, adapter]
-    const core = openCore({
-      garage,
-      adapters,
-      defaultEngine: 'fake',
-      machine: sandboxingMachine,
-      mods: [mainMod],
-      compactDebounceMs: 0,
-    })
-    cores.push(core)
-    for (const { id } of adapters) core.handle({ type: 'engine.setEnabled', engine: id, enabled: true }, () => {})
-    if (options.work !== false) core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
-    const messages: CoreMessage[] = []
-    core.onMessage((m) => messages.push(m))
-    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
-    return { core, garage, calls, completions, messages, handle }
-  }
-
-  const summarized = (t: { core: Core; garage: string }, chatId: string) =>
-    pendingOf(messagesOf(entriesOf(t.core, chatId)), openSummaries(join(t.garage, 'chats', chatId, 'summaries.jsonl')))
-      .length === 0
-
-  it('gives every chat the memory instructions after the role instructions', async () => {
-    const t = setupMemory()
-    writeFileSync(join(t.garage, 'AGENTS.md'), 'RULES')
-    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
-    const home = join(t.garage, 'work', 'home')
-    const rules = `${WRITE_RULES}\nYour work folder: ${home}`
-    expect(t.calls[0]?.options.instructions).toBe([MAIN.instructions, rules, MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
-    const chat = createChat({ ...t, replies: [] }, { name: 'App' })
-    t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
-    expect(withoutRules(t.calls[1]?.options.instructions)).toBe([MEMORY_INSTRUCTIONS, 'RULES'].join('\n\n'))
-  })
-
-  it('summarizes a backlog once engines are detected, and the next prompt shows the summary lines', async () => {
+  it('without a memory mod, sends the latest messages that fit, oldest dropped first, and says so', async () => {
     const garage = tempDir()
-    writeLog(garage, 'main', 40)
-    const t = setupMemory({ garage })
-    expect(t.completions).toHaveLength(0)
-    await t.core.refreshEngines()
-    await until(() => summarized(t, 'main'))
-
-    expect(t.completions[0]).toMatchObject({
-      cwd: join(t.garage, 'work', 'home'),
-      model: SUMMARY_MODELS[0],
-      timeoutMs: COMPLETE_TIMEOUT_MS,
-    })
-    expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
+    writeLog(garage, 'main', 80)
+    writeFileSync(join(garage, 'chats', 'main', 'summaries.jsonl'), '{"id":0,"n":1,"text":"old","at":"x"}\n')
+    const t = setup(textScript, garage)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'next' })
     const prompt = t.calls[0]?.prompt ?? ''
-    expect(prompt).toContain('\n0+1|user: question 0\n1+1|talk: summary of 1+1\n')
-    expect(prompt).toContain('<message id="39" kind="talk">')
+    const shown = [...prompt.matchAll(/<message id="(\d+)"/g)].map(([, id]) => Number(id))
+    expect(shown.at(-1)).toBe(79)
+    expect(shown).toEqual(Array.from({ length: shown.length }, (_, i) => 80 - shown.length + i))
+    expect(prompt).toContain(`(${80 - shown.length} of the 80 messages so far are left out: only the latest that fit are shown.)`)
+    expect(prompt.length).toBeLessThan(WINDOW_MAX_CHARS + 500)
+    expect(prompt).not.toMatch(/^\d+\+\d+\|/m)
     expect(prompt.endsWith('New message from the user:\n\nnext')).toBe(true)
+    expect(t.calls[0]?.options.instructions).toBe([MAIN.instructions, rulesOf(t, 'home')].join('\n\n'))
+    expect(readFileSync(join(garage, 'chats', 'main', 'summaries.jsonl'), 'utf8')).toBe(
+      '{"id":0,"n":1,"text":"old","at":"x"}\n',
+    )
   })
 
-  it('waits for a work folder, then writes summaries in <work>/home, sandboxed there', async () => {
-    const garage = tempDir()
-    writeLog(garage, 'main', 40)
-    const t = setupMemory({ garage, work: false })
-    await t.core.refreshEngines()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(t.completions).toHaveLength(0)
-    t.handle({ type: 'workFolder.set', path: join(garage, 'work') })
-    await until(() => summarized(t, 'main'))
-    const home = join(garage, 'work', 'home')
-    expect(t.completions[0]).toMatchObject({ cwd: home, sandbox: { writable: [home], tmpDir: join(home, '.tmp') } })
-    expect(t.messages.filter((m) => m.type === 'error')).toEqual([])
-  })
-
-  it('summarizes after a turn ends, but only once the messages pass COMPACT_MIN_CHARS', async () => {
-    const reply = 'r'.repeat(COMPACT_MIN_CHARS / 4 - 'q'.length)
-    const t = setupMemory({ script: [{ type: 'text.completed', text: reply }] })
-    await t.core.refreshEngines()
-    for (let i = 0; i < 4; i++) {
-      t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
-      await until(() => statusOf(t.core, 'main') === 'idle')
-    }
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(t.completions).toHaveLength(0)
-
-    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
-    await until(() => statusOf(t.core, 'main') === 'idle')
-    await until(() => t.completions.length > 0 && summarized(t, 'main'))
-  })
-
-  it('never makes a turn wait for summaries, and quits with a summary call still out', async () => {
-    const garage = tempDir()
-    writeLog(garage, 'main', 40)
-    const t = setupMemory({ garage, complete: () => new Promise<string>(() => {}) })
-    await t.core.refreshEngines()
-    await until(() => t.completions.length === 1)
-    t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
-    expect(t.calls).toHaveLength(1)
-    await until(() => statusOf(t.core, 'main') === 'idle')
-    await t.core.close()
-    expect(t.completions).toHaveLength(1)
-  })
-
-  it('writes summaries with the first listed model an engine that is on offers, with or without a provider', async () => {
-    const garage = tempDir()
-    writeLog(garage, 'main', 40)
-    const models = [`x/${SUMMARY_MODELS[1]}`, `x/${SUMMARY_MODELS[0]}`, ...FAKE_MODELS]
-    const offersNone = stubAdapter(() => ({ prompt() {}, interrupt() {}, respond() {}, close() {} }))
-    const t = setupMemory({ garage, models, others: [offersNone] })
-    await t.core.refreshEngines()
-    await until(() => t.completions.length > 0)
-    expect(t.completions[0]?.model).toBe(`x/${SUMMARY_MODELS[0]}`)
-  })
-
-  it('shows one error when summaries fail', async () => {
-    const garage = tempDir()
-    writeLog(garage, 'main', 40)
-    const t = setupMemory({
-      garage,
-      complete: async () => {
-        throw new Error('usage limit reached')
+  it('asks the first memory mod that is on for the view and its instructions, and the window when it is off', async () => {
+    const seen: { chat: string; count: number; tools: boolean }[] = []
+    const memory: Mod = {
+      id: 'mem',
+      name: 'Mem',
+      description: '',
+      enabledByDefault: true,
+      memory: {
+        view({ chat, messages, tools }) {
+          seen.push({ chat: chat.id, count: messages.length, tools })
+          return `VIEW OF ${messages.length}`
+        },
+        instructions: ({ tools }) => `READ THE VIEW (${tools})`,
       },
-    })
-    await t.core.refreshEngines()
-    await until(() => t.messages.some((m) => m.type === 'error'))
-    expect(t.messages.filter((m) => m.type === 'error')).toEqual([
-      { type: 'error', message: 'Memory summaries are failing: usage limit reached. Retrying.' },
-    ])
+    }
+    const second: Mod = { ...memory, id: 'mem2', memory: { view: () => 'SECOND' } }
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, memory, second])
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'one' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[0]?.prompt).toBe('one')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'two' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(t.calls[1]?.prompt).toBe('This is the conversation so far:\n\nVIEW OF 2\n\nNew message from the user:\n\ntwo')
+    expect(t.calls[1]?.options.instructions).toBe(
+      [MAIN.instructions, rulesOf(t, 'home'), 'READ THE VIEW (false)'].join('\n\n'),
+    )
+    expect(seen.at(-1)).toEqual({ chat: 'main', count: 2, tools: false })
+
+    t.handle({ type: 'mod.setEnabled', modId: 'mem', enabled: false })
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'three' })
+    expect(t.calls[2]?.prompt).toContain('SECOND')
+    t.handle({ type: 'mod.setEnabled', modId: 'mem2', enabled: false })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'four' })
+    expect(t.calls[3]?.prompt).toContain('<message id="0" kind="user">\none\n</message>')
+    expect(t.calls[3]?.options.instructions).not.toContain('READ THE VIEW')
   })
 
-  it('uses the summary engine and model that are set, saved in settings.json', async () => {
-    const cannot = stubAdapter(() => {
-      throw new Error('never started')
-    })
-    const script: FakeStep[] = [{ type: 'text.completed', text: 'r'.repeat(COMPACT_MIN_CHARS) }]
-    const t = setupMemory({ script, others: [cannot] })
+  it("falls back to the window when a memory mod's view throws, and shows the error", async () => {
+    const broken: Mod = {
+      id: 'broken',
+      name: 'Broken',
+      description: '',
+      enabledByDefault: true,
+      memory: {
+        view() {
+          throw new Error('no view today')
+        },
+      },
+    }
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, broken])
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'one' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'two' })
+    expect(t.calls[1]?.prompt).toContain('<message id="0" kind="user">\none\n</message>')
+    expect(t.messages).toContainEqual({ type: 'error', message: 'Broken: no view today' })
+  })
+
+  it('starts mods once model calls can run, stops them when turned off or on quit, and starts them again', async () => {
+    const events: string[] = []
+    const worker: Mod = {
+      id: 'worker',
+      name: 'Worker',
+      description: '',
+      enabledByDefault: true,
+      onStart: () => void events.push('start'),
+      onStop: () => void events.push('stop'),
+    }
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, worker])
+    expect(events).toEqual([])
     await t.core.refreshEngines()
-    expect(() => t.handle({ type: 'memory.set', engine: 'stub' })).toThrow(/can't write summaries/)
-    expect(() => t.handle({ type: 'memory.set', engine: 'fake', model: 'nope' })).toThrow(/offers no model "nope"/)
-    expect(() => t.handle({ type: 'memory.set', model: otherModel })).toThrow(/engine/)
-    expect(t.core.memory()).toEqual({})
+    await t.core.refreshEngines()
+    expect(events).toEqual(['start'])
+    t.handle({ type: 'mod.setEnabled', modId: 'worker', enabled: false })
+    t.handle({ type: 'mod.setEnabled', modId: 'worker', enabled: true })
+    expect(events).toEqual(['start', 'stop', 'start'])
+    await t.core.close()
+    expect(events).toEqual(['start', 'stop', 'start', 'stop'])
+  })
 
-    t.handle({ type: 'memory.set', engine: 'fake', model: otherModel })
-    const memory = { engine: 'fake', model: otherModel }
-    expect(t.messages.at(-1)).toEqual({ type: 'memory.updated', memory })
-    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).memory).toEqual(memory)
-    t.handle({ type: 'chat.send', chatId: 'main', text: 'q' })
-    await until(() => t.completions.length > 0 && summarized(t, 'main'))
-    expect(new Set(t.completions.map((c) => c.model))).toEqual(new Set([otherModel]))
+  it("gives mods a chat's messages, files of their own in its folder, one-shot calls and errors", async () => {
+    let host: ModHost | undefined
+    const mod: Mod = {
+      id: 'reader',
+      name: 'Reader',
+      description: '',
+      enabledByDefault: true,
+      onStart: ({ host: given }) => void (host = given),
+    }
+    const plain = createFakeAdapter(textScript, 0)
+    const models = [...FAKE_MODELS, SUMMARY_MODELS[0]!]
+    const completions: CompleteOptions[] = []
+    const fake: Adapter = {
+      ...plain,
+      detect: async (machine) => ({ ...(await plain.detect(machine)), models }),
+      complete: async (_machine, request) => (completions.push(request), 'DONE'),
+    }
+    const t = setup(fake, tempDir(), TEST_STOP_GRACE_MS, [mainMod, mod])
+    await t.core.refreshEngines()
+    t.handle({ type: 'chat.send', chatId: 'main', text: 'hello' })
+    await until(() => statusOf(t.core, 'main') === 'idle')
+    expect(host!.messages('main').map(({ id, kind, text }) => ({ id, kind, text }))).toEqual([
+      { id: 0, kind: 'user', text: 'hello' },
+      { id: 1, kind: 'talk', text: 'Hello' },
+    ])
 
-    t.handle({ type: 'memory.set' })
-    expect(t.core.memory()).toEqual({})
+    const files = host!.chatStorage('main')
+    expect(files.dir).toBe(join(t.garage, 'chats', 'main'))
+    files.append('notes/a.txt', 'one\n')
+    files.append('notes/a.txt', 'two\n')
+    expect(files.read('notes/a.txt')).toBe('one\ntwo\n')
+    for (const name of ['log.jsonl', 'LOG.JSONL', 'chat.json', 'AGENTS.md', 'attachments/x', '../other', '.']) {
+      expect(() => files.write(name, 'x')).toThrow(/outside Reader's files in this chat/)
+    }
+    expect(() => host!.chatStorage('nope')).toThrow()
+
+    expect(await host!.complete({ system: 'S', prompt: 'P', timeoutMs: 1000 })).toBe('DONE')
+    expect(completions[0]).toMatchObject({ system: 'S', prompt: 'P', model: SUMMARY_MODELS[0], cwd: join(t.garage, 'work', 'home') })
+    host!.error('it broke')
+    expect(t.messages).toContainEqual({ type: 'error', message: 'Reader: it broke' })
   })
 })
 
@@ -2816,6 +2793,79 @@ describe('quit', () => {
     t.handle({ type: 'chat.send', chatId: busy.id, text: 'go' })
     void t.core.close()
     expect(() => t.handle({ type: 'chat.send', chatId: idle.id, text: 'hi' })).toThrow(/quitting/)
+  })
+})
+
+describe('one core per garage', () => {
+  it('a second Kothar on a garage in use fails at once and changes nothing there', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+    })
+    const garage = tempDir()
+    // The first Kothar is another process: a lock with its live pid, and a worker mid-turn in a space mid-turn.
+    const other = spawn('sleep', ['30'], { stdio: 'ignore' })
+    try {
+      const t = open(garage, [adapter], adapter.id)
+      const space = createChat(t, { name: 'Space' })
+      t.handle({ type: 'chat.send', chatId: space.id, text: 'go' })
+      await until(() => emits.length === 1)
+      const base = { engine: adapter.id, archived: false, createdAt: at, folders: [], files: [] }
+      const worker = { id: 'w1', name: 'Worker', parentId: space.id, worker: true, ...base }
+      mkdirSync(join(garage, 'chats', worker.id))
+      writeFileSync(join(garage, 'chats', worker.id, 'chat.json'), JSON.stringify(worker))
+      writeFileSync(join(garage, 'chats', worker.id, 'log.jsonl'), JSON.stringify({ at, type: 'turn.started' }) + '\n')
+      await t.core.close(true)
+      cores = cores.filter((core) => core !== t.core)
+      writeFileSync(join(garage, LOCK_FILE), JSON.stringify({ pid: other.pid, token: 'theirs' }) + '\n')
+      const before = snapshot(garage)
+
+      expect(() => open(garage, [adapter], adapter.id)).toThrow(
+        `Kothar is already running on this garage: ${garage} (pid ${other.pid})`,
+      )
+      expect(snapshot(garage)).toEqual(before)
+      expect(existsSync(join(garage, 'chats', worker.id, 'log.jsonl'))).toBe(true)
+    } finally {
+      other.kill()
+    }
+  })
+
+  it('takes over a lock whose process is gone, and gives it up on close', async () => {
+    const garage = tempDir()
+    const gone = spawn('true', [], { stdio: 'ignore' })
+    await new Promise((resolve) => gone.once('exit', resolve))
+    writeFileSync(join(garage, LOCK_FILE), JSON.stringify({ pid: gone.pid, token: 'stale' }) + '\n')
+    const t = setup(textScript, garage)
+    expect(JSON.parse(readFileSync(join(garage, LOCK_FILE), 'utf8')).pid).toBe(process.pid)
+    await t.core.close(true)
+    expect(existsSync(join(garage, LOCK_FILE))).toBe(false)
+  })
+
+  it('a chat whose folder is deleted mid-turn stops, with an error, and the core runs on', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const closed: number[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt() {}, interrupt() {}, respond() {}, close: () => closed.push(emits.length) }
+    })
+    const t = setup(adapter)
+    const chat = createChat(t, { name: 'Gone' })
+    const other = createChat(t, { name: 'Other' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'go' })
+    await until(() => emits.length === 1)
+    rmSync(join(t.garage, 'chats', chat.id), { recursive: true, force: true })
+
+    const tool = { toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls' } as const
+    expect(() => emits[0]!({ type: 'tool.started', ...tool, input: {} })).not.toThrow()
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringContaining('is gone') })
+    expect(statusOf(t.core, chat.id)).toBe('idle')
+    expect(closed).toEqual([1])
+    expect(() => emits[0]!({ type: 'turn.completed' })).not.toThrow()
+
+    t.handle({ type: 'chat.send', chatId: other.id, text: 'still here' })
+    await until(() => emits.length === 2)
+    expect(statusOf(t.core, other.id)).toBe('running')
   })
 })
 
@@ -3072,9 +3122,6 @@ describe('context', () => {
   }
   const instructionsOf = async (t: ReturnType<typeof setup>, chatId: string) =>
     withoutRules((await sessionOf(t, chatId)).instructions)
-      .split('\n\n')
-      .filter((part) => part !== MEMORY_INSTRUCTIONS)
-      .join('\n\n')
   const reopenWithWorker = (t: ReturnType<typeof setup>, parentId: string) => {
     t.core.close()
     const id = 'worker'
@@ -3180,7 +3227,7 @@ describe('context', () => {
     const worker = t.calls[before]!.options
     for (const options of [own, worker]) {
       const file = `<file path="${notes}">\nNOTES\n</file>`
-      expect(withoutRules(options.instructions)).toBe([MEMORY_INSTRUCTIONS, byPath, file].join('\n\n'))
+      expect(withoutRules(options.instructions)).toBe([byPath, file].join('\n\n'))
       expect(options.readFiles).toEqual([image])
     }
     expect(worker).not.toHaveProperty('extraDirs')

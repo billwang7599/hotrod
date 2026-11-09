@@ -40,6 +40,8 @@ export async function startCore(
     mods?: Mod[]
     machine?: Machine
     home?: string
+    // Where the built-in mods are: the repo's mods/ unless a packaged app ships them elsewhere.
+    modsDir?: string
     // How this host restarts Kothar; see openCore's restart.
     restart?: () => void
     // Tests pass a stub, so no terminal really opens.
@@ -47,7 +49,8 @@ export async function startCore(
   } = {},
 ) {
   const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
-  const { mods, brokenMods } = options.mods ? { mods: options.mods, brokenMods: [] } : await loadMods(STOCK_MODS_DIR)
+  const modsDir = options.modsDir ?? STOCK_MODS_DIR
+  const { mods, brokenMods } = options.mods ? { mods: options.mods, brokenMods: [] } : await loadMods(modsDir)
   const port = Number(envVar(env, 'PORT') ?? 4317)
   const garage = envVar(env, 'GARAGE') ?? (await defaultGarage({ home, machine, inUse: () => portInUse(port) }))
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (envVar(env, 'UI_ORIGIN') ?? 'http://localhost:4318')

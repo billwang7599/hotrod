@@ -409,3 +409,49 @@ describe('the Processes tab', () => {
     expect(notes).toEqual([expect.objectContaining(note)])
   })
 })
+
+it("lists other mods' rows, such as the Browser's, with their buttons, which go back to the mod that owns them", async () => {
+  const { mod } = createProcessesMod()
+  const panel = mod.panels![0]!
+  const actions: string[] = []
+  const refreshed: string[] = []
+  let rows = [
+    {
+      mod: 'browser',
+      key: 'browser',
+      label: 'Browser',
+      detail: 'In the background',
+      since: 1000,
+      dot: 'success' as const,
+      actions: [{ name: 'open', label: 'Open' }, { name: 'stop', label: 'Stop' }],
+    },
+  ]
+  const host = {
+    space: (chatId: string) => ({ id: chatId === 'w1' ? 's1' : chatId, name: 'S', folders: [], checkouts: [] }),
+    processes: () => rows,
+    processAction: async (spaceId: string, owner: string, key: string, action: string) =>
+      void actions.push(`${spaceId} ${owner} ${key} ${action}`),
+    chats: () => [{ id: 's1' }, { id: 'w1', parentId: 's1' }],
+    refresh: (chatId: string) => void refreshed.push(chatId),
+  } as unknown as ModHost
+  const context = { values: {}, host }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  // The tab shows for a space with no processes of its own, once another mod lists one.
+  expect(panel.shown!(chat, context)).toBe(true)
+  const view = (await panel.render(chat, context)) as Extract<ModView, { type: 'stack' }>
+  expect(view.children[0]).toEqual({
+    type: 'list',
+    label: 'Browser',
+    items: [{ key: 'browser:browser', label: 'Browser', detail: 'In the background', since: 1000, dot: 'success' }],
+  })
+  const buttons = (view.children[1] as Extract<ModView, { type: 'row' }>).children
+  expect(buttons.map((b) => b.type === 'button' && b.label)).toEqual(['Open', 'Stop'])
+  const stop = buttons[1] as Extract<ModView, { type: 'button' }>
+  await panel.onAction!(stop.action, chat, context)
+  expect(actions).toEqual(['s1 browser browser stop'])
+  // Its rows changed: the space and its workers draw again.
+  mod.onProcessesChanged!('s1', context)
+  expect(refreshed).toEqual(['s1', 'w1'])
+  rows = []
+  expect(panel.shown!(chat, context)).toBe(false)
+})

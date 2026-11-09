@@ -172,9 +172,20 @@ type SidebarProps = {
   send: (m: ClientMessage) => void
   select: (chatId: string) => void
   askName: (request: NameRequest) => void
+  // The New space shortcut, shown when the New space button is hovered.
+  newSpaceKeys?: Binding | null
 }
 
-export function ChatNav({ chats, selectedId, looking = true, connected, send, select, askName }: SidebarProps) {
+export function ChatNav({
+  chats,
+  selectedId,
+  looking = true,
+  connected,
+  send,
+  select,
+  askName,
+  newSpaceKeys,
+}: SidebarProps) {
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
@@ -347,15 +358,17 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
       <div role="group" aria-labelledby="spaces-label" className="flex flex-col gap-1">
         <AnimatePresence>{groupRows(false).filter(shown).map(row)}</AnimatePresence>
       </div>
-      <Button
-        variant="ghost"
-        size="small"
-        className="mt-2 w-full pl-22 text-left"
-        disabled={!connected}
-        onClick={() => askName({ kind: 'new' })}
-      >
-        + New {CHAT_NOUN.one}
-      </Button>
+      <Hint text={newSpaceKeys && <Keys binding={newSpaceKeys} />} side="right">
+        <Button
+          variant="ghost"
+          size="small"
+          className="mt-2 self-end"
+          disabled={!connected}
+          onClick={() => askName({ kind: 'new' })}
+        >
+          + New {CHAT_NOUN.one}
+        </Button>
+      </Hint>
 
       {tree.archived.length > 0 && (
         <details className="group mt-auto">
@@ -443,27 +456,11 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
 
 const FOOTER_ROW = 'flex h-control w-full items-center gap-8 px-8'
 
-/** The sidebar's bottom rows: New space and Settings, each with its shortcut on hover. */
-export function SidebarFooter({
-  connected,
-  keys,
-  newSpace,
-  openSettings,
-}: {
-  connected: boolean
-  keys: { newSpace?: Binding | null; settings?: Binding | null }
-  newSpace: () => void
-  openSettings: () => void
-}) {
+/** The sidebar's bottom row: Settings, with its shortcut on hover. New space sits under the spaces instead. */
+export function SidebarFooter({ settingsKeys, openSettings }: { settingsKeys?: Binding | null; openSettings: () => void }) {
   return (
     <div className="flex flex-col gap-1 px-8 pb-10">
-      <Hint text={keys.newSpace && <Keys binding={keys.newSpace} />} side="right">
-        <Button variant="ghost" size="none" className={FOOTER_ROW} disabled={!connected} onClick={newSpace}>
-          <span aria-hidden="true">+</span>
-          New {CHAT_NOUN.one}
-        </Button>
-      </Hint>
-      <Hint text={keys.settings && <Keys binding={keys.settings} />} side="right">
+      <Hint text={settingsKeys && <Keys binding={settingsKeys} />} side="right">
         <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={openSettings}>
           <span aria-hidden="true">⚙</span>
           Settings

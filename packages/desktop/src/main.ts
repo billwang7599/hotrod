@@ -1,13 +1,19 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { startCore } from '@kothar/core/main'
+import { envVar, startCore } from '@kothar/core/main'
+import { fixPath } from './shell-path.ts'
 import { userDataDir } from './user-data.ts'
 
-const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))
-const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
+// The packaged app is one bundled main.mjs with the UI, preload, icon and built-in mods beside it (see
+// scripts/stage.mjs); from the repo, each sits where the source tree has it.
+const packaged = app.isPackaged
+const local = (inRepo: string, inApp: string) => fileURLToPath(new URL(packaged ? inApp : inRepo, import.meta.url))
+const uiDir = local('../../ui/dist', 'ui')
+const preload = local('preload.cjs', 'preload.cjs')
+const modsDir = packaged ? fileURLToPath(new URL('mods/', import.meta.url)) : undefined
 // A page that dies again this soon after a reload stays dead instead of looping.
 const RELOAD_COOLDOWN_MS = 10_000
-const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
+const icon = local('../assets/icon.png', 'icon.png')
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const VIBRANCY = 'sidebar'
 // The menu's keys until the UI sends the user's own (the defaults in packages/ui/src/shortcuts.ts).
@@ -19,20 +25,32 @@ const MENU_DEFAULTS: Record<string, string | null> = {
 }
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
-app.setPath('userData', userDataDir(app.getPath('appData')))
+// KOTHAR_USER_DATA moves it, with the single-instance lock, so a test copy runs beside the user's own Kothar.
+app.setPath('userData', envVar(process.env, 'USER_DATA') ?? userDataDir(app.getPath('appData')))
 if (!app.requestSingleInstanceLock()) app.quit()
 else
-  start().catch((error: unknown) => {
-    dialog.showErrorBox('Kothar could not start', errorText(error))
+  start().catch(async (error: unknown) => {
+    // Another Kothar holds the garage (npm run dev, or a copy outside this app's single-instance lock): say so plainly.
+    if (/already running on this garage/.test(errorText(error))) {
+      await app.whenReady()
+      await dialog.showMessageBox({
+        type: 'warning',
+        message: 'Kothar is already running',
+        detail: `${errorText(error)}\n\nQuit the other Kothar, then open this one again.`,
+      })
+    } else dialog.showErrorBox('Kothar could not start', errorText(error))
     app.exit(1)
   })
 
 async function start() {
+  // Opened from Finder, the app has launchd's bare PATH and would find no engine.
+  if (packaged) await fixPath()
   await app.whenReady()
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
   // Restart (Settings, after community mod changes) quits as usual, stopping every chat and process, then relaunches.
   const kothar = await startCore({
     uiDir,
+    ...(modsDir && { modsDir }),
     restart: () => {
       app.relaunch()
       app.quit()

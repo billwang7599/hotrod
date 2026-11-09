@@ -28,6 +28,7 @@ import type {
   ThemeFile,
   ToolKind,
   WorkFolder,
+  ChatWait,
 } from '@kothar/core/shared'
 
 export type Permission = {
@@ -73,6 +74,7 @@ export type ChatView = ChatInfo & {
   items: Item[]
   draft: string
   queue: QueuedMessage[]
+  waits?: ChatWait[]
 }
 
 export type State = {
@@ -364,6 +366,10 @@ export function reduce(state: State, action: Action): State {
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
     case 'chat.queue':
       return updateChat(state, action.chatId, (c) => ({ ...c, queue: action.queue }))
+    case 'chat.waits': {
+      const { waits } = action
+      return updateChat(state, action.chatId, ({ waits: _, ...c }) => (waits.length ? { ...c, waits } : c))
+    }
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, items: action.items } }
@@ -503,6 +509,12 @@ export const workerRequests = (chats: ChatView[], chatId: string): WorkerRequest
     .slice(1)
     .filter((c) => c.worker && !c.archived)
     .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
+
+/** What mods wait on the user for in a chat and the workers below it, answered from that chat. */
+export const waitsBelow = (chats: ChatView[], chatId: string) =>
+  familyOf(chats, chatId)
+    .filter((c, i) => i === 0 || (c.worker && !c.archived))
+    .flatMap((chat) => (chat.waits ?? []).map((wait) => ({ chat, wait })))
 
 export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {
   const parent = chats.find((c) => c.id === chat.parentId)

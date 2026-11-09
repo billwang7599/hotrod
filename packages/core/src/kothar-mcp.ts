@@ -4,8 +4,8 @@ import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kothar/mod-
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
-import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
-import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
+import { reaches } from './reach.ts'
+import type { ChatInfo, ChatState, ModelRole } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
 export const WORKER_NAME_MAX_CHARS = 40
@@ -48,19 +48,18 @@ export const WORKERS_MOD: Mod = {
 type Hub = {
   chats(): ChatState[]
   seesAll(chatId: string): boolean
-  createChat(spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }): ChatInfo
+  // A worker below parentId: the same call a mod's host.createChat makes with a parentId.
+  createChild(parentId: string, spec: { name: string; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
   deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
   // What the chat's Stop button does.
   stop(chatId: string): void
   workers(): { enabled: boolean; limit: number }
-  memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
   modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
 }
 
-const reaches = (hub: Hub, caller: ChatState, chat: ChatState) =>
-  chat.worker ? chat.parentId === caller.id : chat.id !== caller.id && hub.seesAll(caller.id)
+const reachesFrom = (hub: Hub, caller: ChatState, chat: ChatState) => reaches(caller, chat, hub.seesAll(caller.id))
 
 export const summaryOf = ({ id, name, engine, parentId, worker }: ChatInfo): ChatSummary => ({
   id,
@@ -88,50 +87,14 @@ function messages(chat: ChatState) {
 
 type Context = { hub: Hub; caller: ChatState; reachable: (chatId: string) => ChatState }
 
-const memoryOf = ({ hub, caller }: Context, parent = false) => {
-  if (!parent) return hub.memory(caller.id)
-  if (!caller.worker || caller.parentId === undefined) {
-    throw new Error("Only a worker can read its parent chat's memory")
-  }
-  const { messages, summaries } = hub.memory(caller.parentId)
-  return { messages: messages.slice(0, caller.parentMessages ?? 0), summaries }
-}
-
-const PARENT_INPUT = z.boolean().optional().describe("A worker's parent chat, as it was at launch")
-
 type Tool = {
-  for: 'reach' | 'workers' | 'memory'
+  for: 'reach' | 'workers'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
 }
 
 const TOOLS: Record<string, Tool> = {
-  zoom: {
-    for: 'memory',
-    description:
-      'Open a line of your memory. zoom(id, n) gives the two lines of n/2 under line id+n; zoom(id, 1) gives ' +
-      'message id whole, in pages (offset and limit pick a part).',
-    input: z.object({
-      id: z.number().int(),
-      n: z.number().int().optional(),
-      offset: z.number().int().optional(),
-      limit: z.number().int().optional(),
-      parent: PARENT_INPUT,
-    }),
-    run(context: Context, input: { id: number; n?: number; offset?: number; limit?: number; parent?: boolean }) {
-      const { messages, summaries } = memoryOf(context, input.parent)
-      return zoom(messages, summaries, input.id, input.n, input.offset, input.limit)
-    },
-  },
-  date: {
-    for: 'memory',
-    description: 'The date and time of message id in your memory.',
-    input: z.object({ id: z.number().int(), parent: PARENT_INPUT }),
-    run(context: Context, { id, parent }: { id: number; parent?: boolean }) {
-      return dateOf(memoryOf(context, parent).messages, id)
-    },
-  },
   list_chats: {
     for: 'reach',
     description: 'List the chats this one can reach, with their status.',
@@ -139,7 +102,7 @@ const TOOLS: Record<string, Tool> = {
     run({ hub, caller }: Context) {
       return hub
         .chats()
-        .filter((chat) => reaches(hub, caller, chat))
+        .filter((chat) => reachesFrom(hub, caller, chat))
         .map(({ id, name, folders, status, engine, archived }) => ({ id, name, folders, status, engine, archived }))
     },
   },
@@ -194,7 +157,7 @@ const TOOLS: Record<string, Tool> = {
         throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
       }
       const name = workerName(task)
-      const chat = hub.createChat({ parentId: caller.id, name, worker: true, role })
+      const chat = hub.createChild(caller.id, { name, ...(role && { role }) })
       hub.send(chat.id, task)
       return { chatId: chat.id }
     },
@@ -209,7 +172,6 @@ export function openKotharMcp(hub: Hub) {
   const offers = (caller: ChatState, tool: Tool) => {
     const spawns = !caller.worker && hub.workers().enabled
     if (tool.for === 'workers') return spawns
-    if (tool.for === 'memory') return true
     return spawns || hub.seesAll(caller.id)
   }
   const modToolsFor = (caller: ChatState) => hub.modTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
@@ -237,7 +199,7 @@ export function openKotharMcp(hub: Hub) {
         answer((caller, chats) => {
           const reachable = (chatId: string) => {
             const chat = chats.find((c) => c.id === chatId)
-            if (!chat || !reaches(hub, caller, chat)) throw new Error(`No chat "${chatId}" this chat can reach`)
+            if (!chat || !reachesFrom(hub, caller, chat)) throw new Error(`No chat "${chatId}" this chat can reach`)
             return chat
           }
           return tool.run({ hub, caller, reachable }, input)

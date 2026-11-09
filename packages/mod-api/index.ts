@@ -72,6 +72,9 @@ export type ChatDetail = ChatSummary & {
   folders: string[]
   files: string[]
   createdAt: string
+  // A worker: how many of its parent's messages there were when it started, so a memory mod can freeze its view of
+  // the parent there.
+  parentMessages?: number
 }
 
 // A git folder in a space's context, checked out in the space's work folder: path and branch of the worktree, and
@@ -101,6 +104,15 @@ export type ChatEntry = { at: string } & (
   | { type: 'mod.note'; text: string; mod?: string; panel?: string }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
+
+// A chat's log as memory reads it: the entries a conversation is made of, numbered from 0 in log order. user is the
+// user's words, work a report from a worker or a message from another chat, talk the agent's reply, tool a tool call,
+// echo its output, note a turn that ended early. Every memory (a mod's or the core's own window) numbers the same way.
+export type MessageKind = 'user' | 'work' | 'talk' | 'tool' | 'echo' | 'note'
+export type MemoryMessage = { id: number; kind: MessageKind; at: string; text: string }
+
+// A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
+export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 // A mod's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its own.
 export type ModChat = { id: string; name: string; instructions: string; seesAll?: boolean }
@@ -134,16 +146,52 @@ export type ModStorage = {
   dir: string
   read(name: string): string | undefined
   write(name: string, text: string): void
+  // Adds to the end of the file, making it if it's missing.
+  append(name: string, text: string): void
   remove(name: string): void
+}
+
+// Which of the user's model lists (Settings → Models) a chat runs on.
+export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
+
+export type NewChatSpec = {
+  name: string
+  folders?: string[]
+  files?: string[]
+  // An engine that is on; without one, the chat follows its role's model list.
+  engine?: string
+  // Makes a child of this chat (see ModHost.createChat).
+  parentId?: string
+  // A child's model list; only with parentId.
+  role?: ModelRole
 }
 
 // Each mod gets a host of its own, so storage and notes know which mod they belong to.
 export type ModHost = {
-  createChat(spec: { name: string; folders?: string[]; files?: string[]; engine?: string }): { id: string }
+  // A new chat; send it its first message with send. Without parentId it's a space, with its own folders and files.
+  // With parentId it's a child of that chat, made exactly as spawn_worker makes a worker: listed under its parent and
+  // view only (the user can watch and stop it, not write to it), working in its space's work folder and checkouts,
+  // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
+  // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
+  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
+  // sets no limit on how many run; spawn_worker counts them toward the Workers mod's.
+  createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
   // Every chat the user can see, spaces and workers.
   chats(): ChatDetail[]
+  // The mod's spaceSettings for chatId's space (the chat itself, or the space a worker is in), defaults filled in.
+  spaceValues(chatId: string): ModValues
+  // Saves one of the mod's spaceSettings for chatId's space, checked as Settings checks a global one, and draws the
+  // mod's panels again.
+  setSpaceValue(chatId: string, key: string, value: string | number | boolean): void
+  // Whether the chat callerId may reach chatId, by the rule the core's list_chats, read_chat, send_message and
+  // stop_chat use: a chat reaches its own workers, and a chat that sees every chat (Home) also reaches every other chat
+  // except other chats' workers. No chat reaches itself. A mod tool learns its caller from run's `caller`; check before
+  // reading or messaging a chat the caller named.
+  reaches(callerId: string, chatId: string): boolean
+  // Every chat callerId may reach, by the same rule.
+  reachable(callerId: string): ChatDetail[]
   chat(chatId: string): ChatDetail | undefined
   // The chat's log, oldest first; `last` keeps only the newest entries.
   read(chatId: string, options?: { last?: number }): ChatEntry[]
@@ -164,6 +212,8 @@ export type ModHost = {
   // A short line in the chat's transcript, for the user. Agents don't see it. With panel, clicking it opens that
   // panel of this mod's.
   note(chatId: string, text: string, options?: { panel?: string }): void
+  // An error for the user, shown as one from a hook that throws is: after the mod's name. For background work.
+  error(text: string): void
   // Runs a command through the Machine, so it works wherever the core runs. Not sandboxed: it's the mod's own.
   run: ModRun
   // Starts a long-running command through the Machine and returns once it's started, without waiting for it to end.
@@ -174,9 +224,48 @@ export type ModHost = {
   // folder. The folder must be in some space: one of its folders, its work folder or a checkout, or inside one. Rejects
   // with a short message for the user when it can't (no such folder, the terminal app is missing).
   openTerminal(path: string): Promise<void>
+  // Files of the mod's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The core's
+  // own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
+  chatStorage(chatId: string): ModStorage
+  // The chat's log as numbered memory messages, oldest first.
+  messages(chatId: string): MemoryMessage[]
+  // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
+  // folder. Rejects when no engine that is on can make one.
+  complete(request: CompletionRequest): Promise<string>
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
   // Without a chat, for every chat.
   refresh(chatId?: string): void
+  // Puts the chat in waiting for the user, as an unanswered permission request does: amber in the sidebar, with a bar
+  // above the composer showing text and the buttons (a worker's shows in its space too). Clicking one, or the user
+  // sending the chat a message, calls the mod's onWaitAction. Only while the chat's turn runs, as from a tool's run;
+  // calling it again replaces this mod's wait. It goes with endWait, when the turn ends, or when the mod is turned off.
+  wait(chatId: string, wait: ModWait): void
+  endWait(chatId: string): void
+  // The Processes tab's rows from every other mod that's on (Mod.processes) for the space, so a mod that draws the
+  // tab can list them. processAction runs one of a row's actions in the mod that owns it; processesChanged tells the
+  // mods that draw them (onProcessesChanged) that this mod's rows changed.
+  processes(spaceId: string): (ModProcessRow & { mod: string })[]
+  processAction(spaceId: string, mod: string, key: string, action: string): Promise<void>
+  processesChanged(spaceId: string): void
+}
+
+// What waits for the user on a chat: a short line saying what's needed, and its buttons.
+export type ModWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }
+
+// How the user answered a wait: a button, or a message they sent the chat instead (it still goes to the agent).
+export type ModWaitAnswer = { button: string } | { message: string }
+
+// Something of a mod's own that runs in a space, such as its browser, listed in the Processes tab beside the
+// commands agents start. actions are buttons on the row; each comes back to the mod's onProcessAction.
+export type ModProcessRow = {
+  key: string
+  label: string
+  detail?: string
+  // When it started (epoch ms), for a live uptime.
+  since?: number
+  dot?: ModTone
+  hint?: string
+  actions: { name: string; label: string; hint?: string; primary?: boolean }[]
 }
 
 export type ModContext = { values: ModValues; host: ModHost }
@@ -213,6 +302,7 @@ export type ModTool = {
   description: string
   inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[] }
   offered(caller: ChatSummary): boolean
+  // caller: the chat whose agent called the tool. host.reaches(caller.id, …) says which chats it may act on.
   run(input: Record<string, unknown>, call: { caller: ChatSummary; values: ModValues; host: ModHost }): unknown
 }
 
@@ -222,6 +312,19 @@ export type McpServer = {
   args?: string[]
   env?: Record<string, string>
   allowTools?: boolean
+}
+
+// What a fresh session sees of its chat's history. The core asks the first mod that's on with a memory; with none, it
+// sends a window of the latest messages in full and says how many older ones it dropped.
+// tools: the session has the Kothar MCP server, so the mod's tools (such as a zoom) reach it.
+export type ModMemoryRequest = { chat: ChatDetail; messages: MemoryMessage[]; tools: boolean }
+export type ModMemory = {
+  // The history, oldest first, put before the new message as "This is the conversation so far". Also called for a
+  // worker's frozen view of its parent at launch, with the parent's chat and messages.
+  view(request: ModMemoryRequest, context: ModContext): string
+  // How to read the view, for the session's instructions, where the memory goes: after mods' instructions, before the
+  // chat's context.
+  instructions?(request: ModInstructionsFor, context: ModContext): string | undefined
 }
 
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
@@ -295,6 +398,20 @@ export type ModView =
   | { type: 'card'; title: string; badges?: ModListItem['badges']; open?: boolean; children: ModView[] }
   | { type: 'divider' }
   | { type: 'empty'; text: string }
+  // Controls for one of the mod's spaceSettings in the panel's space (a worker's panel shows its space's): a switch
+  // for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws again.
+  // label defaults to the setting's. value and options are filled in by the core from the space's saved values and the
+  // setting; a mod leaves them out.
+  | { type: 'switch'; setting: string; label?: string; hint?: string; disabled?: boolean; value?: boolean }
+  | {
+      type: 'picker'
+      setting: string
+      label?: string
+      hint?: string
+      disabled?: boolean
+      value?: string | number
+      options?: { value: string | number; label: string }[]
+    }
 
 // A tab beside General, Context and Permissions in the right sidebar.
 export type ModPanel = {
@@ -323,6 +440,16 @@ export type Mod = {
   description: string
   enabledByDefault: boolean
   settings?: ModSetting[]
+  // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
+  // a worker uses its space's. Read them with host.spaceValues, change them with host.setSpaceValue or with a switch or
+  // picker in a panel. They're saved in the space's chat.json, so they go when the space is deleted.
+  spaceSettings?: ModSetting[]
+  // The version of the mod's saved settings, 1 or more; leave it out until they first need migrating. When the
+  // garage holds an older version (none saved counts as 0), migrateSettings runs once at load, before the mod is
+  // used: on the global values and on each space's, as saved (no defaults filled in). What it returns replaces them
+  // and the new version is saved. If it throws, the error shows, nothing is saved, and it runs again next launch.
+  settingsVersion?: number
+  migrateSettings?(saved: Record<string, unknown>, from: number, where: { spaceId?: string }): Record<string, unknown>
   chats?: ModChat[]
   tools?: ModTool[]
   mcpServers?(session: ModSession): McpServer[]
@@ -332,6 +459,12 @@ export type Mod = {
   setup?: ModSetup
   panels?: ModPanel[]
   commands?: ModCommand[]
+  memory?: ModMemory
+  // Kothar is ready for model calls (engines detected, a work folder chosen), or the mod was turned on after that. For
+  // background work, such as summarizing chats.
+  onStart?(context: ModContext): void | Promise<void>
+  // The mod was turned off, or Kothar is quitting: stop background work. Not called for a mod that never started.
+  onStop?(context: ModContext): void | Promise<void>
   onChatCreated?(chat: ChatDetail, context: ModContext): void | Promise<void>
   // The chat is gone from the core by now; its log and folder too.
   onChatRemoved?(chat: ChatDetail, context: ModContext): void | Promise<void>
@@ -358,6 +491,13 @@ export type Mod = {
   transformOutput?(text: string, chat: ChatDetail, context: ModContext): string
   // A turn ran into its account's usage limit. The core stops the turn first, so the chat is idle here.
   onLimitReached?(limit: LimitReached, context: ModContext): void
+  // The user answered this mod's wait on the chat (host.wait). The wait stays until the mod ends it.
+  onWaitAction?(chat: ChatDetail, answer: ModWaitAnswer, context: ModContext): void | Promise<void>
+  // This mod's rows in the space's Processes tab, now. Called whenever the tab draws.
+  processes?(spaceId: string, context: ModContext): ModProcessRow[]
+  onProcessAction?(spaceId: string, key: string, action: string, context: ModContext): void | Promise<void>
+  // Another mod's rows in the space changed (host.processesChanged): a mod that draws them draws again.
+  onProcessesChanged?(spaceId: string, context: ModContext): void
 }
 
 // A community mod ships as two assets of a GitHub release in its own repo: manifest.json, which is this, and main.mjs,
@@ -388,14 +528,18 @@ export type ModUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onLimitReached
+  // onChatArchived, onLimitReached, onStart, onStop
   | 'events'
+  // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
+  // processAction, processesChanged
   | 'panels'
   | 'commands'
   | 'settings'
   | 'chats'
   | 'setup'
-  // Host calls: chats, chat, read, space.
+  // memory, and host.chatStorage
+  | 'memory'
+  // Host calls: chats, chat, read, space, messages, reaches, reachable.
   | 'readChats'
   // send, createChat, retry, continue, interrupt
   | 'sendMessages'
@@ -403,3 +547,5 @@ export type ModUse =
   | 'accounts'
   // run, spawn, openTerminal
   | 'run'
+  // complete
+  | 'models'

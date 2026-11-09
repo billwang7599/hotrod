@@ -17,7 +17,6 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import { WORKER_INSTRUCTIONS, WORKERS_MOD } from './kothar-mcp.ts'
-import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -465,10 +464,8 @@ it('lets every user chat spawn workers while the mod is on, up to the limit of r
   const subchat = core.chats().find((c) => c.id !== 'main')!
   const offered = send(subchat.id, 'hi').options
   expect(offered.instructions).not.toContain(WORKER_INSTRUCTIONS)
-  const before = offered.kotharMcp!.token
-  expect((await (await post(before, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
-    'Tool spawn_worker not found',
-  )
+  // No tool to offer it, so no Kothar MCP server at all.
+  expect(offered.kotharMcp).toBeUndefined()
 
   workersOn(core, 1)
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
@@ -710,7 +707,6 @@ it("gives a worker its parent's items plus its own while it works", async () => 
   }
   expect(itemsOf(chatId).map((i) => i.from)).toEqual([GLOBAL_CONTEXT, subchat.id, chatId])
   const instructions = sessionOf(chatId).options.instructions.split('\n\n')
-  expect(instructions.slice(1, 3)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
   expect(instructions.slice(-2)).toEqual(['WORKSHOP', 'PARENT'])
 
   const parentRules = join(garage, 'chats', subchat.id, 'AGENTS.md')
@@ -720,25 +716,117 @@ it("gives a worker its parent's items plus its own while it works", async () => 
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })
 
-it('lets every chat zoom its own memory, and cuts a long message only where zoom can bring it back', async () => {
-  const long = 'x'.repeat(MESSAGE_MAX_CHARS + 10)
-  for (const kotharMcp of [true, false]) {
-    const { send, tool } = await startHeld({ kotharMcp })
-    send('main', long).end('ok')
-    const next = send('main', 'next')
-    if (kotharMcp) {
-      expect(next.options.instructions.split('\n\n')).toContain(ZOOM_INSTRUCTIONS)
-      expect(next.prompt).toContain(`cut at ${MESSAGE_MAX_CHARS} of ${long.length} chars; zoom(0) for the rest`)
-      expect((await tool(next.options.kotharMcp!.token, 'zoom', { id: 0 })).text).toMatch(new RegExp(`\\n\\n${long}$`))
-    } else {
-      expect(next.options.kotharMcp).toBeUndefined()
-      expect(next.options.instructions).not.toContain(ZOOM_INSTRUCTIONS)
-      expect(next.prompt).toContain(`\n${long}\n`)
-    }
-  }
+it('without a memory mod, offers no zoom and sends long messages whole', async () => {
+  const long = 'x'.repeat(10_000)
+  const { send, post } = await startHeld()
+  send('main', long).end('ok')
+  const next = send('main', 'next')
+  expect(next.options.instructions).not.toContain('zoom')
+  expect(next.prompt).toContain(`\n${long}\n`)
+  const reply = await (await post(next.options.kotharMcp!.token, 'zoom', { id: 0 })).json()
+  expect(reply.error.message).toBe('Tool zoom not found')
 })
 
-it("gives a worker its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
+// A mod that starts a child of whoever calls its tool, as a Workers mod would.
+const childMod: Mod = {
+  id: 'kids',
+  name: 'Kids',
+  description: '',
+  enabledByDefault: true,
+  tools: [
+    {
+      name: 'delegate',
+      description: 'Start a child chat',
+      offered: (caller) => !caller.worker,
+      inputSchema: { type: 'object', properties: { task: { type: 'string' }, spec: { type: 'object' } }, required: ['task'] },
+      run({ task, spec }, { caller, host }) {
+        const child = host.createChat({ name: String(task), parentId: caller.id, ...(spec as object) })
+        host.send(child.id, String(task))
+        return { chatId: child.id }
+      },
+    },
+  ],
+}
+
+it("lets a mod start a child chat as spawn_worker does, with the Workers mod off: frozen view, report, removal", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld({ mods: [mainMod, childMod] })
+  handleOn(core)({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: false })
+  const parent = send('main', 'Plan the release')
+  const token = parent.options.kotharMcp!.token
+  const { chatId } = await json(token, 'delegate', { task: 'Check the changelog', spec: { role: 'searching' } })
+  expect(chatIn(core, chatId)).toMatchObject({ parentId: 'main', worker: true, role: 'searching', parentMessages: 1 })
+  const child = sessionOf(chatId)
+  expect(child.prompt).toBe('Check the changelog')
+  expect(child.options.instructions).toContain('<message id="0" kind="user">\nPlan the release\n</message>')
+  // Its tool isn't offered to a child, and no memory mod is on, so the child has no Kothar MCP server at all.
+  expect(child.options.kotharMcp).toBeUndefined()
+
+  // A child takes its folders from its space, and can't have children of its own.
+  const refused = await tool(token, 'delegate', { task: 'More', spec: { folders: [garage] } })
+  expect(refused).toEqual({ isError: true, text: 'A child chat takes its folders from its space' })
+  const grandchild = await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId } })
+  expect(grandchild).toEqual({ isError: true, text: 'A worker cannot start chats' })
+  expect((await tool(token, 'delegate', { task: 'Odd', spec: { role: 'boss' } })).text).toBe('Unknown role "boss"')
+
+  child.end('Checked')
+  expect(chatIn(core, 'main').queue).toMatchObject([{ text: 'Checked', report: { chatId, name: 'Check the changelog' } }])
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+})
+
+// A mod tool that tells what its caller may reach, through the host, next to the core's list_chats.
+const peekMod: Mod = {
+  id: 'peek',
+  name: 'Peek',
+  description: '',
+  enabledByDefault: true,
+  tools: [
+    {
+      name: 'peek',
+      description: 'What the caller may reach',
+      offered: () => true,
+      inputSchema: { type: 'object', properties: { chatId: { type: 'string' } } },
+      run({ chatId }, { caller, host }) {
+        return {
+          caller: caller.id,
+          reachable: host.reachable(caller.id).map((c) => c.id).sort(),
+          ...(typeof chatId === 'string' && { reaches: host.reaches(caller.id, chatId) }),
+        }
+      },
+    },
+  ],
+}
+
+it("tells a mod's tool who called it and what that caller may reach, by the rule list_chats uses", async () => {
+  const { core, json, send } = await startHeld({ mods: [mainMod, peekMod] })
+  workersOn(core, -1)
+  core.handle({ type: 'chat.create', name: 'Alpha' }, () => {})
+  core.handle({ type: 'chat.create', name: 'Beta' }, () => {})
+  const [alpha, beta] = ['Alpha', 'Beta'].map((name) => core.chats().find((c) => c.name === name)!.id) as [string, string]
+  const lead = send(alpha, 'Go')
+  const leadToken = lead.options.kotharMcp!.token
+  const worker = (await json(leadToken, 'spawn_worker', { task: 'Help' })).chatId
+  const home = send('main', 'Hi')
+  const homeToken = home.options.kotharMcp!.token
+  const homeWorker = (await json(homeToken, 'spawn_worker', { task: 'Look' })).chatId
+
+  const listed = async (token: string) => ((await json(token, 'list_chats')) as { id: string }[]).map((c) => c.id).sort()
+  const leadPeek = await json(leadToken, 'peek', { chatId: beta })
+  expect(leadPeek).toEqual({ caller: alpha, reachable: [worker], reaches: false })
+  expect(leadPeek.reachable).toEqual(await listed(leadToken))
+  expect((await json(leadToken, 'peek', { chatId: worker })).reaches).toBe(true)
+
+  const homePeek = await json(homeToken, 'peek', { chatId: worker })
+  expect(homePeek.caller).toBe('main')
+  expect(homePeek.reachable).toEqual([alpha, beta, homeWorker].sort())
+  expect(homePeek.reachable).toEqual(await listed(homeToken))
+  // Another chat's worker stays out of Home's reach, and so does Home itself.
+  expect(homePeek.reaches).toBe(false)
+  expect((await json(homeToken, 'peek', { chatId: 'main' })).reaches).toBe(false)
+  expect((await json(homeToken, 'peek', { chatId: 'nope' })).reaches).toBe(false)
+})
+
+it("gives a worker its parent's latest messages frozen at launch when no memory mod is on", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   workersOn(core, -1)
   const parent = send('main', 'Plan the release')
@@ -750,14 +838,8 @@ it("gives a worker its parent's memory frozen at launch, with read-only zoom and
   expect(first.prompt).toBe('Check the changelog')
   expect(chatIn(core, chatId).parentMessages).toBe(1)
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentMessages).toBe(1)
-  const token = first.options.kotharMcp!.token
-  expect((await tool(token, 'zoom', { id: 0, parent: true })).text).toMatch(/\n\nPlan the release$/)
-  expect((await tool(token, 'date', { id: 0, parent: true })).isError).toBe(false)
-
-  expect(await tool(token, 'zoom', { id: 1, parent: true })).toEqual({
-    isError: true,
-    text: 'No message 1; this chat has messages 0 to 0',
-  })
+  expect(first.options.instructions).not.toContain('zoom')
+  expect(first.options.kotharMcp).toBeUndefined()
   first.end('Checked')
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })

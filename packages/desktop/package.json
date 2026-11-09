@@ -1,14 +1,21 @@
 {
   "name": "@kothar/desktop",
   "productName": "Kothar",
+  "version": "0.1.0",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "main": "src/main.ts",
+  "scripts": {
+    "stage": "node scripts/stage.mjs",
+    "package": "npm run build -w @kothar/ui && node scripts/stage.mjs && electron-builder --config electron-builder.config.cjs"
+  },
   "dependencies": {
     "@kothar/core": "*"
   },
   "devDependencies": {
-    "electron": "^45.2.3"
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
+    "rolldown": "^1.2.16"
   }
 }

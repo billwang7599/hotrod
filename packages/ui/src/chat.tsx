@@ -83,6 +83,7 @@ import {
   type Permission,
   type State,
   lineOf,
+  waitsBelow,
   workerRequests,
 } from './state.ts'
 import { revealIn, takeReveal } from './search.tsx'
@@ -964,6 +965,8 @@ export function Chat(props: ChatProps) {
   const viewOnly = !!chat.worker
   // Workers never ask in their own view: their requests wait in the space above them.
   const requests = viewOnly ? [] : workerRequests(props.chats, chat.id)
+  // A worker's waits show in its space, where the user is; its own view shows them too.
+  const waits = viewOnly ? (chat.waits ?? []).map((wait) => ({ chat, wait })) : waitsBelow(props.chats, chat.id)
   const [paneColumnPx, setPaneColumnPx] = useState(0)
   const settled = useSettled()
   const enter = settled.current && MOTION.rise.initial
@@ -1418,6 +1421,39 @@ export function Chat(props: ChatProps) {
               {requests.map(({ chat: below, permission }) => (
                 <li key={`${below.id}-${permission.requestId}`}>
                   <PermissionPrompt permission={permission} chat={below} connected={connected} send={send} fromWorker />
+                </li>
+              ))}
+            </ul>
+          )}
+          {waits.length > 0 && (
+            <ul className="mx-auto mb-8 flex max-w-column flex-col gap-8" aria-label="Waiting for you">
+              {waits.map(({ chat: of, wait }) => (
+                <li
+                  key={`${of.id}-${wait.mod}`}
+                  className="flex flex-wrap items-center gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-10 shadow-raised"
+                >
+                  <span className="min-w-0 flex-1 text-body">
+                    {of.id !== chat.id && (
+                      <>
+                        Worker <strong>{of.name}</strong>:{' '}
+                      </>
+                    )}
+                    {wait.text}
+                  </span>
+                  {wait.buttons.map((button) => (
+                    <Hint key={button.id} text={button.hint}>
+                      <Button
+                        size="small"
+                        variant={button.primary ? 'primary' : 'default'}
+                        disabled={!connected}
+                        onClick={() =>
+                          send({ type: 'mod.wait.answer', chatId: of.id, mod: wait.mod, button: button.id })
+                        }
+                      >
+                        {button.label}
+                      </Button>
+                    </Hint>
+                  ))}
                 </li>
               ))}
             </ul>

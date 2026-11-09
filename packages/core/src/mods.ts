@@ -38,9 +38,9 @@ export async function loadMods(dir: string) {
   return { mods, brokenMods }
 }
 
-export const valuesOf = (mod: Mod, saved: Record<string, unknown> = {}): ModValues =>
+export const valuesOf = (mod: Mod, saved: Record<string, unknown> = {}, list = mod.settings): ModValues =>
   Object.fromEntries(
-    (mod.settings ?? []).map((setting) => {
+    (list ?? []).map((setting) => {
       const value = saved[setting.key]
       const blank = setting.type === 'text' && !String(value).trim()
       return [setting.key, blank || settingProblem(setting, value) ? setting.default : (value as ModValues[string])]
@@ -67,8 +67,17 @@ const FIELD_USES: [keyof Mod, ModUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['settings', 'settings'],
+  ['spaceSettings', 'settings'],
+  ['migrateSettings', 'settings'],
   ['chats', 'chats'],
   ['setup', 'setup'],
+  ['memory', 'memory'],
+  ['onStart', 'events'],
+  ['onStop', 'events'],
+  ['onWaitAction', 'panels'],
+  ['processes', 'panels'],
+  ['onProcessAction', 'panels'],
+  ['onProcessesChanged', 'panels'],
 ]
 
 // What each host call needs listed. note, storage and refresh need nothing.
@@ -77,6 +86,13 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   chat: 'readChats',
   read: 'readChats',
   space: 'readChats',
+  messages: 'readChats',
+  spaceValues: 'settings',
+  setSpaceValue: 'settings',
+  reaches: 'readChats',
+  reachable: 'readChats',
+  chatStorage: 'memory',
+  complete: 'models',
   send: 'sendMessages',
   createChat: 'sendMessages',
   retry: 'sendMessages',
@@ -87,6 +103,11 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   run: 'run',
   spawn: 'run',
   openTerminal: 'run',
+  wait: 'panels',
+  endWait: 'panels',
+  processes: 'panels',
+  processAction: 'panels',
+  processesChanged: 'panels',
 }
 
 // The Mod fields a mod sets, as uses. Empty lists count as unset.
