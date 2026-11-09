@@ -3,7 +3,22 @@ import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CopyBlock } from './controls.tsx'
 
-const remarkPlugins = [remarkGfm]
+// Agents often write `<br>` for a line break, mostly inside table cells where Markdown has no other way to break a
+// line. Raw HTML stays text (agent output is untrusted), so turn just that one tag into a real break. Code spans and
+// code blocks are their own node types, so a `<br>` inside them stays literal.
+type MdNode = { type: string; value?: string; children?: MdNode[] }
+const BR = /^<br\s*\/?>$/i
+const PHRASING_PARENTS = new Set(['paragraph', 'heading', 'tableCell', 'emphasis', 'strong', 'delete', 'link'])
+const brToBreak = (node: MdNode) => {
+  for (const [i, child] of (node.children ?? []).entries()) {
+    if (child.type === 'html' && PHRASING_PARENTS.has(node.type) && BR.test(child.value?.trim() ?? ''))
+      node.children![i] = { type: 'break' }
+    else brToBreak(child)
+  }
+}
+const remarkBr = () => brToBreak
+
+const remarkPlugins = [remarkGfm, remarkBr]
 
 type HastNode = NonNullable<ExtraProps['node']>['children'][number]
 const textOf = (node: HastNode): string =>
