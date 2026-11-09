@@ -40,6 +40,8 @@ declare global {
   interface Window {
     hotrod?: {
       pickFolder(title?: string): Promise<string | null>
+      pickFiles(title?: string): Promise<string[]>
+      pathForFile(file: File): string
       onNewChatFromFolder(listener: () => void): () => void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>

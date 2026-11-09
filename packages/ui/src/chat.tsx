@@ -1477,6 +1477,7 @@ export function Chat(props: ChatProps) {
               hide={props.contextOverlay ? props.toggleContext : undefined}
               modUi={props.modUi}
               panelViews={props.panelViews}
+              pickers={window.hotrod}
             />
           </SidePanel>
         )}

@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
@@ -269,34 +269,128 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
   )
 }
 
-function AddPath({ section, chatId, disabled, send }: {
+/** What the desktop app adds: the system's own folder and file pickers, and real paths for dropped files. */
+export type Pickers = {
+  pickFolder(title?: string): Promise<string | null>
+  pickFiles(title?: string): Promise<string[]>
+  pathForFile(file: File): string
+}
+
+const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files')
+
+/** Paths dropped from the file manager, sorted into folders and files. An item that can't tell is a file. */
+export function droppedPaths(data: DataTransfer, pathForFile: Pickers['pathForFile']) {
+  const found: Record<'folders' | 'files', string[]> = { folders: [], files: [] }
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    const path = file && pathForFile(file)
+    if (!path) continue
+    found[item.webkitGetAsEntry?.()?.isDirectory ? 'folders' : 'files'].push(path)
+  }
+  return found
+}
+
+function AddPath({ section, chatId, disabled, send, pickers }: {
   section: 'folders' | 'files'
   chatId: string
   disabled: boolean
   send: (m: ClientMessage) => void
+  pickers?: Pickers
 }) {
   const [path, setPath] = useState('')
+  // In the desktop app the system picker comes first and typing is the fallback; a browser tab can only type.
+  const [typing, setTyping] = useState(!pickers)
   const what = section === 'folders' ? 'folder' : 'file'
+  const add = (path: string) => send({ type: 'context.add', chatId, section, path })
+  const closeTyping = () => {
+    setPath('')
+    if (pickers) setTyping(false)
+  }
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (disabled || !path.trim()) return
-    send({ type: 'context.add', chatId, section, path: path.trim() })
-    setPath('')
+    add(path.trim())
+    closeTyping()
   }
-  return (
+  const pick = async () => {
+    if (!pickers) return
+    if (section === 'files') {
+      for (const picked of await pickers.pickFiles('Add files')) add(picked)
+      return
+    }
+    const picked = await pickers.pickFolder('Add a folder')
+    if (picked) add(picked)
+  }
+  const form = typing && (
     <form className="flex gap-6" onSubmit={submit}>
       <input
-        className="flex-1 font-mono text-sm"
-        aria-label={`Add a ${what}`}
+        className="min-w-0 flex-1 font-mono text-sm"
+        aria-label={`Add a ${what} by path`}
         placeholder={section === 'folders' ? '/path/to/folder' : '/path/to/file.md'}
         value={path}
         spellCheck={false}
         disabled={disabled}
+        autoFocus={!!pickers}
         onChange={(e) => setPath(e.target.value)}
+        onKeyDown={(e) => e.key === 'Escape' && pickers && (e.preventDefault(), closeTyping())}
       />
-      <Button disabled={disabled || !path.trim()}>Add {what}</Button>
+      <Button disabled={disabled || !path.trim()}>{pickers ? 'Add' : `Add ${what}`}</Button>
     </form>
   )
+  if (!pickers) return form
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-center gap-6">
+        <Hint text={`Or drag ${section} from your file manager onto this panel`} align="start">
+          <Button type="button" disabled={disabled} onClick={() => void pick()}>
+            {section === 'folders' ? 'Add folder…' : 'Add files…'}
+          </Button>
+        </Hint>
+        <Button
+          type="button"
+          variant="ghost"
+          size="small"
+          className="text-muted"
+          aria-expanded={typing}
+          disabled={disabled}
+          onClick={() => (typing ? closeTyping() : setTyping(true))}
+        >
+          Type a path
+        </Button>
+      </div>
+      {form}
+    </div>
+  )
+}
+
+/** In the desktop app, folders and files dropped on the Context tab are added to the chat's context. */
+function useDropPaths(add: ((section: 'folders' | 'files', path: string) => void) | undefined, pickers?: Pickers) {
+  const [over, setOver] = useState(false)
+  const depth = useRef(0)
+  if (!add || !pickers) return { over: false, handlers: {} }
+  const handlers = {
+    onDragEnter: (e: DragEvent) => {
+      if (!carriesFiles(e)) return
+      depth.current++
+      setOver(true)
+    },
+    onDragLeave: (e: DragEvent) => {
+      if (!carriesFiles(e) || --depth.current > 0) return
+      setOver(false)
+    },
+    onDragOver: (e: DragEvent) => carriesFiles(e) && e.preventDefault(),
+    onDrop: (e: DragEvent) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      depth.current = 0
+      setOver(false)
+      const { folders, files } = droppedPaths(e.dataTransfer, pickers.pathForFile)
+      for (const path of folders) add('folders', path)
+      for (const path of files) add('files', path)
+    },
+  }
+  return { over, handlers }
 }
 
 const STEPS_LABEL = 'Thinking and tool calls'
@@ -397,10 +491,12 @@ type ContextPanelProps = {
   hide?: () => void
   modUi?: State['modUi']
   panelViews?: State['panelViews']
+  /** The desktop app's pickers (`window.hotrod`); a browser tab has none and types paths instead. */
+  pickers?: Pickers
 }
 
 export function ContextPanel(props: ContextPanelProps) {
-  const { chatId, items, chats, workFolder, readOnly, connected, send, hide } = props
+  const { chatId, items, chats, workFolder, readOnly, connected, send, hide, pickers } = props
   const settled = useSettled(items !== undefined)
   const locked = readOnly || !connected
   const sourceOf = (item: ContextItem) =>
@@ -421,6 +517,11 @@ export function ContextPanel(props: ContextPanelProps) {
     if (connected && modTab) send({ type: 'mod.panel.get', chatId, mod: modTab.mod, panel: modTab.id })
   }, [chatId, connected, modTab?.mod, modTab?.id, send])
   const width = usePanelWidth('context')
+  const canAdd = shown === 'context' && !locked && sections.includes('folders')
+  const drop = useDropPaths(
+    canAdd ? (section, path) => send({ type: 'context.add', chatId, section, path }) : undefined,
+    pickers,
+  )
   const tabs: TabEntry[] = [
     ...(chat ? [{ id: 'general', label: TAB_LABEL.general! }] : []),
     { id: 'context', label: TAB_LABEL.context! },
@@ -428,8 +529,24 @@ export function ContextPanel(props: ContextPanelProps) {
     ...modTabs.map((p) => ({ id: modTabId(p.mod, p.id), label: p.title })),
   ]
   return (
-    <aside className="relative flex shrink-0 flex-col border-l bg-panel" style={{ width }} aria-label="Context">
+    <aside
+      className="relative flex shrink-0 flex-col border-l bg-panel"
+      style={{ width }}
+      aria-label="Context"
+      {...drop.handlers}
+    >
       <ResizeHandle panel="context" />
+      <AnimatePresence>
+        {drop.over && (
+          <m.div
+            key="drop"
+            className="pointer-events-none absolute inset-8 z-10 grid place-items-center rounded-lg border-2 border-dashed border-accent bg-bg/85 px-12 text-center text-body text-muted"
+            {...MOTION.fade}
+          >
+            Drop to add folders and files
+          </m.div>
+        )}
+      </AnimatePresence>
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <PanelTabs tabs={tabs} active={shown} choose={choosePanelTab} />
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
@@ -495,7 +612,9 @@ export function ContextPanel(props: ContextPanelProps) {
                   ))}
                 </AnimatePresence>
                 {items && !listed.length && <p className="mb-8 text-sm text-faint">{EMPTY_SECTION[section]}</p>}
-                {section !== 'agents' && <AddPath section={section} chatId={chatId} disabled={locked} send={send} />}
+                {section !== 'agents' && (
+                  <AddPath section={section} chatId={chatId} disabled={locked} send={send} pickers={pickers} />
+                )}
               </section>
             )
           })}

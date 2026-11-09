@@ -103,6 +103,10 @@ async function start() {
     return result.canceled ? null : (result.filePaths[0] ?? null)
   }
   ipcMain.handle('pick-folder', (_event, title?: string) => pickFolder(title))
+  ipcMain.handle('pick-files', async (_event, title = 'Choose files') => {
+    const result = await dialog.showOpenDialog(window, { title, properties: ['openFile', 'multiSelections'] })
+    return result.canceled ? [] : result.filePaths
+  })
   ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
     const { scheme, vibrancy, background } = appearance
     if (scheme === 'system' || scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme
