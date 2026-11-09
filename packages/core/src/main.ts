@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,7 +10,7 @@ import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { moveGarage, portInUse } from './garage-move.ts'
 import { localMachine } from './machine.ts'
-import { loadMods } from './mods.ts'
+import { loadCommunityMods, loadMods } from './mods.ts'
 import { startServer } from './server.ts'
 import type { Adapter, Machine } from './shared.ts'
 
@@ -50,7 +51,20 @@ export async function startCore(
 
   const engine = envVar(env, 'ENGINE')
   const defaultEngine = engine ?? adapters[0]?.id ?? ''
-  const core = openCore({ garage, adapters, defaultEngine, machine, mods, brokenMods })
+  const marketplaceUrl = envVar(env, 'MARKETPLACE_URL')
+  const githubToken = envVar(env, 'GITHUB_TOKEN')
+  const community = options.mods ? [] : await loadCommunityMods(garage, (id) => savedOn(garage, id))
+  const core = openCore({
+    garage,
+    adapters,
+    defaultEngine,
+    machine,
+    mods,
+    brokenMods,
+    community,
+    marketplaceUrl,
+    githubToken,
+  })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')
   if (work) core.setWorkFolder(work)
@@ -66,6 +80,15 @@ export async function startCore(
     close: async (force = false) => {
       await Promise.all([core.close(force), server.close()])
     },
+  }
+}
+
+// Whether settings.json has the mod turned on, read before the core opens so only mods that are on get imported.
+function savedOn(garage: string, id: string) {
+  try {
+    return JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).mods?.[id]?.enabled === true
+  } catch {
+    return false
   }
 }
 

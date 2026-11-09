@@ -429,7 +429,7 @@ export function ConfirmDialog() {
                 className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
-                <AlertDialog.Title className="text-body leading-[1.5]">{text}</AlertDialog.Title>
+                <AlertDialog.Title className="text-body leading-[1.5] whitespace-pre-line">{text}</AlertDialog.Title>
                 <div className="flex justify-end gap-8">
                   <AlertDialog.Cancel asChild>
                     <Button>Cancel</Button>

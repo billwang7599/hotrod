@@ -4,6 +4,9 @@ import type {
   Account,
   Answers,
   Attachment,
+  InstalledItem,
+  MarketEntry,
+  MarketKind,
   ChatEntry,
   ChatInfo,
   ChatState,
@@ -20,6 +23,8 @@ import type {
   PanelTab,
   QueuedMessage,
   Question,
+  SearchHit,
+  ThemeFile,
   ToolKind,
   WorkFolder,
 } from '@kotharhq/core/shared'
@@ -81,6 +86,18 @@ export type State = {
   mods: ModInfo[]
   modelLists: ModelLists
   workFolder: WorkFolder
+  // Installed marketplace themes; absent until the core's snapshot arrives.
+  themes?: ThemeFile[]
+  // Everything installed from the marketplace or a folder; absent until the core's snapshot arrives.
+  installed?: InstalledItem[]
+  // The marketplace's catalog, absent until asked for and answered; and the last failed install of each item (by
+  // marketKey), counted so the same error twice still reads as a new answer.
+  catalog?: { entries?: MarketEntry[]; error?: string }
+  marketFailures: Record<string, { error: string; count: number }>
+  // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
+  localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
+  // The core's latest answer to the search palette.
+  search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
@@ -107,6 +124,7 @@ export const initialState: State = {
   mods: [],
   modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
+  marketFailures: {},
   panelViews: {},
   toasts: [],
   nextToastId: 1,
@@ -278,6 +296,8 @@ export function reduce(state: State, action: Action): State {
         mods: action.mods,
         modelLists: action.modelLists,
         workFolder: action.workFolder,
+        themes: action.themes,
+        installed: action.installed,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -355,14 +375,42 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
-    case 'mod.updated':
-      return { ...state, mods: state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) }
+    case 'mod.updated': {
+      const known = state.mods.some((m) => m.id === action.mod.id)
+      const mods = known ? state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) : [...state.mods, action.mod]
+      return { ...state, mods }
+    }
+    case 'mod.removed':
+      return { ...state, mods: state.mods.filter((m) => m.id !== action.modId) }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
     case 'memory.updated':
       return state
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
+    case 'themes.updated':
+      return { ...state, themes: action.themes }
+    case 'market.installed': {
+      const installed = new Set(action.items.map((item) => marketKey(item.kind, item.id)))
+      const marketFailures = Object.fromEntries(
+        Object.entries(state.marketFailures).filter(([key]) => !installed.has(key)),
+      )
+      return { ...state, installed: action.items, marketFailures }
+    }
+    case 'marketplace.catalog':
+      return { ...state, catalog: { entries: action.entries, error: action.error } }
+    case 'market.localInstalled':
+    case 'market.localFailed': {
+      const { type: _, ...answer } = action
+      return { ...state, localInstall: { ...answer, count: (state.localInstall?.count ?? 0) + 1 } }
+    }
+    case 'market.installFailed': {
+      const key = marketKey(action.kind, action.id)
+      const count = (state.marketFailures[key]?.count ?? 0) + 1
+      return { ...state, marketFailures: { ...state.marketFailures, [key]: { error: action.error, count } } }
+    }
+    case 'search.results':
+      return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
     case 'error':
       return {
         ...state,
@@ -553,3 +601,6 @@ export function listedAccounts({ active, accounts }: EngineAccounts) {
   if (!own || !twin) return { active, accounts }
   return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
 }
+
+// One key per installable thing: a theme and a mod may share an id.
+export const marketKey = (kind: MarketKind, id: string) => `${kind}:${id}`

@@ -1,0 +1,41 @@
+{
+  "id": "nord",
+  "name": "Nord",
+  "version": "1.0.0",
+  "author": "Kothar",
+  "description": "The Nord palette by Arctic Ice Studio.",
+  "variants": {
+    "dark": "Polar Night",
+    "light": "Snow Storm"
+  },
+  "dark": {
+    "bg": "#2e3440",
+    "panel": "#3b4252",
+    "raised": "#434c5e",
+    "hover": "#4c566a",
+    "border": "#434c5e",
+    "text": "#eceff4",
+    "muted": "#d8dee9",
+    "faint": "#616e88",
+    "accent": "#88c0d0",
+    "on-accent": "#2e3440",
+    "green": "#a3be8c",
+    "amber": "#ebcb8b",
+    "red": "#bf616a"
+  },
+  "light": {
+    "bg": "#eceff4",
+    "panel": "#e5e9f0",
+    "raised": "#e5e9f0",
+    "hover": "#d8dee9",
+    "border": "#d8dee9",
+    "text": "#2e3440",
+    "muted": "#4c566a",
+    "faint": "#5b6880",
+    "accent": "#5e81ac",
+    "on-accent": "#eceff4",
+    "green": "#74876e",
+    "amber": "#968769",
+    "red": "#bf616a"
+  }
+}

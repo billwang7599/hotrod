@@ -367,7 +367,8 @@ export function createProcessesMod(
       key: proc.id,
       label: proc.name,
       dot: proc.status === 'running' ? 'success' : (end?.tone ?? 'faint'),
-      ...(proc.status === 'running' && { detail: duration(now() - proc.startedAt) }),
+      // The UI ticks it, so a quiet process's uptime stays current without the panel being sent again.
+      ...(proc.status === 'running' && { since: proc.startedAt }),
       ...(end && { badges: [end] }),
       ...(proc.url && { link: { text: `localhost:${proc.port}`, url: proc.url } }),
       selected: open,

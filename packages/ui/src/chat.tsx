@@ -84,6 +84,7 @@ import {
   lineOf,
   subagentRequests,
 } from './state.ts'
+import { revealIn, takeReveal } from './search.tsx'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -992,6 +993,15 @@ export function Chat(props: ChatProps) {
 
   useLayoutEffect(follow, [chat.items, chat.status, chat.draft, requests.length])
 
+  // Opened from a message match in the search palette: show that message instead of the bottom.
+  useLayoutEffect(() => {
+    const reveal = takeReveal(chat.id)
+    const list = listRef.current
+    if (!reveal || !list || !revealIn(list, reveal)) return
+    following.current = false
+    measure()
+  }, [])
+
   useLayoutEffect(() => {
     const list = listRef.current
     if (!list || !contentRef.current) return
@@ -1253,7 +1263,8 @@ export function Chat(props: ChatProps) {
                   return (
                     <m.div
                       key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                      className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
+                      data-item-kind={kind}
+                      className={`group/item flex flex-col rounded transition-colors duration-700 data-revealed:bg-accent/10 ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
                       initial={kind !== 'text' && enter}
                       animate={MOTION.rise.animate}
                     >

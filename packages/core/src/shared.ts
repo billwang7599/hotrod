@@ -6,7 +6,9 @@ import type {
   EngineEvent,
   McpServer,
   ModAction,
+  ModManifest,
   ModSetting,
+  ModUse,
   ModValues,
   ModView,
 } from '@kotharhq/mod-api'
@@ -257,6 +259,17 @@ export type ModInfo = {
   values: ModValues
   setup?: SetupState
   loadError?: string
+  // A community mod: installed in the garage from the marketplace or a folder, and what it says it uses. running: the
+  // version this run of Kothar loaded, if any; mods load only at startup.
+  community?: {
+    version: string
+    author: string
+    uses: ModUse[]
+    source: 'marketplace' | 'local'
+    repo?: string
+    path?: string
+    running?: string
+  }
 }
 
 export type SetupState = {
@@ -382,6 +395,31 @@ export type ClientMessage =
   | { type: 'account.cancelLogin'; engine: string }
   | { type: 'account.use'; engine: string; accountId: string }
   | { type: 'account.remove'; engine: string; accountId: string }
+  // Replies with marketplace.catalog.
+  | { type: 'marketplace.list' }
+  // Replies with themes.updated.
+  | { type: 'themes.get' }
+  // Installs the catalog entry from its repo's latest release, or updates it, then sends everyone market.installed (and
+  // themes.updated for a theme); replies market.installFailed if it can't.
+  | { type: 'market.install'; kind: MarketKind; id: string }
+  | { type: 'market.uninstall'; kind: MarketKind; id: string }
+  // Copies a folder on this computer (a mod or themes) as a local install; replies market.localInstalled or
+  // market.localFailed.
+  | { type: 'market.installLocal'; path: string }
+  // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
+  // the same id, so a reply to an older query can be told apart.
+  | { type: 'search'; id: number; query: string }
+
+// One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
+// earlier messages in the same chat that match too.
+export type SearchHit = {
+  chatId: string
+  at: string
+  kind: 'user' | 'text' | 'report'
+  snippet: string
+  match: { start: number; length: number }
+  nth: number
+}
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
@@ -396,6 +434,8 @@ export type CoreMessage =
       modelLists: ModelLists
       memory: MemorySettings
       workFolder: WorkFolder
+      themes: ThemeFile[]
+      installed: InstalledItem[]
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -412,8 +452,243 @@ export type CoreMessage =
   | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
+  // A mod that's new to the list (a community mod just installed) is added.
   | { type: 'mod.updated'; mod: ModInfo }
+  | { type: 'mod.removed'; modId: string }
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
+  // The marketplace's entries, or why they couldn't be fetched (offline, say).
+  | { type: 'marketplace.catalog'; entries?: MarketEntry[]; error?: string }
+  // Every installed theme.
+  | { type: 'themes.updated'; themes: ThemeFile[] }
+  // Everything installed from the marketplace or a folder, and where each came from.
+  | { type: 'market.installed'; items: InstalledItem[] }
+  | { type: 'market.installFailed'; kind: MarketKind; id: string; error: string }
+  | { type: 'market.localInstalled'; path: string; kind: MarketKind; ids: string[] }
+  | { type: 'market.localFailed'; path: string; error: string }
+  | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
+
+// Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
+// strictly so a theme is only ever colours and can never carry CSS.
+export const THEME_TOKENS = [
+  'bg',
+  'panel',
+  'raised',
+  'hover',
+  'border',
+  'text',
+  'muted',
+  'faint',
+  'accent',
+  'on-accent',
+  'green',
+  'amber',
+  'red',
+] as const
+
+export type ThemeToken = (typeof THEME_TOKENS)[number]
+export type ThemePalette = Record<ThemeToken, string>
+
+// variants: what the theme calls its dark and light palettes, such as Mocha and Latte.
+export type ThemeFile = {
+  id: string
+  name: string
+  version: string
+  author: string
+  description: string
+  variants?: { dark: string; light: string }
+  dark: ThemePalette
+  light: ThemePalette
+}
+
+// The colours a catalog entry shows before it's installed.
+export const PREVIEW_TOKENS = ['accent', 'bg', 'panel', 'text'] as const satisfies readonly ThemeToken[]
+export type ThemePreview = Record<'dark' | 'light', Record<(typeof PREVIEW_TOKENS)[number], string>>
+
+export type MarketKind = 'theme' | 'mod'
+
+// One entry of the marketplace's catalog.json: a pointer to the author's own GitHub repo, whose latest release carries
+// what installs (a theme: <id>.json; a mod: manifest.json and main.mjs).
+export type CatalogEntry = {
+  id: string
+  kind: MarketKind
+  name: string
+  author: string
+  description: string
+  repo: string
+}
+
+// A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem). notes: the start of
+// the release's notes, if it has any.
+export type MarketEntry = CatalogEntry & {
+  latest?: { tag: string; version: string; notes?: string; preview?: ThemePreview; uses?: ModUse[] }
+  problem?: string
+}
+
+// Something installed: from the marketplace (repo and tag), from a folder on this computer (path), or by an older Kothar
+// that kept themes as single files (legacy).
+export type InstalledItem = {
+  kind: MarketKind
+  id: string
+  name: string
+  version: string
+  source: 'marketplace' | 'local' | 'legacy'
+  repo?: string
+  tag?: string
+  path?: string
+}
+
+// GitHub's compare view from the installed release's tag to the latest one, to read before updating. None for an item
+// installed from a folder or by an older Kothar (no tag), from another repo than the catalog's now, or already current.
+export function changesUrl(item: InstalledItem, repo: string, latestTag: string): string | undefined {
+  if (item.source !== 'marketplace' || !item.tag || item.repo !== repo || item.tag === latestTag) return undefined
+  return `https://github.com/${repo}/compare/${encodeURIComponent(item.tag)}...${encodeURIComponent(latestTag)}`
+}
+
+export const MAX_THEME_BYTES = 64 * 1024
+
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+// Lowercase only, so two ids can't name one file on a case-insensitive disk.
+const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
+export const MAX_MANIFEST_BYTES = 64 * 1024
+export const MAX_MOD_BYTES = 5 * 1024 * 1024
+export const MOD_API_VERSION = 1
+
+// What a community mod can say it uses, as the user reads it before install. The keys are ModUse, in this order.
+export const MOD_USES: Record<ModUse, string> = {
+  run: 'Runs programs on your computer',
+  setup: 'Installs software it needs',
+  mcpServers: 'Starts MCP servers for agents',
+  permissions: 'Approves or denies agents\' requests for you',
+  sendMessages: 'Sends messages and starts chats as you',
+  accounts: 'Sees and switches your engine accounts',
+  readChats: 'Reads your chats',
+  transforms: 'Rewrites your messages or agents\' replies',
+  instructions: 'Adds to every agent\'s instructions',
+  tools: 'Gives agents tools',
+  events: 'Watches chats as they run',
+  chats: 'Adds chats of its own',
+  panels: 'Adds panels',
+  commands: 'Adds commands',
+  settings: 'Has settings',
+}
+
+export const isModUse = (use: unknown): use is ModUse => typeof use === 'string' && Object.hasOwn(MOD_USES, use)
+
+// In MOD_USES order, so lists read the same everywhere.
+export const sortUses = (uses: Iterable<ModUse>) => {
+  const set = new Set(uses)
+  return (Object.keys(MOD_USES) as ModUse[]).filter((use) => set.has(use))
+}
+
+const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
+
+export const isItemId = (id: unknown): id is string => typeof id === 'string' && ITEM_ID.test(id)
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+function onlyKeys(value: unknown, what: string, required: readonly string[], optional: readonly string[] = []) {
+  if (!isRecord(value)) throw new Error(`${what} must be an object`)
+  const extra = Object.keys(value).find((key) => !required.includes(key) && !optional.includes(key))
+  if (extra !== undefined) throw new Error(`${what} has an unknown field "${extra}"`)
+  const missing = required.find((key) => !Object.hasOwn(value, key))
+  if (missing !== undefined) throw new Error(`${what} is missing "${missing}"`)
+  return value
+}
+
+function text(value: unknown, what: string, max: number) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
+    throw new Error(`${what} must be text of 1 to ${max} characters`)
+  }
+  return value
+}
+
+function colors<K extends string>(value: unknown, what: string, tokens: readonly K[]) {
+  const palette = onlyKeys(value, what, tokens)
+  for (const token of tokens) {
+    const color = palette[token]
+    if (typeof color !== 'string' || !HEX_COLOR.test(color)) throw new Error(`${what} ${token} must be a hex colour`)
+  }
+  return palette as Record<K, string>
+}
+
+function itemFields(value: Record<string, unknown>, what: string) {
+  if (!isItemId(value.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
+  if (typeof value.version !== 'string' || !VERSION.test(value.version)) {
+    throw new Error(`${what} version must look like 1.2.3`)
+  }
+  return {
+    id: value.id,
+    name: text(value.name, `${what} name`, 40),
+    version: value.version,
+    author: text(value.author, `${what} author`, 60),
+    description: text(value.description, `${what} description`, 200),
+  }
+}
+
+// Throws, saying why, unless value is a theme file with exactly the known fields.
+export function checkTheme(value: unknown): ThemeFile {
+  const fields = ['id', 'name', 'version', 'author', 'description', 'dark', 'light']
+  const theme = onlyKeys(value, 'The theme', fields, ['variants'])
+  const variants =
+    theme.variants === undefined
+      ? undefined
+      : onlyKeys(theme.variants, 'The theme variants', ['dark', 'light'])
+  return {
+    ...itemFields(theme, 'The theme'),
+    ...(variants && {
+      variants: { dark: text(variants.dark, 'The dark variant', 30), light: text(variants.light, 'The light variant', 30) },
+    }),
+    dark: colors(theme.dark, 'The dark palette', THEME_TOKENS),
+    light: colors(theme.light, 'The light palette', THEME_TOKENS),
+  }
+}
+
+// Throws, saying why, unless value is a community mod's manifest.json with exactly the known fields.
+export function checkModManifest(value: unknown): ModManifest {
+  const fields = ['id', 'name', 'version', 'author', 'description', 'api', 'uses']
+  const manifest = onlyKeys(value, 'manifest.json', fields)
+  if (manifest.api !== MOD_API_VERSION) throw new Error(`manifest.json is for mod API ${String(manifest.api)}, not ${MOD_API_VERSION}`)
+  if (!Array.isArray(manifest.uses)) throw new Error('manifest.json uses must be a list')
+  const unknown = manifest.uses.find((use) => !isModUse(use))
+  if (unknown !== undefined) throw new Error(`manifest.json uses "${String(unknown)}", which Kothar doesn't know`)
+  return { ...itemFields(manifest, 'manifest.json'), api: MOD_API_VERSION, uses: sortUses(manifest.uses as ModUse[]) }
+}
+
+export const isRepo = (repo: unknown): repo is string => typeof repo === 'string' && REPO.test(repo) && !repo.includes('..')
+
+// Throws, saying why, unless value is a marketplace catalog: { version: 2, entries: CatalogEntry[] } with unique ids per
+// kind.
+export function checkCatalog(value: unknown): CatalogEntry[] {
+  const catalog = onlyKeys(value, 'The marketplace catalog', ['entries'], ['version'])
+  if (catalog.version !== 2) throw new Error('The marketplace catalog is for another version of Kothar')
+  if (!Array.isArray(catalog.entries)) throw new Error('The marketplace catalog entries must be a list')
+  const entries = catalog.entries.map((raw, i): CatalogEntry => {
+    const what = `Marketplace entry ${i + 1}`
+    const entry = onlyKeys(raw, what, ['id', 'kind', 'name', 'author', 'description', 'repo'])
+    if (!isItemId(entry.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
+    if (entry.kind !== 'theme' && entry.kind !== 'mod') throw new Error(`Marketplace entry "${entry.id}" is a "${entry.kind}"`)
+    if (!isRepo(entry.repo)) throw new Error(`Marketplace entry "${entry.id}" repo must be owner/name`)
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      name: text(entry.name, `${what} name`, 40),
+      author: text(entry.author, `${what} author`, 60),
+      description: text(entry.description, `${what} description`, 200),
+      repo: entry.repo,
+    }
+  })
+  const keys = entries.map((entry) => `${entry.kind} ${entry.id}`)
+  const twin = keys.find((key, i) => keys.indexOf(key) !== i)
+  if (twin !== undefined) throw new Error(`Two marketplace entries are the ${twin.replace(' ', ' "')}"`)
+  return entries
+}
+
+export const previewOf = (theme: ThemeFile): ThemePreview => ({
+  dark: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.dark[token]])) as ThemePreview['dark'],
+  light: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.light[token]])) as ThemePreview['light'],
+})

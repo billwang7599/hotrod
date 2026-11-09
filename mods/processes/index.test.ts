@@ -2,11 +2,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ChatSummary, Mod, ModHost, ModView } from '@kotharhq/mod-api'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModView } from '@kotharhq/mod-api'
 import { createFakeAdapter } from '@kotharhq/core/fake'
 import { startCore } from '@kotharhq/core/main'
 import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kotharhq/core/shared'
 import { sandboxingMachine as localMachine } from '@kotharhq/core/test-machine'
+import { elapsed } from '../../packages/ui/src/elapsed.ts'
 import { createProcessesMod, duration, plain, portOf } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -134,6 +135,11 @@ describe('output', () => {
       '1h 2m',
       '1d 1h',
     ])
+  })
+
+  it('says it the same way the UI ticks a live uptime', () => {
+    for (const ms of [-1, 0, 999, 59_999, 60_000, 3_599_999, 3_600_000, 86_399_999, 86_400_000, 900_000_000])
+      expect(elapsed(ms)).toBe(duration(ms))
   })
 })
 
@@ -276,8 +282,9 @@ describe('the Processes tab', () => {
     expect(t.tabs()).toEqual([])
   })
 
-  it('lists each process with a status dot, its uptime and its address', async () => {
+  it('lists each process with a status dot, its live uptime and its address', async () => {
     const t = await start()
+    const before = Date.now()
     await t.tool('start_process', { command: 'echo "Local: http://localhost:5173/"; sleep 300', name: 'web' })
     await t.tool('start_process', { command: 'exit 2', name: 'broken' })
     const view = await t.panel()
@@ -285,12 +292,18 @@ describe('the Processes tab', () => {
       expect.objectContaining({
         label: 'web',
         dot: 'success',
-        detail: expect.stringMatching(/^\d+s$/),
         link: { text: 'localhost:5173', url: 'http://localhost:5173/' },
         selected: false,
       }),
       expect.objectContaining({ label: 'broken', dot: 'error', badges: [expect.objectContaining({ text: 'exit 2' })] }),
     ])
+    // The running row carries when it started, for the UI to tick; the ended one a fixed "after" in its badge.
+    const [web, broken] = rows(view) as [ModListItem, ModListItem]
+    expect(web.since).toBeGreaterThanOrEqual(before)
+    expect(web.since).toBeLessThanOrEqual(Date.now())
+    expect(web.detail).toBeUndefined()
+    expect(broken.since).toBeUndefined()
+    expect(broken.badges?.[0]?.hint).toMatch(/^Exited with code 2 after \d+s$/)
     expect(buttons(view)).toEqual(['Clear ended'])
   })
 

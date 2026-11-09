@@ -17,9 +17,11 @@ import type {
   Mod,
   ModAction,
   ModContext,
+  ModManifest,
   ModHost,
   ModPanel,
   ModRun,
+  ModUse,
   PermissionRequest,
   PermissionVerdict,
   SpaceDetail,
@@ -41,7 +43,8 @@ import {
   type Summaries,
 } from './memory.ts'
 import { realPath } from './machine.ts'
-import { valuesOf } from './mods.ts'
+import { type Fetch, installedMods, openMarketplace } from './marketplace.ts'
+import { type CommunityMod, guardHost, valuesOf } from './mods.ts'
 import {
   ASK_FIRST_COMMANDS,
   bySpaceOrder,
@@ -73,6 +76,9 @@ import {
   type EngineStatus,
   type Machine,
   type ModelRole,
+  type InstalledItem,
+  type MarketKind,
+  MOD_USES,
   type ModInfo,
   type NewChat,
   type PanelTab,
@@ -86,6 +92,7 @@ import {
   type Worktree,
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
+import { searchChats } from './search.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -141,8 +148,13 @@ export function openCore(options: {
   machine: Machine
   mods?: Mod[]
   brokenMods?: { id: string; loadError: string }[]
+  // Mods installed in the garage from the marketplace or a folder; see loadCommunityMods.
+  community?: CommunityMod[]
   stopGraceMs?: number
   compactDebounceMs?: number
+  marketplaceUrl?: string
+  githubToken?: string
+  fetch?: Fetch
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
@@ -166,6 +178,42 @@ export function openCore(options: {
     const twin = ids.find((id, i) => ids.indexOf(id) !== i)
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
+  // Community mods come after the stock ones. One that clashes with a stock mod's id isn't listed; one whose tool or chat
+  // is taken doesn't run. A mod that didn't load (off, or broken) is listed as a stub with no hooks, so it can be turned
+  // on or off; it runs from the next start.
+  const stockIds = new Set(mods.map((mod) => mod.id))
+  const community = new Map<string, { manifest: ModManifest; item: InstalledItem; running?: string; loadError?: string }>()
+  const stubOf = ({ id, name, description }: ModManifest): Mod => ({ id, name, description, enabledByDefault: false })
+  for (const found of options.community ?? []) {
+    const { manifest, item } = found
+    if (stockIds.has(manifest.id) || community.has(manifest.id)) {
+      console.error(`Skipped the community mod "${manifest.id}": a mod already has that id`)
+      continue
+    }
+    let { mod, loadError } = found
+    const clash =
+      mod &&
+      ((mod.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
+        (mod.chats ?? []).map((chat) => chat.id).find((id) => modChats.some((chat) => chat.id === id)))
+    if (clash) {
+      loadError = `its tool or chat "${clash}" is already taken`
+      mod = undefined
+    }
+    community.set(manifest.id, { manifest, item, ...(mod && { running: manifest.version }), ...(loadError && { loadError }) })
+    if (!mod) {
+      mods.push(stubOf(manifest))
+      continue
+    }
+    mods.push(mod)
+    modChats.push(...(mod.chats ?? []).map((chat) => ({ ...chat, mod: mod! })))
+    toolNames.push(...(mod.tools ?? []).map((tool) => tool.name))
+  }
+  const marketplace = openMarketplace({
+    garage,
+    url: options.marketplaceUrl,
+    token: options.githubToken,
+    fetch: options.fetch,
+  })
   const settingsFile = join(garage, 'settings.json')
   const settings: PermissionSwitches &
     ModelSettings & {
@@ -186,8 +234,10 @@ export function openCore(options: {
     const broken = brokenMods.find((m) => m.id === id)
     throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
   }
+  // A community mod is off until the user turns it on, whatever it says.
   const isOn = (mod: Mod) => {
     const saved = settings.mods?.[mod.id]?.enabled
+    if (community.has(mod.id)) return saved === true
     return typeof saved === 'boolean' ? saved : mod.enabledByDefault
   }
   const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
@@ -202,7 +252,22 @@ export function openCore(options: {
       ...(setups.get(id) ?? { status: 'checking' }),
     }
     const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
-    return { ...info, ...(setup && { setup }) }
+    const from = community.get(id)
+    const { version, author, uses } = from?.manifest ?? {}
+    const { source, repo, path } = from?.item ?? {}
+    const aftermarket = from && {
+      community: {
+        version: version!,
+        author: author!,
+        uses: uses!,
+        source: source === 'local' ? ('local' as const) : ('marketplace' as const),
+        ...(repo && { repo }),
+        ...(path && { path }),
+        ...(from.running && { running: from.running }),
+      },
+      ...(from.loadError && { loadError: from.loadError }),
+    }
+    return { ...info, ...(setup && { setup }), ...aftermarket }
   }
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
@@ -214,6 +279,11 @@ export function openCore(options: {
   const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const listeners: ((message: CoreMessage) => void)[] = []
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
+  // Every window hears what's installed now, and the themes it can show.
+  const marketChanged = (kind: MarketKind) => {
+    if (kind === 'theme') broadcast({ type: 'themes.updated', themes: marketplace.themes() })
+    broadcast({ type: 'market.installed', items: marketplace.installed() })
+  }
   // Everything about which engine, model and thinking level runs lives here.
   const models = openModels({ settings, save: saveSettings, engines: engineInfos, defaultEngine, broadcast })
   const offersModel = (engine: string, model?: string) => detected.get(engine)?.models?.some((m) => m.id === model) === true
@@ -755,8 +825,10 @@ export function openCore(options: {
       },
       refresh: (chatId) => refreshMod(mod, chatId),
     }
-    hosts.set(mod.id, host)
-    return host
+    const uses = community.get(mod.id)?.manifest.uses
+    const given = uses ? guardHost(host, mod, uses) : host
+    hosts.set(mod.id, given)
+    return given
   }
 
   // Mod panels and commands: which a chat gets, and the views of panels the UI has asked for.
@@ -1023,6 +1095,43 @@ export function openCore(options: {
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
+  }
+
+  // A community mod was installed or updated. It runs from the next start; an update that uses more than the version
+  // the user turned on is turned off until they turn it on again.
+  const communityChanged = (id: string, added: ModUse[]) => {
+    const install = installedMods(garage).find((m) => m.manifest.id === id)
+    if (!install) return
+    const known = community.get(id)
+    community.set(id, { ...known, manifest: install.manifest, item: install.item })
+    const at = mods.findIndex((m) => m.id === id)
+    if (at < 0) mods.push(stubOf(install.manifest))
+    else if (!known?.running) mods[at] = stubOf(install.manifest)
+    const mod = mods.find((m) => m.id === id)!
+    if (added.length && isOn(mod)) {
+      setModEnabled(mod, false)
+      const more = added.map((use) => MOD_USES[use].toLowerCase()).join('; ')
+      broadcast({
+        type: 'error',
+        message: `${mod.name} was turned off: its update also ${more}. Turn it on again in Community mods to allow that.`,
+      })
+    }
+    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+  }
+
+  // Turns the mod off and deletes its files. Its storage in <garage>/mods/<id>/ stays, as a stock mod's does.
+  const uninstallMod = (id: string) => {
+    const mod = mods.find((m) => m.id === id)
+    if (!community.has(id) || !mod) return marketplace.uninstall('mod', id)
+    if (isOn(mod)) setModEnabled(mod, false)
+    marketplace.uninstall('mod', id)
+    const { enabled: _, ...kept } = settings.mods?.[id] ?? {}
+    settings.mods = { ...settings.mods, [id]: kept }
+    saveSettings()
+    community.delete(id)
+    hosts.delete(id)
+    mods.splice(mods.indexOf(mod), 1)
+    broadcast({ type: 'mod.removed', modId: id })
   }
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
@@ -1745,6 +1854,8 @@ export function openCore(options: {
     chats: () => shownChats().map(state),
     workFolder,
     setWorkFolder,
+    themes: marketplace.themes,
+    installed: marketplace.installed,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -1875,6 +1986,61 @@ export function openCore(options: {
           return accounts.use(String(message.engine), String(message.accountId))
         case 'account.remove':
           return accounts.remove(String(message.engine), String(message.accountId), reply)
+        case 'marketplace.list':
+          return void marketplace.listing().then(
+            (entries) => reply({ type: 'marketplace.catalog', entries }),
+            (error) => reply({ type: 'marketplace.catalog', error: messageOf(error) }),
+          )
+        case 'themes.get':
+          return reply({ type: 'themes.updated', themes: marketplace.themes() })
+        case 'market.install': {
+          const { kind } = message
+          const id = String(message.id)
+          if (kind === 'mod' && stockIds.has(id)) {
+            return reply({ type: 'market.installFailed', kind, id, error: `A built-in mod is already called "${id}"` })
+          }
+          return void marketplace.install(kind, id).then(
+            ({ added }) => {
+              if (kind === 'mod') communityChanged(id, added)
+              marketChanged(kind)
+            },
+            (error) => reply({ type: 'market.installFailed', kind, id, error: messageOf(error) }),
+          )
+        }
+        case 'market.installLocal': {
+          const path = String(message.path ?? '')
+          let result: ReturnType<typeof marketplace.installLocal>
+          try {
+            // A broken manifest is the marketplace's to explain.
+            const id = (() => {
+              try {
+                return (readJson(join(path.trim(), 'manifest.json')) as { id?: unknown }).id
+              } catch {
+                return undefined
+              }
+            })()
+            if (typeof id === 'string' && stockIds.has(id)) throw new Error(`A built-in mod is already called "${id}"`)
+            result = marketplace.installLocal(path)
+          } catch (error) {
+            return reply({ type: 'market.localFailed', path, error: messageOf(error) })
+          }
+          const { kind, ids, added } = result
+          if (kind === 'mod') communityChanged(ids[0]!, added)
+          marketChanged(kind)
+          return reply({ type: 'market.localInstalled', path, kind, ids })
+        }
+        case 'market.uninstall':
+          if (message.kind === 'mod') uninstallMod(String(message.id))
+          else marketplace.uninstall(message.kind, message.id)
+          return marketChanged(message.kind)
+        case 'search': {
+          const spaces = shownChats().filter((c) => !c.info.subagent)
+          const hits = searchChats(
+            spaces.map((c) => ({ id: c.info.id, name: c.info.name, entries: c.entries })),
+            String(message.query ?? ''),
+          )
+          return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
+        }
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }

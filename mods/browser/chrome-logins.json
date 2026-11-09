@@ -1,0 +1,7 @@
+{
+  "browser": {
+    "launchOptions": {
+      "ignoreDefaultArgs": ["--use-mock-keychain", "--password-store=basic"]
+    }
+  }
+}

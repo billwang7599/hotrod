@@ -1,0 +1,41 @@
+{
+  "id": "gruvbox",
+  "name": "Gruvbox",
+  "version": "1.0.0",
+  "author": "Kothar",
+  "description": "The Gruvbox palette by morhetz.",
+  "variants": {
+    "dark": "Dark",
+    "light": "Light"
+  },
+  "dark": {
+    "bg": "#282828",
+    "panel": "#1d2021",
+    "raised": "#3c3836",
+    "hover": "#504945",
+    "border": "#3c3836",
+    "text": "#ebdbb2",
+    "muted": "#a89984",
+    "faint": "#7c6f64",
+    "accent": "#fe8019",
+    "on-accent": "#282828",
+    "green": "#b8bb26",
+    "amber": "#fabd2f",
+    "red": "#fb4934"
+  },
+  "light": {
+    "bg": "#fbf1c7",
+    "panel": "#f2e5bc",
+    "raised": "#ebdbb2",
+    "hover": "#d5c4a1",
+    "border": "#d5c4a1",
+    "text": "#3c3836",
+    "muted": "#675d55",
+    "faint": "#6d6359",
+    "accent": "#af3a03",
+    "on-accent": "#fbf1c7",
+    "green": "#79740e",
+    "amber": "#b57614",
+    "red": "#9d0006"
+  }
+}

@@ -1,17 +1,20 @@
 // First, so preferences saved before the rename move to their new keys before any module reads them.
 import './renamed-storage.ts'
-import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { pruneDrafts } from './drafts.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
-import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
-import { startAppearance } from './themes.tsx'
+import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
+import { nthSpace, stepSpace } from './nav.ts'
+import { SearchPalette } from './search.tsx'
+import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
+import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { useLooking, useMarkRead } from './unread.ts'
 import {
   dockedPanels,
@@ -44,7 +47,10 @@ declare global {
       pickFolder(title?: string): Promise<string | null>
       pickFiles(title?: string): Promise<string[]>
       pathForFile(file: File): string
-      onNewChatFromFolder(listener: () => void): () => void
+      /** The desktop menu's items run the same actions as their shortcuts. */
+      onShortcut?(listener: (action: string) => void): () => void
+      /** Shows the user's keys on the menu's items, as Electron accelerators by action id. */
+      setMenuShortcuts?(accelerators: Record<string, string | null>): void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
       vibrancy: boolean
@@ -84,6 +90,7 @@ function App() {
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
   const [changingWorkFolder, setChangingWorkFolder] = useState(false)
   useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  useEffect(() => state.themes && setInstalledThemes(state.themes), [state.themes])
   const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)
@@ -139,12 +146,31 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
+  const { catalog, themes, installed, marketFailures, mods, localInstall } = state
+  const market = useMemo(
+    () => ({ catalog, themes, installed, marketFailures, mods, localInstall }),
+    [catalog, themes, installed, marketFailures, mods, localInstall],
+  )
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
     const picked = await window.kothar.pickFolder()
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
-  useEffect(() => window.kothar?.onNewChatFromFolder(() => void newChatFromFolder()), [newChatFromFolder])
+  const [searching, setSearching] = useState(false)
+  const goTo = (chatId: string | undefined) => chatId && select(chatId)
+  const shortcuts: ShortcutHandlers = {
+    previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
+    nextSpace: () => goTo(stepSpace(state.chats, state.selectedId, 1)),
+    ...Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [`jump${i + 1}`, () => goTo(nthSpace(state.chats, i + 1))]),
+    ),
+    newSpace: () => connected && setNameRequest({ kind: 'new' }),
+    settings: () => openSettings(),
+    search: () => setSearching((open) => !open),
+    ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
+  }
+  useShortcuts(shortcuts)
+  const keys = useBindings()
   const [quitting, setQuitting] = useState(false)
   useEffect(() => window.kothar?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
@@ -171,23 +197,6 @@ function App() {
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
                 <aside className="relative flex shrink-0 flex-col border-r bg-panel" style={{ width: widths.sidebar }}>
                   <ResizeHandle panel="sidebar" />
-                  <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
-                    {!sidebarDocks && (
-                      <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
-                    )}
-                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Kothar</span>
-                    <Hint text={`New ${CHAT_NOUN.one}`}>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`New ${CHAT_NOUN.one}`}
-                        disabled={!connected}
-                        onClick={() => setNameRequest({ kind: 'new' })}
-                      >
-                        +
-                      </Button>
-                    </Hint>
-                  </div>
                   <ChatNav
                     chats={state.chats}
                     selectedId={state.selectedId}
@@ -197,17 +206,12 @@ function App() {
                     select={select}
                     askName={setNameRequest}
                   />
-                  <div className="px-8 pb-10">
-                    <Button
-                      variant="ghost"
-                      size="none"
-                      className="flex h-control w-full items-center gap-8 px-8"
-                      onClick={() => openSettings()}
-                    >
-                      <span aria-hidden="true">⚙</span>
-                      Settings
-                    </Button>
-                  </div>
+                  <SidebarFooter
+                    connected={connected}
+                    keys={keys}
+                    newSpace={() => setNameRequest({ kind: 'new' })}
+                    openSettings={() => openSettings()}
+                  />
                 </aside>
               </SidePanel>
             )}
@@ -251,6 +255,8 @@ function App() {
               modelLists={state.modelLists}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
+              market={market}
+              pickFolder={window.kothar?.pickFolder}
               connected={connected}
               send={send}
               page={settingsPage}
@@ -314,6 +320,16 @@ function App() {
               ))}
             </AnimatePresence>
           </div>
+          <SearchPalette
+            open={searching}
+            close={() => setSearching(false)}
+            chats={state.chats}
+            selectedId={state.selectedId}
+            search={state.search}
+            connected={connected}
+            send={send}
+            select={select}
+          />
           <NameDialog
             request={nameRequest}
             connected={connected}
