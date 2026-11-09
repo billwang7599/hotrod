@@ -1,16 +1,17 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative } from 'node:path'
-import { crc32 } from 'node:zlib'
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
-import type { ModRun, ModSession } from '@kothar/mod-api'
-import { startCore } from '@kothar/core/main'
-import { type Adapter, type SessionOptions, settingProblem } from '@kothar/core/shared'
+import { dirname, join } from 'node:path'
+import { afterAll, afterEach, expect, it } from 'vitest'
+import type { ChatDetail, ModHost, ModProcess, ModRun, ModTool, ModWait } from '@kothar/mod-api'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import { backgroundArgs } from './background.ts'
-import browser, { BROWSER_INSTRUCTIONS, DEFAULT_PORT, EXTENSION_URL, WINDOW } from './index.ts'
+import { getCookies, listTabs } from './cdp.ts'
+import { chromiumArgs, chromiumLauncher, freeProfile, type Launch, type Launcher } from './chromium.ts'
+import { serveEndpoints } from './endpoint.ts'
+import browser, { BROWSER_INSTRUCTIONS, createBrowserMod, HAND_OFF_TOOL } from './index.ts'
+import { type BrowserOps, SpaceBrowser } from './space-browser.ts'
 
 const dirs: string[] = []
 const tempDir = (prefix: string) => {
@@ -18,478 +19,470 @@ const tempDir = (prefix: string) => {
   dirs.push(dir)
   return dir
 }
-let browsers = ''
-beforeEach(() => {
-  browsers = tempDir('kothar-browsers-')
-  process.env.PLAYWRIGHT_BROWSERS_PATH = browsers
-})
-const cleanups: (() => Promise<void>)[] = []
+const cleanups: (() => unknown)[] = []
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup()
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
-  delete process.env.PLAYWRIGHT_BROWSERS_PATH
-  delete process.env.PLAYWRIGHT_DOWNLOAD_HOST
 })
 
 const run: ModRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
 const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
-const chromium = { ...defaults, browser: WINDOW }
-const space = { id: 'abc', name: 'Space', engine: 'claude-code' }
-const serverFor = (session: Partial<ModSession> = {}) =>
-  browser.mcpServers!({ chat: space, workDir: '/work/abc', sandboxed: true, values: defaults, ...session })[0]!
 const valueAfter = (args: string[] = [], flag: string) =>
   args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
+const until = async (check: () => boolean | Promise<boolean>, ms = 4000) => {
+  for (let waited = 0; waited < ms && !(await check()); waited += 10) await new Promise((r) => setTimeout(r, 10))
+  expect(await check()).toBe(true)
+}
 
-it("runs Playwright MCP on Playwright's Chromium in a window, with the space's own profile in its work folder", () => {
-  const { name, command, args, env, allowTools } = serverFor({ values: chromium })
+// A fake browser: each launch is a "browser" with tabs the test can see and change, so the window step runs without
+// a window. ops reads and writes the same tabs, as the CDP calls would.
+function fakeBrowsers() {
+  type Fake = { launch: Launch; endpoint: string; tabs: { id: string; url: string; title: string }[]; cookies: Record<string, unknown>[]; alive: boolean; quit: () => void; fronted: number }
+  const launched: Fake[] = []
+  const byEndpoint = (endpoint: string) => launched.find((b) => b.endpoint === endpoint)!
+  let next = 0
+  const launch: Launcher = async (options) => {
+    let quit!: () => void
+    const exited = new Promise<void>((resolve) => (quit = resolve))
+    // A browser starts on one blank tab, as Chromium does on about:blank.
+    const tabs = [{ id: 'blank', url: 'about:blank', title: '' }]
+    const fake: Fake = { launch: options, endpoint: `http://fake:${++next}`, tabs, cookies: [], alive: true, quit: () => {}, fronted: 0 }
+    fake.quit = () => {
+      fake.alive = false
+      quit()
+    }
+    launched.push(fake)
+    return { endpoint: fake.endpoint, exited, stop: async () => fake.quit() }
+  }
+  const ops: BrowserOps = {
+    listTabs: async (endpoint) => {
+      const b = byEndpoint(endpoint)
+      if (!b.alive) throw new Error('gone')
+      return b.tabs
+    },
+    activeTab: async (_endpoint, tabs) => tabs.at(-1),
+    getCookies: async (endpoint) => byEndpoint(endpoint).cookies,
+    restore: async (endpoint, cookies, urls) => {
+      const b = byEndpoint(endpoint)
+      b.cookies = cookies
+      b.tabs = urls.map((url, i) => ({ id: `t${i}`, url, title: `Page ${i}` }))
+    },
+    bringToFront: async (endpoint) => {
+      byEndpoint(endpoint).fronted++
+    },
+  }
+  return { launch, ops, launched }
+}
+
+// A host as the core gives one, for the calls the Browser mod makes, with chats the test sets.
+function fakeHost(storage: string) {
+  const chats: ChatDetail[] = []
+  const waits = new Map<string, ModWait>()
+  const changed: string[] = []
+  const host = {
+    chats: () => chats,
+    space: (chatId: string) => {
+      const chat = chats.find((c) => c.id === chatId)
+      const id = chat?.parentId ?? chat?.id
+      return id ? { id, name: id, folders: [], checkouts: [] } : undefined
+    },
+    wait: (chatId: string, wait: ModWait) => void waits.set(chatId, wait),
+    endWait: (chatId: string) => void waits.delete(chatId),
+    processesChanged: (spaceId: string) => void changed.push(spaceId),
+    storage: { dir: storage },
+    run,
+  } as unknown as ModHost
+  const chat = (id: string, more: Partial<ChatDetail> = {}): ChatDetail => {
+    const detail = { id, name: id, engine: 'fake', status: 'running' as const, archived: false, folders: [], files: [], createdAt: '', ...more }
+    chats.push(detail)
+    return detail
+  }
+  return { host, chats, waits, changed, chat }
+}
+
+async function startedMod() {
+  const fakes = fakeBrowsers()
+  const { mod } = createBrowserMod({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10 })
+  const storage = tempDir('kothar-browser-mod-')
+  const fake = fakeHost(storage)
+  await mod.onStart!({ values: defaults, host: fake.host })
+  cleanups.push(() => mod.onStop!({ values: defaults, host: fake.host }))
+  const tool = mod.tools!.find((t) => t.name === HAND_OFF_TOOL) as ModTool
+  return { mod, fakes, storage, tool, ...fake }
+}
+
+it('attaches Playwright MCP to the space’s browser through Kothar’s endpoint, never launching one itself', async () => {
+  const { mod, chat } = await startedMod()
+  chat('space')
+  chat('worker', { parentId: 'space', worker: true })
+  const serverOf = (id: string, values = defaults) =>
+    mod.mcpServers!({ chat: { id, name: id, engine: 'fake' }, workDir: '/work/space', sandboxed: true, values })[0]!
+  const { name, command, args, env, allowTools } = serverOf('space')
   expect({ name, command, allowTools }).toEqual({ name: 'browser', command: process.execPath, allowTools: true })
-  expect(existsSync(args![0]!)).toBe(true)
-  expect(args).not.toContain('--headless')
-  expect(valueAfter(args, '--browser')).toBe('chromium')
-  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/profile')
-  expect(valueAfter(args, '--output-dir')).toBe('/work/abc/.browser/output')
-  expect(args).toContain('--no-sandbox')
-  expect(env).toEqual({
-    ELECTRON_RUN_AS_NODE: '1',
-    TMPDIR: tmpdir(),
-    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
-    PLAYWRIGHT_BROWSERS_PATH: browsers,
-  })
-})
-
-it("asks before each action and keeps a worker's profile in memory, as set", () => {
-  expect(serverFor({ values: { ...chromium, askEachAction: true } }).allowTools).toBe(false)
-  const worker = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', worker: true }, values: chromium }).args
-  expect(worker).toContain('--isolated')
-  expect(worker).not.toContain('--user-data-dir')
-  expect(serverFor({ sandboxed: false, values: chromium }).args).not.toContain('--no-sandbox')
-})
-
-it('has one picker for where the browser runs, with no separate background switch', () => {
-  const keys = browser.settings!.map((setting) => setting.key)
-  expect(keys).not.toContain('background')
-  const picker = browser.settings!.find((setting) => setting.key === 'browser')!
-  expect(picker.type === 'select' && picker.options.map((option) => option.value)).toEqual([
-    'background', 'logins', WINDOW, 'attach', 'chrome',
-  ])
-})
-
-it("isn't offered the old 'chromium', once headless by default, so the core reads it as the default, background", () => {
-  const picker = browser.settings!.find((setting) => setting.key === 'browser')!
-  // The core swaps a saved value with a problem for the setting's default.
-  expect(settingProblem(picker, 'chromium')).toBeTruthy()
-  expect(picker.default).toBe('background')
-})
-
-it('browses in the background by default, through background.ts, which picks Chrome or Chromium where it runs', () => {
-  expect(defaults.browser).toBe('background')
-  const { args, env } = serverFor()
-  expect(args!.slice(0, 3)).toEqual([expect.stringMatching(/background\.ts$/), 'run', '/work/abc/.browser'])
-  expect(existsSync(args![0]!)).toBe(true)
-  expect(args![3]).toMatch(/cli\.js$/)
-  expect(args).toContain('--no-sandbox')
-  expect(args).not.toContain('--extension')
-  expect(args).not.toContain('--cdp-endpoint')
-  expect(env?.KOTHAR_BROWSER_WORKER).toBeUndefined()
-  const worker = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', worker: true } })
-  expect(worker.env?.KOTHAR_BROWSER_WORKER).toBe('1')
-  expect(serverFor({ sandboxed: false }).args).not.toContain('--no-sandbox')
-})
-
-it('runs headless on Chrome with a profile of its own, else on Chromium, and a worker keeps its in memory', () => {
-  expect(backgroundArgs('/w/.browser', true, false)).toEqual([
-    '--browser', 'chrome', '--headless', '--user-data-dir', '/w/.browser/chrome-profile',
-  ])
-  expect(backgroundArgs('/w/.browser', false, false)).toEqual([
-    '--browser', 'chromium', '--headless', '--user-data-dir', '/w/.browser/profile',
-  ])
-  expect(backgroundArgs('/w/.browser', true, true)).toEqual(['--browser', 'chrome', '--headless', '--isolated'])
-})
-
-it('is ready in the background with Chrome as it is, and needs Chromium installed only without Chrome', async () => {
-  const withChrome = fakeRun({ chrome: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
-  expect(await browser.setup!.check(withChrome.run, defaults)).toEqual({
-    ready: true,
-    message: 'Google Chrome, headless, on a profile of Kothar’s own',
-  })
-  expect(withChrome.calls).toEqual([[expect.stringMatching(/background\.ts$/), 'check']])
-  const without = fakeRun({ chrome: null }, { ready: false, name: 'Chrome for Testing 1' })
-  expect(await browser.setup!.check(without.run, defaults)).toEqual({ ready: false, message: 'Browser not installed' })
-  const installed = fakeRun({ chrome: null }, { ready: true, name: 'Chrome for Testing 1' })
-  expect(await browser.setup!.check(installed.run, defaults)).toEqual({
-    ready: true,
-    message: 'Chrome for Testing 1 installed, headless',
-  })
-  const about = browser.setup!.description
-  expect(typeof about === 'function' && about(defaults)).toContain('nothing to install')
-})
-
-it("background.ts check finds Chrome where Playwright would, or says there's none", async () => {
-  const { code, stdout } = await run(process.execPath, [serverFor().args![0]!, 'check'], {
-    env: { ELECTRON_RUN_AS_NODE: '1' },
-  })
-  expect(code).toBe(0)
-  const { chrome } = JSON.parse(stdout)
-  if (chrome !== null) expect(existsSync(chrome)).toBe(true)
-})
-
-it("attaches to the browser you're running on its debugging port, as pi's browser extension does", async () => {
-  const attach = { ...defaults, browser: 'attach' }
-  const { args } = serverFor({ values: attach })
-  expect(valueAfter(args, '--cdp-endpoint')).toBe(`http://localhost:${DEFAULT_PORT}`)
-  for (const flag of ['--headless', '--browser', '--user-data-dir', '--isolated', '--extension']) {
+  expect(args![0]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
+  expect(valueAfter(args, '--cdp-endpoint')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[\w-]+\/space$/)
+  expect(valueAfter(args, '--output-dir')).toBe('/work/space/.browser/output')
+  for (const flag of ['--headless', '--browser', '--user-data-dir', '--isolated', '--extension', '--no-sandbox']) {
     expect(args).not.toContain(flag)
   }
-  expect(valueAfter(serverFor({ values: { ...attach, port: 9333 } }).args, '--cdp-endpoint')).toBe(
-    'http://localhost:9333',
-  )
-
-  const devtools = createServer((request, response) => {
-    if (request.url !== '/json/version') return void response.writeHead(404).end()
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ Browser: 'Chrome/157.0.1' }))
-  })
-  await new Promise<void>((resolve) => devtools.listen(0, '127.0.0.1', resolve))
-  const { port } = devtools.address() as { port: number }
-  const plain: ModRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
-  try {
-    expect(await browser.setup!.check(plain, { ...attach, port })).toEqual({
-      ready: true,
-      message: `Chrome 157.0.1, on port ${port}. Its tabs aren’t grouped`,
-    })
-  } finally {
-    await new Promise<void>((resolve) => devtools.close(() => resolve()))
-  }
-  expect(await browser.setup!.check(plain, { ...attach, port })).toEqual({
-    ready: false,
-    message: `No browser is listening on port ${port}`,
-  })
-  await expect(browser.setup!.install(plain, () => {}, { ...attach, port })).rejects.toThrow(
-    `--remote-debugging-port=${port}`,
-  )
-})
-
-const chrome = { ...defaults, browser: 'chrome' }
-
-it("connects to your running Chrome through the Playwright Extension, with its token, and nothing of Kothar's Chromium", () => {
-  const { args, env, allowTools } = serverFor({ values: { ...chrome, extensionToken: ' abc123 ' } })
-  expect(allowTools).toBe(true)
-  expect(args).toContain('--extension')
-  expect(valueAfter(args, '--browser')).toBe('chrome')
-  expect(valueAfter(args, '--output-dir')).toBe('/work/abc/.browser/output')
-  for (const flag of ['--headless', '--user-data-dir', '--isolated', '--no-sandbox']) expect(args).not.toContain(flag)
   expect(env).toEqual({
     ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: tmpdir(),
     PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
-    PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'abc123',
   })
-  expect(serverFor({ values: chrome }).env).not.toHaveProperty('PLAYWRIGHT_MCP_EXTENSION_TOKEN')
+  // A worker shares its space's browser.
+  expect(valueAfter(serverOf('worker').args, '--cdp-endpoint')).toBe(valueAfter(args, '--cdp-endpoint'))
+  expect(serverOf('space', { ...defaults, askEachAction: true }).allowTools).toBe(false)
 })
 
-it("gives a worker the same Chrome as its space, since the extension takes a connection per session", () => {
-  const worker = { ...space, id: 'def', parentId: 'abc', worker: true }
-  expect(serverFor({ chat: worker, values: chrome }).args).toEqual(serverFor({ values: chrome }).args)
+it('has no browser before it starts, and drops the old picker settings when it migrates', () => {
+  const { mod } = createBrowserMod()
+  expect(mod.mcpServers!({ chat: { id: 'a', name: 'a', engine: 'fake' }, workDir: '/w', sandboxed: true, values: defaults })).toEqual([])
+  expect(mod.settings!.map((s) => s.key)).toEqual(['askEachAction', 'idleMinutes'])
+  expect(mod.settingsVersion).toBe(1)
+  const old = { browser: 'chrome', port: 9333, extensionToken: 'x', background: true, askEachAction: true }
+  expect(mod.migrateSettings!(old, 0, {})).toEqual({ askEachAction: true })
 })
 
-it('tells agents that get the browser to read snapshots before screenshots, batch form fills and close their tabs', () => {
-  const chat = { ...space, status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
-  const context = { values: defaults, host: {} as never }
-  const text = browser.instructions!({ chat, tools: true }, context)
+it('tells agents about snapshots, batching, closing tabs and handing the browser to the user', () => {
+  const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const text = browser.instructions!({ chat, tools: true }, { values: defaults, host: {} as never })
   expect(text).toBe(BROWSER_INSTRUCTIONS)
-  for (const word of ['snapshot', 'screenshot', 'browser_fill_form', 'Close']) expect(text).toContain(word)
-  // An engine without MCP servers has no browser to be told about.
-  expect(browser.instructions!({ chat, tools: false }, context)).toBeUndefined()
+  for (const word of ['snapshot', 'screenshot', 'browser_fill_form', 'Close', HAND_OFF_TOOL]) expect(text).toContain(word)
+  expect(browser.instructions!({ chat, tools: false }, { values: defaults, host: {} as never })).toBeUndefined()
+  const tool = browser.tools!.find((t) => t.name === HAND_OFF_TOOL)!
+  expect(tool.description).toContain('not submitted is lost')
 })
 
-const logins = { ...defaults, browser: 'logins' }
-
-it("runs your Chrome headless on the space's copy of your Chrome logins, with Chrome's keychain, never in front", () => {
-  const { args, env, allowTools } = serverFor({ values: logins })
-  expect(allowTools).toBe(true)
-  // logins.ts copies the logins, then runs Playwright MCP's CLI with the rest.
-  expect(args!.slice(0, 3)).toEqual([join(import.meta.dirname, 'logins.ts'), 'run', '/work/abc/.browser/logins'])
-  expect(existsSync(args![0]!)).toBe(true)
-  expect(args![3]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
-  expect(valueAfter(args, '--browser')).toBe('chrome')
-  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins')
-  expect(args).toContain('--headless')
-  expect(args).toContain('--no-sandbox')
-  for (const flag of ['--extension', '--isolated']) expect(args).not.toContain(flag)
-  const config = JSON.parse(readFileSync(valueAfter(args, '--config')!, 'utf8'))
-  expect(config.browser.launchOptions.ignoreDefaultArgs).toContain('--use-mock-keychain')
-  expect(env).not.toHaveProperty('KOTHAR_LOGINS_TEMPORARY')
+it('launches the space’s browser headless on the first browse, and keeps it for the next', async () => {
+  const { mod, fakes, storage, chat } = await startedMod()
+  chat('space')
+  const endpoint = valueAfter(
+    mod.mcpServers!({ chat: { id: 'space', name: 's', engine: 'fake' }, workDir: '/w', sandboxed: true, values: defaults })[0]!.args,
+    '--cdp-endpoint',
+  )!
+  expect(fakes.launched).toHaveLength(0)
+  // Playwright's first call: the fake has no real /json/version, so the endpoint answers 503, but it launched.
+  await fetch(`${endpoint}/json/version/`)
+  await fetch(`${endpoint}/json/version/`)
+  expect(fakes.launched).toHaveLength(1)
+  expect(fakes.launched[0]!.launch).toEqual({ profile: join(storage, 'profiles', 'space'), headless: true })
+  // Only Kothar's endpoint, with its token, answers.
+  expect((await fetch(endpoint.replace(/\/[\w-]+\/space$/, '/wrong/space/json/version'))).status).toBe(404)
 })
 
-it('gives a worker a copy of its own, removed when its session ends', () => {
-  const worker = { ...space, id: 'def', parentId: 'abc', worker: true }
-  const { args, env } = serverFor({ chat: worker, values: logins })
-  expect(args![2]).toBe('/work/abc/.browser/logins-workers/def')
-  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins-workers/def')
-  expect(env).toHaveProperty('KOTHAR_LOGINS_TEMPORARY', '1')
-})
+it('hands the browser to the user in a window with the same tabs and logins, and goes back headless on Done', async () => {
+  const { mod, fakes, tool, waits, changed, chat, host } = await startedMod()
+  const space = chat('space')
+  // The agent browsed: a headless browser with two tabs and a cookie.
+  const servers = mod.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })
+  await fetch(`${valueAfter(servers[0]!.args, '--cdp-endpoint')}/json/version/`)
+  const headless = fakes.launched[0]!
+  headless.tabs = [
+    { id: 'a', url: 'https://example.com/', title: 'Example' },
+    { id: 'b', url: 'https://example.com/login', title: 'Login' },
+    { id: 'c', url: 'about:blank', title: '' },
+  ]
+  headless.cookies = [{ name: 'session', value: '1', domain: 'example.com' }]
 
-it("is ready with your Chrome's logins once Chrome and a profile with cookies are there", async () => {
-  const check = (...results: object[]) => browser.setup!.check(fakeRun(...results).run, logins)
-  expect(await check({ chrome: false, executable: null, profile: null })).toEqual({
-    ready: false,
-    message: 'Google Chrome not found',
+  const call = tool.run({ reason: 'Log in to Example' }, { caller: space, values: defaults, host })
+  await until(() => waits.has('space'))
+  expect(headless.alive).toBe(false)
+  const window = fakes.launched[1]!
+  expect(window.launch.headless).toBe(false)
+  expect(window.launch.profile).toBe(headless.launch.profile)
+  expect(window.tabs.map((t) => t.url)).toEqual(['https://example.com/', 'https://example.com/login'])
+  expect(window.cookies).toEqual(headless.cookies)
+  expect(window.fronted).toBe(1)
+  expect(waits.get('space')).toEqual({
+    text: 'Browser: Log in to Example',
+    buttons: [
+      expect.objectContaining({ id: 'open', label: 'Open browser' }),
+      expect.objectContaining({ id: 'done', label: 'Done', primary: true }),
+    ],
   })
-  expect(await check({ ...found, profile: null }, { profile: null })).toEqual({
-    ready: false,
-    message: 'No Chrome profile with logins found',
-  })
-  const profile = { dir: '/chrome/Profile 1', name: 'Profile 1', label: 'Work' }
-  expect(await check({ ...found, profile: null }, { profile })).toEqual({
-    ready: true,
-    message: 'Logins from Chrome profile “Work”',
-  })
-  const about = browser.setup!.description
-  expect(typeof about === 'function' && about(logins)).toContain('Keychain')
-  // Nothing to install but Chrome itself, and nothing opens.
-  const installed = fakeRun({ ...found, profile: null })
-  await browser.setup!.install(installed.run, () => {}, logins)
-  expect(installed.calls).toHaveLength(1)
-  const missing = fakeRun({ chrome: false, executable: null, profile: null })
-  await expect(browser.setup!.install(missing.run, () => {}, logins)).rejects.toThrow('Install Google Chrome first')
+  expect(mod.processes!('space', { values: defaults, host })).toEqual([
+    expect.objectContaining({ label: 'Browser', dot: 'warning', detail: 'Open for you: Log in to Example' }),
+  ])
+  expect(changed).toContain('space')
+
+  // Open brings it forward again; the user logs in and lands somewhere new.
+  await mod.onWaitAction!(space, { button: 'open' }, { values: defaults, host })
+  expect(window.fronted).toBe(2)
+  window.tabs = [{ id: 'x', url: 'https://example.com/home', title: 'Home' }]
+  window.cookies = [{ name: 'session', value: 'logged-in', domain: 'example.com' }]
+  await mod.onWaitAction!(space, { button: 'done' }, { values: defaults, host })
+
+  const text = String(await call)
+  expect(text).toContain('The user is done.')
+  expect(text).toContain('* Home — https://example.com/home')
+  expect(window.alive).toBe(false)
+  const back = fakes.launched[2]!
+  expect(back.launch.headless).toBe(true)
+  expect(back.tabs.map((t) => t.url)).toEqual(['https://example.com/home'])
+  expect(back.cookies).toEqual(window.cookies)
+  expect(waits.has('space')).toBe(false)
+  expect(mod.processes!('space', { values: defaults, host })).toEqual([
+    expect.objectContaining({ dot: 'success', detail: 'In the background' }),
+  ])
 })
 
-it("finds the logins in Chrome's last used profile, through the session's own logins.ts", async () => {
-  if (process.platform === 'win32') return
-  const home = tempDir('kothar-chrome-home-')
-  const dataDir =
-    process.platform === 'darwin'
-      ? join(home, 'Library', 'Application Support', 'Google', 'Chrome')
-      : join(home, '.config', 'google-chrome')
-  mkdirSync(join(dataDir, 'Profile 2', 'Network'), { recursive: true })
-  writeFileSync(join(dataDir, 'Profile 2', 'Network', 'Cookies'), '')
-  writeFileSync(
-    join(dataDir, 'Local State'),
-    JSON.stringify({ profile: { last_used: 'Profile 2', info_cache: { 'Profile 2': { name: 'Personal' } } } }),
-  )
-  const atHome: ModRun = (command, args, options = {}) => {
-    // The Chrome check needs Chrome installed; the profile check is the one under test.
-    if (args[0] === '-e') return Promise.resolve({ code: 0, stdout: JSON.stringify({ ...found, profile: null }), stderr: '' })
-    return run(command, args, { ...options, env: { ...options.env, HOME: home } })
+it('ends a hand-off when the user closes the window, sends a message, or the chat is stopped', async () => {
+  const { mod, fakes, tool, waits, chat, host } = await startedMod()
+  const space = chat('space')
+  const context = { values: defaults, host }
+  const handOff = async () => {
+    const call = tool.run({ reason: 'Solve the CAPTCHA' }, { caller: space, values: defaults, host })
+    await until(() => waits.has('space'))
+    return { call, window: fakes.launched.at(-1)! }
   }
-  expect(await browser.setup!.check(atHome, logins)).toEqual({
+  // Closing every tab, as closing the window does on macOS.
+  let { call, window } = await handOff()
+  window.tabs = []
+  expect(String(await call)).toContain('The user closed the browser window.')
+  expect(fakes.launched.at(-1)!.launch.headless).toBe(true)
+
+  // A message instead of Done.
+  ;({ call, window } = await handOff())
+  window.tabs = [{ id: 'y', url: 'https://example.com/next', title: 'Next' }]
+  await mod.onWaitAction!(space, { message: 'done, carry on' }, context)
+  expect(String(await call)).toContain('The user sent you a message')
+
+  // Quitting the browser.
+  ;({ call, window } = await handOff())
+  window.quit()
+  expect(String(await call)).toContain('The user closed the browser window.')
+
+  // Stop on the chat: the window closes and the browser stays off.
+  ;({ call, window } = await handOff())
+  const launches = fakes.launched.length
+  mod.onStatusChanged!({ ...space, status: 'stopping' }, 'stopping', context)
+  expect(String(await call)).toContain('The hand-off was stopped.')
+  expect(window.alive).toBe(false)
+  expect(fakes.launched).toHaveLength(launches)
+  expect(mod.processes!('space', context)).toEqual([])
+})
+
+it('times out a hand-off nobody answers, and lets only one chat in a space wait at a time', async () => {
+  const fakes = fakeBrowsers()
+  const { mod } = createBrowserMod({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, handOffMs: 50 })
+  const h = fakeHost(tempDir('kothar-browser-mod-'))
+  await mod.onStart!({ values: defaults, host: h.host })
+  cleanups.push(() => mod.onStop!({ values: defaults, host: h.host }))
+  const space = h.chat('space')
+  const worker = h.chat('worker', { parentId: 'space', worker: true })
+  const tool = mod.tools![0]!
+  const call = tool.run({ reason: 'Pay' }, { caller: space, values: defaults, host: h.host })
+  await until(() => h.waits.has('space'))
+  await expect(
+    Promise.resolve(tool.run({ reason: 'Me too' }, { caller: worker, values: defaults, host: h.host })),
+  ).rejects.toThrow('Another chat in this space is waiting')
+  expect(String(await call)).toContain('did not finish in time')
+})
+
+it('opens on demand from Processes, refuses agents while the user has it, and stops', async () => {
+  const { mod, fakes, chat, host } = await startedMod()
+  const space = chat('space')
+  const context = { values: defaults, host }
+  const endpoint = valueAfter(mod.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })[0]!.args, '--cdp-endpoint')!
+  await fetch(`${endpoint}/json/version/`)
+  expect(mod.processes!('space', context)[0]!.actions.map((a) => a.name)).toEqual(['open', 'stop'])
+  await mod.onProcessAction!('space', 'browser', 'open', context)
+  await until(() => fakes.launched.length === 2 && fakes.launched[1]!.fronted === 1)
+  expect(fakes.launched[1]!.launch.headless).toBe(false)
+  expect(mod.processes!('space', context)[0]!.actions.map((a) => a.name)).toEqual(['open', 'done', 'stop'])
+  const refused = await fetch(`${endpoint}/json/version/`)
+  expect(refused.status).toBe(503)
+  expect(await refused.text()).toContain('The user has this space’s browser open')
+  await mod.onProcessAction!('space', 'browser', 'done', context)
+  expect(fakes.launched[2]!.launch.headless).toBe(true)
+  await mod.onProcessAction!('space', 'browser', 'stop', context)
+  expect(fakes.launched.every((b) => !b.alive)).toBe(true)
+  expect(mod.processes!('space', context)).toEqual([])
+})
+
+it('closes a space’s browser once the space has been idle a while, and its profile goes with the space', async () => {
+  const fakes = fakeBrowsers()
+  const { mod } = createBrowserMod({ launch: () => fakes.launch, ops: fakes.ops })
+  const storage = tempDir('kothar-browser-mod-')
+  const h = fakeHost(storage)
+  const values = { ...defaults, idleMinutes: 0.001 }
+  await mod.onStart!({ values, host: h.host })
+  cleanups.push(() => mod.onStop!({ values, host: h.host }))
+  const space = h.chat('space')
+  const endpoint = valueAfter(mod.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  await fetch(`${endpoint}/json/version/`)
+  space.status = 'idle'
+  mod.onStatusChanged!(space, 'idle', { values, host: h.host })
+  await until(() => !fakes.launched[0]!.alive)
+  const profile = join(storage, 'profiles', 'space')
+  mkdirSync(profile, { recursive: true })
+  await mod.onChatRemoved!(space, { values, host: h.host })
+  await until(() => !existsSync(profile))
+})
+
+it('is ready once Playwright’s Chromium is installed', async () => {
+  const fake = (result: object): ModRun => async () => ({ code: 0, stdout: JSON.stringify(result), stderr: '' })
+  expect(await browser.setup!.check(fake({ ready: false, name: 'Chrome for Testing 1', path: '/x' }), defaults)).toEqual({
+    ready: false,
+    message: 'Browser not installed',
+  })
+  expect(await browser.setup!.check(fake({ ready: true, name: 'Chrome for Testing 1', path: '/x' }), defaults)).toEqual({
     ready: true,
-    message: 'Logins from Chrome profile “Personal”',
+    message: 'Chrome for Testing 1 installed, in the background',
   })
 })
 
-const fakeRun = (...results: object[]) => {
+it('launches with a profile of its own, headless unless handed off, and the same keychain flags both ways', () => {
+  const headless = chromiumArgs({ profile: '/p', headless: true })
+  const window = chromiumArgs({ profile: '/p', headless: false })
+  for (const args of [headless, window]) {
+    for (const flag of ['--user-data-dir=/p', '--remote-debugging-port=0', '--use-mock-keychain', '--password-store=basic']) {
+      expect(args).toContain(flag)
+    }
+  }
+  expect(headless).toContain('--headless')
+  expect(window).not.toContain('--headless')
+})
+
+it('frees a profile from a stale lock, and from a browser of its own still on it, never from another process', async () => {
+  const profile = tempDir('kothar-profile-')
+  const lock = join(profile, 'SingletonLock')
   const calls: string[][] = []
-  const run: ModRun = async (_command, args) => {
-    calls.push(args)
-    // Opening Chrome prints nothing; every other run is the check.
-    if (args[1]!.includes('child_process')) return { code: 0, stdout: '', stderr: '' }
-    return { code: 0, stdout: JSON.stringify(results.length > 1 ? results.shift() : results[0]), stderr: '' }
+  // ps and kill as the Machine runs them, with ps answering what the test says each process runs.
+  const commands = new Map<number, string>()
+  const fakeRun: ModRun = async (command, args) => {
+    calls.push([command, ...args])
+    if (command === '/bin/ps') return { code: 0, stdout: commands.get(Number(args.at(-1))) ?? '', stderr: '' }
+    process.kill(Number(args.at(-1)), args[0] === '-KILL' ? 'SIGKILL' : 'SIGTERM')
+    return { code: 0, stdout: '', stderr: '' }
   }
-  return { run, calls }
-}
-const found = { chrome: true, executable: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' }
-
-it('is ready with your Chrome once Chrome has the Playwright Extension', async () => {
-  const check = (result: object) => browser.setup!.check(fakeRun(result).run, chrome)
-  expect(await check({ chrome: false, executable: null, profile: null })).toEqual({
-    ready: false,
-    message: 'Google Chrome not found',
-  })
-  expect(await check({ ...found, profile: null })).toEqual({
-    ready: false,
-    message: 'The Playwright Extension isn’t in Chrome',
-  })
-  expect(await check({ ...found, profile: 'Profile 1' })).toEqual({
-    ready: true,
-    message:
-      'Your Chrome, profile “Profile 1”, its tabs in the “Playwright · Kothar” group. Chrome comes to the front each ' +
-      'message; pick In the background above for no pop-ups',
-  })
-  const failing: ModRun = async () => ({ code: 1, stdout: '', stderr: 'boom' })
-  await expect(browser.setup!.check(failing, chrome)).rejects.toThrow('boom')
-  const about = browser.setup!.description
-  expect(typeof about === 'function' && about(chrome)).toContain(EXTENSION_URL)
-  expect(typeof about === 'function' && about(chromium)).toContain('Chromium')
+  // A lock whose process is gone.
+  symlinkSync('host-999999', lock)
+  await freeProfile({ run: fakeRun }, profile)
+  expect(() => readlinkSync(lock)).toThrow()
+  expect(calls).toEqual([])
+  // A live process that isn't a browser on this profile is never signalled.
+  const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'])
+  cleanups.push(() => other.kill('SIGKILL'))
+  commands.set(other.pid!, `${process.execPath} -e setTimeout`)
+  symlinkSync(`host-${other.pid}`, lock)
+  await freeProfile({ run: fakeRun }, profile)
+  expect(calls.map((c) => c[0])).toEqual(['/bin/ps'])
+  expect(other.exitCode).toBeNull()
+  expect(other.signalCode).toBeNull()
+  // A browser of Kothar's own left on this profile is asked to go.
+  const stale = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'])
+  cleanups.push(() => stale.kill('SIGKILL'))
+  const gone = new Promise((resolve) => stale.once('exit', resolve))
+  commands.set(stale.pid!, `Chromium --user-data-dir=${profile} --headless`)
+  symlinkSync(`host-${stale.pid}`, lock)
+  await freeProfile({ run: fakeRun }, profile)
+  expect(await gone).not.toBeUndefined()
+  expect(calls.at(-1)).toEqual(['/bin/kill', '-TERM', String(stale.pid)])
+  expect(() => readlinkSync(lock)).toThrow()
 })
 
-it("finds the extension in Chrome's last used profile that has it, as Playwright does", async () => {
-  if (process.platform === 'win32') return
-  const home = tempDir('kothar-chrome-home-')
-  const dataDir =
-    process.platform === 'darwin'
-      ? join(home, 'Library', 'Application Support', 'Google', 'Chrome')
-      : join(home, '.config', 'google-chrome')
-  const id = EXTENSION_URL.split('/').at(-1)!
-  mkdirSync(join(dataDir, 'Profile 1', 'Extensions', id), { recursive: true })
-  mkdirSync(join(dataDir, 'Profile 2'), { recursive: true })
-  mkdirSync(join(dataDir, 'Default'), { recursive: true })
-  const prefs = { extensions: { settings: { [id]: { state: 1 } } } }
-  writeFileSync(join(dataDir, 'Profile 2', 'Secure Preferences'), JSON.stringify(prefs))
-  const atHome: ModRun = (command, args, options = {}) =>
-    run(command, args, { ...options, env: { ...options.env, HOME: home } })
-  const { message } = await browser.setup!.check(atHome, chrome)
-  // Chrome itself may or may not be installed where the tests run.
-  if (message !== 'Google Chrome not found') expect(message).toMatch(/^Your Chrome, profile “Profile 1”, its tabs in the “Playwright · Kothar” group\. Chrome comes to the front/)
-  writeFileSync(join(dataDir, 'Local State'), JSON.stringify({ profile: { last_used: 'Profile 2' } }))
-  const again = await browser.setup!.check(atHome, chrome)
-  if (again.message !== 'Google Chrome not found') expect(again.message).toMatch(/^Your Chrome, profile “Profile 2”, /)
-  rmSync(join(dataDir, 'Profile 1', 'Extensions'), { recursive: true })
-  rmSync(join(dataDir, 'Profile 2', 'Secure Preferences'))
-  const none = await browser.setup!.check(atHome, chrome)
-  expect(none.ready).toBe(false)
-})
-
-it("opens the extension's store page in Chrome and waits until Chrome has it", async () => {
-  vi.useFakeTimers()
-  try {
-    const missing = { ...found, profile: null }
-    const { run, calls } = fakeRun(missing, missing, { ...found, profile: 'Default' })
-    const reports: { text?: string }[] = []
-    const installing = browser.setup!.install(run, (update) => reports.push(update), chrome)
-    await vi.advanceTimersByTimeAsync(5_000)
-    await installing
-    expect(calls).toHaveLength(4)
-    expect(calls[1]!.slice(2)).toEqual([found.executable, EXTENSION_URL])
-    expect(reports).toEqual([{ text: 'Add the Playwright Extension in the Chrome window that opened…' }])
-  } finally {
-    vi.useRealTimers()
-  }
-  const missing = fakeRun({ chrome: false, executable: null, profile: null })
-  await expect(browser.setup!.install(missing.run, () => {}, chrome)).rejects.toThrow('Install Google Chrome first')
-  expect(missing.calls).toHaveLength(1)
-  const already = fakeRun({ ...found, profile: 'Default' })
-  await browser.setup!.install(already.run, () => {}, chrome)
-  expect(already.calls).toHaveLength(1)
-})
-
+// Real Chromium, headless only: the background browser and a hand-off's relaunch, with the window step faked as
+// another headless launch so nothing shows on screen.
 const require = createRequire(import.meta.url)
-const executableIn = (name: string) => {
-  const { registry } = require('playwright-core/lib/coreBundle')
-  const executable = registry.registry.findExecutable(name)
-  return relative(executable.directory, executable.executablePath())
-}
-
-function zipOf(name: string) {
-  const data = Buffer.from('#!/bin/sh\n')
-  const path = Buffer.from(name)
-  const local = Buffer.alloc(30)
-  local.writeUInt32LE(0x04034b50, 0)
-  local.writeUInt16LE(20, 4)
-  local.writeUInt32LE(crc32(data), 14)
-  local.writeUInt32LE(data.length, 18)
-  local.writeUInt32LE(data.length, 22)
-  local.writeUInt16LE(path.length, 26)
-  const central = Buffer.alloc(46)
-  central.writeUInt32LE(0x02014b50, 0)
-  central.writeUInt16LE(20, 4)
-  central.writeUInt16LE(20, 6)
-  local.copy(central, 16, 14, 26)
-  central.writeUInt16LE(path.length, 28)
-  const end = Buffer.alloc(22)
-  end.writeUInt32LE(0x06054b50, 0)
-  end.writeUInt16LE(1, 8)
-  end.writeUInt16LE(1, 10)
-  end.writeUInt32LE(central.length + path.length, 12)
-  end.writeUInt32LE(local.length + path.length + data.length, 16)
-  return Buffer.concat([local, path, data, central, path, end])
-}
-
-const downloads = { failing: false }
-const mirror = createServer((request, response) => {
-  if (downloads.failing) return response.writeHead(404).end('No such build')
-  const body = zipOf(executableIn(request.url!.includes('ffmpeg') ? 'ffmpeg' : 'chromium'))
-  response.writeHead(200, { 'content-length': body.length }).end(body)
-})
-beforeAll(async () => {
-  await new Promise<void>((resolve) => mirror.listen(0, '127.0.0.1', resolve))
-  const address = mirror.address()
-  if (typeof address === 'object' && address) process.env.PLAYWRIGHT_DOWNLOAD_HOST = `http://127.0.0.1:${address.port}`
-})
-afterAll(() => new Promise<void>((resolve) => mirror.close(() => resolve())))
-
-it("installs Chromium with Playwright's installer, reporting progress, and never removes other browsers", async () => {
-  const other = join(browsers, 'chromium-1000', 'INSTALLATION_COMPLETE')
-  mkdirSync(dirname(other))
-  writeFileSync(other, '')
-  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: false, message: 'Browser not installed' })
-  const reports: { text?: string; progress?: number }[] = []
-  await browser.setup!.install(run, (update) => reports.push(update), chromium)
-  expect(reports).toContainEqual({ text: expect.stringMatching(/^Downloading Chrome for Testing .*100%/), progress: 1 })
-  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed, in a window, its tabs in the “Kothar” group$/) })
-  expect(existsSync(other)).toBe(true)
-}, 60_000)
-
-it("fails with the installer's error", async () => {
-  downloads.failing = true
+const chromiumPath = (() => {
   try {
-    await expect(browser.setup!.install(run, () => {}, chromium)).rejects.toThrow(/404/)
-    expect((await browser.setup!.check(run, chromium)).ready).toBe(false)
-  } finally {
-    downloads.failing = false
+    const mcp = dirname(require.resolve('@playwright/mcp/package.json'))
+    const { registry } = require(require.resolve('playwright-core/lib/coreBundle', { paths: [mcp] }))
+    const path: string = registry.registry.findExecutable('chromium').executablePath()
+    return existsSync(path) ? path : undefined
+  } catch {
+    return undefined
   }
-}, 60_000)
+})()
 
-function fakeInstall() {
-  const { registry } = require('playwright-core/lib/coreBundle')
-  const executable = registry.registry.findExecutable('chromium')
-  const directory = join(browsers, relative(registry.registryDirectory, executable.directory))
-  mkdirSync(dirname(join(directory, executableIn('chromium'))), { recursive: true })
-  writeFileSync(join(directory, executableIn('chromium')), '')
-  writeFileSync(join(directory, 'INSTALLATION_COMPLETE'), '')
+// host.spawn as the core's, for the test: the process is the test's own, killed by pid when the test ends.
+const spawnHere: ModHost['spawn'] = async (command, args) => {
+  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  let stderr = ''
+  child.stderr.on('data', (chunk) => (stderr = (stderr + chunk).slice(-2000)))
+  cleanups.push(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+  })
+  const proc: ModProcess = {
+    onOutput: (listener) => void child.stdout.on('data', (chunk) => listener(String(chunk))),
+    onExit: (listener) => void child.on('exit', (code) => listener(code, stderr)),
+    stop: () => void child.kill('SIGTERM'),
+  }
+  return proc
 }
 
-it('offers the browser once it is installed, and only to engines that take MCP servers', async () => {
-  const garage = tempDir('kothar-browser-garage-')
-  const sessions: SessionOptions[] = []
-  const engine = (id: string, kotharMcp: boolean): Adapter => ({
-    id,
-    kotharMcp,
-    detect: async () => ({ installed: true, signedIn: true }),
-    start(_machine, options, emit) {
-      sessions.push(options)
-      return {
-        prompt() {
-          emit({ type: 'turn.started' })
-          emit({ type: 'turn.completed' })
-        },
-        interrupt() {},
-        respond() {},
-        close() {},
-      }
-    },
+it.skipIf(!chromiumPath)('runs a real headless Chromium, and a hand-off keeps its tabs and session cookies', async () => {
+  const site = createServer((request, response) => {
+    if (request.url === '/login') {
+      return void response.writeHead(200, { 'set-cookie': 'session=abc; Path=/', 'content-type': 'text/html' }).end('<title>Login</title>in')
+    }
+    response.writeHead(200, { 'content-type': 'text/html' }).end(`<title>Page</title>${request.headers.cookie ?? 'none'}`)
   })
-  const env = { KOTHAR_ENGINE: 'mcp', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
-  const adapters = [engine('mcp', true), engine('plain', false)]
-  const kothar = await startCore({ env, adapters, mods: [browser], machine: sandboxingMachine })
-  cleanups.push(() => kothar.close(true))
-  const handle = (message: Parameters<typeof kothar.core.handle>[0]) => kothar.core.handle(message, () => {})
-  const statusOf = () => kothar.core.mods().find((mod) => mod.id === 'browser')!.setup!.status
-  const until = async (check: () => boolean) => {
-    for (let i = 0; i < 400 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10))
-    expect(check()).toBe(true)
-  }
-  const turn = (engine: string) => {
-    handle({ type: 'chat.create', name: engine, engine })
-    const { id } = kothar.core.chats().at(-1)!
-    handle({ type: 'chat.send', chatId: id, text: 'Open the page' })
-    return { chat: kothar.core.chats().find((chat) => chat.id === id)!, options: sessions.at(-1)! }
-  }
+  await new Promise<void>((resolve) => site.listen(0, '127.0.0.1', resolve))
+  cleanups.push(() => new Promise<void>((resolve) => site.close(() => resolve())))
+  const origin = `http://127.0.0.1:${(site.address() as { port: number }).port}`
 
-  expect(kothar.core.mods().find((mod) => mod.id === 'browser')?.enabled).toBe(false)
-  // Kothar's Chromium, which the test controls; the default mode depends on whether Chrome is installed here.
-  handle({ type: 'mod.setValue', modId: 'browser', key: 'browser', value: WINDOW })
-  handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true })
-  await until(() => statusOf() === 'missing')
-  expect(turn('mcp').options.mcpServers).toBeUndefined()
+  // The test may itself run in a sandbox, where Chromium's own sandbox and its separate network process can't start;
+  // Kothar launches it unsandboxed, so it needs neither flag.
+  const real = chromiumLauncher({ run, spawn: spawnHere }, async () => chromiumPath!, [
+    '--enable-features=NetworkServiceInProcess2',
+    '--no-sandbox',
+  ])
+  // The window step, headless: the test proves what carries over without a window on screen.
+  const launches: Launch[] = []
+  const launch: Launcher = (options) => {
+    launches.push(options)
+    return real({ ...options, headless: true })
+  }
+  const profile = join(tempDir('kothar-real-browser-'), 'profile')
+  const space = new SpaceBrowser({ profile, launch, pollMs: 100 })
+  cleanups.push(() => space.stop())
+  const endpoints = await serveEndpoints(() => space.endpoint())
+  cleanups.push(() => endpoints.close())
 
-  fakeInstall()
-  handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true })
-  await until(() => statusOf() === 'ready')
-  const { chat, options } = turn('mcp')
-  expect(options.mcpServers?.map((server) => server.name)).toEqual(['browser'])
-  expect(valueAfter(options.mcpServers![0]!.args, '--user-data-dir')).toBe(join(chat.workDir!, '.browser', 'profile'))
-  handle({ type: 'engine.setEnabled', engine: 'plain', enabled: true })
-  expect(turn('plain').options.mcpServers).toBeUndefined()
-}, 30_000)
+  // What Playwright does first: /json/version through Kothar's endpoint launches the browser.
+  const version = await (await fetch(`${endpoints.url('space')}/json/version/`)).json()
+  expect(version.webSocketDebuggerUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//)
+  const endpoint = await space.endpoint()
+  // Playwright attaches through Kothar's endpoint, as Playwright MCP's --cdp-endpoint does, and browses.
+  const mcp = dirname(require.resolve('@playwright/mcp/package.json'))
+  const { chromium } = require(require.resolve('playwright-core', { paths: [mcp] }))
+  const attached = await chromium.connectOverCDP(endpoints.url('space'))
+  const page = await attached.contexts()[0].newPage()
+  await page.goto(`${origin}/login`)
+  await until(async () => (await getCookies(endpoint)).some((c) => c.name === 'session'), 10_000)
+  const disconnected = new Promise((resolve) => attached.once('disconnected', resolve))
+
+  const done = space.handOff('Log in')
+  await until(() => space.mode === 'window', 20_000)
+  // Playwright sees its browser go, and reconnects on its next call.
+  await disconnected
+  expect(launches.map((l) => l.headless)).toEqual([true, false])
+  const window = await space.endpoint().catch((error: Error) => error.message)
+  expect(window).toContain('The user has this space’s browser open')
+  await space.finish('done')
+  const result = await done
+  expect(result.how).toBe('done')
+  expect(result.tabs.map((t) => t.url)).toEqual([`${origin}/login`])
+
+  const after = await space.endpoint()
+  expect(after).not.toBe(endpoint)
+  // The session cookie (not saved to disk by Chromium) came across both relaunches, and the tab with it.
+  expect((await getCookies(after)).find((c) => c.name === 'session')?.value).toBe('abc')
+  await until(async () => (await listTabs(after)).some((t) => t.url === `${origin}/login`), 10_000)
+  const again = await chromium.connectOverCDP(endpoints.url('space'))
+  const tab = again.contexts()[0].pages().find((p: { url(): string }) => p.url() === `${origin}/login`)
+  await tab.reload()
+  expect(await tab.textContent('body')).toBe('in')
+  const other = await again.contexts()[0].newPage()
+  await other.goto(`${origin}/`)
+  expect(await other.textContent('body')).toBe('session=abc')
+  await again.close()
+  await space.stop()
+  expect(space.mode).toBe('off')
+  expect(existsSync(join(profile, 'SingletonLock'))).toBe(false)
+}, 60_000)

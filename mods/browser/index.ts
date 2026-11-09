@@ -1,356 +1,387 @@
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import type { Mod, ModRun, ModValues } from '@kothar/mod-api'
-import type { LoginsProfile } from './logins.ts'
+import { rmSync } from 'node:fs'
+import type { ChatDetail, Mod, ModHost, ModProcessRow, ModRun } from '@kothar/mod-api'
+import { chromiumLauncher, type Launcher } from './chromium.ts'
+import { serveEndpoints, type Endpoints } from './endpoint.ts'
+import { type BrowserOps, type HandOffResult, SpaceBrowser } from './space-browser.ts'
+
+// Agents browse in the background: each space has one Chromium of Kothar's own (Playwright's, never the user's Chrome
+// or profile), headless, launched when an agent first browses and kept between messages, so its tabs and logins stay.
+// Playwright MCP attaches to it over CDP (see endpoint.ts). When a page needs the user, ask_user_in_browser hands the
+// browser over: the same profile opens in a window with the same tabs, the chat waits, and Done puts it back in the
+// background where the user left it (see space-browser.ts).
 
 const require = createRequire(import.meta.url)
-const HERE = dirname(fileURLToPath(import.meta.url))
-// Copies a Chrome profile's logins, then runs Playwright MCP; see logins.ts.
-const LOGINS = join(HERE, 'logins.ts')
-// Picks Chrome or Kothar's Chromium for the default mode, on the session's machine; see background.ts.
-const BACKGROUND = join(HERE, 'background.ts')
-// Puts the agent's tabs in a "Kothar" tab group where a window shows them; see group.ts.
-const GROUP = join(HERE, 'group.ts')
-// Playwright passes Chrome a mock keychain on macOS (a plain password store on Linux), and then Chrome can't decrypt
-// the copied cookies.
-const LOGINS_CONFIG = join(HERE, 'chrome-logins.json')
 const MCP_DIR = dirname(require.resolve('@playwright/mcp/package.json'))
 const CLI = join(MCP_DIR, 'cli.js')
 const CORE_BUNDLE = require.resolve('playwright-core/lib/coreBundle', { paths: [MCP_DIR] })
 // The core may be Electron, which runs scripts as Node only with this set.
 const NODE_ENV = { ELECTRON_RUN_AS_NODE: '1' }
 const INSTALL_TIMEOUT_MS = 30 * 60_000
+// Playwright waits this long for the browser, which may be launching on that first call.
+const CDP_TIMEOUT_MS = 60_000
 
 const CHECK_SCRIPT = `
 const fs = require('node:fs')
 const { registry } = require(${JSON.stringify(CORE_BUNDLE)})
 const chromium = registry.registry.findExecutable('chromium')
 const marker = registry.browserDirectoryToMarkerFilePath(chromium.directory)
-const ready = fs.existsSync(marker) && fs.existsSync(chromium.executablePath())
-console.log(JSON.stringify({ ready, name: chromium.title + ' ' + chromium.browserVersion }))
+const path = chromium.executablePath()
+const ready = fs.existsSync(marker) && fs.existsSync(path)
+console.log(JSON.stringify({ ready, name: chromium.title + ' ' + chromium.browserVersion, path }))
 `
-
-// The Playwright Extension: it connects Playwright MCP to tabs in the user's running Chrome.
-const EXTENSION_ID = 'mmlmfjhmonkocbjadbfplnigmagldckm'
-export const EXTENSION_URL = `https://chromewebstore.google.com/detail/playwright-extension/${EXTENSION_ID}`
-const EXTENSION_WAIT_MS = 10 * 60_000
-const EXTENSION_POLL_MS = 2_000
-
-// Finds Chrome, and the profile Playwright MCP's --extension picks: the last used one with the extension, else the
-// first. The same rules as Playwright's own, which it doesn't export.
-const CHROME_CHECK_SCRIPT = `
-const fs = require('node:fs')
-const path = require('node:path')
-const { registry, utils } = require(${JSON.stringify(CORE_BUNDLE)})
-const id = ${JSON.stringify(EXTENSION_ID)}
-let executable
-try { executable = registry.registry.findExecutable('chrome').executablePath() } catch {}
-const chrome = !!executable && fs.existsSync(executable)
-const dataDir = utils.defaultUserDataDirForChannel('chrome')
-const read = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch {} }
-const hasExtension = (profile) =>
-  fs.existsSync(path.join(dataDir, profile, 'Extensions', id)) ||
-  ['Preferences', 'Secure Preferences'].some((file) => {
-    const record = read(path.join(dataDir, profile, file))?.extensions?.settings?.[id]
-    return !!record && typeof record === 'object' && Object.keys(record).length > 0
-  })
-let profiles = []
-try {
-  profiles = fs.readdirSync(dataDir).filter((entry) => entry === 'Default' || /^Profile \\d+$/.test(entry))
-} catch {}
-const lastUsed = read(path.join(dataDir, 'Local State'))?.profile?.last_used
-const ordered = profiles.includes(lastUsed) ? [lastUsed, ...profiles.filter((p) => p !== lastUsed)] : profiles
-const profile = ordered.find(hasExtension) ?? null
-console.log(JSON.stringify({ chrome, executable: chrome ? executable : null, profile }))
-`
-
-type ChromeCheck = { chrome: boolean; executable: string | null; profile: string | null }
 
 const ANSI = /\x1b\[[0-9;]*m/g
+
+export const HAND_OFF_TOOL = 'ask_user_in_browser'
 
 export const BROWSER_INSTRUCTIONS =
   'Browser (the browser_* tools): read a page from its snapshot, the one each action returns or browser_snapshot, ' +
   'and take a screenshot only when how it looks matters. Fill a form with one browser_fill_form call, not a call ' +
-  'per field. Close the tabs you opened when you are done with them.'
+  'per field. Close the tabs you opened when you are done with them. The browser runs in the background and keeps ' +
+  `its tabs and logins between messages. When a page needs the user (a login, CAPTCHA, 2FA, payment, or anything ` +
+  `you shouldn't do for them), call ${HAND_OFF_TOOL} instead of asking them for passwords or codes.`
 
-const usesChrome = (values: ModValues) => values.browser === 'chrome'
-const usesLogins = (values: ModValues) => values.browser === 'logins'
-const usesBackground = (values: ModValues) => values.browser === 'background'
-const usesAttach = (values: ModValues) => values.browser === 'attach'
-// Kothar's Chromium in a visible window. A new value rather than the old 'chromium', which was headless by default:
-// reusing it would open windows for everyone who had picked it.
-export const WINDOW = 'window'
+export const HAND_OFF_DESCRIPTION =
+  "Hands this space's browser to the user, for what only they can or should do: log in, solve a CAPTCHA, enter a " +
+  '2FA code, pay, confirm. The browser opens in a window on their screen with your tabs, the current one in front, ' +
+  'and this call waits until they say they are done (or close the window, or send you a message). Then the browser ' +
+  'goes back to the background with their tabs and logins, and this returns the open tabs. Cookies, logins and site ' +
+  'storage carry over both ways, but anything typed into a form and not submitted is lost, so ask before filling a ' +
+  "form you can't finish. Afterwards your earlier page references are gone: take a browser_snapshot first."
 
-export const DEFAULT_PORT = 9222
-const portOf = (values: ModValues) => {
-  const port = Number(values.port)
-  return Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_PORT
+export type BrowserModOptions = {
+  // Tests pass a fake launcher and fake CDP calls, so nothing opens a window.
+  launch?: (host: ModHost) => Launcher
+  ops?: BrowserOps
+  pollMs?: number
+  handOffMs?: number
 }
-export const endpointOf = (values: ModValues) => `http://localhost:${portOf(values)}`
 
-// What answers on the debugging port: the browser's name, or nothing. Run through the Machine, where sessions run.
-const ATTACH_CHECK_SCRIPT = `
-fetch(process.argv[1] + '/json/version', { signal: AbortSignal.timeout(2000) })
-  .then((response) => response.json())
-  .then((version) => console.log(JSON.stringify({ browser: version.Browser ?? 'A browser' })))
-  .catch(() => console.log(JSON.stringify({ browser: null })))
-`
+export function createBrowserMod(options: BrowserModOptions = {}) {
+  let host: ModHost | undefined
+  let endpoints: Endpoints | undefined
+  let executable: string | undefined
+  const browsers = new Map<string, SpaceBrowser>()
+  const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  let idleMs = 15 * 60_000
 
-async function checkAttach(run: ModRun, values: ModValues) {
-  const { code, stdout, stderr } = await run(process.execPath, ['-e', ATTACH_CHECK_SCRIPT, endpointOf(values)], {
-    env: NODE_ENV,
-  })
-  if (code !== 0) throw new Error(stderr.trim() || `The debugging port check exited with code ${code}`)
-  const { browser } = JSON.parse(stdout) as { browser: string | null }
-  const port = portOf(values)
-  if (!browser) return { ready: false, message: `No browser is listening on port ${port}` }
-  // Chrome lets only extensions make tab groups, and none is told which of these tabs are the agent's.
-  return { ready: true, message: `${browser.replace('/', ' ')}, on port ${port}. Its tabs aren’t grouped` }
+  const findExecutable = async () => {
+    if (executable) return executable
+    const { ready, path } = await checkChromium(host!.run)
+    if (!ready) throw new Error('Kothar’s browser isn’t installed: Settings → Mods → Browser → Install')
+    return (executable = path)
+  }
+
+  const spaceIdOf = (chatId: string) => host?.space(chatId)?.id
+
+  const browserOf = (spaceId: string) => {
+    let browser = browsers.get(spaceId)
+    if (browser) return browser
+    const launch = options.launch ? options.launch(host!) : chromiumLauncher(host!, findExecutable)
+    browser = new SpaceBrowser({
+      profile: join(host!.storage.dir, 'profiles', spaceId),
+      launch,
+      ...(options.ops && { ops: options.ops }),
+      ...(options.pollMs !== undefined && { pollMs: options.pollMs }),
+      ...(options.handOffMs !== undefined && { handOffMs: options.handOffMs }),
+      onChange: () => changed(spaceId),
+    })
+    browsers.set(spaceId, browser)
+    return browser
+  }
+
+  const changed = (spaceId: string) => {
+    if (!host) return
+    host.processesChanged(spaceId)
+    const browser = browsers.get(spaceId)
+    // The chat that waits on the window shows it; any other's wait goes.
+    const waiting = browser?.waitingChat
+    for (const chat of host.chats()) {
+      if (chat.id !== spaceId && chat.parentId !== spaceId) continue
+      if (chat.id === waiting && browser?.mode === 'window') {
+        if (!['running', 'waiting'].includes(chat.status)) continue
+        host.wait(chat.id, {
+          text: `Browser: ${browser.reason}`,
+          buttons: [
+            { id: 'open', label: 'Open browser', hint: 'Bring the browser window to the front' },
+            { id: 'done', label: 'Done', primary: true, hint: 'Close the window; the agent carries on in the background' },
+          ],
+        })
+      } else if (['running', 'waiting'].includes(chat.status)) {
+        try {
+          host.endWait(chat.id)
+        } catch {}
+      }
+    }
+  }
+
+  // Stops a space's browser once nothing in the space has run for a while. A window the user has is left alone.
+  const idleCheck = (spaceId: string) => {
+    clearTimeout(idleTimers.get(spaceId))
+    idleTimers.delete(spaceId)
+    const browser = browsers.get(spaceId)
+    if (!host || !browser?.busy || browser.mode === 'window' || idleMs <= 0) return
+    const active = host.chats().some((c) => (c.id === spaceId || c.parentId === spaceId) && c.status !== 'idle')
+    if (active) return
+    idleTimers.set(
+      spaceId,
+      setTimeout(() => {
+        idleTimers.delete(spaceId)
+        if (browser.mode === 'headless') void browser.stop()
+      }, idleMs),
+    )
+  }
+
+  const stopSpace = (spaceId: string) => {
+    clearTimeout(idleTimers.get(spaceId))
+    idleTimers.delete(spaceId)
+    const browser = browsers.get(spaceId)
+    browsers.delete(spaceId)
+    return browser?.stop()
+  }
+
+  const resultText = ({ how, tabs, error }: HandOffResult) => {
+    const said = {
+      done: 'The user is done.',
+      message: 'The user sent you a message instead of clicking Done; it follows this result.',
+      closed: 'The user closed the browser window.',
+      stopped: 'The hand-off was stopped.',
+      timeout: 'The user did not finish in time; ask them in the chat before trying again.',
+    }[how]
+    const list = tabs.length
+      ? tabs.map((t) => `${t.active ? '* ' : '- '}${t.title ? `${t.title} — ` : ''}${t.url}`).join('\n')
+      : '(no tabs)'
+    const where = how === 'stopped' ? 'The browser is closed.' : 'The browser is back in the background.'
+    return `${said}${error ? ` (${error})` : ''} ${where} Open tabs (* is the one in front):\n${list}`
+  }
+
+  const rowOf = (spaceId: string): ModProcessRow[] => {
+    const browser = browsers.get(spaceId)
+    if (!browser?.busy) return []
+    const window = browser.mode === 'window'
+    return [
+      {
+        key: 'browser',
+        label: 'Browser',
+        detail: window ? `Open for you${browser.reason ? `: ${browser.reason}` : ''}` : 'In the background',
+        ...(browser.since !== undefined && { since: browser.since }),
+        dot: window ? 'warning' : 'success',
+        hint: "This space's browser, Kothar's own Chromium. Agents' tabs and logins stay while it runs.",
+        actions: window
+          ? [
+              { name: 'open', label: 'Open', hint: 'Bring its window to the front' },
+              { name: 'done', label: 'Done', primary: true, hint: 'Close the window; it goes on in the background' },
+              { name: 'stop', label: 'Stop', hint: 'Close the browser' },
+            ]
+          : [
+              { name: 'open', label: 'Open', hint: 'Show the agents’ tabs in a window, to look or take over' },
+              { name: 'stop', label: 'Stop', hint: 'Close the browser; it starts again when an agent browses' },
+            ],
+      },
+    ]
+  }
+
+  const mod: Mod = {
+    id: 'browser',
+    name: 'Browser',
+    description:
+      "Agents browse the web in the background, in a Chromium of Kothar's own: no window opens or takes focus. Each " +
+      'space keeps its own browser profile, so its tabs and logins stay. When a page needs you (a login, CAPTCHA, ' +
+      'payment), the agent hands you the browser in a window and carries on when you click Done.',
+    enabledByDefault: false,
+    settingsVersion: 1,
+    // Version 0 had a picker of where the browser ran (your Chrome, a debugging port, the Playwright Extension, a
+    // window, a copy of your Chrome's logins). There is one way now, so those settings go.
+    migrateSettings(saved, from) {
+      if (from >= 1) return saved
+      const { browser: _browser, port: _port, extensionToken: _token, background: _background, ...rest } = saved
+      return rest
+    },
+    settings: [
+      {
+        key: 'askEachAction',
+        label: 'Ask before each browser action',
+        description:
+          'Each browser tool call waits for your approval. Off, the agent browses without asking. pi never asks.',
+        type: 'boolean',
+        default: false,
+      },
+      {
+        key: 'idleMinutes',
+        label: 'Close after idle (minutes)',
+        description:
+          "A space's browser closes once nothing in the space has run for this long, and opens again when an agent " +
+          'browses. Logins stay; tabs don’t. 0 keeps it open until Kothar quits.',
+        type: 'number',
+        default: 15,
+        min: 0,
+        max: 1440,
+        integer: true,
+      },
+    ],
+
+    setup: {
+      description:
+        "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's browser " +
+        'folder, which other Playwright tools share. Nothing in it is removed.',
+      async check(run) {
+        const { ready, name } = await checkChromium(run)
+        return { ready, message: ready ? `${name} installed, in the background` : 'Browser not installed' }
+      },
+      async install(run, report) {
+        let downloading = 'the browser'
+        let partial = ''
+        const onStdout = (chunk: string) => {
+          const lines = (partial + chunk).split('\n')
+          partial = lines.pop()!
+          for (const line of lines.map((l) => l.replace(ANSI, ''))) {
+            downloading = line.match(/^Downloading (.+?) \(playwright/)?.[1] ?? downloading
+            const [, percent, size] = line.match(/(\d+)% of (.+)$/) ?? []
+            if (percent) report({ text: `Downloading ${downloading}: ${percent}% of ${size}`, progress: +percent / 100 })
+          }
+        }
+        // Without --no-remove the installer deletes browsers that other Playwright installs still use.
+        const args = [CLI, 'install-browser', '--no-shell', '--no-remove', 'chromium']
+        const { code, stderr } = await run(process.execPath, args, {
+          env: NODE_ENV,
+          timeoutMs: INSTALL_TIMEOUT_MS,
+          onStdout,
+        })
+        executable = undefined
+        if (code === 0) return
+        const error = stderr.split('\n').findLast((line) => line.startsWith('Error: '))?.slice('Error: '.length)
+        throw new Error(error ?? `Playwright's installer exited with code ${code}`)
+      },
+    },
+
+    // Sessions that take MCP servers get the browser, so they get this too.
+    instructions: ({ tools }) => (tools ? BROWSER_INSTRUCTIONS : undefined),
+
+    async onStart({ host: given, values }) {
+      host = given
+      idleMs = Number(values.idleMinutes ?? 15) * 60_000
+      endpoints ??= await serveEndpoints((spaceId) => browserOf(spaceId).endpoint())
+    },
+
+    async onStop() {
+      const closing = endpoints
+      endpoints = undefined
+      await Promise.all([...browsers.keys()].map(stopSpace))
+      await closing?.close()
+    },
+
+    mcpServers({ chat, workDir, values }) {
+      const spaceId = spaceIdOf(chat.id)
+      // Not started yet (it starts once Kothar is ready), or a chat outside any space: no browser this time.
+      if (!endpoints || !spaceId) return []
+      idleMs = Number(values.idleMinutes ?? 15) * 60_000
+      const args = [
+        CLI,
+        '--cdp-endpoint',
+        endpoints.url(spaceId),
+        '--cdp-timeout',
+        String(CDP_TIMEOUT_MS),
+        '--output-dir',
+        join(workDir, '.browser', 'output'),
+        '--file-paths',
+        'absolute',
+      ]
+      const env: Record<string, string> = {
+        ...NODE_ENV,
+        // Playwright puts sockets here, and the work folder's temp path can pass a socket path's 104 bytes.
+        TMPDIR: tmpdir(),
+        // Its list of running browsers is otherwise in ~/Library/Caches, which the sandbox keeps read-only.
+        PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
+      }
+      return [{ name: 'browser', command: process.execPath, args, env, allowTools: !values.askEachAction }]
+    },
+
+    tools: [
+      {
+        name: HAND_OFF_TOOL,
+        description: HAND_OFF_DESCRIPTION,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            reason: {
+              type: 'string',
+              minLength: 1,
+              description: 'What the user should do, shown to them, e.g. "Log in to GitHub"',
+            },
+          },
+          required: ['reason'],
+        },
+        offered: (caller) => !!endpoints && !!spaceIdOf(caller.id),
+        async run(input, { caller }) {
+          const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim() : 'Your turn'
+          const spaceId = spaceIdOf(caller.id)
+          if (!spaceId || !endpoints) throw new Error('This chat has no browser')
+          const browser = browserOf(spaceId)
+          if (browser.waitingChat && browser.waitingChat !== caller.id) {
+            throw new Error('Another chat in this space is waiting on the user in the browser; try again after')
+          }
+          const result = await browser.handOff(reason, caller.id)
+          try {
+            host?.endWait(caller.id)
+          } catch {}
+          return resultText(result)
+        },
+      },
+    ],
+
+    onWaitAction(chat, answer) {
+      const browser = browsers.get(spaceIdOf(chat.id) ?? '')
+      if (!browser || browser.waitingChat !== chat.id) return
+      if ('message' in answer) return browser.finish('message')
+      if (answer.button === 'open') return browser.show()
+      if (answer.button === 'done') return browser.finish('done')
+    },
+
+    processes: (spaceId) => rowOf(spaceId),
+
+    async onProcessAction(spaceId, _key, action) {
+      const browser = browsers.get(spaceId)
+      if (!browser) return
+      if (action === 'stop') return stopSpace(spaceId)
+      if (action === 'done') return browser.finish('done')
+      if (action === 'open') {
+        if (browser.mode === 'window') return browser.show()
+        // On demand: no agent waits; Done (or closing the window) puts it back.
+        void browser.handOff('opened from Processes')
+      }
+    },
+
+    onStatusChanged(chat: ChatDetail, status) {
+      const spaceId = spaceIdOf(chat.id)
+      if (!spaceId) return
+      const browser = browsers.get(spaceId)
+      // Stopping the chat that waits on the window ends the hand-off, and the window closes.
+      if (browser?.waitingChat === chat.id && (status === 'stopping' || status === 'idle')) void browser.finish('stopped')
+      idleCheck(spaceId)
+    },
+
+    onChatArchived(chat, archived) {
+      if (archived && chat.parentId === undefined) void stopSpace(chat.id)
+    },
+
+    // The space's profile, its logins with it, goes with the space.
+    onChatRemoved(chat) {
+      if (chat.parentId !== undefined || !host) return
+      const profile = join(host.storage.dir, 'profiles', chat.id)
+      void Promise.resolve(stopSpace(chat.id)).finally(() => rmSync(profile, { recursive: true, force: true }))
+    },
+  }
+
+  return { mod, browsers }
 }
 
 async function checkChromium(run: ModRun) {
   const { code, stdout, stderr } = await run(process.execPath, ['-e', CHECK_SCRIPT], { env: NODE_ENV })
   if (code !== 0) throw new Error(stderr.trim() || `The browser check exited with code ${code}`)
-  const { ready, name } = JSON.parse(stdout)
-  return { ready: ready as boolean, message: ready ? `${name} installed` : 'Browser not installed' }
+  return JSON.parse(stdout) as { ready: boolean; name: string; path: string }
 }
 
-// The default mode is ready with Google Chrome as it is, and needs Kothar's Chromium only without it.
-async function checkBackground(run: ModRun) {
-  const { code, stdout, stderr } = await run(process.execPath, [BACKGROUND, 'check'], { env: NODE_ENV })
-  if (code !== 0) throw new Error(stderr.trim() || `The Chrome check exited with code ${code}`)
-  if ((JSON.parse(stdout) as { chrome: string | null }).chrome) {
-    return { ready: true, message: 'Google Chrome, headless, on a profile of Kothar’s own' }
-  }
-  const chromium = await checkChromium(run)
-  return chromium.ready ? { ...chromium, message: `${chromium.message}, headless` } : chromium
-}
-
-async function checkLogins(run: ModRun) {
-  const chrome = await checkChrome(run)
-  if (!chrome.chrome) return { ready: false, message: 'Google Chrome not found' }
-  const { code, stdout, stderr } = await run(process.execPath, [LOGINS, 'check'], { env: NODE_ENV })
-  if (code !== 0) throw new Error(stderr.trim() || `The Chrome profile check exited with code ${code}`)
-  const { profile } = JSON.parse(stdout) as { profile: LoginsProfile | null }
-  if (!profile) return { ready: false, message: 'No Chrome profile with logins found' }
-  return { ready: true, message: `Logins from Chrome profile “${profile.label}”` }
-}
-
-async function checkChrome(run: ModRun): Promise<ChromeCheck> {
-  const { code, stdout, stderr } = await run(process.execPath, ['-e', CHROME_CHECK_SCRIPT], { env: NODE_ENV })
-  if (code !== 0) throw new Error(stderr.trim() || `The Chrome check exited with code ${code}`)
-  return JSON.parse(stdout)
-}
-
-const chromeStatus = ({ chrome, profile }: ChromeCheck) => {
-  if (!chrome) return { ready: false, message: 'Google Chrome not found' }
-  if (!profile) return { ready: false, message: 'The Playwright Extension isn’t in Chrome' }
-  return { ready: true, message: `Your Chrome, profile “${profile}”, its tabs in the “Playwright · Kothar” group` }
-}
-
-const browser: Mod = {
-  id: 'browser',
-  name: 'Browser',
-  description:
-    'Agents browse the web with Playwright. By default in the background: no window opens or takes focus, on your ' +
-    "Google Chrome if you have it, else a Chromium of Kothar's own, never your Chrome's profile or logins. Each space " +
-    'keeps its own browser profile, so a login there stays. Pick a mode with a window only to watch the agent.',
-  enabledByDefault: false,
-  settings: [
-    {
-      key: 'browser',
-      label: 'Browser',
-      description:
-        'In the background: headless, so nothing opens or takes focus, on Google Chrome if it is installed (nothing to ' +
-        "install), else Kothar's Chromium, with a profile of the space's own. " +
-        "With your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
-        "storage (not passwords or history), so agents are logged in where you are and can act as you there, " +
-        'without opening a window. Logins you make in Chrome reach agents at their next message. ' +
-        "Kothar's Chromium, in a window: Playwright's Chromium in a window you can watch, which may take focus while " +
-        'the agent works, its tabs in a tab group named Kothar. ' +
-        'Your open browser: agents attach to a Chromium-based browser you started with --remote-debugging-port, as ' +
-        "pi's browser extension does, and work in its tabs with its logins. Chrome 136 and later only allow this with " +
-        'a --user-data-dir other than your usual one. ' +
-        "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
-        'Each message that browses opens a tab and brings Chrome to the front. Its tabs sit in a tab group named ' +
-        '“Playwright · Kothar”, and each worker gets a group of its own. Your other tabs are left alone.',
-      type: 'select',
-      options: [
-        // 'chromium' (Kothar's Chromium, headless unless a switch said otherwise) is gone: a saved one isn't an option,
-        // so it reads as the default, 'background', which stays headless as it was. See WINDOW.
-        { value: 'background', label: 'In the background (no window)' },
-        { value: 'logins', label: "In the background, with your Chrome's logins" },
-        { value: WINDOW, label: "Kothar's Chromium, in a window" },
-        { value: 'attach', label: 'Your open browser (debugging port)' },
-        { value: 'chrome', label: 'Your Chrome, in front (shows Chrome)' },
-      ],
-      default: 'background',
-    },
-    {
-      key: 'port',
-      label: 'Debugging port',
-      description: 'Your open browser only: the port you started it with, as in --remote-debugging-port=9222.',
-      type: 'number',
-      default: DEFAULT_PORT,
-      min: 1,
-      max: 65535,
-      integer: true,
-    },
-    {
-      key: 'extensionToken',
-      label: 'Extension token',
-      description:
-        "Your Chrome, in front, only. Without it, Chrome asks you to pick a tab each time an agent connects, which is every " +
-        "message. Copy it from the Playwright Extension's page: click its icon in Chrome's toolbar.",
-      type: 'text',
-      default: '',
-      rows: 1,
-    },
-    {
-      key: 'askEachAction',
-      label: 'Ask before each browser action',
-      description:
-        'Each browser tool call waits for your approval. Off, the agent browses without asking. pi never asks.',
-      type: 'boolean',
-      default: false,
-    },
-  ],
-
-  setup: {
-    description: (values) =>
-      usesBackground(values)
-        ? 'Uses Google Chrome if it is installed, with nothing to install. Without it, Install runs Playwright’s ' +
-          'installer for its Chromium (Chrome for Testing), which other Playwright tools share.'
-        : usesAttach(values)
-        ? 'Start a Chromium-based browser with --remote-debugging-port=' + portOf(values) + ' (Chrome 136 and later ' +
-          'also need a --user-data-dir other than your usual one), and this turns ready.'
-        : usesLogins(values)
-        ? 'Uses Google Chrome, with nothing to install. Each message that browses copies the logins of your last ' +
-          "used Chrome profile into the space's work folder when Chrome's are newer, and Chrome reads them with " +
-          'its key from your Keychain.'
-        : usesChrome(values)
-        ? `Install opens the Playwright Extension in the Chrome Web Store (${EXTENSION_URL}). Add it to Chrome, ` +
-          'and this turns ready once Chrome has it.'
-        : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's " +
-          'browser folder, which other Playwright tools share. Nothing in it is removed. Its window may take focus ' +
-          'while the agent works.',
-    async check(run, values) {
-      if (usesBackground(values)) return checkBackground(run)
-      if (usesAttach(values)) return checkAttach(run, values)
-      if (usesLogins(values)) return checkLogins(run)
-      if (usesChrome(values)) {
-        // Kept for whoever picked it, but it's the one mode that brings Chrome to the front, so say so where it shows.
-        const status = chromeStatus(await checkChrome(run))
-        const front = 'Chrome comes to the front each message; pick In the background above for no pop-ups'
-        return status.ready ? { ...status, message: `${status.message}. ${front}` } : status
-      }
-      const chromium = await checkChromium(run)
-      return chromium.ready
-        ? { ...chromium, message: `${chromium.message}, in a window, its tabs in the “Kothar” group` }
-        : chromium
-    },
-    async install(run, report, values) {
-      if (usesAttach(values)) {
-        throw new Error(`Start your browser with --remote-debugging-port=${portOf(values)}; there's nothing to install`)
-      }
-      if (usesLogins(values)) {
-        if (!(await checkChrome(run)).chrome) throw new Error('Install Google Chrome first')
-        return
-      }
-      if (usesChrome(values)) return installExtension(run, report)
-      let downloading = 'the browser'
-      let partial = ''
-      const onStdout = (chunk: string) => {
-        const lines = (partial + chunk).split('\n')
-        partial = lines.pop()!
-        for (const line of lines.map((l) => l.replace(ANSI, ''))) {
-          downloading = line.match(/^Downloading (.+?) \(playwright/)?.[1] ?? downloading
-          const [, percent, size] = line.match(/(\d+)% of (.+)$/) ?? []
-          if (percent) report({ text: `Downloading ${downloading}: ${percent}% of ${size}`, progress: +percent / 100 })
-        }
-      }
-      // Without --no-remove the installer deletes browsers that other Playwright installs still use.
-      const args = [CLI, 'install-browser', '--no-shell', '--no-remove', 'chromium']
-      const options = { env: NODE_ENV, timeoutMs: INSTALL_TIMEOUT_MS, onStdout }
-      const { code, stderr } = await run(process.execPath, args, options)
-      if (code === 0) return
-      const error = stderr.split('\n').findLast((line) => line.startsWith('Error: '))?.slice('Error: '.length)
-      throw new Error(error ?? `Playwright's installer exited with code ${code}`)
-    },
-  },
-
-  // Sessions that take MCP servers get the browser, so they get this too. Snapshots are text and cheaper than
-  // screenshots; each action already returns one.
-  instructions: ({ tools }) => (tools ? BROWSER_INSTRUCTIONS : undefined),
-
-  mcpServers({ chat, workDir, sandboxed, values }) {
-    const dir = join(workDir, '.browser')
-    const args = [CLI, '--output-dir', join(dir, 'output'), '--file-paths', 'absolute']
-    const env: Record<string, string> = {
-      ...NODE_ENV,
-      // Playwright puts sockets here, and the work folder's temp path can pass a socket path's 104 bytes.
-      TMPDIR: tmpdir(),
-      // Its list of running browsers is otherwise in ~/Library/Caches, which the sandbox keeps read-only.
-      PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
-    }
-    if (usesBackground(values)) {
-      args.unshift(BACKGROUND, 'run', dir)
-      if (chat.worker) env.KOTHAR_BROWSER_WORKER = '1'
-      // Chrome and Chromium can't start their own sandboxes inside Kothar's.
-      if (sandboxed) args.push('--no-sandbox')
-      if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH
-    } else if (usesAttach(values)) {
-      // The user's browser, as it is: Playwright attaches over CDP and leaves it running when the session ends.
-      args.push('--cdp-endpoint', endpointOf(values))
-    } else if (usesChrome(values)) {
-      // The extension takes a connection per session, each in a tab group of its own, so workers share Chrome too.
-      // The group is named for the MCP client, which group.ts names Kothar: "Playwright · Kothar".
-      args.unshift(GROUP, 'name')
-      args.push('--extension', '--browser', 'chrome')
-      const token = String(values.extensionToken ?? '').trim()
-      if (token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token
-    } else if (usesLogins(values)) {
-      // A worker gets a copy of its own, since Chrome locks a profile to one browser at a time.
-      const copy = chat.worker ? join(dir, 'logins-workers', chat.id) : join(dir, 'logins')
-      if (chat.worker) env.KOTHAR_LOGINS_TEMPORARY = '1'
-      args.unshift(LOGINS, 'run', copy)
-      args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
-      if (sandboxed) args.push('--no-sandbox')
-    } else {
-      // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless. group.ts loads an
-      // extension that keeps its tabs in a "Kothar" group.
-      args.unshift(GROUP, 'window', dir)
-      args.push('--browser', 'chromium')
-      // A space's workers run beside it, and Chromium locks a profile to one browser at a time.
-      args.push(...(chat.worker ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
-      // Chromium can't start its own sandbox inside Kothar's.
-      if (sandboxed) args.push('--no-sandbox')
-      if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH
-    }
-    return [{ name: 'browser', command: process.execPath, args, env, allowTools: !values.askEachAction }]
-  },
-}
-
-// Opens the extension's store page in Chrome, then waits for Chrome to have it. Cancel stops it at its next check.
-async function installExtension(run: ModRun, report: (update: { text?: string; progress?: number }) => void) {
-  let checked = await checkChrome(run)
-  if (!checked.chrome) throw new Error('Install Google Chrome first')
-  if (checked.profile) return
-  // Chrome's own binary hands a URL to the running Chrome; detached, so a Chrome it starts outlives the script.
-  const open =
-    "require('node:child_process').spawn(process.argv[1], [process.argv[2]], { detached: true, stdio: 'ignore' })" +
-    '.unref()'
-  const opened = await run(process.execPath, ['-e', open, checked.executable!, EXTENSION_URL], { env: NODE_ENV })
-  if (opened.code !== 0) throw new Error(opened.stderr.trim() || `Opening Chrome exited with code ${opened.code}`)
-  report({ text: 'Add the Playwright Extension in the Chrome window that opened…' })
-  for (let waited = 0; waited < EXTENSION_WAIT_MS; waited += EXTENSION_POLL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, EXTENSION_POLL_MS))
-    checked = await checkChrome(run)
-    if (checked.profile) return
-  }
-  throw new Error(`Chrome didn't get the Playwright Extension. Add it from ${EXTENSION_URL}`)
-}
-
-export default browser
+export default createBrowserMod().mod

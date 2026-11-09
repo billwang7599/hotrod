@@ -28,7 +28,7 @@ The built-in mods today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents can browse the web with Playwright, in the background by default. |
+| Browser | No | Agents browse the web with Playwright in the background, one browser per space. When a page needs you, the agent hands it to you in a window and carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 

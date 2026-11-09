@@ -1,6 +1,6 @@
 ---
 title: Examples
-description: How three built-in mods - Home, Processes and Account rotation - plus Browser's setup use the mod API.
+description: How three built-in mods - Home, Processes and Account rotation - plus Browser use the mod API.
 ---
 
 # Examples
@@ -123,15 +123,23 @@ Its manifest would list `events`, `accounts` and `sendMessages`.
 
 **The pattern:** one hook, a few host calls, and a note so you know what the mod did.
 
-## Browser: a setup that follows the settings
+## Browser: a background process, and handing it to the user
 
 [Source](https://github.com/billwang7599/kothar/blob/main/mods/browser/index.ts)
 
-Browser gives agents Playwright's MCP server. Two parts are worth copying:
+Browser gives agents Playwright's MCP server, attached to one headless Chromium per space that the mod itself runs.
+Parts worth copying:
 
-- **`setup`** has a `description` function and a `check` that depend on the **Browser** setting. Picking another
-  browser re-runs the check, and `install` reports download progress from the installer's output with `report`.
-- **`mcpServers`** builds the server's command line from the session: the work folder, whether the session is
-  sandboxed, and whether the chat is a worker, which gets a browser profile of its own.
+- **`onStart` and `onStop`** start and stop a small local HTTP endpoint. `mcpServers` gives Playwright MCP that
+  address as `--cdp-endpoint`, and the browser launches (with `host.spawn`) only when an agent first browses. It
+  stays between messages, so tabs and logins do, and stops when the space has been idle a while, the mod is turned
+  off, or Kothar quits.
+- **A tool that waits for the user.** `ask_user_in_browser` relaunches the space's profile in a window with the same
+  tabs and cookies, then calls [`host.wait`](reference/host.md#waiting-for-the-user) with **Open browser** and
+  **Done** buttons and waits. `onWaitAction` ends the hand-off, and the tool returns the tabs the user left.
+- **A Processes row.** [`processes`](reference/host.md#processes-rows) lists the space's browser while it runs, with
+  **Open** (take it over at any time) and **Stop**, and `host.processesChanged` redraws the tab when it changes.
+- **`setup`** checks for Playwright's Chromium and installs it, reporting download progress with `report`.
 
-**The pattern:** let `setup` and `mcpServers` read the same settings, so what's installed always matches what runs.
+**The pattern:** keep what the agent needs running in the mod, not in the session, so it outlives each turn; let the
+user see it in Processes, and hand it to them with a wait when the agent can't go on alone.
