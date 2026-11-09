@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type Adapter, type Sandbox, type ToolKind } from '../shared.ts'
+import { type Adapter, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -20,7 +20,31 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   search: ['pattern'],
 }
 
-const THINKING = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+// Hotrod's thinking levels as pi's --thinking values. pi also has `minimal`, which Hotrod doesn't offer; read back
+// from pi, it counts as low.
+const LEVEL_OF: Record<ThinkingLevel, string> = {
+  off: 'off',
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+}
+const THINKING = Object.keys(LEVEL_OF) as ThinkingLevel[]
+const levelFrom = (native: unknown) =>
+  native === 'minimal' ? 'low' : THINKING.find((level) => LEVEL_OF[level] === native)
+
+// The levels one of pi's models takes, as pi works it out (getSupportedThinkingLevels in pi-ai 1.5): none for a model
+// without reasoning; xhigh and max only where its thinkingLevelMap names them; any level it maps to null, never.
+// Undefined when pi doesn't say whether the model reasons, so the engine's list applies.
+function levelsOfModel({ reasoning, thinkingLevelMap: map }: { reasoning?: unknown; thinkingLevelMap?: any }) {
+  if (reasoning === undefined) return undefined
+  if (!reasoning) return []
+  return THINKING.filter((level) => {
+    const mapped = map?.[LEVEL_OF[level]]
+    return mapped !== null && (level === 'xhigh' || level === 'max' ? mapped !== undefined : true)
+  })
+}
 
 const CLEAN_ARGS = [
   '--no-session',
@@ -69,6 +93,7 @@ const textOf = (content: any): string =>
 
 export const pi: Adapter = {
   id: 'pi',
+  name: 'pi',
   imageInput: true,
   hotrodMcp: true,
   steering: true,
@@ -86,11 +111,17 @@ export const pi: Adapter = {
         if (msg.type === 'response' && msg.success) answers[msg.command] = msg.data
       } catch {}
     }
-    const models = ((answers.get_available_models?.models ?? []) as any[]).flatMap(({ provider, id }) =>
-      provider && id ? [`${provider}/${id}`] : [],
+    const listed = ((answers.get_available_models?.models ?? []) as any[]).filter(({ provider, id }) => provider && id)
+    const models = listed.map(({ provider, id }) => `${provider}/${id}`)
+    const modelThinking = Object.fromEntries(
+      listed.flatMap((model) => {
+        const levels = levelsOfModel(model)
+        return levels && levels.join() !== THINKING.join() ? [[`${model.provider}/${model.id}`, levels]] : []
+      }),
     )
     const { model: started, thinkingLevel } = answers.get_state ?? {}
     const startedId = `${started?.provider}/${started?.id}`
+    const defaultThinking = levelFrom(thinkingLevel)
     const defaultModel = models.includes(startedId) ? startedId : undefined
     return {
       installed: true,
@@ -98,8 +129,9 @@ export const pi: Adapter = {
       detail: version.stdout.trim(),
       models,
       thinking: THINKING,
+      ...(Object.keys(modelThinking).length && { modelThinking }),
       ...(defaultModel && { defaultModel }),
-      ...(THINKING.includes(thinkingLevel) && { defaultThinking: thinkingLevel }),
+      ...(defaultThinking && { defaultThinking }),
     }
   },
 
@@ -115,7 +147,7 @@ export const pi: Adapter = {
   start(machine, { cwd, instructions, hotrodMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
     const args = [...RPC_ARGS, '-e', 'builtin:mcp']
     if (model) args.push('--model', model)
-    if (thinking) args.push('--thinking', thinking)
+    if (thinking) args.push('--thinking', LEVEL_OF[thinking])
     const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
     const systemPrompt = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean)
     if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))

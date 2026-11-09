@@ -271,7 +271,7 @@ describe('Hotrod MCP server', () => {
       expect(calls).toEqual([])
     })
 
-    it("spawns a subagent named after its task with the parent's engine, and starts it with the task", async () => {
+    it("spawns a subagent named after its task, on the engine it names or else its model list, and starts it", async () => {
       const { calls, json, tool, grant } = await on()
       expect(await json(grant('aaaa0001'), 'spawn_subagent', { task: 'Read the tests' })).toEqual({
         chatId: 'dddd0001',
@@ -281,7 +281,7 @@ describe('Hotrod MCP server', () => {
       const long = `Lint   every file\nin ${'x'.repeat(SUBAGENT_NAME_MAX_CHARS)}`
       expect(await json(grant('bbbb0001'), 'spawn_subagent', { task: long })).toEqual({ chatId: 'dddd0001' })
       const name = `${`Lint every file in ${'x'.repeat(SUBAGENT_NAME_MAX_CHARS)}`.slice(0, SUBAGENT_NAME_MAX_CHARS)}…`
-      const subagent = { engine: 'fake', subagent: true }
+      const subagent = { subagent: true }
       expect(calls).toEqual([
         ['createChat', { parentId: 'aaaa0001', name: 'Read the tests', ...subagent }],
         ['send', 'dddd0001', 'Read the tests'],

@@ -454,7 +454,7 @@ describe('pi.detect', () => {
       signedIn: true,
       detail: '1.5.0',
       models: listed.map(([provider, id]) => `${provider}/${id}`),
-      thinking: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      thinking: ['off', 'low', 'medium', 'high', 'xhigh', 'max'],
       defaultModel: 'anthropic/claude-haiku-5-5',
       defaultThinking: 'xhigh',
     })
@@ -463,6 +463,33 @@ describe('pi.detect', () => {
       'get_available_models',
       'get_state',
     ])
+  })
+
+  it("reports each model's levels as pi works them out, and its minimal as low", async () => {
+    const models = [
+      { provider: 'a', id: 'plain', reasoning: false },
+      { provider: 'a', id: 'reasons', reasoning: true },
+      { provider: 'a', id: 'deep', reasoning: true, thinkingLevelMap: { xhigh: 'xhigh', max: 'max', off: null } },
+      { provider: 'a', id: 'unsaid' },
+    ]
+    const stdout =
+      line({ type: 'response', command: 'get_available_models', success: true, data: { models } }) +
+      line({ type: 'response', command: 'get_state', success: true, data: { model: models[1], thinkingLevel: 'minimal' } })
+    const fake = fakeMachine({ 'pi --version': version, [rpc]: { code: 0, stdout, stderr: '' } })
+    const detected = await pi.detect(fake.machine)
+    expect(detected.modelThinking).toEqual({
+      'a/plain': [],
+      'a/reasons': ['off', 'low', 'medium', 'high'],
+      'a/deep': ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+    expect(detected.defaultThinking).toBe('low')
+  })
+
+  it('maps each level onto its own --thinking value', () => {
+    for (const level of ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const) {
+      const args = startSession('', { thinking: level }).fake.spawned[0]!.args
+      expect(args[args.indexOf('--thinking') + 1]).toBe(level)
+    }
   })
 
   it('leaves out a start model pi does not list', async () => {

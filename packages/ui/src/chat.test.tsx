@@ -17,6 +17,8 @@ import {
   PERMISSION_SWITCHES,
   type ClientMessage,
   type ContextItem,
+  type EngineInfo,
+  type ModelLists,
   type ToolKind,
   type WorkFolder,
 } from '@hotrod/core/shared'
@@ -96,6 +98,8 @@ type RenderOptions = {
   chats?: ChatView[]
   select?: (chatId: string) => void
   steering?: boolean
+  engines?: EngineInfo[]
+  modelLists?: ModelLists
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -125,9 +129,12 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               folder={options.folder}
               chats={[view, ...(options.chats ?? [])]}
               select={options.select}
-              engines={[
-                { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
-              ]}
+              engines={
+                options.engines ?? [
+                  { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
+                ]
+              }
+              modelLists={options.modelLists}
               connected
               send={send}
               openSettings={() => {}}
@@ -1162,4 +1169,41 @@ test('a steering message waits in the queue with no way to take it back, then sh
   const items: Item[] = [USER, tool('done', 'a'), { kind: 'user', text: 'use y', midTurn: true }]
   render({ status: 'running', items, queue: [] }, () => {}, { steering: true })
   expect(container.textContent).toContain('Sent mid-turn')
+})
+
+test("the composer offers every engine's models, grouped, and picking one on another engine pins the chat to it", () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const engines: EngineInfo[] = [
+    { id: 'cc', name: 'Claude Code', enabled: true, installed: true, signedIn: true, thinking: ['low', 'high'], models: [{ id: 'opus', label: 'Opus' }] },
+    { id: 'pi', enabled: true, installed: true, signedIn: true, thinking: ['off', 'high'], models: [{ id: 'p/one', label: 'One' }] },
+  ]
+  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus', thinking: 'high' }], planning: [], searching: [], subagents: [] }
+  const sent: ClientMessage[] = []
+  render({ engine: 'cc', thinking: 'high' }, (m) => sent.push(m), { engines, modelLists })
+  const select = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
+  expect(select('Model').textContent).toBe('Opus · Claude Code')
+  expect(select('Thinking').textContent).toBe('High')
+  expect(container.querySelector('button[aria-label="Engine"]')).toBeNull()
+  act(() => select('Model').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect([...document.querySelectorAll('[role="group"]')].map((g) => g.firstElementChild?.textContent)).toEqual([
+    'Claude Code',
+    'pi',
+  ])
+  const item = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith('One · pi'))!
+  act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  // The chat's own level carries over, since pi's model takes it too.
+  expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1', engine: 'pi', model: 'p/one', thinking: 'high' })
+})
+
+test("a chat whose own model can't run says so and offers to go back to Settings' models", () => {
+  const engines: EngineInfo[] = [
+    { id: 'cc', enabled: true, installed: true, signedIn: true, models: [{ id: 'opus', label: 'Opus' }] },
+  ]
+  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus' }], planning: [], searching: [], subagents: [] }
+  const sent: ClientMessage[] = []
+  render({ engine: 'cc', model: 'gone' }, (m) => sent.push(m), { engines, modelLists })
+  expect(container.textContent).toContain("gone on cc can't run")
+  const back = [...container.querySelectorAll('button')].find((b) => b.textContent === "Use Settings' models")!
+  act(() => back.click())
+  expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1' })
 })

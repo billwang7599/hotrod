@@ -112,7 +112,7 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={[]}
-              modelLists={{}}
+              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -182,7 +182,7 @@ function renderMods(mods: ModInfo[], page: SettingsPage, sent: ClientMessage[] =
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={mods}
-              modelLists={{}}
+              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -322,10 +322,11 @@ test("a mod's text setting saves on blur and resets to its default while it diff
   expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
 })
 
-test('Settings → Models gives each listed model its own thinking level, offering only the levels it takes', () => {
+test('Settings → Models lists each role once across engines, each model with its own thinking level', () => {
   Element.prototype.scrollIntoView = vi.fn()
-  const engine: EngineInfo = {
+  const cc: EngineInfo = {
     id: 'claude-code',
+    name: 'Claude Code',
     enabled: true,
     installed: true,
     signedIn: true,
@@ -337,9 +338,21 @@ test('Settings → Models gives each listed model its own thinking level, offeri
       { id: 'sonnet', label: 'Sonnet', thinking: ['low', 'high'] },
     ],
   }
+  const pi: EngineInfo = {
+    id: 'pi',
+    enabled: true,
+    installed: true,
+    signedIn: true,
+    thinking: ['off', 'low', 'high'],
+    models: [{ id: 'p/one', label: 'One' }],
+  }
   const lists: ModelLists = {
-    chat: [],
-    planning: [{ model: 'opus', thinking: 'high' }, { model: 'haiku' }, { model: 'sonnet', thinking: 'medium' }],
+    chat: [{ engine: 'claude-code', model: 'opus', thinking: 'medium' }],
+    planning: [
+      { engine: 'claude-code', model: 'opus', thinking: 'high' },
+      { engine: 'claude-code', model: 'haiku' },
+      { engine: 'pi', model: 'p/one', thinking: 'off' },
+    ],
     searching: [],
     subagents: [],
   }
@@ -354,11 +367,11 @@ test('Settings → Models gives each listed model its own thinking level, offeri
               page="models"
               openPage={() => {}}
               close={() => {}}
-              engines={[engine]}
+              engines={[cc, pi]}
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={[]}
-              modelLists={{ 'claude-code': lists }}
+              modelLists={lists}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -373,23 +386,40 @@ test('Settings → Models gives each listed model its own thinking level, offeri
   const open = (label: string) =>
     act(() => select(label)!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   const options = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.replace('✓', ''))
+  const pick = (text: string) => {
+    const item = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith(text))!
+    act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  }
 
-  expect(select('Thinking for Opus in Planning')!.textContent).toBe('high')
-  expect(select('Thinking for Haiku in Planning')).toBeNull()
-  // Sonnet's saved level is one it doesn't take, and so is the default: the row shows plain default.
-  expect(select('Thinking for Sonnet in Planning')!.textContent).toBe('default')
-  open('Thinking for Sonnet in Planning')
-  expect(options()).toEqual(['default', 'low', 'high'])
-  act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+  // One section, not one per engine, and no default anywhere.
+  expect(dialog().querySelectorAll('section[aria-label="Models"]')).toHaveLength(1)
+  expect(dialog().textContent).not.toMatch(/default/i)
+  expect(dialog().querySelector('ol[aria-label="Planning models"]')!.textContent).toContain('One · pi')
+  expect(select('Thinking for Opus · Claude Code in Planning')!.textContent).toBe('High')
+  expect(select('Thinking for Haiku · Claude Code in Planning')).toBeNull()
+  // Empty roles run what Chat does, and the Chat list's only model can't be removed.
+  expect(dialog().textContent?.match(/Same as Chat/g)).toHaveLength(2)
+  expect(select('Remove Opus · Claude Code')!.disabled).toBe(true)
 
-  open('Thinking for Opus in Planning')
-  expect(options()).toEqual(['default (medium)', 'low', 'medium', 'high'])
-  const item = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith('default (medium)'))!
-  act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  open('Thinking for One · pi in Planning')
+  expect(options()).toEqual(['Off', 'Low', 'High'])
+  pick('High')
   expect(sent.at(-1)).toEqual({
     type: 'models.setList',
-    engine: 'claude-code',
     role: 'planning',
-    models: [{ model: 'opus' }, { model: 'haiku' }, { model: 'sonnet', thinking: 'medium' }],
+    models: [lists.planning[0], lists.planning[1], { engine: 'pi', model: 'p/one', thinking: 'high' }],
+  })
+
+  // Adding a model offers every engine's, grouped, and starts it at its engine's default level, snapped.
+  open('Add a Searching model')
+  expect([...document.querySelectorAll('[role="group"]')].map((g) => g.firstElementChild?.textContent)).toEqual([
+    'Claude Code',
+    'pi',
+  ])
+  pick('Sonnet · Claude Code')
+  expect(sent.at(-1)).toEqual({
+    type: 'models.setList',
+    role: 'searching',
+    models: [{ engine: 'claude-code', model: 'sonnet', thinking: 'low' }],
   })
 })

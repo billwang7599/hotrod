@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
-import type { Adapter, EngineEvent, Question, SessionOptions, ToolKind } from '../shared.ts'
+import type { Adapter, EngineEvent, Question, SessionOptions, ThinkingLevel, ToolKind } from '../shared.ts'
 
 export type FakeStep =
   | EngineEvent
@@ -79,8 +79,8 @@ const demoScript: FakeStep[] = [
 ]
 
 export const FAKE_MODELS = ['fake-large', 'fake-small']
-export const FAKE_THINKING = ['low', 'high']
-export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' }
+export const FAKE_THINKING: ThinkingLevel[] = ['low', 'high']
+export const FAKE_DEFAULTS = { defaultModel: 'fake-small', defaultThinking: 'high' as const }
 
 // A script can depend on the session, such as which account it runs on (options.accountDir). With steering, a
 // steered message lands after the next tool result, like Claude Code's and pi's; one still waiting when the script
@@ -92,6 +92,7 @@ export function createFakeAdapter(
 ): Adapter {
   return {
     id: 'fake',
+    name: 'Fake',
     imageInput: true,
     ...(steering && { steering }),
     async complete(_machine, { prompt }) {

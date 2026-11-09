@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ToolKind } from '../shared.ts'
+import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -40,11 +40,19 @@ const MODELS = [
   'claude-haiku-5-5',
   'claude-haiku-4-5',
 ]
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// Hotrod's thinking levels as Claude Code's --effort values. Claude Code can't turn thinking off, so `off` isn't one.
+const EFFORT_OF: Partial<Record<ThinkingLevel, string>> = {
+  low: 'low',
+  medium: 'medium',
+  high: 'high',
+  xhigh: 'xhigh',
+  max: 'max',
+}
+const EFFORTS = Object.keys(EFFORT_OF) as ThinkingLevel[]
 // Models that take fewer --effort levels than EFFORTS; Claude Code silently lowers or drops the rest. From Claude
 // Code 2.1.319's own model list (supportedEffortLevels in its initialize reply) and, for the 4.5 models it doesn't
 // list, its effort, xhigh and max checks.
-const MODEL_EFFORTS: Record<string, string[]> = {
+const MODEL_EFFORTS: Record<string, ThinkingLevel[]> = {
   'claude-opus-4-6': ['low', 'medium', 'high', 'max'],
   'claude-sonnet-4-6': ['low', 'medium', 'high', 'max'],
   'claude-opus-4-5': ['low', 'medium', 'high'],
@@ -52,7 +60,7 @@ const MODEL_EFFORTS: Record<string, string[]> = {
   'claude-haiku-4-5': [],
 }
 // What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
-const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
+const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' as const }
 
 const CLEAN_ARGS = [
   '--no-session-persistence',
@@ -140,6 +148,7 @@ const contentOf = (text: string, images: { mimeType: string; base64: string }[] 
 
 export const claudeCode: Adapter = {
   id: 'claude-code',
+  name: 'Claude Code',
   imageInput: true,
   hotrodMcp: true,
   steering: true,
@@ -234,7 +243,8 @@ export const claudeCode: Adapter = {
       '--replay-user-messages',
     ]
     if (model) args.push('--model', model)
-    if (thinking) args.push('--effort', thinking)
+    const effort = thinking && EFFORT_OF[thinking]
+    if (effort) args.push('--effort', effort)
     for (const dir of extraDirs) args.push('--add-dir', dir)
     const jail = sandbox && jailed(sandbox, accountDir)
     const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }

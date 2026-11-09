@@ -274,7 +274,7 @@ function App() {
                 modUi={state.modUi}
                 panelViews={state.panelViews}
                 contextDefaults={state.contextDefaults}
-                modelLists={state.modelLists[selected.engine]}
+                modelLists={state.modelLists}
                 select={select}
               />
             ) : (
