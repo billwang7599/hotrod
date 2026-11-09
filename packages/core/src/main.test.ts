@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
-import { defaultGarage, envVar, startCore } from './main.ts'
+import { envVar, startCore } from './main.ts'
 import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './shared.ts'
 
 const port = 4451
@@ -35,17 +35,6 @@ function firstMessage(origin: string, token: string) {
     socket.on('error', () => {})
   })
 }
-
-it('a fresh install gets the Kothar garage', () => {
-  expect(defaultGarage('/Users/u', () => false)).toBe('/Users/u/Library/Application Support/Kothar')
-})
-
-it('a garage from when Kothar was Hotrod stays in use where it is, unless a Kothar one exists', () => {
-  const old = '/Users/u/Library/Application Support/Hotrod'
-  const kothar = '/Users/u/Library/Application Support/Kothar'
-  expect(defaultGarage('/Users/u', (path) => path === old)).toBe(old)
-  expect(defaultGarage('/Users/u', (path) => path === old || path === kothar)).toBe(kothar)
-})
 
 it('reads each KOTHAR_ variable, falling back to its HOTROD_ name', () => {
   expect(envVar({ HOTROD_GARAGE: '/old' }, 'GARAGE')).toBe('/old')

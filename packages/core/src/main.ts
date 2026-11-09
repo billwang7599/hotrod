@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +7,7 @@ import { claudeCode } from './adapters/claude-code.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
+import { moveGarage, portInUse } from './garage-move.ts'
 import { localMachine } from './machine.ts'
 import { loadMods } from './mods.ts'
 import { startServer } from './server.ts'
@@ -21,13 +21,14 @@ export function envVar(env: Record<string, string | undefined>, name: string): s
   return env[`KOTHAR_${name}`] ?? env[`HOTROD_${name}`]
 }
 
-// A garage from when Kothar was Hotrod stays where it is, in use: its work folders hold git worktrees with absolute
-// paths, so moving it would break them. A fresh install gets Kothar's own.
-export function defaultGarage(home = homedir(), exists: (path: string) => boolean = existsSync) {
+// Kothar's garage. One from when Kothar was Hotrod moves here on the first launch after the rename (see
+// garage-move.ts); it stays in use where it is only if the move can't happen yet.
+export function defaultGarage(
+  options: { home?: string; machine?: Machine; inUse?: () => Promise<boolean>; log?: (message: string) => void } = {},
+) {
+  const { home = homedir(), machine = localMachine, inUse = async () => false, log } = options
   const support = join(home, 'Library', 'Application Support')
-  const garage = join(support, 'Kothar')
-  const old = join(support, 'Hotrod')
-  return !exists(garage) && exists(old) ? old : garage
+  return moveGarage({ from: join(support, 'Hotrod'), to: join(support, 'Kothar'), machine, inUse, log })
 }
 
 export async function startCore(
@@ -37,12 +38,13 @@ export async function startCore(
     adapters?: Adapter[]
     mods?: Mod[]
     machine?: Machine
+    home?: string
   } = {},
 ) {
-  const { env = process.env, uiDir, adapters = registered, machine = localMachine } = options
+  const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
   const { mods, brokenMods } = options.mods ? { mods: options.mods, brokenMods: [] } : await loadMods(STOCK_MODS_DIR)
-  const garage = envVar(env, 'GARAGE') ?? defaultGarage()
   const port = Number(envVar(env, 'PORT') ?? 4317)
+  const garage = envVar(env, 'GARAGE') ?? (await defaultGarage({ home, machine, inUse: () => portInUse(port) }))
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (envVar(env, 'UI_ORIGIN') ?? 'http://localhost:4318')
   const token = envVar(env, 'TOKEN') || randomBytes(32).toString('base64url')
 
