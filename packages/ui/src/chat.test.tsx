@@ -6,6 +6,7 @@ import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
+import { DRAFT_SAVE_MS } from './drafts.ts'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
 import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
@@ -1111,17 +1112,21 @@ test('an unsent message stays in its chat across a switch and a reload, and is c
   localStorage.clear()
 })
 
-test('a message queued during a turn clears its draft too', () => {
+test('a draft is saved once typing pauses, and a message queued during a turn clears it', () => {
   localStorage.clear()
+  vi.useFakeTimers()
   const box = () => container.querySelector('textarea')!
   render({ status: 'running' })
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'later')
     box().dispatchEvent(new Event('input', { bubbles: true }))
   })
+  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  act(() => vi.advanceTimersByTime(DRAFT_SAVE_MS))
   expect(localStorage.getItem('hotrod.drafts')).toContain('later')
   act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  vi.useRealTimers()
 })
 
 test('while a turn runs, Enter steers when the engine can and ⌥Enter queues; otherwise Enter queues', () => {

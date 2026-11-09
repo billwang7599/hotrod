@@ -32,7 +32,7 @@ import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { choosePanelTab, modTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
-import { draftOf, saveDraft } from './drafts.ts'
+import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
 import {
   openReportCard,
@@ -934,15 +934,9 @@ export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const paths = usePathsShown()
   const listed = accounts && listedAccounts(accounts)
-  const [text, setTyped] = useState(() => draftOf(props.chat.id))
-  const setText = (typed: string) => {
-    setTyped(typed)
-    saveDraft(chat.id, typed)
-  }
   const [pending, setPending] = useState<Pending[]>([])
   const pendingRef = useRef(pending)
   pendingRef.current = pending
-  const fileInput = useRef<HTMLInputElement>(null)
   const dragDepth = useRef(0)
   const [dragging, setDragging] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
@@ -1016,7 +1010,6 @@ export function Chat(props: ChatProps) {
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff
   const busy = chat.status !== 'idle'
-  const working = busy && !archived && !text
   const asking = chat.status === 'waiting' || requests.length > 0
   const questionWaits = asking && chat.items.some((i) => i.kind === 'question' && i.outcome === 'pending')
   const steers = offers?.steering === true && (chat.status === 'running' || chat.status === 'waiting')
@@ -1028,7 +1021,6 @@ export function Chat(props: ChatProps) {
   const last = chat.items.at(-1)
   const awaitingOutput = chat.status === 'running' && !chat.draft && !(last?.kind === 'tool' && last.state === 'running')
   const canAttach = canSend || canQueue
-  const hasContent = text.trim() !== '' || pending.length > 0
   const unattach = (removed: Pending[]) => {
     removed.forEach((p) => p.preview && URL.revokeObjectURL(p.preview))
     setPending((list) => list.filter((p) => !removed.includes(p)))
@@ -1065,19 +1057,17 @@ export function Chat(props: ChatProps) {
     }
   }
   const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files')
-  const submit = (steer = false) => {
-    if (!canAttach || !hasContent) return
+  const submit = (text: string, steer = false) => {
+    if (!canAttach || (text.trim() === '' && !pending.length)) return false
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
     const steering = steer && steers
     send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }), ...(steering && { steer: true }) })
     following.current = true
     toBottom()
-    setText('')
     unattach(pending)
+    return true
   }
-  const interruptAndSend = async () => {
-    if (!canQueue) return
-    submit()
+  const interrupt = async () => {
     if (chat.status !== 'stopping' && (await confirm(INTERRUPT_SEND_TEXT))) {
       send({ type: 'chat.interrupt', chatId: chat.id })
     }
@@ -1434,156 +1424,24 @@ export function Chat(props: ChatProps) {
             </div>
           )}
           {!showEngineNote && !viewOnly && (
-            <div
-              className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
-            >
-              {pending.length > 0 && (
-                <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
-                  {pending.map((p) => (
-                    <li key={p.id} className="relative min-w-0">
-                      {p.preview ? (
-                        <img
-                          src={p.preview}
-                          alt={p.name}
-                          title={p.name}
-                          className="block size-48 rounded-lg border object-cover shadow-raised"
-                        />
-                      ) : (
-                        <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
-                          <FileLabel name={p.name} size={p.size} />
-                        </div>
-                      )}
-                      <Hint text="Remove">
-                        <button
-                          className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
-                          aria-label={`Remove ${p.name}`}
-                          onClick={() => unattach([p])}
-                        >
-                          ×
-                        </button>
-                      </Hint>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <div className="relative">
-                {working && (
-                  <span
-                    className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
-                    data-status={chat.status}
-                    aria-hidden="true"
-                  >
-                    {placeholder}
-                  </span>
-                )}
-                <textarea
-                  className="block max-h-[calc(12lh+16px)] min-h-[calc(1lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
-                  value={text}
-                  rows={1}
-                  placeholder={working ? undefined : archived ? 'Archived' : placeholder}
-                  aria-placeholder={working ? placeholder : undefined}
-                  disabled={!(canSend || canQueue)}
-                  onChange={(e) => setText(e.target.value)}
-                  onPaste={(e) => {
-                    const { types, files } = e.clipboardData
-                    if (types.includes('text/plain') || !files.length) return
-                    e.preventDefault()
-                    void attach([...files])
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
-                    e.preventDefault()
-                    const emptyWithQueue = !hasContent && chat.queue.length > 0
-                    if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
-                    else submit(!e.altKey)
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-8 px-6 pb-6">
-                <span className="flex min-w-0 flex-1 items-center gap-6">
-                  <Hint text="Attach files">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="grid shrink-0 place-items-center"
-                      aria-label="Attach files"
-                      disabled={!canAttach}
-                      onClick={() => fileInput.current?.click()}
-                    >
-                      <PaperclipIcon />
-                    </Button>
-                  </Hint>
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
-                    onChange={(e) => {
-                      void attach([...(e.target.files ?? [])])
-                      e.target.value = ''
-                    }}
-                  />
-                </span>
-                <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
-                  {menu.model && (
-                    <Select
-                      variant="chip"
-                      label="Model"
-                      hint={MODEL_HINT}
-                      value={menu.model}
-                      disabled={!canChange}
-                      options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
-                      onChange={(model) => setModel(model, menu.thinking)}
-                    />
-                  )}
-                  {menu.thinking && (
-                    <Select
-                      variant="chip"
-                      label="Thinking"
-                      hint={THINKING_HINT}
-                      value={menu.thinking}
-                      disabled={!canChange}
-                      options={menu.levels.map((l) => ({ value: l, label: l }))}
-                      onChange={(thinking) => setModel(menu.model, thinking)}
-                    />
-                  )}
-                  {busy ? (
-                    <>
-                      {hasContent && (
-                        <Hint text={steers ? STEER_HINT : QUEUE_HINT}>
-                          <Button size="small" disabled={!canQueue} onClick={() => submit()}>
-                            Queue
-                          </Button>
-                        </Hint>
-                      )}
-                      <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
-                        <Button
-                          variant="danger"
-                          className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
-                          disabled={!connected}
-                          onClick={stop}
-                        >
-                          {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
-                        </Button>
-                      </Hint>
-                    </>
-                  ) : (
-                    <Hint text={SEND_HINT}>
-                      <span className="flex">
-                        <Button
-                          variant="primary"
-                          className="disabled:pointer-events-none"
-                          disabled={!canSend || !hasContent}
-                          onClick={() => submit()}
-                        >
-                          Send
-                        </Button>
-                      </span>
-                    </Hint>
-                  )}
-                </span>
-              </div>
-            </div>
+            <Composer
+              key={chat.id}
+              chat={chat}
+              connected={connected}
+              pending={pending}
+              unattach={unattach}
+              attach={attach}
+              canSend={canSend}
+              canQueue={canQueue}
+              canChange={canChange}
+              steers={steers}
+              placeholder={placeholder}
+              menu={menu}
+              setModel={setModel}
+              stop={stop}
+              submit={submit}
+              interrupt={interrupt}
+            />
           )}
           <Hint text="Chat width">
             <input
@@ -1614,6 +1472,209 @@ export function Chat(props: ChatProps) {
           </SidePanel>
         )}
       </AnimatePresence>
+    </div>
+  )
+}
+
+type ComposerProps = {
+  chat: ChatView
+  connected: boolean
+  pending: Pending[]
+  unattach: (removed: Pending[]) => void
+  attach: (files: File[]) => Promise<void>
+  canSend: boolean
+  canQueue: boolean
+  canChange: boolean
+  steers: boolean
+  placeholder: string
+  menu: ReturnType<typeof modelMenu>
+  setModel: (model?: string, thinking?: string) => void
+  stop: () => void
+  /** Sends the text with the pending attachments; false when it can't be sent now, so the text stays. */
+  submit: (text: string, steer?: boolean) => boolean
+  /** Offers to stop the turn, so what's queued sends now. */
+  interrupt: () => void
+}
+
+/**
+ * The message box. It keeps what's typed in its own state, so a keystroke re-renders only the box, never the
+ * transcript above it, and the draft is written to localStorage once typing pauses.
+ */
+function Composer(props: ComposerProps) {
+  const { chat, connected, pending, unattach, attach, canSend, canQueue, canChange, steers, placeholder, menu } = props
+  const { setModel, stop } = props
+  const [text, setTyped] = useState(() => draftOf(chat.id))
+  const setText = (typed: string) => {
+    setTyped(typed)
+    saveDraftSoon(chat.id, typed)
+  }
+  useEffect(() => flushDrafts, [])
+  const fileInput = useRef<HTMLInputElement>(null)
+  const archived = chat.archived
+  const busy = chat.status !== 'idle'
+  const working = busy && !archived && !text
+  const canAttach = canSend || canQueue
+  const hasContent = text.trim() !== '' || pending.length > 0
+  const submit = (steer = false) => {
+    if (!props.submit(text, steer)) return
+    setTyped('')
+    saveDraft(chat.id, '')
+  }
+  const interruptAndSend = () => {
+    if (!canQueue) return
+    submit()
+    props.interrupt()
+  }
+  return (
+    <div
+      className={`@container mx-auto max-w-column rounded-lg border transition-[border-color,box-shadow] has-[textarea:focus]:border-accent ${canSend || canQueue ? 'bg-panel shadow-raised has-[textarea:focus]:shadow-floating' : 'bg-bg'}`}
+    >
+      {pending.length > 0 && (
+        <ul className="flex flex-wrap gap-6 px-8 pt-8" aria-label="Attachments">
+          {pending.map((p) => (
+            <li key={p.id} className="relative min-w-0">
+              {p.preview ? (
+                <img
+                  src={p.preview}
+                  alt={p.name}
+                  title={p.name}
+                  className="block size-48 rounded-lg border object-cover shadow-raised"
+                />
+              ) : (
+                <div className={`${FILE_CHIP} h-48 bg-bg pr-20 shadow-raised`} title={p.name}>
+                  <FileLabel name={p.name} size={p.size} />
+                </div>
+              )}
+              <Hint text="Remove">
+                <button
+                  className="absolute -top-4 -right-4 grid size-18 place-items-center rounded-full border bg-raised text-[12px] leading-none text-muted shadow-raised hover:text-text"
+                  aria-label={`Remove ${p.name}`}
+                  onClick={() => unattach([p])}
+                >
+                  ×
+                </button>
+              </Hint>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="relative">
+        {working && (
+          <span
+            className="shimmer pointer-events-none absolute inset-x-12 top-8 truncate text-body leading-[1.5]"
+            data-status={chat.status}
+            aria-hidden="true"
+          >
+            {placeholder}
+          </span>
+        )}
+        <textarea
+          className="block max-h-[calc(12lh+16px)] min-h-[calc(1lh+16px)] w-full resize-none border-none bg-transparent px-12 shadow-none py-8 text-body leading-[1.5] field-sizing-content"
+          value={text}
+          rows={1}
+          placeholder={working ? undefined : archived ? 'Archived' : placeholder}
+          aria-placeholder={working ? placeholder : undefined}
+          disabled={!(canSend || canQueue)}
+          onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => {
+            const { types, files } = e.clipboardData
+            if (types.includes('text/plain') || !files.length) return
+            e.preventDefault()
+            void attach([...files])
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            const emptyWithQueue = !hasContent && chat.queue.length > 0
+            if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
+            else submit(!e.altKey)
+          }}
+        />
+      </div>
+      <div className="flex items-center gap-8 px-6 pb-6">
+        <span className="flex min-w-0 flex-1 items-center gap-6">
+          <Hint text="Attach files">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="grid shrink-0 place-items-center"
+              aria-label="Attach files"
+              disabled={!canAttach}
+              onClick={() => fileInput.current?.click()}
+            >
+              <PaperclipIcon />
+            </Button>
+          </Hint>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            onChange={(e) => {
+              void attach([...(e.target.files ?? [])])
+              e.target.value = ''
+            }}
+          />
+        </span>
+        <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
+          {menu.model && (
+            <Select
+              variant="chip"
+              label="Model"
+              hint={MODEL_HINT}
+              value={menu.model}
+              disabled={!canChange}
+              options={menu.models.map((m) => ({ value: m.id, label: m.label }))}
+              onChange={(model) => setModel(model, menu.thinking)}
+            />
+          )}
+          {menu.thinking && (
+            <Select
+              variant="chip"
+              label="Thinking"
+              hint={THINKING_HINT}
+              value={menu.thinking}
+              disabled={!canChange}
+              options={menu.levels.map((l) => ({ value: l, label: l }))}
+              onChange={(thinking) => setModel(menu.model, thinking)}
+            />
+          )}
+          {busy ? (
+            <>
+              {hasContent && (
+                <Hint text={steers ? STEER_HINT : QUEUE_HINT}>
+                  <Button size="small" disabled={!canQueue} onClick={() => submit()}>
+                    Queue
+                  </Button>
+                </Hint>
+              )}
+              <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>
+                <Button
+                  variant="danger"
+                  className={chat.status === 'stopping' ? 'enabled:animate-[blink_1.4s_ease-in-out_infinite]' : ''}
+                  disabled={!connected}
+                  onClick={stop}
+                >
+                  {chat.status === 'stopping' ? 'Stopping…' : 'Stop'}
+                </Button>
+              </Hint>
+            </>
+          ) : (
+            <Hint text={SEND_HINT}>
+              <span className="flex">
+                <Button
+                  variant="primary"
+                  className="disabled:pointer-events-none"
+                  disabled={!canSend || !hasContent}
+                  onClick={() => submit()}
+                >
+                  Send
+                </Button>
+              </span>
+            </Hint>
+          )}
+        </span>
+      </div>
     </div>
   )
 }

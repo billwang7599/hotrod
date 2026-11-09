@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { CopyBlock } from './controls.tsx'
@@ -18,7 +19,8 @@ const components: Components = {
   ),
 }
 
-export function Markdown({ text, className }: { text: string; className: string }) {
+/** Rendered Markdown. Memoized: parsing is the costliest part of a transcript, and most texts never change. */
+export const Markdown = memo(function Markdown({ text, className }: { text: string; className: string }) {
   return (
     <div className={`markdown ${className}`}>
       <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
@@ -26,4 +28,4 @@ export function Markdown({ text, className }: { text: string; className: string 
       </ReactMarkdown>
     </div>
   )
-}
+})
