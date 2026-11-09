@@ -69,6 +69,9 @@ const FIELD_USES: [keyof Mod, ModUse][] = [
   ['settings', 'settings'],
   ['chats', 'chats'],
   ['setup', 'setup'],
+  ['memory', 'memory'],
+  ['onStart', 'events'],
+  ['onStop', 'events'],
 ]
 
 // What each host call needs listed. note, storage and refresh need nothing.
@@ -77,6 +80,9 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   chat: 'readChats',
   read: 'readChats',
   space: 'readChats',
+  messages: 'readChats',
+  chatStorage: 'memory',
+  complete: 'models',
   send: 'sendMessages',
   createChat: 'sendMessages',
   retry: 'sendMessages',

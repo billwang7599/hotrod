@@ -72,6 +72,9 @@ export type ChatDetail = ChatSummary & {
   folders: string[]
   files: string[]
   createdAt: string
+  // A worker: how many of its parent's messages there were when it started, so a memory mod can freeze its view of
+  // the parent there.
+  parentMessages?: number
 }
 
 // A git folder in a space's context, checked out in the space's work folder: path and branch of the worktree, and
@@ -101,6 +104,15 @@ export type ChatEntry = { at: string } & (
   | { type: 'mod.note'; text: string; mod?: string; panel?: string }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
+
+// A chat's log as memory reads it: the entries a conversation is made of, numbered from 0 in log order. user is the
+// user's words, work a report from a worker or a message from another chat, talk the agent's reply, tool a tool call,
+// echo its output, note a turn that ended early. Every memory (a mod's or the core's own window) numbers the same way.
+export type MessageKind = 'user' | 'work' | 'talk' | 'tool' | 'echo' | 'note'
+export type MemoryMessage = { id: number; kind: MessageKind; at: string; text: string }
+
+// A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
+export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 // A mod's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its own.
 export type ModChat = { id: string; name: string; instructions: string; seesAll?: boolean }
@@ -134,6 +146,8 @@ export type ModStorage = {
   dir: string
   read(name: string): string | undefined
   write(name: string, text: string): void
+  // Adds to the end of the file, making it if it's missing.
+  append(name: string, text: string): void
   remove(name: string): void
 }
 
@@ -164,6 +178,8 @@ export type ModHost = {
   // A short line in the chat's transcript, for the user. Agents don't see it. With panel, clicking it opens that
   // panel of this mod's.
   note(chatId: string, text: string, options?: { panel?: string }): void
+  // An error for the user, shown as one from a hook that throws is: after the mod's name. For background work.
+  error(text: string): void
   // Runs a command through the Machine, so it works wherever the core runs. Not sandboxed: it's the mod's own.
   run: ModRun
   // Starts a long-running command through the Machine and returns once it's started, without waiting for it to end.
@@ -174,6 +190,14 @@ export type ModHost = {
   // folder. The folder must be in some space: one of its folders, its work folder or a checkout, or inside one. Rejects
   // with a short message for the user when it can't (no such folder, the terminal app is missing).
   openTerminal(path: string): Promise<void>
+  // Files of the mod's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The core's
+  // own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
+  chatStorage(chatId: string): ModStorage
+  // The chat's log as numbered memory messages, oldest first.
+  messages(chatId: string): MemoryMessage[]
+  // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
+  // folder. Rejects when no engine that is on can make one.
+  complete(request: CompletionRequest): Promise<string>
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
   // Without a chat, for every chat.
   refresh(chatId?: string): void
@@ -222,6 +246,19 @@ export type McpServer = {
   args?: string[]
   env?: Record<string, string>
   allowTools?: boolean
+}
+
+// What a fresh session sees of its chat's history. The core asks the first mod that's on with a memory; with none, it
+// sends a window of the latest messages in full and says how many older ones it dropped.
+// tools: the session has the Kothar MCP server, so the mod's tools (such as a zoom) reach it.
+export type ModMemoryRequest = { chat: ChatDetail; messages: MemoryMessage[]; tools: boolean }
+export type ModMemory = {
+  // The history, oldest first, put before the new message as "This is the conversation so far". Also called for a
+  // worker's frozen view of its parent at launch, with the parent's chat and messages.
+  view(request: ModMemoryRequest, context: ModContext): string
+  // How to read the view, for the session's instructions, where the memory goes: after mods' instructions, before the
+  // chat's context.
+  instructions?(request: ModInstructionsFor, context: ModContext): string | undefined
 }
 
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
@@ -332,6 +369,12 @@ export type Mod = {
   setup?: ModSetup
   panels?: ModPanel[]
   commands?: ModCommand[]
+  memory?: ModMemory
+  // Kothar is ready for model calls (engines detected, a work folder chosen), or the mod was turned on after that. For
+  // background work, such as summarizing chats.
+  onStart?(context: ModContext): void | Promise<void>
+  // The mod was turned off, or Kothar is quitting: stop background work. Not called for a mod that never started.
+  onStop?(context: ModContext): void | Promise<void>
   onChatCreated?(chat: ChatDetail, context: ModContext): void | Promise<void>
   // The chat is gone from the core by now; its log and folder too.
   onChatRemoved?(chat: ChatDetail, context: ModContext): void | Promise<void>
@@ -388,14 +431,16 @@ export type ModUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onLimitReached
+  // onChatArchived, onLimitReached, onStart, onStop
   | 'events'
   | 'panels'
   | 'commands'
   | 'settings'
   | 'chats'
   | 'setup'
-  // Host calls: chats, chat, read, space.
+  // memory, and host.chatStorage
+  | 'memory'
+  // Host calls: chats, chat, read, space, messages.
   | 'readChats'
   // send, createChat, retry, continue, interrupt
   | 'sendMessages'
@@ -403,3 +448,5 @@ export type ModUse =
   | 'accounts'
   // run, spawn, openTerminal
   | 'run'
+  // complete
+  | 'models'

@@ -17,7 +17,6 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import { WORKER_INSTRUCTIONS, WORKERS_MOD } from './kothar-mcp.ts'
-import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -465,10 +464,8 @@ it('lets every user chat spawn workers while the mod is on, up to the limit of r
   const subchat = core.chats().find((c) => c.id !== 'main')!
   const offered = send(subchat.id, 'hi').options
   expect(offered.instructions).not.toContain(WORKER_INSTRUCTIONS)
-  const before = offered.kotharMcp!.token
-  expect((await (await post(before, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
-    'Tool spawn_worker not found',
-  )
+  // No tool to offer it, so no Kothar MCP server at all.
+  expect(offered.kotharMcp).toBeUndefined()
 
   workersOn(core, 1)
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
@@ -710,7 +707,6 @@ it("gives a worker its parent's items plus its own while it works", async () => 
   }
   expect(itemsOf(chatId).map((i) => i.from)).toEqual([GLOBAL_CONTEXT, subchat.id, chatId])
   const instructions = sessionOf(chatId).options.instructions.split('\n\n')
-  expect(instructions.slice(1, 3)).toEqual([MEMORY_INSTRUCTIONS, ZOOM_INSTRUCTIONS])
   expect(instructions.slice(-2)).toEqual(['WORKSHOP', 'PARENT'])
 
   const parentRules = join(garage, 'chats', subchat.id, 'AGENTS.md')
@@ -720,25 +716,18 @@ it("gives a worker its parent's items plus its own while it works", async () => 
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })
 
-it('lets every chat zoom its own memory, and cuts a long message only where zoom can bring it back', async () => {
-  const long = 'x'.repeat(MESSAGE_MAX_CHARS + 10)
-  for (const kotharMcp of [true, false]) {
-    const { send, tool } = await startHeld({ kotharMcp })
-    send('main', long).end('ok')
-    const next = send('main', 'next')
-    if (kotharMcp) {
-      expect(next.options.instructions.split('\n\n')).toContain(ZOOM_INSTRUCTIONS)
-      expect(next.prompt).toContain(`cut at ${MESSAGE_MAX_CHARS} of ${long.length} chars; zoom(0) for the rest`)
-      expect((await tool(next.options.kotharMcp!.token, 'zoom', { id: 0 })).text).toMatch(new RegExp(`\\n\\n${long}$`))
-    } else {
-      expect(next.options.kotharMcp).toBeUndefined()
-      expect(next.options.instructions).not.toContain(ZOOM_INSTRUCTIONS)
-      expect(next.prompt).toContain(`\n${long}\n`)
-    }
-  }
+it('without a memory mod, offers no zoom and sends long messages whole', async () => {
+  const long = 'x'.repeat(10_000)
+  const { send, post } = await startHeld()
+  send('main', long).end('ok')
+  const next = send('main', 'next')
+  expect(next.options.instructions).not.toContain('zoom')
+  expect(next.prompt).toContain(`\n${long}\n`)
+  const reply = await (await post(next.options.kotharMcp!.token, 'zoom', { id: 0 })).json()
+  expect(reply.error.message).toBe('Tool zoom not found')
 })
 
-it("gives a worker its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
+it("gives a worker its parent's latest messages frozen at launch when no memory mod is on", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   workersOn(core, -1)
   const parent = send('main', 'Plan the release')
@@ -750,14 +739,8 @@ it("gives a worker its parent's memory frozen at launch, with read-only zoom and
   expect(first.prompt).toBe('Check the changelog')
   expect(chatIn(core, chatId).parentMessages).toBe(1)
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentMessages).toBe(1)
-  const token = first.options.kotharMcp!.token
-  expect((await tool(token, 'zoom', { id: 0, parent: true })).text).toMatch(/\n\nPlan the release$/)
-  expect((await tool(token, 'date', { id: 0, parent: true })).isError).toBe(false)
-
-  expect(await tool(token, 'zoom', { id: 1, parent: true })).toEqual({
-    isError: true,
-    text: 'No message 1; this chat has messages 0 to 0',
-  })
+  expect(first.options.instructions).not.toContain('zoom')
+  expect(first.options.kotharMcp).toBeUndefined()
   first.end('Checked')
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })

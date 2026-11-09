@@ -3,6 +3,7 @@ import type {
   Attachment,
   ChatEntry,
   ChatStatus,
+  CompletionRequest,
   EngineEvent,
   McpServer,
   ModAction,
@@ -13,7 +14,17 @@ import type {
   ModView,
 } from '@kothar/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kothar/mod-api'
+export type {
+  Answers,
+  ChatEntry,
+  ChatStatus,
+  CompletionRequest,
+  EngineEvent,
+  MemoryMessage,
+  MessageKind,
+  Question,
+  ToolKind,
+} from '@kothar/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -103,8 +114,6 @@ export type SessionOptions = {
 }
 
 export type ImageInput = { mimeType: string; base64: string }
-
-export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 export type CompleteOptions = CompletionRequest & {
   cwd: string
@@ -601,6 +610,8 @@ export const MOD_USES: Record<ModUse, string> = {
   permissions: 'Approves or denies agents\' requests for you',
   sendMessages: 'Sends messages and starts chats as you',
   accounts: 'Sees and switches your engine accounts',
+  models: 'Makes model calls on your accounts',
+  memory: 'Decides what agents remember of each chat',
   readChats: 'Reads your chats',
   transforms: 'Rewrites your messages or agents\' replies',
   instructions: 'Adds to every agent\'s instructions',

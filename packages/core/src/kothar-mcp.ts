@@ -4,7 +4,6 @@ import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kothar/mod-
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
-import { dateOf, zoom, type MemoryMessage, type Summaries } from './memory.ts'
 import type { ChatInfo, ChatState, ModelRole, NewChat } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
@@ -55,7 +54,6 @@ type Hub = {
   // What the chat's Stop button does.
   stop(chatId: string): void
   workers(): { enabled: boolean; limit: number }
-  memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
   modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
 }
 
@@ -88,50 +86,14 @@ function messages(chat: ChatState) {
 
 type Context = { hub: Hub; caller: ChatState; reachable: (chatId: string) => ChatState }
 
-const memoryOf = ({ hub, caller }: Context, parent = false) => {
-  if (!parent) return hub.memory(caller.id)
-  if (!caller.worker || caller.parentId === undefined) {
-    throw new Error("Only a worker can read its parent chat's memory")
-  }
-  const { messages, summaries } = hub.memory(caller.parentId)
-  return { messages: messages.slice(0, caller.parentMessages ?? 0), summaries }
-}
-
-const PARENT_INPUT = z.boolean().optional().describe("A worker's parent chat, as it was at launch")
-
 type Tool = {
-  for: 'reach' | 'workers' | 'memory'
+  for: 'reach' | 'workers'
   description: string
   input: z.ZodObject
   run(context: Context, input: any): unknown
 }
 
 const TOOLS: Record<string, Tool> = {
-  zoom: {
-    for: 'memory',
-    description:
-      'Open a line of your memory. zoom(id, n) gives the two lines of n/2 under line id+n; zoom(id, 1) gives ' +
-      'message id whole, in pages (offset and limit pick a part).',
-    input: z.object({
-      id: z.number().int(),
-      n: z.number().int().optional(),
-      offset: z.number().int().optional(),
-      limit: z.number().int().optional(),
-      parent: PARENT_INPUT,
-    }),
-    run(context: Context, input: { id: number; n?: number; offset?: number; limit?: number; parent?: boolean }) {
-      const { messages, summaries } = memoryOf(context, input.parent)
-      return zoom(messages, summaries, input.id, input.n, input.offset, input.limit)
-    },
-  },
-  date: {
-    for: 'memory',
-    description: 'The date and time of message id in your memory.',
-    input: z.object({ id: z.number().int(), parent: PARENT_INPUT }),
-    run(context: Context, { id, parent }: { id: number; parent?: boolean }) {
-      return dateOf(memoryOf(context, parent).messages, id)
-    },
-  },
   list_chats: {
     for: 'reach',
     description: 'List the chats this one can reach, with their status.',
@@ -209,7 +171,6 @@ export function openKotharMcp(hub: Hub) {
   const offers = (caller: ChatState, tool: Tool) => {
     const spawns = !caller.worker && hub.workers().enabled
     if (tool.for === 'workers') return spawns
-    if (tool.for === 'memory') return true
     return spawns || hub.seesAll(caller.id)
   }
   const modToolsFor = (caller: ChatState) => hub.modTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
