@@ -10,6 +10,12 @@ const RELOAD_COOLDOWN_MS = 10_000
 const icon = fileURLToPath(new URL('../assets/icon.png', import.meta.url))
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const VIBRANCY = 'sidebar'
+// The menu's keys until the UI sends the user's own (the defaults in packages/ui/src/shortcuts.ts).
+const MENU_DEFAULTS: Record<string, string | null> = {
+  newSpace: 'CmdOrCtrl+N',
+  newSpaceFromFolder: 'CmdOrCtrl+Shift+O',
+  settings: 'CmdOrCtrl+,',
+}
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
 app.setPath('userData', userDataDir(app.getPath('appData')))
@@ -114,26 +120,60 @@ async function start() {
     window.setBackgroundColor(background)
   })
 
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
-      {
-        label: 'File',
-        submenu: [
-          {
-            label: 'New space from folder…',
-            accelerator: 'CmdOrCtrl+O',
-            click: () => window.webContents.send('new-chat-from-folder'),
-          },
-          { type: 'separator' },
-          { role: process.platform === 'darwin' ? 'close' : 'quit' },
-        ],
-      },
-      { role: 'editMenu' },
-      { role: 'viewMenu' },
-      { role: 'windowMenu' },
-    ]),
-  )
+  // The menu shows the user's own keys: the UI sends them on start and whenever they change (Settings → Shortcuts).
+  // A click runs the same action as the keys; a key press the page already handled never reaches the menu.
+  let accelerators: Record<string, string | null> = MENU_DEFAULTS
+  const item = (action: string, label: string) => ({
+    label,
+    accelerator: accelerators[action] ?? undefined,
+    click: () => window.webContents.send('shortcut', action),
+  })
+  const buildMenu = () => {
+    const mac = process.platform === 'darwin'
+    const settings = item('settings', mac ? 'Settings…' : 'Settings')
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([
+        ...(mac
+          ? [
+              {
+                label: app.name,
+                submenu: [
+                  { role: 'about' as const },
+                  { type: 'separator' as const },
+                  settings,
+                  { type: 'separator' as const },
+                  { role: 'services' as const },
+                  { type: 'separator' as const },
+                  { role: 'hide' as const },
+                  { role: 'hideOthers' as const },
+                  { role: 'unhide' as const },
+                  { type: 'separator' as const },
+                  { role: 'quit' as const },
+                ],
+              },
+            ]
+          : []),
+        {
+          label: 'File',
+          submenu: [
+            item('newSpace', 'New space…'),
+            item('newSpaceFromFolder', 'New space from folder…'),
+            ...(mac ? [] : [settings]),
+            { type: 'separator' },
+            { role: mac ? 'close' : 'quit' },
+          ],
+        },
+        { role: 'editMenu' },
+        { role: 'viewMenu' },
+        { role: 'windowMenu' },
+      ]),
+    )
+  }
+  buildMenu()
+  ipcMain.on('set-menu-shortcuts', (_event, next: Record<string, string | null>) => {
+    accelerators = { ...MENU_DEFAULTS, ...next }
+    buildMenu()
+  })
 
   const openOutside = (url: string) => {
     if (/^https?:/.test(url)) void shell.openExternal(url)

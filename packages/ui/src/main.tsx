@@ -11,6 +11,9 @@ import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel,
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
+import { nthSpace, stepSpace } from './nav.ts'
+import { Keys } from './shortcuts-page.tsx'
+import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { useLooking, useMarkRead } from './unread.ts'
 import {
@@ -45,7 +48,10 @@ declare global {
       pickFolder(title?: string): Promise<string | null>
       pickFiles(title?: string): Promise<string[]>
       pathForFile(file: File): string
-      onNewChatFromFolder(listener: () => void): () => void
+      /** The desktop menu's items run the same actions as their shortcuts. */
+      onShortcut?(listener: (action: string) => void): () => void
+      /** Shows the user's keys on the menu's items, as Electron accelerators by action id. */
+      setMenuShortcuts?(accelerators: Record<string, string | null>): void
       onQuitting(listener: () => void): () => void
       forceQuit(): Promise<void>
       vibrancy: boolean
@@ -146,7 +152,19 @@ function App() {
     const picked = await window.kothar.pickFolder()
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
-  useEffect(() => window.kothar?.onNewChatFromFolder(() => void newChatFromFolder()), [newChatFromFolder])
+  const goTo = (chatId: string | undefined) => chatId && select(chatId)
+  const shortcuts: ShortcutHandlers = {
+    previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
+    nextSpace: () => goTo(stepSpace(state.chats, state.selectedId, 1)),
+    ...Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [`jump${i + 1}`, () => goTo(nthSpace(state.chats, i + 1))]),
+    ),
+    newSpace: () => connected && setNameRequest({ kind: 'new' }),
+    settings: () => openSettings(),
+    ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
+  }
+  useShortcuts(shortcuts)
+  const keys = useBindings()
   const [quitting, setQuitting] = useState(false)
   useEffect(() => window.kothar?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
@@ -181,7 +199,14 @@ function App() {
                       <KotharMark className="size-16 shrink-0" />
                       Kothar
                     </span>
-                    <Hint text={`New ${CHAT_NOUN.one}`}>
+                    <Hint
+                      text={
+                        <span className="flex items-center gap-8">
+                          New {CHAT_NOUN.one}
+                          {keys.newSpace && <Keys binding={keys.newSpace} />}
+                        </span>
+                      }
+                    >
                       <Button
                         variant="ghost"
                         size="icon"
@@ -203,15 +228,17 @@ function App() {
                     askName={setNameRequest}
                   />
                   <div className="px-8 pb-10">
-                    <Button
-                      variant="ghost"
-                      size="none"
-                      className="flex h-control w-full items-center gap-8 px-8"
-                      onClick={() => openSettings()}
-                    >
-                      <span aria-hidden="true">⚙</span>
-                      Settings
-                    </Button>
+                    <Hint text={keys.settings && <Keys binding={keys.settings} />} side="right">
+                      <Button
+                        variant="ghost"
+                        size="none"
+                        className="flex h-control w-full items-center gap-8 px-8"
+                        onClick={() => openSettings()}
+                      >
+                        <span aria-hidden="true">⚙</span>
+                        Settings
+                      </Button>
+                    </Hint>
                   </div>
                 </aside>
               </SidePanel>

@@ -41,6 +41,7 @@ import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, 
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
 import { Appearance } from './themes.tsx'
+import { ShortcutsPage } from './shortcuts-page.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -159,6 +160,13 @@ const PAGES = [
         <ShownReports />
       </>
     ),
+  },
+  {
+    id: 'shortcuts',
+    group: 'Options',
+    title: 'Shortcuts',
+    intro: 'Click an action\'s keys, then press new ones.',
+    body: () => <ShortcutsPage />,
   },
   {
     id: 'accounts',
