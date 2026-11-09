@@ -34,7 +34,7 @@ import {
 } from './controls.tsx'
 import { accountLabel, engineProblem, listedAccounts, NO_LISTS } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
-import { showStepsByDefault, useStepsDefault } from './steps.ts'
+import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
 import { Appearance } from './themes.tsx'
 
 type PageProps = {
@@ -151,6 +151,7 @@ const PAGES = [
         <Appearance />
         <ShownPaths />
         <ShownSteps />
+        <ShownReports />
       </>
     ),
   },
@@ -432,6 +433,23 @@ function ShownSteps() {
           description={`Instead of folding them into "N steps". Each ${CHAT_NOUN.one} can override this in its Context panel.`}
         >
           <Switch label="Show thinking and tool calls unfolded" checked={shown} onChange={showStepsByDefault} />
+        </SettingRow>
+      </div>
+    </>
+  )
+}
+
+function ShownReports() {
+  const shown = useReportsDefault()
+  return (
+    <>
+      <div className="pt-24 pb-8 font-semibold">Subagent reports</div>
+      <div className={GROUP}>
+        <SettingRow
+          name="Show unfolded"
+          description={`Folded, a report shows one line until opened. Each ${CHAT_NOUN.one} can override this in its General tab.`}
+        >
+          <Switch label="Show subagent reports unfolded" checked={shown} onChange={showReportsByDefault} />
         </SettingRow>
       </div>
     </>

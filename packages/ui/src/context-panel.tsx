@@ -17,7 +17,7 @@ import {
 } from '@hotrod/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
-import { showStepsIn, useStepsShown } from './steps.ts'
+import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { ModViewer } from './mod-view.tsx'
 import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
@@ -299,22 +299,31 @@ function AddPath({ section, chatId, disabled, send }: {
 }
 
 const STEPS_LABEL = 'Thinking and tool calls'
-function StepsSwitch({ chatId }: { chatId: string }) {
-  const shown = useStepsShown(chatId)
+const REPORTS_LABEL = 'Subagent reports'
+function FoldPicker({ label, shown, choose }: { label: string; shown: boolean; choose: (shown: boolean) => void }) {
   return (
-    <section className="flex flex-col" aria-label="View">
-      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
-        <span className="min-w-0 flex-1">{STEPS_LABEL}</span>
-        <Select
-          label={STEPS_LABEL}
-          value={shown ? 'on' : 'off'}
-          options={[
-            { value: 'on', label: 'Unfolded' },
-            { value: 'off', label: 'Folded' },
-          ]}
-          onChange={(value) => showStepsIn(chatId, value === 'on')}
-        />
-      </div>
+    <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+      <span className="min-w-0 flex-1">{label}</span>
+      <Select
+        label={label}
+        value={shown ? 'on' : 'off'}
+        options={[
+          { value: 'on', label: 'Unfolded' },
+          { value: 'off', label: 'Folded' },
+        ]}
+        onChange={(value) => choose(value === 'on')}
+      />
+    </div>
+  )
+}
+
+function ViewPickers({ chatId }: { chatId: string }) {
+  const steps = useStepsShown(chatId)
+  const reports = useReportsShown(chatId)
+  return (
+    <section className="flex flex-col gap-6" aria-label="View">
+      <FoldPicker label={STEPS_LABEL} shown={steps} choose={(shown) => showStepsIn(chatId, shown)} />
+      <FoldPicker label={REPORTS_LABEL} shown={reports} choose={(shown) => showReportsIn(chatId, shown)} />
     </section>
   )
 }
@@ -524,7 +533,7 @@ export function ContextPanel(props: ContextPanelProps) {
               </section>
             )
           })}
-        {shown === 'general' && chat && <StepsSwitch chatId={chatId} />}
+        {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
         {shown === 'general' && chat && (
           <ModCommands chatId={chatId} commands={modUi?.commands ?? []} disabled={locked} send={send} />
         )}

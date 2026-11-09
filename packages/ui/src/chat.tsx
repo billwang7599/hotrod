@@ -34,7 +34,15 @@ import { choosePanelTab, modTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
 import { draftOf, saveDraft } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
-import { StepsOpen, useStepsShown } from './steps.ts'
+import {
+  openReportCard,
+  reportCardKey,
+  ReportsOpen,
+  StepsOpen,
+  useReportCardChoice,
+  useReportsShown,
+  useStepsShown,
+} from './steps.ts'
 import {
   Button,
   CHAT_NOUN,
@@ -653,35 +661,72 @@ type ItemProps = {
   revealOf?: RevealOf
   // Opens a mod's panel in the right sidebar, for a mod's note.
   openPanel?: (mod: string, panel: string) => void
+  // The item's index in the chat, for choices kept per item (a report card's fold).
+  at?: number
+}
+
+type Report = Extract<Item, { kind: 'report' }>
+
+/** A subagent's report: unfolded or folded by the chat's setting until the user opens or closes it. */
+function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; at?: number; open?: () => void }) {
+  const opens = useContext(ReportsOpen)
+  const key = at === undefined ? undefined : reportCardKey(chatId, at)
+  const chosen = useReportCardChoice(key ?? '')
+  const [local, setLocal] = useState<boolean>()
+  const shown = (key ? chosen : local) ?? opens
+  const toggle = () => (key ? openReportCard(key, !shown) : setLocal(!shown))
+  const name = open ? (
+    <button type="button" className="font-medium text-text hover:underline" onClick={open}>
+      {item.name}
+    </button>
+  ) : (
+    <span className="font-medium text-text">{item.name}</span>
+  )
+  const preview = item.text.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').trim() || 'No reply'
+  return (
+    <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
+      <div className="flex min-w-0 items-center gap-6 text-sm text-muted">
+        <button
+          type="button"
+          className="group -ml-4 flex h-20 items-center rounded px-4 hover:bg-raised"
+          aria-label={shown ? 'Fold report' : 'Unfold report'}
+          aria-expanded={shown}
+          data-open={shown || undefined}
+          onClick={toggle}
+        >
+          <Chevron />
+        </button>
+        <span className="shrink-0">
+          Subagent {name} reported
+          {item.error && <span> · ended early: {item.error}</span>}
+        </span>
+        {!shown && (
+          <button type="button" className="min-w-0 truncate text-left text-faint hover:text-muted" onClick={toggle}>
+            {preview}
+          </button>
+        )}
+      </div>
+      <AnimatePresence initial={false}>
+        {shown && (
+          <m.div {...MOTION.collapse}>
+            {item.text ? (
+              <Markdown className={ASSISTANT} text={item.text} />
+            ) : (
+              <div className="text-sm text-muted">No reply</div>
+            )}
+          </m.div>
+        )}
+      </AnimatePresence>
+    </section>
+  )
 }
 
 function ItemView(props: ItemProps) {
   const { item, chat, contextItems, connected, send, space, select, openChat, revealOf, openPanel } = props
   const promptProps = { chat, connected, send, space, select }
   switch (item.kind) {
-    case 'report': {
-      const open = openChat?.(item.chatId)
-      const name = open ? (
-        <button type="button" className="font-medium text-text hover:underline" onClick={open}>
-          {item.name}
-        </button>
-      ) : (
-        <span className="font-medium text-text">{item.name}</span>
-      )
-      return (
-        <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
-          <div className="text-sm text-muted">
-            Subagent {name} reported
-            {item.error && <span> · ended early: {item.error}</span>}
-          </div>
-          {item.text ? (
-            <Markdown className={ASSISTANT} text={item.text} />
-          ) : (
-            <div className="text-sm text-muted">No reply</div>
-          )}
-        </section>
-      )
-    }
+    case 'report':
+      return <ReportCard item={item} chatId={chat.id} at={props.at} open={openChat?.(item.chatId)} />
     case 'user':
       return (
         <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
@@ -904,6 +949,7 @@ export function Chat(props: ChatProps) {
   const line = lineOf(props.chats, chat)
   const space = line.at(-1)!
   const stepsShown = useStepsShown(chat.id, ...line.slice(1).map((c) => c.id))
+  const reportsShown = useReportsShown(chat.id, ...line.slice(1).map((c) => c.id))
   const viewOnly = !!chat.subagent
   // Subagents never ask in their own view: their requests wait in the space above them.
   const requests = viewOnly ? [] : subagentRequests(props.chats, chat.id)
@@ -1183,49 +1229,51 @@ export function Chat(props: ChatProps) {
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
             <StepsOpen.Provider value={stepsShown}>
-              {chat.items.length === 0 && !chat.draft && (
-                <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
-                  <strong className="text-body font-semibold text-text">
-                    Start a chat in <span className="font-mono">{chat.name}</span>
-                  </strong>
-                  <span>
-                    Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
-                  </span>
-                </div>
-              )}
-              {foldSteps(chat.items, stepsShown).map((row) => {
-                const kind = 'item' in row ? row.item.kind : 'steps'
-                return (
-                  <m.div
-                    key={kind === 'steps' ? `steps-${row.at}` : row.at}
-                    className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
-                    initial={kind !== 'text' && enter}
-                    animate={MOTION.rise.animate}
-                  >
-                    {'steps' in row ? (
-                      <Row quiet summary={`${row.steps.length} steps`}>
-                        <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
-                          {row.steps.map((item, i) => (
-                            <ItemView key={i} item={item} {...itemProps} />
-                          ))}
-                        </div>
-                      </Row>
-                    ) : (
-                      <ItemView item={row.item} {...itemProps} />
-                    )}
+              <ReportsOpen.Provider value={reportsShown}>
+                {chat.items.length === 0 && !chat.draft && (
+                  <div className="m-auto flex max-w-420 flex-col items-center gap-4 p-24 text-center text-muted">
+                    <strong className="text-body font-semibold text-text">
+                      Start a chat in <span className="font-mono">{chat.name}</span>
+                    </strong>
+                    <span>
+                      Each message starts <span className="font-mono">{chat.engine}</span> in {folder ?? 'a scratch folder'}
+                    </span>
+                  </div>
+                )}
+                {foldSteps(chat.items, stepsShown).map((row) => {
+                  const kind = 'item' in row ? row.item.kind : 'steps'
+                  return (
+                    <m.div
+                      key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                      className={`group/item flex flex-col ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
+                      initial={kind !== 'text' && enter}
+                      animate={MOTION.rise.animate}
+                    >
+                      {'steps' in row ? (
+                        <Row quiet summary={`${row.steps.length} steps`}>
+                          <div className="mt-4 mb-2 ml-13 flex flex-col gap-10 border-l-2 pl-12 text-text">
+                            {row.steps.map((item, i) => (
+                              <ItemView key={i} item={item} {...itemProps} />
+                            ))}
+                          </div>
+                        </Row>
+                      ) : (
+                        <ItemView item={row.item} at={row.at} {...itemProps} />
+                      )}
+                    </m.div>
+                  )
+                })}
+                {chat.draft && (
+                  <m.div initial={enter} animate={MOTION.rise.animate}>
+                    <StreamingText name={draftKey} text={chat.draft} from={draftFrom} smooth={!reduceMotion} />
                   </m.div>
-                )
-              })}
-              {chat.draft && (
-                <m.div initial={enter} animate={MOTION.rise.animate}>
-                  <StreamingText name={draftKey} text={chat.draft} from={draftFrom} smooth={!reduceMotion} />
-                </m.div>
-              )}
-              {awaitingOutput && (
-                <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
-                  <Dots label="Working" />
-                </m.div>
-              )}
+                )}
+                {awaitingOutput && (
+                  <m.div className="text-body leading-[1.6] text-muted" initial={MOTION.fade.initial} animate={MOTION.fade.animate}>
+                    <Dots label="Working" />
+                  </m.div>
+                )}
+              </ReportsOpen.Provider>
             </StepsOpen.Provider>
           </div>
         </div>

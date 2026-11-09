@@ -8,7 +8,7 @@ import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
-import { reloadSteps, showStepsByDefault, showStepsIn } from './steps.ts'
+import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
 import { ChatNav } from './sidebar.tsx'
 import {
   GLOBAL_CONTEXT,
@@ -982,14 +982,83 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   expect(docs.textContent).toContain('Subagent Docs reported')
   expect(docs.querySelector('strong')?.textContent).toBe('it')
   expect(docs.closest('.self-end')).toBeNull()
-  act(() => docs.querySelector('button')!.click())
+  const named = (card: Element, name: string) => [...card.querySelectorAll('button')].find((b) => b.textContent === name)
+  act(() => named(docs, 'Docs')!.click())
   expect(selected).toEqual(['s1'])
 
   // A removed subagent's name is plain text; a report with no reply says so.
   const lint = container.querySelector('[aria-label="Report from subagent Lint"]')!
-  expect(lint.querySelector('button')).toBeNull()
+  expect(named(lint, 'Lint')).toBeUndefined()
   expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
   expect(lint.textContent).toContain('No reply')
+})
+
+test('a report card folds and unfolds on click, and remembers it', () => {
+  localStorage.clear()
+  reloadSteps()
+  const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: '## Found **it**\n\nMore detail' }]
+  render({ items })
+  const card = () => container.querySelector('[aria-label="Report from subagent Docs"]')!
+  const chevron = () => card().querySelector<HTMLButtonElement>('button[aria-expanded]')!
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+  expect(card().textContent).toContain('More detail')
+
+  act(() => chevron().click())
+  expect(chevron().getAttribute('aria-expanded')).toBe('false')
+  expect(chevron().getAttribute('aria-label')).toBe('Unfold report')
+  const preview = [...card().querySelectorAll('button')].at(-1)!
+  expect(preview.textContent).toBe('Found it')
+
+  // The choice survives a reload, for this card only.
+  act(() => reloadSteps())
+  render({ items })
+  expect(chevron().getAttribute('aria-expanded')).toBe('false')
+  render({ id: 'c2', items })
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+
+  render({ items })
+  act(() => [...card().querySelectorAll('button')].at(-1)!.click())
+  expect(chevron().getAttribute('aria-expanded')).toBe('true')
+  expect(card().textContent).toContain('More detail')
+  localStorage.clear()
+  reloadSteps()
+})
+
+test('subagent reports fold by default from Settings, and each chat overrides that in its General tab', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  localStorage.clear()
+  reloadSteps()
+  const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: 'Found it\n\nMore detail' }]
+  const expanded = () =>
+    container
+      .querySelector('[aria-label="Report from subagent Docs"] button[aria-expanded]')!
+      .getAttribute('aria-expanded')
+  render({ items }, () => {}, { contextOpen: true })
+  expect(expanded()).toBe('true')
+
+  act(() => showReportsByDefault(false))
+  expect(expanded()).toBe('false')
+
+  const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
+  act(() => general.click())
+  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Subagent reports"]')!
+  expect(select().textContent).toBe('Folded')
+  act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Unfolded', 'Folded'])
+  const unfolded = options.find((o) => o.textContent?.replace('✓', '') === 'Unfolded')!
+  act(() => unfolded.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(select().textContent).toBe('Unfolded')
+  expect(expanded()).toBe('true')
+
+  // Another chat still follows Settings.
+  render({ id: 'c2', items }, () => {}, { contextOpen: true })
+  expect(expanded()).toBe('false')
+  expect(select().textContent).toBe('Folded')
+
+  act(() => showReportsByDefault(true))
+  localStorage.clear()
+  reloadSteps()
 })
 
 test("labels a queued subagent report as the subagent's", () => {
