@@ -27,7 +27,7 @@ it("loads each folder's index.ts in name order, listing a broken mod under its f
   const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
   const dir = modsDir({
     beta: declare('beta'),
-    alpha: `import type { Mod } from '@kotharhq/mod-api'\nconst mod: Mod = ${declare('alpha').slice(15)}\nexport default mod`,
+    alpha: `import type { Mod } from '@kothar/mod-api'\nconst mod: Mod = ${declare('alpha').slice(15)}\nexport default mod`,
     throws: `throw new Error('boom')`,
     'no-default': `export const mod = 1`,
     renamed: declare('other'),

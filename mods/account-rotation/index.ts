@@ -1,4 +1,4 @@
-import type { Mod, ModAccount } from '@kotharhq/mod-api'
+import type { Mod, ModAccount } from '@kothar/mod-api'
 
 // Sent when the turn had already done some of the work, so the new account picks up instead of starting over.
 export const CONTINUE_PROMPT =

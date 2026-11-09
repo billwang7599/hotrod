@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import type { ModManifest, ModUse } from '@kotharhq/mod-api'
+import type { ModManifest, ModUse } from '@kothar/mod-api'
+import { moveCommunityDir } from './vocab-move.ts'
 import {
   type CatalogEntry,
   checkCatalog,
@@ -48,13 +49,14 @@ const MANIFEST = 'manifest.json'
 export const MOD_MAIN = 'main.mjs'
 
 // Community mods live apart from <garage>/mods/<id>/, which is every mod's own storage and stays on uninstall.
-export const communityDir = (garage: string) => join(garage, 'aftermarket')
+export const communityDir = (garage: string) => join(garage, 'community')
 
 export type CommunityInstall = { manifest: ModManifest; item: InstalledItem; dir: string }
 
-// The community mods installed in the garage: each <garage>/aftermarket/<id>/ with a valid manifest.json, its main.mjs
+// The community mods installed in the garage: each <garage>/community/<id>/ with a valid manifest.json, its main.mjs
 // and installed.json. Folders that don't pass are skipped and left on disk.
 export function installedMods(garage: string): CommunityInstall[] {
+  moveCommunityDir(garage)
   const root = communityDir(garage)
   if (!existsSync(root)) return []
   return readdirSync(root)

@@ -13,8 +13,8 @@ import {
   type ModInfo,
   type SetupState,
   type WorkFolder,
-} from '@kotharhq/core/shared'
-import type { ModSetting } from '@kotharhq/mod-api'
+} from '@kothar/core/shared'
+import type { ModSetting } from '@kothar/mod-api'
 import { PERMISSIONS } from './context-panel.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 
@@ -112,7 +112,7 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={[]}
-              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -140,6 +140,26 @@ test('Settings → Work folder sets the default of each permission every chat fo
     renderSettings({ ...workFolder, path: '/garage/work', [name]: !PERMISSION_DEFAULTS[name] }, sent)
     expect(toggle().getAttribute('aria-checked')).toBe(String(!PERMISSION_DEFAULTS[name]))
   }
+})
+
+test('Settings → Work folder picks the terminal Open in Terminal uses, where there is a choice', () => {
+  const terminals = [
+    { id: 'terminal', name: 'Terminal' },
+    { id: 'ghostty', name: 'Ghostty' },
+  ]
+  const select = () => dialog().querySelector<HTMLButtonElement>('button[aria-label="Terminal"]')
+  renderSettings(workFolder)
+  expect(select()).toBeNull()
+  const sent = renderSettings({ ...workFolder, terminals })
+  expect(select()!.textContent).toBe('Automatic')
+  act(() => select()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Automatic', 'Terminal', 'Ghostty'])
+  const ghostty = options.find((o) => o.textContent?.endsWith('Ghostty'))!
+  act(() => ghostty.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent).toEqual([{ type: 'terminal.set', terminal: 'ghostty' }])
+  renderSettings({ ...workFolder, terminals, terminal: 'ghostty' })
+  expect(select()!.textContent).toBe('Ghostty')
 })
 
 test('Settings has no Instructions page: the global AGENTS.md is edited in the Context panel', () => {
@@ -182,7 +202,7 @@ function renderMods(mods: ModInfo[], page: SettingsPage, sent: ClientMessage[] =
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
               mods={mods}
-              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
               connected
@@ -354,7 +374,7 @@ test('Settings → Models lists each role once across engines, each model with i
       { engine: 'pi', model: 'p/one', thinking: 'off' },
     ],
     searching: [],
-    subagents: [],
+    workers: [],
   }
   const sent: ClientMessage[] = []
   act(() =>
@@ -422,4 +442,13 @@ test('Settings → Models lists each role once across engines, each model with i
     role: 'searching',
     models: [{ engine: 'claude-code', model: 'sonnet' }],
   })
+})
+
+test("Settings' scrolling nav and page keep their scrollbars inset, the page's below the close button", () => {
+  renderSettings(workFolder)
+  const nav = dialog().querySelector('[role="tablist"]')!
+  const page = dialog().querySelector('[role="tabpanel"]')!
+  expect(nav.classList).toContain('scroll-inset')
+  expect(page.classList).toContain('scroll-inset')
+  expect(page.className).toContain('[--scroll-top:48px]')
 })

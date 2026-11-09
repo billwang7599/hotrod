@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import type { Mod } from '@kotharhq/mod-api'
+import type { Mod } from '@kothar/mod-api'
 
 const HOME_ID = 'main'
 
@@ -9,7 +9,7 @@ const INSTRUCTIONS =
   'with personal tasks and use your MCP tools. You may work in any directory the user names in this chat. No ' +
   'folder stays attached to Home; each message starts in a scratch folder. For ongoing ' +
   'work in a folder, offer to make a space for it: a chat with that folder, made with the kothar create_chat tool. ' +
-  'list_chats, read_chat and send_message reach every space.'
+  'list_chats, read_chat, send_message and stop_chat reach every space.'
 
 type NewSpace = { name: string; prompt?: string; folders?: string[]; files?: string[]; engine?: string }
 

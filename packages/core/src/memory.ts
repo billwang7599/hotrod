@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
-import type { Attachment, ChatEntry, CompletionRequest, SubagentReport } from './shared.ts'
+import type { Attachment, ChatEntry, CompletionRequest, WorkerReport } from './shared.ts'
 
 export const LINE_MAX_CHARS = 280
 export const LINE_CHARS_PER_LEVEL = 40
@@ -24,7 +24,7 @@ export const MEMORY_INSTRUCTIONS =
   'Each message you get starts with your memory of this chat: the whole conversation, oldest first. Older ' +
   'messages appear as one-line summaries, id+n|text, each covering the n messages from id on. Recent lines ' +
   'cover one message each; the older the messages, the more a line covers. The latest messages follow in full. ' +
-  'Items are tagged by kind: user (the user\'s words), work (a report from a subagent or a message from another ' +
+  'Items are tagged by kind: user (the user\'s words), work (a report from a worker or a message from another ' +
   'chat), talk (your replies), tool (your tool calls), echo (their output) and note (a turn that ended early). ' +
   "The memory's latest word on a thing is the truth. Summaries keep little of tool output, so say in your reply " +
   'what you learned that will matter later.'
@@ -40,7 +40,7 @@ const COMPACTOR_INSTRUCTIONS = `You write the memory of a long chat between a us
 either one message to summarize, or two adjacent summaries (key|text lines, oldest first) to merge into one. Write \
 one summary per item, as a single line of plain text.
 
-Message kinds: user (the user's words), work (a report from a subagent or a message from another chat), talk (the \
+Message kinds: user (the user's words), work (a report from a worker or a message from another chat), talk (the \
 agent's reply), tool (a tool call), echo (a tool's output), note (a turn that ended early).
 
 - Tag what you keep by kind, in order: "user: … talk: … tool: … echo: …".
@@ -78,12 +78,12 @@ export type Summaries = ReturnType<typeof openSummaries>
 type Block = { id: number; n: number }
 type LineOf = (id: number, n: number) => string | undefined
 
-export type Report = { text: string; report: SubagentReport }
+export type Report = { text: string; report: WorkerReport }
 
-// How a subagent's report reads to its lead, in memory and in the prompt that delivers it.
+// How a worker's report reads to its lead, in memory and in the prompt that delivers it.
 export function reportText({ text, report: { chatId, name, error } }: Report) {
   const early = error ? `\n\n(The turn ended early: ${error})` : ''
-  return `Report from subagent "${name}" (${chatId}):\n\n${text || '(No reply)'}${early}`
+  return `Report from worker "${name}" (${chatId}):\n\n${text || '(No reply)'}${early}`
 }
 
 export function withAttachments(text: string, attachments: Attachment[] = []) {
@@ -100,7 +100,7 @@ export function messagesOf(entries: ChatEntry[]): MemoryMessage[] {
       const kind = entry.text.startsWith('[subagent "') ? 'work' : 'user'
       add(kind, entry.at, withAttachments(entry.text, entry.attachments))
     }
-    if (entry.type === 'subagent.report') {
+    if (entry.type === 'worker.report') {
       const { text, chatId, name, error } = entry
       add('work', entry.at, reportText({ text, report: { chatId, name, ...(error && { error }) } }))
     }

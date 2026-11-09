@@ -381,7 +381,9 @@ export function useReturnFocus() {
   }
 }
 
-type PendingConfirm = { text: string; resolve: (ok: boolean) => void }
+// text: the question, as the dialog's title; body: what follows it, such as risks; ok: the confirming button's label.
+export type ConfirmRequest = { text: string; body?: string; ok?: string; danger?: boolean }
+type PendingConfirm = ConfirmRequest & { resolve: (ok: boolean) => void }
 let pendingConfirm: PendingConfirm | null = null
 const confirmListeners = new Set<() => void>()
 
@@ -391,8 +393,9 @@ function settleConfirm(ok: boolean, next: PendingConfirm | null = null) {
   confirmListeners.forEach((listener) => listener())
 }
 
-export function confirm(text: string) {
-  return new Promise<boolean>((resolve) => settleConfirm(false, { text, resolve }))
+export function confirm(request: string | ConfirmRequest) {
+  const asked = typeof request === 'string' ? { text: request } : request
+  return new Promise<boolean>((resolve) => settleConfirm(false, { ...asked, resolve }))
 }
 
 const subscribeConfirm = (listener: () => void) => {
@@ -402,8 +405,12 @@ const subscribeConfirm = (listener: () => void) => {
 
 export function ConfirmDialog() {
   const pending = useSyncExternalStore(subscribeConfirm, () => pendingConfirm)
-  const [text, setText] = useState('')
-  if (pending && pending.text !== text) setText(pending.text)
+  // Kept while the dialog animates out, after pending is cleared.
+  const [shown, setShown] = useState<ConfirmRequest>({ text: '' })
+  if (pending && pending !== shown && (pending.text !== shown.text || pending.body !== shown.body || pending.ok !== shown.ok)) {
+    setShown({ text: pending.text, body: pending.body, ok: pending.ok, danger: pending.danger })
+  }
+  const { text, body, ok, danger } = shown
   const okRef = useRef<HTMLButtonElement>(null)
   const focus = useReturnFocus()
   return (
@@ -417,7 +424,7 @@ export function ConfirmDialog() {
             <AlertDialog.Content
               forceMount
               asChild
-              aria-describedby={undefined}
+              {...(!body && { 'aria-describedby': undefined })}
               onOpenAutoFocus={(e) => {
                 focus.remember()
                 e.preventDefault()
@@ -426,17 +433,28 @@ export function ConfirmDialog() {
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
-                <AlertDialog.Title className="text-body leading-[1.5] whitespace-pre-line">{text}</AlertDialog.Title>
+                <div className="flex flex-col gap-8">
+                  <AlertDialog.Title
+                    className={`leading-[1.5] whitespace-pre-line ${body ? 'text-[16px] font-semibold' : 'text-body'}`}
+                  >
+                    {text}
+                  </AlertDialog.Title>
+                  {body && (
+                    <AlertDialog.Description className="text-ui leading-[1.5] whitespace-pre-line text-muted">
+                      {body}
+                    </AlertDialog.Description>
+                  )}
+                </div>
                 <div className="flex justify-end gap-8">
                   <AlertDialog.Cancel asChild>
                     <Button>Cancel</Button>
                   </AlertDialog.Cancel>
                   <AlertDialog.Action asChild onClick={() => settleConfirm(true)}>
-                    <Button ref={okRef} variant="primary">
-                      OK
+                    <Button ref={okRef} variant={danger ? 'danger' : 'primary'}>
+                      {ok ?? 'OK'}
                     </Button>
                   </AlertDialog.Action>
                 </div>

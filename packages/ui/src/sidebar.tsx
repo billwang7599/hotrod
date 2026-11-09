@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
-import type { ChatStatus, ClientMessage } from '@kotharhq/core/shared'
+import type { ChatStatus, ClientMessage } from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
-import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
+import { chatTree, familyOf, folderOf, workerRequests, type ChatView, type TreeRow } from './state.ts'
 import { Keys } from './shortcuts-page.tsx'
 import type { Binding } from './shortcuts.ts'
 import { showsUnread } from './unread.ts'
@@ -16,7 +16,7 @@ const DOTS: Record<ChatStatus, string> = {
   waiting: 'bg-amber',
   stopping: 'bg-amber',
 }
-/** A folded row shows the busiest status among the subagents it hides. */
+/** A folded row shows the busiest status among the workers it hides. */
 const BUSIEST: ChatStatus[] = ['waiting', 'stopping', 'running', 'idle']
 const INDENTS = ['pl-8', 'pl-22', 'pl-36', 'pl-50']
 const ROW_ACTION = 'hidden group-hover/row:block group-focus-within/row:block'
@@ -76,7 +76,7 @@ type RowProps = {
   animate: boolean
   title: string
   selected: boolean
-  // Shown as the chat's status while a subagent below it waits for approval, since the user answers it here.
+  // Shown as the chat's status while a worker below it waits for approval, since the user answers it here.
   status: ChatStatus
   // Bold: a space or Home whose own lead finished a turn the user hasn't seen.
   unread: boolean
@@ -122,16 +122,16 @@ function ChatRow(props: RowProps) {
         <span className={`min-w-0 flex-1 truncate ${unread ? 'font-semibold' : ''}`} data-unread={unread || undefined}>
           {chat.name}
         </span>
-        {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
+        {chat.worker && <span className="rounded border px-5 text-xs text-muted">worker</span>}
         {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
       {fold && (
-        <Hint text={fold.folded ? 'Show subagents' : 'Hide subagents'}>
+        <Hint text={fold.folded ? 'Show workers' : 'Hide workers'}>
           <Button
             variant="ghost"
             size="none"
             className="group mr-2 flex h-22 items-center gap-4 px-4 text-xs text-faint"
-            aria-label={fold.folded ? 'Show subagents' : 'Hide subagents'}
+            aria-label={fold.folded ? 'Show workers' : 'Hide workers'}
             aria-expanded={!fold.folded}
             data-open={fold.folded ? undefined : ''}
             onClick={fold.toggle}
@@ -241,7 +241,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
         e.preventDefault()
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
         const { after } = target(e)
-        // The indicator sits on the row the space lands next to: below a space's last subagent when after it.
+        // The indicator sits on the row the space lands next to: below a space's last worker when after it.
         const family = groupRows(!!space.pinned).filter((r) => rootOf(r.chat).id === space.id && shown(r))
         const id = after ? family.at(-1)!.chat.id : space.id
         if (drag.over?.id !== id || drag.over.after !== after) setDrag({ ...drag, over: { id, after } })
@@ -309,7 +309,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
     const folder = folderOf(chats, chat) ?? 'Not tied to a folder'
     const below = familyOf(chats, chat.id).filter((c) => c.id !== chat.id && c.archived === chat.archived)
     const isFolded = folded.has(chat.id)
-    const asksBelow = !chat.subagent && subagentRequests(chats, chat.id).length > 0
+    const asksBelow = !chat.worker && workerRequests(chats, chat.id).length > 0
     return (
       <ChatRow
         key={chat.id}
@@ -321,7 +321,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
         unread={showsUnread(chat, looking && chat.id === selectedId)}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.mod || chat.subagent ? undefined : chatMenu(chat)}
+        menu={chat.mod || chat.worker ? undefined : chatMenu(chat)}
         fold={below.length ? { folded: isFolded, hidden: below, toggle: () => foldChat(chat.id, !isFolded) } : undefined}
         reorder={reorder(row)}
       />
@@ -329,7 +329,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
   }
 
   return (
-    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pt-10 pb-8">
+    <nav className="flex flex-1 scroll-inset flex-col gap-1 overflow-y-auto pt-10 pr-0 pb-8 pl-8">
       <AnimatePresence>{tree.active.slice(0, split).filter(shown).map(row)}</AnimatePresence>
       {pinnedRows.length > 0 && (
         <>
@@ -409,7 +409,7 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-12 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
                 onSubmit={submit}
               >

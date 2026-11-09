@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage, SearchHit } from '@kotharhq/core/shared'
+import type { ClientMessage, SearchHit } from '@kothar/core/shared'
 import { ago, paletteResults, revealIn, SEARCH_DEBOUNCE_MS, SearchPalette, takeReveal } from './search.tsx'
 import type { ChatView } from './state.ts'
 
@@ -28,7 +28,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
 const HOME = chat({ id: 'main', name: 'Home', mod: 'home', doneAt: '2026-03-01T00:00:00Z' })
 const WEB = chat({ id: 'web', name: 'Website', doneAt: '2026-03-03T00:00:00Z' })
 const API = chat({ id: 'api', name: 'API server', readAt: '2026-03-02T00:00:00Z' })
-const SUB = chat({ id: 'sub', name: 'Website subagent', parentId: 'web', subagent: true, doneAt: '2026-03-04T00:00:00Z' })
+const SUB = chat({ id: 'sub', name: 'Website worker', parentId: 'web', worker: true, doneAt: '2026-03-04T00:00:00Z' })
 const CHATS = [HOME, WEB, API, SUB]
 const hit = (chatId: string, nth = 0): SearchHit => ({
   chatId,
@@ -39,7 +39,7 @@ const hit = (chatId: string, nth = 0): SearchHit => ({
   nth,
 })
 
-test('with no query it lists recent chats, the open one last, and never subagents', () => {
+test('with no query it lists recent chats, the open one last, and never workers', () => {
   expect(paletteResults(CHATS, 'web', '', undefined).map((r) => r.chat.id)).toEqual(['api', 'main', 'web'])
 })
 

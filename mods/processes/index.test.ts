@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ChatSummary, Mod, ModHost, ModListItem, ModView } from '@kotharhq/mod-api'
-import { createFakeAdapter } from '@kotharhq/core/fake'
-import { startCore } from '@kotharhq/core/main'
-import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kotharhq/core/shared'
-import { sandboxingMachine as localMachine } from '@kotharhq/core/test-machine'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModView } from '@kothar/mod-api'
+import { createFakeAdapter } from '@kothar/core/fake'
+import { startCore } from '@kothar/core/main'
+import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kothar/core/shared'
+import { sandboxingMachine as localMachine } from '@kothar/core/test-machine'
 import { elapsed } from '../../packages/ui/src/elapsed.ts'
 import { createProcessesMod, duration, plain, portOf } from './index.ts'
 
@@ -42,7 +42,7 @@ const at = '2026-01-01T00:00:00.000Z'
 async function start(options: { logMaxBytes?: number } = {}) {
   const garage = tempDir()
   const work = join(garage, 'work')
-  // A space and its subagent, saved as if from before, so the subagent exists without running a model.
+  // A space and its worker, saved as if from before, so the worker exists without running a model.
   const spaceId = 'space001'
   const workDir = join(work, spaceId)
   mkdirSync(workDir, { recursive: true })
@@ -52,7 +52,7 @@ async function start(options: { logMaxBytes?: number } = {}) {
     writeFileSync(join(garage, 'chats', id, 'chat.json'), JSON.stringify(chat))
   }
   saved(spaceId, { name: 'Web', folders: [], files: [], archived: false, workDir })
-  saved('sub001', { name: 'Builder', parentId: spaceId, subagent: true })
+  saved('sub001', { name: 'Builder', parentId: spaceId, worker: true })
 
   const spawned: { command: string; args: string[]; cwd: string; sandbox?: Sandbox }[] = []
   const machine: Machine = {
@@ -67,7 +67,14 @@ async function start(options: { logMaxBytes?: number } = {}) {
   let host: ModHost | undefined
   const mod: Mod = { ...made.mod, onChatCreated: (_chat, context) => void (host = context.host) }
   const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: work, KOTHAR_PORT: '0' }
-  const kothar = await startCore({ env, adapters: [createFakeAdapter([], 0)], mods: [mod], machine })
+  // No terminal really opens: the folders asked for are noted, and terminal.fails makes the next ones fail.
+  const terminals: string[] = []
+  const terminal = { fails: '' }
+  const openTerminal = async (dir: string) => {
+    if (terminal.fails) throw new Error(terminal.fails)
+    terminals.push(dir)
+  }
+  const kothar = await startCore({ env, adapters: [createFakeAdapter([], 0)], mods: [mod], machine, openTerminal })
   let closed = false
   const close = async () => {
     if (!closed) await kothar.close(true)
@@ -109,7 +116,25 @@ async function start(options: { logMaxBytes?: number } = {}) {
     if (shown?.type !== 'mod.panel' || !shown.view) throw new Error('no view')
     return shown.view
   }
-  return { core, garage, workDir, spaceId, handle, tool, spawned, made, close, logDir, tabs, panel, views, lastView }
+  return {
+    core,
+    garage,
+    workDir,
+    spaceId,
+    handle,
+    tool,
+    spawned,
+    made,
+    close,
+    logDir,
+    tabs,
+    panel,
+    views,
+    lastView,
+    terminals,
+    terminal,
+    host: () => host!,
+  }
 }
 
 describe('output', () => {
@@ -202,7 +227,7 @@ describe('the tools', () => {
     await expect(t.tool('read_output', { id: 'p9' })).rejects.toThrow(/No process "p9"/)
   })
 
-  it('belong to the space: a subagent’s process is the lead’s to see and stop', async () => {
+  it('belong to the space: a worker’s process is the lead’s to see and stop', async () => {
     const t = await start()
     await t.tool('start_process', { command: 'sleep 300', name: 'watch' }, 'sub001')
     const listed = await t.tool('list_processes', {})
@@ -271,7 +296,7 @@ const buttons = (view: ModView) => partsOf(view).flatMap((part) => (part.type ==
 const code = (view: ModView) => partsOf(view).find((part) => part.type === 'code')
 
 describe('the Processes tab', () => {
-  it('shows once the space has a process, in the space and its subagents, and goes once they are cleared', async () => {
+  it('shows once the space has a process, in the space and its workers, and goes once they are cleared', async () => {
     const t = await start()
     expect(t.tabs()).toEqual([])
     await t.tool('start_process', { command: 'echo hi', name: 'once' })
@@ -315,12 +340,42 @@ describe('the Processes tab', () => {
     expect(rows(open)[0]).toMatchObject({ selected: true, hint: 'Hide its output' })
     const command = 'echo first; sleep 1.5; echo second; sleep 300'
     expect(partsOf(open)).toContainEqual(expect.objectContaining({ type: 'text', text: command }))
-    expect(buttons(open)).toEqual(['Stop', 'Restart'])
+    expect(buttons(open)).toEqual(['Stop', 'Restart', 'Open in Terminal'])
     expect(code(open)).toMatchObject({ follow: true, text: 'first' })
     // New output draws the open tab again by itself.
     await until(() => (code(t.lastView()) as { text?: string } | undefined)?.text === 'first\nsecond')
     const closed = await t.panel({ name: 'open', value: 'p1' })
     expect(code(closed)).toBeUndefined()
+  })
+
+  it('opens the terminal at a process’s folder, and says so inline when it can’t', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'web' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const opened = await t.panel({ name: 'terminal', value: 'p1' })
+    expect(t.terminals).toEqual([realpathSync(t.workDir)])
+    expect(partsOf(opened).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+    t.terminal.fails = 'Couldn’t open Ghostty. Is it installed?'
+    const failed = await t.panel({ name: 'terminal', value: 'p1' })
+    expect(partsOf(failed)).toContainEqual(
+      expect.objectContaining({ type: 'text', tone: 'error', text: 'Couldn’t open Ghostty. Is it installed?' }),
+    )
+    // Any other action clears it.
+    t.terminal.fails = ''
+    const after = await t.panel({ name: 'open', value: 'p1' })
+    expect(partsOf(after).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+  })
+
+  it('lets a mod open a terminal only inside a space’s folders', async () => {
+    const t = await start()
+    const outside = tempDir()
+    await expect(t.host().openTerminal(outside)).rejects.toThrow(/isn't inside a space's folders/)
+    await expect(t.host().openTerminal('relative/path')).rejects.toThrow(/isn't inside/)
+    const inside = join(t.workDir, 'app')
+    mkdirSync(inside)
+    await t.host().openTerminal(inside)
+    expect(t.terminals).toEqual([realpathSync(inside)])
   })
 
   it('stops and restarts a process under the same id', async () => {
@@ -336,7 +391,7 @@ describe('the Processes tab', () => {
     const [proc] = t.made.processes(t.spaceId)
     expect(proc).toMatchObject({ id: 'p1', status: 'running' })
     expect((code(t.lastView()) as { text: string }).text).toMatch(/^run \d+\n--- restarted ---\nrun \d+$/)
-    expect(buttons(t.lastView())).toEqual(['Stop', 'Restart'])
+    expect(buttons(t.lastView())).toEqual(['Stop', 'Restart', 'Open in Terminal'])
     // Restarting a running one stops it first.
     const pid = Number(/run (\d+)$/.exec(proc!.lines.join('\n'))?.[1])
     await t.panel({ name: 'restart', value: 'p1' })

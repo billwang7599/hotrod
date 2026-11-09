@@ -4,9 +4,9 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage, InstalledItem, MarketEntry, ModInfo } from '@kotharhq/core/shared'
+import type { ClientMessage, InstalledItem, MarketEntry, ModInfo, RestartState } from '@kothar/core/shared'
 import { ConfirmDialog } from './controls.tsx'
-import { MarketplacePage, type Market } from './marketplace.tsx'
+import { MarketplaceDialog, type Market } from './marketplace.tsx'
 import { SettingsDialog } from './settings.tsx'
 import { reduce, initialState } from './state.ts'
 import { startAppearance } from './themes.tsx'
@@ -69,7 +69,9 @@ function render(node: ReactNode) {
   )
 }
 
-function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
+type Extra = { communityMods?: boolean; restart?: RestartState; running?: number }
+
+function settings(mods: ModInfo[], sent: ClientMessage[] = [], extra: Extra = { communityMods: true }) {
   render(
     <SettingsDialog
       open
@@ -80,11 +82,12 @@ function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
       mods={mods}
-      modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
       connected
       send={(m) => sent.push(m)}
+      {...extra}
     />,
   )
   return sent
@@ -92,9 +95,13 @@ function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
 
 const buttons = (label: string) => [...document.querySelectorAll('button')].filter((b) => b.textContent === label)
 const confirmText = () => document.querySelector('[role="alertdialog"]')?.textContent ?? ''
+// The confirm's own button (OK, Turn on, Restart…) or Cancel.
 const answer = async (ok: boolean) => {
-  await act(async () => buttons(ok ? 'OK' : 'Cancel')[0]!.click())
+  const dialog = document.querySelector('[role="alertdialog"]')!
+  const [cancel, confirming] = [...dialog.querySelectorAll('button')]
+  await act(async () => (ok ? confirming : cancel)!.click())
 }
+const modSwitch = (name = 'Counter') => document.querySelector(`[role="switch"][aria-label="${name}"]`) as HTMLButtonElement
 
 test('Community mods lists only community mods, with the warning, what each uses and where it came from', () => {
   settings([builtIn, counter()])
@@ -117,26 +124,104 @@ test('says when no community mods are installed', () => {
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No community mods installed.')
 })
 
-test('turning a mod on asks first, listing what it uses, and says it starts on the next start', async () => {
+test('turning a mod on asks first, naming its repo and what it uses, and says it starts on a restart', async () => {
   const sent = settings([counter()])
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   expect(confirmText()).toContain('Turn on Counter?')
+  expect(confirmText()).toContain('From github.com/someone/counter.')
   expect(confirmText()).toContain('• Runs programs on your computer')
+  expect(buttons('Turn on')).toHaveLength(1)
   await answer(false)
   expect(sent).toEqual([])
 
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   await answer(true)
   expect(sent).toEqual([{ type: 'mod.setEnabled', modId: 'counter', enabled: true }])
 
   settings([counter({ enabled: true })], sent)
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('On from the next start of Kothar.')
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Starts when Kothar restarts.')
+})
+
+test('the master switch is off by default: mods are greyed out and can only be turned off', () => {
+  settings([counter(), counter({ id: 'notes', name: 'Notes', enabled: true })], [], {})
+  const text = document.querySelector('[role="dialog"]')!.textContent!
+  expect(text).toContain('Off. No community mod runs, whatever its own switch says.')
+  expect(modSwitch('Community mods').getAttribute('aria-checked')).toBe('false')
+  expect(document.querySelector('[aria-disabled="true"]')?.className).toContain('opacity-60')
+  expect(modSwitch().disabled).toBe(true)
+  // One that's on can still be turned off.
+  expect(modSwitch('Notes').disabled).toBe(false)
+  expect(text).toContain('Off while community mods are off.')
+})
+
+test('turning community mods on warns about the risks first; turning them off asks nothing', async () => {
+  const sent = settings([counter()], [], { communityMods: false })
+  await act(async () => modSwitch('Community mods').click())
+  expect(confirmText()).toContain('Turn on community mods?')
+  expect(confirmText()).toContain('They can read your files and settings, and reach the network.')
+  expect(confirmText()).toContain("Kothar doesn't review them.")
+  expect(confirmText()).toContain('An update can change what a mod does.')
+  expect(buttons('Turn on community mods')).toHaveLength(1)
+  await answer(false)
+  expect(sent).toEqual([])
+  await act(async () => modSwitch('Community mods').click())
+  await answer(true)
+  expect(sent).toEqual([{ type: 'communityMods.setEnabled', enabled: true }])
+
+  settings([counter()], sent, { communityMods: true })
+  await act(async () => modSwitch('Community mods').click())
+  expect(confirmText()).toBe('')
+  expect(sent.at(-1)).toEqual({ type: 'communityMods.setEnabled', enabled: false })
+})
+
+test('a change waiting for a restart shows with a Restart button that warns about running chats', async () => {
+  const restart: RestartState = {
+    changes: [
+      { id: 'counter', name: 'Counter', change: 'start' },
+      { id: 'notes', name: 'Notes', change: 'stop' },
+    ],
+    canRestart: true,
+  }
+  const sent = settings([counter({ enabled: true })], [], { communityMods: true, restart, running: 2 })
+  const notice = document.querySelector('[role="dialog"] [role="status"]')!
+  expect(notice.textContent).toContain('Restart Kothar to apply: Counter starts, Notes stops')
+  await act(async () => buttons('Restart')[0]!.click())
+  expect(confirmText()).toContain('Restart Kothar?')
+  expect(confirmText()).toContain('2 chats are running and will stop.')
+  await answer(false)
+  expect(sent).toEqual([])
+  await act(async () => buttons('Restart')[0]!.click())
+  await answer(true)
+  expect(sent).toEqual([{ type: 'app.restart' }])
+
+  // Nothing running: no question.
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart, running: 0 })
+  await act(async () => buttons('Restart')[0]!.click())
+  expect(confirmText()).toBe('')
+  expect(sent.at(-1)).toEqual({ type: 'app.restart' })
+
+  // A Kothar that can't restart itself says what to do instead.
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart: { ...restart, canRestart: false } })
+  expect(buttons('Restart')).toHaveLength(0)
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Restart the dev server')
+
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart: { changes: [], canRestart: true } })
+  expect(document.querySelector('[role="dialog"] [role="status"]')).toBeNull()
+})
+
+test('the state follows the master switch and what waits for a restart', () => {
+  expect(initialState.communityMods).toBe(false)
+  let state = reduce(initialState, { type: 'communityMods.updated', enabled: true })
+  expect(state.communityMods).toBe(true)
+  const restart: RestartState = { changes: [{ id: 'counter', name: 'Counter', change: 'update' }], canRestart: true }
+  state = reduce(state, { type: 'restart.updated', restart })
+  expect(state.restart).toEqual(restart)
 })
 
 test('turning a mod off, uninstalling it, and a mod that failed to load', async () => {
   const sent = settings([counter({ enabled: true, loadError: 'boom' }, { running: undefined })])
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Couldn't load: boom")
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   expect(sent).toEqual([{ type: 'mod.setEnabled', modId: 'counter', enabled: false }])
   act(() => buttons('Uninstall')[0]!.click())
   expect(sent.at(-1)).toEqual({ type: 'market.uninstall', kind: 'mod', id: 'counter' })
@@ -159,29 +244,36 @@ test("a mod's own settings page lists what it uses", () => {
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
       mods={[withSettings]}
-      modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
       connected
       send={() => {}}
+      communityMods
     />,
   )
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('UsesRuns programs on your computer')
 })
 
 function market(m: Partial<Market>, sent: ClientMessage[] = []) {
-  render(<MarketplacePage market={{ marketFailures: {}, themes: [], installed: [], ...m }} connected send={(x) => sent.push(x)} />)
+  render(<MarketplaceDialog open close={() => {}} market={{ marketFailures: {}, themes: [], installed: [], ...m }} connected send={(x) => sent.push(x)} />)
   return sent
+}
+// Picks the entry in the Marketplace's list and returns its detail pane.
+const detail = (name: string) => {
+  act(() => (document.querySelector(`[role="option"][aria-label="${name}"]`) as HTMLElement).click())
+  return document.querySelector(`article[aria-label="${name}"]`)!
 }
 
 test('the Marketplace lists mods with what they use and the warning, and asks before installing', async () => {
   const sent = market({ catalog: { entries: [entry] } })
-  const row = document.querySelector('[role="listitem"][aria-label="Counter"]')!
+  const row = detail('Counter')
   expect(row.textContent).toContain('Runs programs on your computer')
   expect(row.textContent).toContain('1.0.0')
-  expect(container.textContent).toContain('A community mod runs code on your computer')
+  expect(row.textContent).toContain('A community mod runs code on your computer')
   await act(async () => buttons('Install')[0]!.click())
-  expect(confirmText()).toContain('Install Counter? It stays off until you turn it on in Community mods.')
+  expect(confirmText()).toContain('Install Counter?')
+  expect(confirmText()).toContain('It stays off until you turn it on in Community mods.')
   expect(confirmText()).toContain('• Adds panels')
   await answer(true)
   expect(sent.at(-1)).toEqual({ type: 'market.install', kind: 'mod', id: 'counter' })
@@ -189,7 +281,7 @@ test('the Marketplace lists mods with what they use and the warning, and asks be
 
 test('the Marketplace says an installed mod is off, and offers its update', () => {
   market({ catalog: { entries: [entry] }, installed: [installed], mods: [counter()] })
-  const row = document.querySelector('[role="listitem"][aria-label="Counter"]')!
+  const row = detail('Counter')
   expect(row.textContent).toContain('Off. Turn it on in Community mods.')
   market({
     catalog: { entries: [{ ...entry, latest: { ...entry.latest!, version: '2.0.0' } }] },
@@ -217,32 +309,34 @@ test('Install from folder: a browser tab types a path; the answer shows inline',
   })
   act(() => buttons('Install from folder')[0]!.click())
   expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/my-mod' })
-  expect(container.textContent).toContain('Installing…')
+  expect(document.body.textContent).toContain('Installing…')
 
   const local: InstalledItem = { kind: 'mod', id: 'mine', name: 'Mine', version: '0.1.0', source: 'local', path: '/Users/me/my-mod' }
   const answered = { path: '/Users/me/my-mod', kind: 'mod' as const, ids: ['mine'], count: 1 }
   market({ catalog: { entries: [] }, installed: [local], localInstall: answered }, sent)
-  expect(container.textContent).toContain('Installed Mine from /Users/me/my-mod. Turn it on in Community mods.')
+  expect(document.body.textContent).toContain('Installed Mine from /Users/me/my-mod. Turn it on in Community mods.')
 })
 
 test('Install from folder: the desktop picker comes first, and a failure shows why', async () => {
   const sent: ClientMessage[] = []
   const pickFolder = vi.fn(async () => '/Users/me/broken')
-  render(<MarketplacePage market={{ marketFailures: {}, themes: [], installed: [], catalog: { entries: [] } }} connected send={(x) => sent.push(x)} pickFolder={pickFolder} />)
+  render(<MarketplaceDialog open close={() => {}} market={{ marketFailures: {}, themes: [], installed: [], catalog: { entries: [] } }} connected send={(x) => sent.push(x)} pickFolder={pickFolder} />)
   expect(document.querySelector('input[aria-label="Install from a folder by path"]')).toBeNull()
   await act(async () => buttons('Install from folder…')[0]!.click())
   expect(pickFolder).toHaveBeenCalledWith('Install from folder')
   expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/broken' })
   const failed = { path: '/Users/me/broken', error: '/Users/me/broken has no main.mjs. Build the mod first.', count: 1 }
   render(
-    <MarketplacePage
+    <MarketplaceDialog
+      open
+      close={() => {}}
       market={{ marketFailures: {}, themes: [], installed: [], catalog: { entries: [] }, localInstall: failed }}
       connected
       send={(x) => sent.push(x)}
       pickFolder={pickFolder}
     />,
   )
-  expect(container.textContent).toContain('has no main.mjs. Build the mod first.')
+  expect(document.body.textContent).toContain('has no main.mjs. Build the mod first.')
   act(() => buttons('Type a path')[0]!.click())
   expect(document.querySelector('input[aria-label="Install from a folder by path"]')).toBeTruthy()
 })
@@ -250,7 +344,7 @@ test('Install from folder: the desktop picker comes first, and a failure shows w
 test('a local install is marked Local, offers Reinstall from its folder, and never an update', () => {
   const local: InstalledItem = { kind: 'mod', id: 'counter', name: 'Counter', version: '0.1.0', source: 'local', path: '/Users/me/counter' }
   const sent = market({ catalog: { entries: [entry] }, installed: [local], mods: [counter({}, { source: 'local', path: '/Users/me/counter' })] })
-  const row = document.querySelector('[role="listitem"][aria-label="Counter"]')!
+  const row = detail('Counter')
   expect(row.textContent).toContain('Local')
   expect(buttons('Update to 1.0.0')).toHaveLength(0)
   act(() => buttons('Reinstall')[0]!.click())

@@ -24,7 +24,7 @@ const chat = (id: string, change: Partial<ChatView> = {}): ChatView => ({
   queue: [],
   ...change,
 })
-const sub = (id: string, change: Partial<ChatView> = {}) => chat(id, { parentId: 'space', subagent: true, ...change })
+const sub = (id: string, change: Partial<ChatView> = {}) => chat(id, { parentId: 'space', worker: true, ...change })
 
 let root: Root
 let host: HTMLDivElement
@@ -65,7 +65,7 @@ function render(chats: ChatView[], selectedId = 'space') {
   )
 }
 
-const names = () => [...host.querySelectorAll('nav button[title]')].map((b) => b.textContent!.replace('subagent', ''))
+const names = () => [...host.querySelectorAll('nav button[title]')].map((b) => b.textContent!.replace('worker', ''))
 const toggle = (label: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
 // Rows leave through an exit animation, so wait for it to finish.
 const click = async (el: Element | null | undefined) => {
@@ -75,19 +75,19 @@ const click = async (el: Element | null | undefined) => {
 const dotOf = (name: string) =>
   [...host.querySelectorAll('nav button[title]')].find((b) => b.textContent!.startsWith(name))!.querySelector('span')!
 
-test('only a row with subagents has a fold toggle', async () => {
+test('only a row with workers has a fold toggle', async () => {
   render([chat('space'), sub('a'), chat('alone', { createdAt: '2025-01-01T00:00:00.000Z' })])
-  expect(host.querySelectorAll('button[aria-label="Hide subagents"]')).toHaveLength(1)
-  expect(toggle('Hide subagents')!.getAttribute('aria-expanded')).toBe('true')
+  expect(host.querySelectorAll('button[aria-label="Hide workers"]')).toHaveLength(1)
+  expect(toggle('Hide workers')!.getAttribute('aria-expanded')).toBe('true')
 })
 
-test("folding hides a space's subagents and shows how many, without selecting it", async () => {
-  render([chat('space'), sub('a'), sub('b'), chat('b-child', { parentId: 'b', subagent: true })], 'other')
+test("folding hides a space's workers and shows how many, without selecting it", async () => {
+  render([chat('space'), sub('a'), sub('b'), chat('b-child', { parentId: 'b', worker: true })], 'other')
   expect(names()).toEqual(['space', 'a', 'b', 'b-child'])
 
-  await click(toggle('Hide subagents'))
+  await click(toggle('Hide workers'))
   expect(names()).toEqual(['space'])
-  const show = toggle('Show subagents')!
+  const show = toggle('Show workers')!
   expect(show.getAttribute('aria-expanded')).toBe('false')
   expect(show.textContent).toBe('3')
   expect(selected).toEqual([])
@@ -96,16 +96,16 @@ test("folding hides a space's subagents and shows how many, without selecting it
   expect(names()).toEqual(['space', 'a', 'b', 'b-child'])
 })
 
-test('nested subagents fold under their own subagent', async () => {
-  render([chat('space'), sub('b'), chat('b-child', { parentId: 'b', subagent: true })], 'other')
-  await click(host.querySelectorAll('button[aria-label="Hide subagents"]')[1])
+test('nested workers fold under their own worker', async () => {
+  render([chat('space'), sub('b'), chat('b-child', { parentId: 'b', worker: true })], 'other')
+  await click(host.querySelectorAll('button[aria-label="Hide workers"]')[1])
   expect(names()).toEqual(['space', 'b'])
 })
 
 test('the folded state is kept after a reload', async () => {
   const chats = [chat('space'), sub('a')]
   render(chats, 'other')
-  await click(toggle('Hide subagents'))
+  await click(toggle('Hide workers'))
   expect(JSON.parse(localStorage.getItem('kothar.foldedChats')!)).toEqual(['space'])
 
   act(() => root.unmount())
@@ -115,9 +115,9 @@ test('the folded state is kept after a reload', async () => {
   expect(names()).toEqual(['space'])
 })
 
-test('a folded row shows when a hidden subagent is running or waiting', async () => {
+test('a folded row shows when a hidden worker is running or waiting', async () => {
   render([chat('space'), sub('a', { status: 'running' }), sub('b', { status: 'waiting' })], 'other')
-  await click(toggle('Hide subagents'))
+  await click(toggle('Hide workers'))
   expect(dotOf('space').className).toContain('bg-amber')
 
   render([chat('space'), sub('a', { status: 'running' })], 'other')
@@ -127,8 +127,8 @@ test('a folded row shows when a hidden subagent is running or waiting', async ()
   expect(dotOf('space').className).toContain('bg-faint')
 })
 
-test('the subagent being viewed stays in the list when its space folds', async () => {
+test('the worker being viewed stays in the list when its space folds', async () => {
   render([chat('space'), sub('a'), sub('b')], 'a')
-  await click(toggle('Hide subagents'))
+  await click(toggle('Hide workers'))
   expect(names()).toEqual(['space', 'a'])
 })

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
-import type { ClientMessage, SearchHit } from '@kotharhq/core/shared'
+import type { ClientMessage, SearchHit } from '@kothar/core/shared'
 import { MOTION, useReturnFocus } from './controls.tsx'
 import { Keys } from './shortcuts-page.tsx'
 import { useBindings } from './shortcuts.ts'
@@ -37,7 +37,7 @@ type Result = { key: string; chat: ChatView; hit?: SearchHit }
 
 /**
  * What the palette lists: with no query, recent chats (the open one last, so Enter goes back to the one before);
- * otherwise chats whose name matches, then the core's message matches. Home and spaces only, never subagents.
+ * otherwise chats whose name matches, then the core's message matches. Home and spaces only, never workers.
  */
 export function paletteResults(
   chats: ChatView[],
@@ -45,7 +45,7 @@ export function paletteResults(
   query: string,
   hits: SearchHit[] | undefined,
 ): Result[] {
-  const listed = chats.filter((c) => !c.subagent)
+  const listed = chats.filter((c) => !c.worker)
   const q = query.trim().toLowerCase()
   if (!q) {
     const recent = [...listed].sort((a, b) => lastActive(b).localeCompare(lastActive(a)))
@@ -177,7 +177,7 @@ export function SearchPalette({ open, close, chats, selectedId, search, connecte
                   />
                   {keys.search && <Keys binding={keys.search} />}
                 </div>
-                <ul id="palette-results" role="listbox" aria-label="Results" className="min-h-0 flex-1 overflow-y-auto p-6">
+                <ul id="palette-results" role="listbox" aria-label="Results" className="min-h-0 flex-1 scroll-inset overflow-y-auto py-6 pl-6">
                   {!trimmed && results.length > 0 && <li className="px-8 pt-4 pb-2 text-xs text-faint">Recent</li>}
                   {results.map((result, i) => (
                     <PaletteRow

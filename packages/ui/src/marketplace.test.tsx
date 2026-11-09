@@ -2,7 +2,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { act } from 'react'
+import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -14,8 +14,9 @@ import {
   type InstalledItem,
   type MarketEntry,
   type ThemeFile,
-} from '@kotharhq/core/shared'
-import { MarketplacePage, type Market } from './marketplace.tsx'
+} from '@kothar/core/shared'
+import { ConfirmDialog } from './controls.tsx'
+import { MarketplaceDialog, shownRows, type Market, type MarketKindFilter } from './marketplace.tsx'
 import { reduce, initialState } from './state.ts'
 import { SettingsDialog } from './settings.tsx'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -67,39 +68,75 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function show(market: Market, sent: ClientMessage[] = [], connected = true) {
+function render(node: ReactNode) {
   act(() =>
     root.render(
-      <Tooltip.Provider>
-        <MarketplacePage market={market} connected={connected} send={(m) => sent.push(m)} />
-      </Tooltip.Provider>,
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider>
+            {node}
+            <ConfirmDialog />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
     ),
   )
+}
+
+function show(market: Market, sent: ClientMessage[] = [], connected = true, kind?: MarketKindFilter) {
+  render(<MarketplaceDialog open close={() => {}} kind={kind} market={market} connected={connected} send={(m) => sent.push(m)} />)
   return sent
 }
 
-const row = (name: string) => container.querySelector(`[role="listitem"][aria-label="${name}"]`) as HTMLElement | null
-const button = (within: HTMLElement | null, label: string) =>
+const option = (name: string) => document.querySelector(`[role="option"][aria-label="${name}"]`) as HTMLElement | null
+const options = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.getAttribute('aria-label'))
+// Picks the entry in the list and returns its detail pane.
+const row = (name: string) => {
+  const o = option(name)
+  if (!o) return null
+  act(() => o.click())
+  return document.querySelector(`article[aria-label="${name}"]`) as HTMLElement | null
+}
+const button = (within: Element | null, label: string) =>
   [...(within?.querySelectorAll('button') ?? [])].find((b) => b.textContent === label)
+const type = (input: HTMLInputElement, value: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, value)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+const search = () => document.querySelector('input[aria-label="Search the marketplace"]') as HTMLInputElement
 
-test('asks the core for the catalog and says it is loading', () => {
+test('opens as its own window, asks the core for the catalog and shows skeleton rows while it loads', () => {
   const sent = show({ marketFailures: {} })
   expect(sent).toEqual([{ type: 'marketplace.list' }])
-  expect(container.textContent).toContain('Loading the marketplace…')
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.querySelector('h2')?.textContent).toBe('Marketplace')
+  expect(dialog.querySelectorAll('[data-skeleton]').length).toBeGreaterThan(0)
+  expect(dialog.querySelector('[role="listbox"]')!.getAttribute('aria-busy')).toBe('true')
+  expect(dialog.textContent).toContain('Loading the marketplace…')
 })
 
 test("doesn't ask while disconnected", () => {
   expect(show({ marketFailures: {} }, [], false)).toEqual([])
 })
 
-test('lists each theme with its author, description and a swatch of its colours in both schemes', () => {
+test('asks again when reopened after a failure, but not when it already has the catalog', () => {
+  const sent = show({ catalog: { entries }, marketFailures: {} })
+  expect(sent).toEqual([])
+  render(<MarketplaceDialog open={false} close={() => {}} market={{ catalog: { error: 'x' }, marketFailures: {} }} connected send={(m) => sent.push(m)} />)
+  render(<MarketplaceDialog open close={() => {}} market={{ catalog: { error: 'x' }, marketFailures: {} }} connected send={(m) => sent.push(m)} />)
+  expect(sent).toEqual([{ type: 'marketplace.list' }])
+})
+
+test('lists each theme with its author and description, and shows the picked one in detail with its colours', () => {
   show({ catalog: { entries }, themes: [], marketFailures: {} })
+  expect(options()).toEqual(['Nord', 'Gruvbox', 'Catppuccin'])
   for (const entry of entries) {
+    expect(option(entry.name)!.textContent).toContain(`by ${entry.author}`)
     const r = row(entry.name)!
-    expect(r.textContent).toContain(entry.name)
-    expect(r.textContent).toContain(`by ${entry.author}`)
     expect(r.textContent).toContain(entry.description)
     expect(button(r, 'Install')).toBeTruthy()
+    expect(option(entry.name)!.getAttribute('aria-selected')).toBe('true')
   }
   const swatch = row('Nord')!.querySelector('[data-scheme="dark"]') as HTMLElement
   expect(swatch.style.background).toBe(hexToRgb(nordEntry.latest!.preview!.dark.bg))
@@ -110,22 +147,73 @@ test('lists each theme with its author, description and a swatch of its colours 
   )
 })
 
+test('picks the first entry at first, and the arrow keys move through the list', () => {
+  show({ catalog: { entries }, themes: [], marketFailures: {} })
+  expect(document.querySelector('article')!.getAttribute('aria-label')).toBe('Nord')
+  act(() => search().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })))
+  expect(document.querySelector('article')!.getAttribute('aria-label')).toBe('Gruvbox')
+  act(() => search().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+  act(() => search().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true })))
+  expect(document.querySelector('article')!.getAttribute('aria-label')).toBe('Nord')
+})
+
+test('searches names, authors, descriptions and repos, and says when nothing matches', () => {
+  show({ catalog: { entries }, themes: [], marketFailures: {} })
+  type(search(), 'gruv')
+  expect(options()).toEqual(['Gruvbox'])
+  type(search(), nordEntry.author.toUpperCase())
+  expect(options()).toContain('Nord')
+  type(search(), 'no such thing')
+  expect(options()).toEqual([])
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Nothing matches “no such thing”.')
+})
+
+test('filters by kind and by what is installed or has an update', () => {
+  const mod: MarketEntry = {
+    id: 'counter',
+    kind: 'mod',
+    name: 'Counter',
+    author: 'Someone',
+    description: 'Counts words.',
+    repo: 'someone/counter',
+    latest: { tag: 'v1.0.0', version: '1.0.0', uses: ['panels'] },
+  }
+  const old = installedNord({ version: '0.9.0' })
+  const market: Market = { catalog: { entries: [...entries, mod] }, themes: [nord], installed: [old], marketFailures: {} }
+  show(market, [], true, 'mod')
+  expect(options()).toEqual(['Counter'])
+  act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), 'Themes')!.click())
+  expect(options()).toEqual(['Nord', 'Gruvbox', 'Catppuccin'])
+  act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), 'All')!.click())
+  expect(options()).toHaveLength(4)
+  expect(option('Nord')!.textContent).toContain('Update')
+  // The Show menu's choices, checked through what they list.
+  expect(shownRows(market, 'all', 'installed', '').map((r) => r.id)).toEqual(['nord'])
+  expect(shownRows(market, 'all', 'updates', '').map((r) => r.id)).toEqual(['nord'])
+  const current = { ...market, installed: [installedNord()] }
+  expect(shownRows(current, 'all', 'updates', '')).toEqual([])
+  expect(document.querySelector('[role="dialog"] button[aria-label="Show"]')!.textContent).toContain('Everything')
+})
+
 test("links each entry to its author's repo", () => {
   show({ catalog: { entries }, themes: [], marketFailures: {} })
   const link = row('Nord')!.querySelector('a')!
-  expect(link.textContent).toBe(REPO)
+  expect(link.textContent).toBe(`github.com/${REPO}`)
   expect(link.getAttribute('href')).toBe(`https://github.com/${REPO}`)
 })
 
-test('installs a theme, shows it installing, then offers Use and Uninstall', () => {
+test('installs a theme, shows its progress, then offers Use and Uninstall', () => {
   const sent = show({ catalog: { entries }, themes: [], installed: [], marketFailures: {} })
   act(() => button(row('Nord'), 'Install')!.click())
   expect(sent.at(-1)).toEqual({ type: 'market.install', kind: 'theme', id: 'nord' })
   const installing = button(row('Nord'), 'Installing…')!
   expect(installing.disabled).toBe(true)
+  expect(row('Nord')!.querySelector('[role="progressbar"]')!.getAttribute('aria-label')).toBe('Installing Nord')
+  expect(option('Nord')!.textContent).toContain('Installing…')
 
   show({ catalog: { entries }, themes: [nord], installed: [installedNord()], marketFailures: {} }, sent)
   expect(row('Nord')!.textContent).toContain(`Installed ${nord.version}`)
+  expect(row('Nord')!.querySelector('[role="progressbar"]')).toBeNull()
   expect(button(row('Nord'), 'Install')).toBeUndefined()
   setInstalledThemes([nord])
   act(() => button(row('Nord'), 'Use')!.click())
@@ -150,10 +238,14 @@ test('shows why an install failed, inline, and lets it be tried again', () => {
   expect(button(row('Nord'), 'Install')!.disabled).toBe(false)
 })
 
-test("offers an update when the author's latest release has another version", () => {
+test("offers an update when the author's latest release has another version, with its release notes", () => {
   const old = installedNord({ version: '0.9.0' })
-  const sent = show({ catalog: { entries }, themes: [{ ...nord, version: '0.9.0' }], installed: [old], marketFailures: {} })
+  const notes = { ...nordEntry, latest: { ...nordEntry.latest!, notes: 'Warmer greens.\nFixed contrast.' } }
+  const sent = show({ catalog: { entries: [notes] }, themes: [{ ...nord, version: '0.9.0' }], installed: [old], marketFailures: {} })
   expect(row('Nord')!.textContent).toContain('Installed 0.9.0')
+  expect(row('Nord')!.textContent).toContain(`Latest ${nord.version}`)
+  expect(row('Nord')!.textContent).toContain(`Release notes, ${nord.version}`)
+  expect(row('Nord')!.textContent).toContain('Warmer greens.')
   act(() => button(row('Nord'), `Update to ${nord.version}`)!.click())
   expect(sent.at(-1)).toEqual({ type: 'market.install', kind: 'theme', id: 'nord' })
   expect(button(row('Nord'), 'Updating…')).toBeTruthy()
@@ -194,18 +286,30 @@ test('marks a theme installed from a folder as Local, and never offers to update
   const local = installedNord({ source: 'local', path: '/Users/me/my-theme', repo: undefined, tag: undefined, version: '0.1.0' })
   show({ catalog: { entries }, themes: [nord], installed: [local], marketFailures: {} })
   expect(row('Nord')!.textContent).toContain('Local')
+  expect(option('Nord')!.textContent).toContain('Local')
   expect(button(row('Nord'), `Update to ${nord.version}`)).toBeUndefined()
   expect(button(row('Nord'), 'Uninstall')).toBeTruthy()
 })
 
-test('says the marketplace is unreachable, offers Try again, and still lists installed themes', () => {
-  const error = "Couldn't reach the marketplace: fetch failed"
-  const sent = show({ catalog: { error }, themes: [nord], installed: [installedNord()], marketFailures: {} })
-  expect(container.textContent).toContain(error)
-  act(() => button(container, 'Try again')!.click())
+test('says the marketplace is unreachable or rate-limited, offers Retry, and still lists installed themes', () => {
+  const error = "GitHub's limit of 60 requests an hour is used up; it resets at 3:00 PM. Set KOTHAR_GITHUB_TOKEN to a GitHub token to lift it."
+  const market: Market = { catalog: { error }, themes: [nord], installed: [installedNord()], marketFailures: {} }
+  // Opened after a failure, it asks again at once; the answer is the same failure.
+  const sent = show(market)
+  expect(sent).toEqual([{ type: 'marketplace.list' }])
+  show({ ...market, catalog: { error } }, sent)
+  const alert = document.querySelector('[role="dialog"] [role="alert"]')!
+  expect(alert.textContent).toContain(error)
+  act(() => button(alert, 'Retry')!.click())
   expect(sent.filter((m) => m.type === 'marketplace.list')).toHaveLength(2)
+  // Loading again: the error gives way to skeleton rows below what's installed.
+  expect(document.querySelector('[role="dialog"] [role="alert"]')).toBeNull()
+  expect(document.querySelectorAll('[data-skeleton]').length).toBeGreaterThan(0)
   expect(button(row('Nord'), 'Uninstall')).toBeTruthy()
   expect(row('Nord')!.textContent).not.toContain('No longer in the marketplace')
+  // A fresh answer ends the loading.
+  show({ ...market, catalog: { entries } }, sent)
+  expect(document.querySelectorAll('[data-skeleton]')).toHaveLength(0)
 })
 
 test('says when an installed theme left the marketplace', () => {
@@ -214,8 +318,8 @@ test('says when an installed theme left the marketplace', () => {
 })
 
 test('says when the marketplace is empty', () => {
-  show({ catalog: { entries: [] }, themes: [], installed: [], marketFailures: {} })
-  expect(container.textContent).toContain('No themes in the marketplace yet.')
+  show({ catalog: { entries: [] }, themes: [], installed: [], marketFailures: {} }, [], true, 'theme')
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No themes in the marketplace yet.')
 })
 
 test('the state keeps the catalog, what is installed and failures, and an install clears its failure', () => {
@@ -231,40 +335,47 @@ test('the state keeps the catalog, what is installed and failures, and an instal
   expect(state.marketFailures).toEqual({})
 })
 
-test('Settings has a Marketplace page beside Appearance', () => {
-  act(() =>
-    root.render(
-      <LazyMotion features={domAnimation} strict>
-        <MotionConfig transition={{ duration: 0 }}>
-          <Tooltip.Provider>
-            <SettingsDialog
-              open
-              page="marketplace"
-              openPage={() => {}}
-              close={() => {}}
-              engines={[]}
-              accounts={[]}
-              contextDefaults={{ agents: true, folders: true, files: true }}
-              mods={[]}
-              modelLists={{ chat: [], planning: [], searching: [], subagents: [] }}
-              workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
-              chooseWorkFolder={() => {}}
-              market={{ catalog: { entries }, themes: [], marketFailures: {} }}
-              connected
-              send={() => {}}
-            />
-          </Tooltip.Provider>
-        </MotionConfig>
-      </LazyMotion>,
-    ),
+function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: (kind?: MarketKindFilter) => void) {
+  render(
+    <SettingsDialog
+      open
+      page={page}
+      openPage={() => {}}
+      close={() => {}}
+      engines={[]}
+      accounts={[]}
+      contextDefaults={{ agents: true, folders: true, files: true }}
+      mods={[]}
+      modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
+      workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
+      chooseWorkFolder={() => {}}
+      market={{ catalog: { entries }, themes: [], marketFailures: {} }}
+      openMarketplace={openMarketplace}
+      connected
+      send={() => {}}
+    />,
   )
-  const dialog = document.querySelector('[role="dialog"]')!
-  const tabs = [...dialog.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
-  expect(tabs.indexOf('Marketplace')).toBe(tabs.indexOf('Appearance') + 1)
-  expect(dialog.querySelector('[role="listitem"][aria-label="Nord"]')).toBeTruthy()
+}
+
+test('Settings has no Marketplace page; Appearance and Community mods open it with Browse', () => {
+  const opened: (MarketKindFilter | undefined)[] = []
+  settingsAt('appearance', (kind) => opened.push(kind))
+  const tabs = [...document.querySelectorAll('[role="dialog"] [role="tab"]')].map((tab) => tab.textContent)
+  expect(tabs).not.toContain('Marketplace')
+  act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
+  settingsAt('community-mods', (kind) => opened.push(kind))
+  act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
+  expect(opened).toEqual(['theme', 'mod'])
 })
 
 function hexToRgb(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
   return `rgb(${r}, ${g}, ${b})`
 }
+
+test("the list and the detail keep their scrollbars inset from the window's edges", () => {
+  show({ marketFailures: {} })
+  const dialog = document.querySelector('[role="dialog"]')!
+  expect(dialog.querySelector('[role="listbox"]')!.classList).toContain('scroll-inset')
+  expect(dialog.querySelectorAll('.scroll-inset').length).toBe(2)
+})

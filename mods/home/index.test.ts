@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { startCore } from '@kotharhq/core/main'
-import type { Adapter, SessionOptions } from '@kotharhq/core/shared'
-import { sandboxingMachine } from '@kotharhq/core/test-machine'
+import { startCore } from '@kothar/core/main'
+import type { Adapter, SessionOptions } from '@kothar/core/shared'
+import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -80,7 +80,8 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
     'list_chats',
     'read_chat',
     'send_message',
-    'spawn_subagent',
+    'spawn_worker',
+    'stop_chat',
     'zoom',
   ])
 
@@ -109,7 +110,8 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
     'list_chats',
     'read_chat',
     'send_message',
-    'spawn_subagent',
+    'spawn_worker',
+    'stop_chat',
     'zoom',
   ])
 })

@@ -119,6 +119,65 @@
   }
 }
 
+/* A scrollbar that floats inside its box: a thin pill inset from the edges, so it never runs into a rounded
+   corner, a border or a close button. --scroll-top / --scroll-bottom set how far the track stays from the top
+   and bottom (default 12px, the dialog radius). Browsers without ::-webkit-scrollbar (Firefox) keep the thin
+   bar from the base layer. */
+.scroll-inset {
+  scrollbar-gutter: stable;
+}
+
+@supports selector(::-webkit-scrollbar) {
+  .scroll-inset {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .scroll-inset::-webkit-scrollbar {
+    width: 14px;
+    height: 14px;
+    background: transparent;
+  }
+
+  .scroll-inset::-webkit-scrollbar-track {
+    background: transparent;
+    margin: var(--scroll-top, 12px) var(--scroll-x, 12px) var(--scroll-bottom, 12px);
+  }
+
+  /* Small bordered boxes (previews, logs): a narrower bar and a shorter inset. */
+  .scroll-inset-tight {
+    --scroll-top: 6px;
+    --scroll-bottom: 6px;
+    --scroll-x: 6px;
+  }
+
+  .scroll-inset-tight::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  .scroll-inset-tight::-webkit-scrollbar-thumb {
+    border-width: 3px;
+  }
+
+  .scroll-inset::-webkit-scrollbar-thumb {
+    min-height: 32px;
+    border: 4px solid transparent;
+    border-left-width: 5px;
+    border-radius: 999px;
+    background: var(--border) padding-box;
+  }
+
+  .scroll-inset::-webkit-scrollbar-thumb:hover,
+  .scroll-inset::-webkit-scrollbar-thumb:active {
+    background-color: var(--faint);
+  }
+
+  .scroll-inset::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .shimmer {
     background: linear-gradient(90deg, var(--faint) 40%, var(--shimmer) 50%, var(--faint) 60%) 0 0 / 300% 100%;
@@ -245,6 +304,16 @@
     list-style: decimal;
   }
 
+  /* GFM task lists: the checkbox is the marker. */
+  .markdown li.task-list-item {
+    list-style: none;
+  }
+
+  .markdown li.task-list-item > input {
+    margin: 0 6px 0 -18px;
+    vertical-align: -1px;
+  }
+
   .markdown li + li {
     margin-top: 2px;
   }
@@ -263,6 +332,9 @@
     background: var(--raised);
     border-radius: var(--radius-sm);
     padding: 1px 4px;
+    /* Inline code that wraps keeps its padding and rounded background on every line. */
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
   }
 
   .markdown pre {
@@ -297,6 +369,7 @@
   }
 
   .markdown :is(th, td) {
+    min-width: 4em;
     padding: 4px 10px;
     border: 1px solid var(--border);
   }
@@ -319,5 +392,21 @@
     content: '▍';
     color: var(--accent);
     animation: blink 1s steps(2) infinite;
+  }
+}
+
+/* The Marketplace's install bar: no steps to count, so a band slides across while it runs. */
+@keyframes indeterminate {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .indeterminate {
+    animation: indeterminate 1.2s ease-in-out infinite;
   }
 }

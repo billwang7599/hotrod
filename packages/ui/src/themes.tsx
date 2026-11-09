@@ -1,6 +1,6 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
-import { checkTheme, THEME_TOKENS, type ThemeFile, type ThemePalette } from '@kotharhq/core/shared'
-import { GROUP, Select } from './controls.tsx'
+import { checkTheme, THEME_TOKENS, type ThemeFile, type ThemePalette } from '@kothar/core/shared'
+import { Button, GROUP, Select } from './controls.tsx'
 
 export const TOKENS = THEME_TOKENS
 
@@ -255,7 +255,8 @@ function Preview({ theme, scheme }: { theme: Theme; scheme: 'dark' | 'light' }) 
   )
 }
 
-export function Appearance() {
+// browse: opens the Marketplace on its themes.
+export function Appearance({ browse }: { browse?: () => void } = {}) {
   const { theme: picked, scheme, dark } = useAppearance()
   const shown = dark ? 'dark' : 'light'
   return (
@@ -289,7 +290,14 @@ export function Appearance() {
           </button>
         ))}
       </div>
-      <p className="pt-8 text-sm text-muted">More themes are in the Marketplace.</p>
+      <p className="flex items-center gap-12 pt-12 text-sm text-muted">
+        More themes are in the Marketplace.
+        {browse && (
+          <Button size="small" onClick={browse}>
+            Browse…
+          </Button>
+        )}
+      </p>
     </>
   )
 }

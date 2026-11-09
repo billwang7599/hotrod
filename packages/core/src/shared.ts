@@ -11,9 +11,9 @@ import type {
   ModUse,
   ModValues,
   ModView,
-} from '@kotharhq/mod-api'
+} from '@kothar/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kotharhq/mod-api'
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kothar/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -162,7 +162,13 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true, autoFetch: true }
+export const PERMISSION_DEFAULTS = {
+  editAnywhere: false,
+  autoRunCommands: true,
+  askNetworkCommands: true,
+  autoFetch: true,
+  autoRead: true,
+}
 
 export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
 
@@ -180,7 +186,7 @@ export type ChatInfo = PermissionSwitches & {
   name: string
   mod?: string
   parentId?: string
-  subagent?: boolean
+  worker?: boolean
   parentMessages?: number
   folders: string[]
   files: string[]
@@ -217,12 +223,20 @@ export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>
   return (a.order ?? 0) - (b.order ?? 0) || b.createdAt.localeCompare(a.createdAt)
 }
 
-export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
+// terminal: the app Open in Terminal uses, absent for automatic; terminals: the ones the user can pick, only where
+// there's a choice (macOS).
+export type WorkFolder = PermissionSwitches & {
+  path?: string
+  defaultPath: string
+  canSandbox: boolean
+  terminal?: string
+  terminals?: { id: string; name: string }[]
+}
 
 // Layers nearest first: a chat, the chats above it, then the work folder's defaults.
 export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('editAnywhere', ...layers)
 
-export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as const
+export const MODEL_ROLES = ['chat', 'planning', 'searching', 'workers'] as const
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
@@ -230,7 +244,7 @@ export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',
   planning: 'Planning',
   searching: 'Searching',
-  subagents: 'Subagents',
+  workers: 'Workers',
 }
 
 // One entry in a role's model list: a model on an engine, and the thinking level it runs at there. `thinking` is left
@@ -240,7 +254,7 @@ export type ModelRow = { engine: string; model: string; thinking?: ThinkingLevel
 // One list per role, shared by every engine; a list can mix engines.
 export type ModelLists = Record<ModelRole, ModelRow[]>
 
-export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
+export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], workers: [] }
 
 /** The thinking levels a model takes: its own list if its engine gives one, else the engine's. */
 export const levelsOf = (engine: EngineInfo | undefined, model?: string): ThinkingLevel[] =>
@@ -271,6 +285,13 @@ export type ModInfo = {
     running?: string
   }
 }
+
+// A community mod whose code this run of Kothar doesn't match what the settings ask for, so it changes only when Kothar
+// restarts: start (on, never loaded), update (loaded, then updated or reinstalled), stop (loaded, now off or uninstalled).
+export type RestartChange = { id: string; name: string; change: 'start' | 'update' | 'stop' }
+
+// What waits for a restart, and whether this Kothar can restart itself (the desktop app, or npm run dev's core).
+export type RestartState = { changes: RestartChange[]; canRestart: boolean }
 
 export type SetupState = {
   description: string
@@ -322,19 +343,19 @@ export const MAX_ATTACHMENT_BYTES = 20_000_000
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type { Attachment } from '@kotharhq/mod-api'
+export type { Attachment } from '@kothar/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
-// A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
-export type SubagentReport = { chatId: string; name: string; error?: string }
+// A worker's final reply to its lead: which worker, and why its turn ended early, if it did.
+export type WorkerReport = { chatId: string; name: string; error?: string }
 
 // steering: handed to the running turn, waiting for its next tool boundary; it can't be taken back.
 export type QueuedMessage = {
   id: string
   text: string
   attachments?: Attachment[]
-  report?: SubagentReport
+  report?: WorkerReport
   steering?: true
 }
 
@@ -387,6 +408,10 @@ export type ClientMessage =
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'mod.install'; modId: string }
   | { type: 'mod.cancelInstall'; modId: string }
+  // The master switch for community mods (off by default): while it's off, none loads, whatever its own switch says.
+  | { type: 'communityMods.setEnabled'; enabled: boolean }
+  // Stops every chat as quitting does, then starts Kothar again, so community mod changes apply.
+  | { type: 'app.restart' }
   | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
@@ -406,9 +431,14 @@ export type ClientMessage =
   // Copies a folder on this computer (a mod or themes) as a local install; replies market.localInstalled or
   // market.localFailed.
   | { type: 'market.installLocal'; path: string }
-  // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
+  // Searches the message text of Home (while its mod is on) and every space, not workers. Replies search.results with
   // the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
+  // Opens the user's terminal app at one of the chat's folders: a context folder, its space's work folder or a
+  // checkout. Replies terminal.result.
+  | { type: 'terminal.open'; chatId: string; path: string }
+  // 'auto' for the system's default terminal, or one of WorkFolder.terminals by id.
+  | { type: 'terminal.set'; terminal: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.
@@ -436,6 +466,8 @@ export type CoreMessage =
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
+      communityMods: boolean
+      restart: RestartState
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -455,6 +487,8 @@ export type CoreMessage =
   // A mod that's new to the list (a community mod just installed) is added.
   | { type: 'mod.updated'; mod: ModInfo }
   | { type: 'mod.removed'; modId: string }
+  | { type: 'communityMods.updated'; enabled: boolean }
+  | { type: 'restart.updated'; restart: RestartState }
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
@@ -469,6 +503,8 @@ export type CoreMessage =
   | { type: 'market.localFailed'; path: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
+  // The answer to terminal.open: error if no terminal opened.
+  | { type: 'terminal.result'; chatId: string; path: string; error?: string }
 
 // Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
 // strictly so a theme is only ever colours and can never carry CSS.

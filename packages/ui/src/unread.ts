@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { isUnread, type ClientMessage } from '@kotharhq/core/shared'
+import { isUnread, type ClientMessage } from '@kothar/core/shared'
 import type { ChatView } from './state.ts'
 
 // The user is looking at this window: it's focused and not hidden. The open chat counts as seen only then.
@@ -19,11 +19,11 @@ function subscribe(changed: () => void) {
 export const useLooking = () => useSyncExternalStore(subscribe, looking)
 
 /**
- * Bold in the sidebar: a space (or Home) finished a turn the user hasn't seen. Subagents never are; running and
+ * Bold in the sidebar: a space (or Home) finished a turn the user hasn't seen. Workers never are; running and
  * waiting chats have their dot instead, and the chat open in a window the user is looking at is being seen right now.
  */
 export const showsUnread = (chat: ChatView, open: boolean) =>
-  !chat.subagent && chat.status === 'idle' && isUnread(chat) && !open
+  !chat.worker && chat.status === 'idle' && isUnread(chat) && !open
 
 /**
  * Marks the open chat read whenever it has an unseen turn while the user looks at this window. `seen` is false while

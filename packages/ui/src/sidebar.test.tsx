@@ -39,7 +39,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
 
 const HOME = chat({ id: 'main', name: 'Home', mod: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
 const SPACE = chat({ id: 's1', name: 'Kothar' })
-const SUBAGENT = chat({ id: 'w1', name: 'Worker', parentId: 's1', subagent: true })
+const WORKER = chat({ id: 'w1', name: 'Worker', parentId: 's1', worker: true })
 
 function render(chats: ChatView[], selected: string[] = []) {
   act(() =>
@@ -67,11 +67,11 @@ const names = (el: Element) => [...el.querySelectorAll('button[title]')].map((b)
 const rowOf = (name: string) =>
   [...container.querySelectorAll('button[title]')].find((b) => b.textContent === name) as HTMLButtonElement
 
-test('Home sits above the spaces, outside their section, and still selects; Home and subagents get no row menu', () => {
+test('Home sits above the spaces, outside their section, and still selects; Home and workers get no row menu', () => {
   const selected: string[] = []
-  render([SPACE, SUBAGENT, HOME], selected)
+  render([SPACE, WORKER, HOME], selected)
   expect(container.querySelector('#spaces-label')?.textContent).toBe('spaces')
-  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workerworker'])
   const home = rowOf('Home')
   expect(spaces().contains(home)).toBe(false)
   expect(home.compareDocumentPosition(spaces()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -84,9 +84,9 @@ test('Home sits above the spaces, outside their section, and still selects; Home
 })
 
 test('with Home off, only the spaces show', () => {
-  render([SPACE, SUBAGENT])
+  render([SPACE, WORKER])
   expect(rowOf('Home')).toBeUndefined()
-  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workerworker'])
   expect(names(container)).toEqual(names(spaces()))
 })
 

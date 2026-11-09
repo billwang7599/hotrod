@@ -1,10 +1,10 @@
 import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@kotharhq/mod-api'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@kothar/mod-api'
 
 // Long-running commands (dev servers, watchers) that a space's agents start with start_process. An engine's own
 // background shell dies with its session, which ends with every turn; these belong to the space instead, so they keep
-// running between messages, outlive the subagent that started them, and stop when someone stops them, the space goes,
+// running between messages, outlive the worker that started them, and stop when someone stops them, the space goes,
 // the mod is turned off or Kothar quits. Each one runs through the Machine (host.spawn), sandboxed as the space's own
 // commands are, with its output in a plain log file in the mod's storage. The Processes tab shows them to the user,
 // once a space has one.
@@ -121,8 +121,10 @@ export function createProcessesMod(
   const counters = new Map<string, number>()
   // Per chat looking at the tab, the process whose output it shows.
   const selected = new Map<string, string>()
+  // Per chat, why its last Open in Terminal failed, shown under the buttons until the next try.
+  const terminalErrors = new Map<string, { proc: string; error: string }>()
 
-  // The space's tab and its subagents' show the same processes, so all of them are drawn again.
+  // The space's tab and its workers' show the same processes, so all of them are drawn again.
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   const redraw = (host: ModHost, spaceId: string) => {
     clearTimeout(pending.get(spaceId))
@@ -377,7 +379,7 @@ export function createProcessesMod(
     }
   }
 
-  const detailOf = (proc: Proc): ModView => {
+  const detailOf = (proc: Proc, chatId: string): ModView => {
     const output = tail(proc, PANEL_LINES)
     const stopButton: ModView = {
       type: 'button',
@@ -393,7 +395,15 @@ export function createProcessesMod(
         action: { name: 'restart', value: proc.id },
         hint: proc.status === 'running' ? 'Stop it, then run the same command again' : 'Run the same command again',
       },
+      {
+        type: 'button',
+        label: 'Open in Terminal',
+        variant: 'ghost',
+        action: { name: 'terminal', value: proc.id },
+        hint: `Open your terminal app in ${proc.cwd}`,
+      },
     ]
+    const failed = terminalErrors.get(chatId)
     return {
       type: 'stack',
       gap: 'tight',
@@ -406,6 +416,7 @@ export function createProcessesMod(
           hint: `In ${proc.cwd}, started by ${proc.startedBy}`,
         },
         { type: 'row', children: buttons },
+        ...(failed?.proc === proc.id ? [{ type: 'text', text: failed.error, tone: 'error', small: true } as const] : []),
         output.trim()
           ? { type: 'code', text: output, maxLines: PANEL_LINES, follow: true }
           : { type: 'empty', text: 'No output yet' },
@@ -430,7 +441,7 @@ export function createProcessesMod(
     }
     for (const proc of list) {
       children.push({ type: 'list', label: proc.name, items: [rowOf(proc, proc.id === open)] })
-      if (proc.id === open) children.push(detailOf(proc))
+      if (proc.id === open) children.push(detailOf(proc, chatId))
     }
     return { type: 'stack', gap: 'normal', children }
   }
@@ -448,7 +459,7 @@ export function createProcessesMod(
         ? 'Start anything long-running (a dev server, a watcher, anything that doesn’t exit on its own) with the ' +
           'start_process tool, never in your shell’s background (`&`, nohup, run_in_background): your session ends ' +
           'with your turn and takes those with it. A process from start_process belongs to the space, keeps running ' +
-          'between messages, and the lead, its subagents and the user all see it. Call list_processes before ' +
+          'between messages, and the lead, its workers and the user all see it. Call list_processes before ' +
           'starting one and use what is already running instead of starting it twice. read_output shows what it ' +
           'printed (and its address, once it opens a port); stop_process stops it when it’s no longer needed.'
         : undefined,
@@ -562,7 +573,14 @@ export function createProcessesMod(
           }
           const proc = listOf(spaceId).find((p) => p.id === action.value)
           if (!proc) return
-          if (action.name === 'open') {
+          if (action.name !== 'terminal') terminalErrors.delete(chat.id)
+          if (action.name === 'terminal') {
+            terminalErrors.delete(chat.id)
+            await host.openTerminal(proc.cwd).catch((error: unknown) => {
+              const text = error instanceof Error ? error.message : String(error)
+              terminalErrors.set(chat.id, { proc: proc.id, error: text })
+            })
+          } else if (action.name === 'open') {
             if (selected.get(chat.id) === proc.id) selected.delete(chat.id)
             else selected.set(chat.id, proc.id)
           } else if (action.name === 'stop') {
@@ -579,6 +597,7 @@ export function createProcessesMod(
     },
     onChatRemoved(chat, { host }) {
       selected.delete(chat.id)
+      terminalErrors.delete(chat.id)
       if (chat.parentId !== undefined) return
       clearTimeout(pending.get(chat.id))
       pending.delete(chat.id)

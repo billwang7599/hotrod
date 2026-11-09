@@ -38,6 +38,32 @@ test('never renders raw HTML', () => {
   expect(html).toContain('&lt;script&gt;')
 })
 
+test('<br> in a table cell or paragraph is a line break', () => {
+  const html = render('| grid |\n|---|\n| `1 2 3`<br>`4 5 6`<br/>`7 8 9` |\n\none<BR />two')
+  expect(html).toContain('<td><code>1 2 3</code><br/>\n<code>4 5 6</code><br/>\n<code>7 8 9</code></td>')
+  expect(html).toContain('one<br/>\ntwo')
+  expect(html).not.toContain('&lt;br')
+})
+
+test('<br> inside code stays literal', () => {
+  const html = render('`a<br>b`\n\n```\nx<br>y\n```')
+  expect(html).toContain('<code>a&lt;br&gt;b</code>')
+  expect(html).toContain('x&lt;br&gt;y')
+})
+
+test('other HTML tags still render as text, next to a <br>', () => {
+  const html = render('<b>bold</b><br><img src=x onerror=alert(1)>')
+  expect(html).not.toContain('<b>')
+  expect(html).not.toContain('<img')
+  expect(html).toContain('&lt;b&gt;bold&lt;/b&gt;<br/>\n&lt;img')
+})
+
+test('entities, strikethrough and task lists', () => {
+  const html = render('a&nbsp;b &lt;tag&gt; ~~gone~~\n\n- [x] done\n- [ ] todo')
+  expect(html).toContain('a\u00a0b &lt;tag&gt; <del>gone</del>')
+  expect(html).toContain('<li class="task-list-item"><input type="checkbox" disabled="" checked=""/> done</li>')
+})
+
 let root: Root
 let container: HTMLElement
 const setClipboard = (clipboard?: Partial<Clipboard>) =>

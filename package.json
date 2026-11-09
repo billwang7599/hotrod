@@ -6,8 +6,8 @@
   "workspaces": ["packages/*", "mods/*"],
   "engines": { "node": ">=26" },
   "scripts": {
-    "dev": "export KOTHAR_TOKEN=$(node -p 'crypto.randomUUID()'); npm run dev -w @kotharhq/core & npm run dev -w @kotharhq/ui & wait",
-    "desktop": "npm run build -w @kotharhq/ui && electron packages/desktop",
+    "dev": "export KOTHAR_TOKEN=$(node -p 'crypto.randomUUID()'); npm run dev -w @kothar/core & npm run dev -w @kothar/ui & wait",
+    "desktop": "npm run build -w @kothar/ui && electron packages/desktop",
     "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p packages/desktop && tsc -p mods",
     "test": "vitest run --passWithNoTests"
   },

@@ -1,6 +1,7 @@
-import type { ModView } from '@kotharhq/mod-api'
-import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kotharhq/core/shared'
+import type { ModView } from '@kothar/mod-api'
+import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
+  RestartState,
   Account,
   Answers,
   Attachment,
@@ -27,7 +28,7 @@ import type {
   ThemeFile,
   ToolKind,
   WorkFolder,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 
 export type Permission = {
   requestId: string
@@ -94,6 +95,9 @@ export type State = {
   // marketKey), counted so the same error twice still reads as a new answer.
   catalog?: { entries?: MarketEntry[]; error?: string }
   marketFailures: Record<string, { error: string; count: number }>
+  // The master switch for community mods, and the community mod changes that wait for a restart.
+  communityMods: boolean
+  restart: RestartState
   // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
   localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
   // The core's latest answer to the search palette.
@@ -102,6 +106,8 @@ export type State = {
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
   panelViews: Record<string, { view?: ModView; error?: string }>
+  // Why Open in Terminal last failed, by terminalKey; a later success clears it.
+  terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -125,7 +131,10 @@ export const initialState: State = {
   modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
   marketFailures: {},
+  communityMods: false,
+  restart: { changes: [], canRestart: false },
   panelViews: {},
+  terminalErrors: {},
   toasts: [],
   nextToastId: 1,
 }
@@ -148,7 +157,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       }
       return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
     }
-    case 'subagent.report': {
+    case 'worker.report': {
       const { chatId, name, text, error } = entry
       return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
     }
@@ -298,6 +307,8 @@ export function reduce(state: State, action: Action): State {
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
+        communityMods: action.communityMods,
+        restart: action.restart,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -313,7 +324,7 @@ export function reduce(state: State, action: Action): State {
       return {
         ...state,
         chats: state.chats.some((c) => c.id === action.chat.id) ? state.chats : [...state.chats, toView(action.chat)],
-        // A subagent appears under its space without taking the view from the chat the user is reading.
+        // A worker appears under its space without taking the view from the chat the user is reading.
         selectedId: action.chat.parentId ? state.selectedId : action.chat.id,
       }
     case 'chat.updated':
@@ -328,7 +339,7 @@ export function reduce(state: State, action: Action): State {
       const chats = state.chats.filter((c) => c.id !== action.chatId)
       const removed = familyOf(state.chats, action.chatId)
       if (!removed.some((c) => c.id === state.selectedId)) return keepSelection({ ...state, chats })
-      // A subagent goes once it's done, with any below it; whoever was watching lands on the chat above them.
+      // A worker goes once it's done, with any below it; whoever was watching lands on the chat above them.
       const parentId = removed[0]?.parentId
       return keepSelection({ ...state, chats, selectedId: parentId ?? state.selectedId })
     }
@@ -382,6 +393,10 @@ export function reduce(state: State, action: Action): State {
     }
     case 'mod.removed':
       return { ...state, mods: state.mods.filter((m) => m.id !== action.modId) }
+    case 'communityMods.updated':
+      return { ...state, communityMods: action.enabled }
+    case 'restart.updated':
+      return { ...state, restart: action.restart }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
     case 'memory.updated':
@@ -408,6 +423,11 @@ export function reduce(state: State, action: Action): State {
       const key = marketKey(action.kind, action.id)
       const count = (state.marketFailures[key]?.count ?? 0) + 1
       return { ...state, marketFailures: { ...state.marketFailures, [key]: { error: action.error, count } } }
+    }
+    case 'terminal.result': {
+      const { [terminalKey(action.chatId, action.path)]: _, ...rest } = state.terminalErrors
+      const terminalErrors = action.error ? { ...rest, [terminalKey(action.chatId, action.path)]: action.error } : rest
+      return { ...state, terminalErrors }
     }
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
@@ -436,7 +456,7 @@ export function chatTree(chats: ChatView[]) {
   const below = (chat: ChatView, archived: boolean) =>
     chats
       .filter((c) => c.parentId === chat.id && c.archived === archived)
-      .sort((a, b) => Number(!!b.subagent) - Number(!!a.subagent) || newestFirst(a, b))
+      .sort((a, b) => Number(!!b.worker) - Number(!!a.worker) || newestFirst(a, b))
   const walk = (chat: ChatView, depth: number, archived: boolean): TreeRow[] => [
     { chat, depth },
     ...below(chat, archived).flatMap((c) => walk(c, depth + 1, archived)),
@@ -457,6 +477,8 @@ export const familyOf = (chats: ChatView[], chatId: string): ChatView[] => [
 ]
 
 /** The chat and the chats above it, nearest first, ending at its space. */
+export const terminalKey = (chatId: string, path: string) => `${chatId}\n${path}`
+
 export function lineOf(chats: ChatView[], chat: ChatView): ChatView[] {
   const parent = chats.find((c) => c.id === chat.parentId)
   return parent ? [chat, ...lineOf(chats, parent)] : [chat]
@@ -473,13 +495,13 @@ const pendingIn = (chat: ChatView): Permission[] =>
             : [],
       )
 
-export type SubagentRequest = { chat: ChatView; permission: Permission }
+export type WorkerRequest = { chat: ChatView; permission: Permission }
 
-/** Permission requests waiting in the subagents below a chat, which the user answers from that chat. */
-export const subagentRequests = (chats: ChatView[], chatId: string): SubagentRequest[] =>
+/** Permission requests waiting in the workers below a chat, which the user answers from that chat. */
+export const workerRequests = (chats: ChatView[], chatId: string): WorkerRequest[] =>
   familyOf(chats, chatId)
     .slice(1)
-    .filter((c) => c.subagent && !c.archived)
+    .filter((c) => c.worker && !c.archived)
     .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
 
 export function folderOf(chats: ChatView[], chat: ChatView): string | undefined {

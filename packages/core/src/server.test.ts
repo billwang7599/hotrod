@@ -10,13 +10,13 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Mod } from '@kotharhq/mod-api'
+import type { Mod } from '@kothar/mod-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { SUBAGENT_INSTRUCTIONS, SUBAGENTS_MOD } from './kothar-mcp.ts'
+import { WORKER_INSTRUCTIONS, WORKERS_MOD } from './kothar-mcp.ts'
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
@@ -125,9 +125,9 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     engines: [{ id: 'fake', enabled: false }],
     chats: [],
     accounts: [{ engine: 'fake', active: 'default' }],
-    modelLists: { chat: [], planning: [], searching: [], subagents: [] },
+    modelLists: { chat: [], planning: [], searching: [], workers: [] },
     memory: {},
-    mods: [expect.objectContaining({ id: SUBAGENTS_MOD.id, enabled: true, values: { limit: expect.any(Number), instructions: SUBAGENT_INSTRUCTIONS } })],
+    mods: [expect.objectContaining({ id: WORKERS_MOD.id, enabled: true, values: { limit: expect.any(Number), instructions: WORKER_INSTRUCTIONS } })],
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -316,13 +316,15 @@ const mainMod: Mod = {
   ],
 }
 
-async function startHeld({ kotharMcp = true, mods = [mainMod] } = {}) {
+async function startHeld({ kotharMcp = true, mods = [mainMod], steering = false } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-test-')))
   const sessions: {
     options: SessionOptions
     prompt?: string
     end: (reply?: string, error?: string) => void
     emit: (event: EngineEvent) => void
+    interrupted?: boolean
+    steered?: string[]
   }[] = []
   const held: Adapter = {
     id: 'held',
@@ -340,9 +342,12 @@ async function startHeld({ kotharMcp = true, mods = [mainMod] } = {}) {
           session.prompt = text
           emit({ type: 'turn.started' })
         },
-        interrupt: () => {},
+        interrupt: () => {
+          session.interrupted = true
+        },
         respond: () => {},
         close: () => {},
+        ...(steering && { steer: (_id: string, text: string) => void (session.steered ??= []).push(text) }),
       }
     },
   }
@@ -430,51 +435,52 @@ it("runs a mod's tool, whose host makes a top-level chat and starts it, shown li
   expect(sessions.at(-1)?.prompt).toBe('Look around')
   expect(sessions.at(-1)?.options).toMatchObject({ cwd: join(garage, 'work', chatId), extraDirs: folders })
 
-  expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toEqual({
-    isError: true,
-    text: `Chat "${chatId}" is running; wait until it is idle`,
-  })
+  // Busy, it queues the message for the end of the turn, as the composer does when the engine can't steer.
+  expect(await json(bearer, 'send_message', { chatId, text: 'more' })).toEqual({ delivered: 'queued' })
+  expect(chatIn(core, chatId).queue).toMatchObject([{ text: 'more' }])
   sessions.at(-1)!.end()
-  expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: false })
   expect(sessions.at(-1)?.prompt).toContain('more')
+  sessions.at(-1)!.end()
+  expect(await json(bearer, 'send_message', { chatId, text: 'again' })).toEqual({ delivered: 'sent' })
+  expect(sessions.at(-1)?.prompt).toContain('again')
 })
 
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
   core.handle(m, () => {})
-const subagentsOn = (core: ReturnType<typeof openCore>, limit?: number) => {
-  handleOn(core)({ type: 'mod.setEnabled', modId: SUBAGENTS_MOD.id, enabled: true })
-  if (limit !== undefined) handleOn(core)({ type: 'mod.setValue', modId: SUBAGENTS_MOD.id, key: 'limit', value: limit })
+const workersOn = (core: ReturnType<typeof openCore>, limit?: number) => {
+  handleOn(core)({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: true })
+  if (limit !== undefined) handleOn(core)({ type: 'mod.setValue', modId: WORKERS_MOD.id, key: 'limit', value: limit })
 }
 const chatIn = (core: ReturnType<typeof openCore>, id: string) => core.chats().find((c) => c.id === id)!
 
-it('lets every user chat spawn subagents while the mod is on, up to the limit of running ones', async () => {
+it('lets every user chat spawn workers while the mod is on, up to the limit of running ones', async () => {
   const { core, garage, sessions, post, tool, json, send } = await startHeld()
   const handle = handleOn(core)
-  handle({ type: 'mod.setEnabled', modId: SUBAGENTS_MOD.id, enabled: false })
+  handle({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: false })
   const workshop = send('main', 'hi').options.kotharMcp!.token
-  expect((await (await post(workshop, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
-    'Tool spawn_subagent not found',
+  expect((await (await post(workshop, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
+    'Tool spawn_worker not found',
   )
   handle({ type: 'chat.create', name: 'Side' })
   const subchat = core.chats().find((c) => c.id !== 'main')!
   const offered = send(subchat.id, 'hi').options
-  expect(offered.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
+  expect(offered.instructions).not.toContain(WORKER_INSTRUCTIONS)
   const before = offered.kotharMcp!.token
-  expect((await (await post(before, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
-    'Tool spawn_subagent not found',
+  expect((await (await post(before, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
+    'Tool spawn_worker not found',
   )
 
-  subagentsOn(core, 1)
+  workersOn(core, 1)
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
   const leading = send(subchat.id, 'again').options
-  expect(leading.instructions).toContain(SUBAGENT_INSTRUCTIONS)
+  expect(leading.instructions).toContain(WORKER_INSTRUCTIONS)
   const lead = leading.kotharMcp!.token
-  const { chatId } = await json(lead, 'spawn_subagent', { task: 'Read the tests' })
-  expect(sessions.at(-1)?.options.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
+  const { chatId } = await json(lead, 'spawn_worker', { task: 'Read the tests' })
+  expect(sessions.at(-1)?.options.instructions).not.toContain(WORKER_INSTRUCTIONS)
   expect(chatIn(core, chatId)).toMatchObject({
     name: 'Read the tests',
     parentId: subchat.id,
-    subagent: true,
+    worker: true,
     engine: 'held',
     status: 'running',
   })
@@ -482,35 +488,35 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   expect(sessions.at(-1)).toMatchObject({ prompt: 'Read the tests', options: { cwd } })
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentId).toBe(subchat.id)
 
-  expect(await tool(lead, 'spawn_subagent', { task: 'More' })).toEqual({
+  expect(await tool(lead, 'spawn_worker', { task: 'More' })).toEqual({
     isError: true,
-    text: 'This chat already has 1 subagents running; the limit is 1',
+    text: 'This chat already has 1 workers running; the limit is 1',
   })
   sessions.at(-1)!.end('Done')
-  expect((await json(lead, 'spawn_subagent', { task: 'More' })).chatId).not.toBe(chatId)
+  expect((await json(lead, 'spawn_worker', { task: 'More' })).chatId).not.toBe(chatId)
   expect((await json(workshop, 'list_chats')).map((c: { id: string }) => c.id)).toEqual([subchat.id])
 })
 
-it('tells a chat that can spawn subagents the saved subagent instructions, or the default when blank', async () => {
+it('tells a chat that can spawn workers the saved worker instructions, or the default when blank', async () => {
   const { core, sessions, send } = await startHeld()
-  subagentsOn(core)
+  workersOn(core)
   const setInstructions = (value: string) =>
-    handleOn(core)({ type: 'mod.setValue', modId: SUBAGENTS_MOD.id, key: 'instructions', value })
-  setInstructions('Spawn one subagent per failing test.')
+    handleOn(core)({ type: 'mod.setValue', modId: WORKERS_MOD.id, key: 'instructions', value })
+  setInstructions('Spawn one worker per failing test.')
   const custom = send('main', 'hi').options.instructions
-  expect(custom).toContain('Spawn one subagent per failing test.')
-  expect(custom).not.toContain(SUBAGENT_INSTRUCTIONS)
+  expect(custom).toContain('Spawn one worker per failing test.')
+  expect(custom).not.toContain(WORKER_INSTRUCTIONS)
   sessions.at(-1)!.end()
 
   setInstructions('  \n')
-  expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
+  expect(send('main', 'again').options.instructions).toContain(WORKER_INSTRUCTIONS)
 })
 
-it("starts a subagent on the Subagents list, else the Chat list, or its role's list, not its parent's model", async () => {
+it("starts a worker on the Workers list, else the Chat list, or its role's list, not its parent's model", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
-  subagentsOn(core, -1)
+  workersOn(core, -1)
   const [large, small] = heldOffers.models as [string, string]
   const row = (model: string, thinking: ThinkingLevel) => ({ engine: 'held', model, thinking })
   handle({ type: 'models.setList', role: 'chat', models: [row(large, 'high')] })
@@ -518,35 +524,35 @@ it("starts a subagent on the Subagents list, else the Chat list, or its role's l
   handle({ type: 'chat.setModel', chatId: 'main', engine: 'held', model: small, thinking: 'low' })
   const token = send('main', 'Plan it').options.kotharMcp!.token
 
-  // The Subagents list is empty, so a subagent runs what Chat does, whatever its parent picked.
-  const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
-  expect(chatIn(core, helper)).toMatchObject({ role: 'subagents' })
+  // The Workers list is empty, so a worker runs what Chat does, whatever its parent picked.
+  const helper = (await json(token, 'spawn_worker', { task: 'Go' })).chatId
+  expect(chatIn(core, helper)).toMatchObject({ role: 'workers' })
   expect(chatIn(core, helper)).not.toHaveProperty('model')
   expect(sessionOf(helper).options).toMatchObject({ model: large, thinking: 'high' })
 
-  const planner = (await json(token, 'spawn_subagent', { task: 'Plan', role: 'planning' })).chatId
+  const planner = (await json(token, 'spawn_worker', { task: 'Plan', role: 'planning' })).chatId
   expect(sessionOf(planner).options).toMatchObject({ model: small, thinking: 'low' })
   expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
 
-  handle({ type: 'models.setList', role: 'subagents', models: [row(small, 'high')] })
-  const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
+  handle({ type: 'models.setList', role: 'workers', models: [row(small, 'high')] })
+  const next = (await json(token, 'spawn_worker', { task: 'Again' })).chatId
   expect(chatIn(core, next)).not.toHaveProperty('thinking')
   expect(sessionOf(next).options).toMatchObject({ model: small, thinking: 'high' })
 
   // The tool takes no engine: one an agent names anyway is dropped, and the core picks from the list as always.
-  const named = (await json(token, 'spawn_subagent', { task: 'On held', engine: 'held' })).chatId
+  const named = (await json(token, 'spawn_worker', { task: 'On held', engine: 'held' })).chatId
   expect(chatIn(core, named)).not.toHaveProperty('model')
   expect(chatIn(core, named)).toMatchObject({ run: { engine: 'held', model: small, thinking: 'high' } })
   // What runs is worked out each time, never saved with the chat.
   expect(JSON.parse(readFileSync(join(garage, 'chats', named, 'chat.json'), 'utf8'))).not.toHaveProperty('run')
 })
 
-it("wakes the parent with a subagent's final reply, queued while the parent is busy, then removes the subagent", async () => {
+it("wakes the parent with a worker's final reply, queued while the parent is busy, then removes the worker", async () => {
   const { core, garage, sessionOf, sessionsOf, json, tool, send } = await startHeld()
-  subagentsOn(core, -1)
+  workersOn(core, -1)
   const parent = send('main', 'Plan it')
   const token = parent.options.kotharMcp!.token
-  const { chatId } = await json(token, 'spawn_subagent', { task: 'Search the docs' })
+  const { chatId } = await json(token, 'spawn_worker', { task: 'Search the docs' })
   expect(existsSync(join(garage, 'chats', chatId))).toBe(true)
 
   sessionOf(chatId).end('Found it')
@@ -559,30 +565,85 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   core.handle({ type: 'chat.send', chatId: 'main', text: 'Also check the FAQ' }, () => {})
   parent.end('Waiting')
   const prompt = sessionOf('main').prompt!
-  expect(prompt).toContain(`Report from subagent "Search the docs" (${chatId}):\n\nFound it`)
+  expect(prompt).toContain(`Report from worker "Search the docs" (${chatId}):\n\nFound it`)
   expect(prompt.endsWith('New message from the user:\n\nAlso check the FAQ')).toBe(true)
   expect(chatIn(core, 'main').status).toBe('running')
   // The report is its own entry, apart from the user's words, so neither the UI nor memory takes it as theirs.
-  const logged = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
+  const logged = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'worker.report')
   expect(logged.slice(-2)).toMatchObject([
-    { type: 'subagent.report', text: 'Found it', ...report },
+    { type: 'worker.report', text: 'Found it', ...report },
     { type: 'user.message', text: 'Also check the FAQ' },
   ])
   const lead = sessionOf('main')
 
-  const stopped = (await json(lead.options.kotharMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
+  const stopped = (await json(lead.options.kotharMcp!.token, 'spawn_worker', { task: 'Look again' })).chatId
   lead.end('Thanks')
   sessionOf(stopped).end(undefined, 'Interrupted')
-  const failed = `Report from subagent "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
+  const failed = `Report from worker "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
   expect(sessionOf('main').prompt?.endsWith(failed)).toBe(true)
   expect(sessionOf('main').prompt).not.toContain('New message from the user')
-  expect(chatIn(core, 'main').entries.at(-2)).toMatchObject({ type: 'subagent.report', text: '', error: 'Interrupted' })
+  expect(chatIn(core, 'main').entries.at(-2)).toMatchObject({ type: 'worker.report', text: '', error: 'Interrupted' })
   expect(sessionsOf('main')).toHaveLength(3)
   expect(core.chats().some((c) => c.id === stopped)).toBe(false)
   expect(existsSync(join(garage, 'chats', stopped))).toBe(false)
 })
 
-it("sends a limited turn again whole, a lead's reports included, and keeps a subagent sent again", async () => {
+it("lets a lead stop its running worker as the Stop button does, and nothing outside its reach", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld()
+  workersOn(core, -1)
+  const handle = handleOn(core)
+  handle({ type: 'chat.create', name: 'Lead' })
+  handle({ type: 'chat.create', name: 'Other' })
+  const [leadId, otherId] = core.chats().filter((c) => c.id !== 'main').map((c) => c.id) as [string, string]
+  send(otherId, 'busy elsewhere')
+  const lead = send(leadId, 'Plan it')
+  const token = lead.options.kotharMcp!.token
+  const { chatId } = await json(token, 'spawn_worker', { task: 'Dig in' })
+
+  const refused = (id: string) => ({ isError: true, text: `No chat "${id}" this chat can reach` })
+  for (const id of [otherId, 'main', leadId]) expect(await tool(token, 'stop_chat', { chatId: id })).toEqual(refused(id))
+  expect(chatIn(core, otherId).status).toBe('running')
+  expect(sessionOf(otherId).interrupted).toBeUndefined()
+
+  expect(await tool(token, 'stop_chat', { chatId })).toEqual({ isError: false, text: `Stopping chat "${chatId}"` })
+  expect(sessionOf(chatId).interrupted).toBe(true)
+  expect(chatIn(core, chatId).status).toBe('stopping')
+  expect((await tool(token, 'stop_chat', { chatId })).text).toBe(`Chat "${chatId}" is already stopping`)
+  // The engine ends the turn, and the worker reports and goes, as after Stop in the UI.
+  sessionOf(chatId).end(undefined, 'Interrupted')
+  expect(chatIn(core, leadId).queue).toMatchObject([{ text: '', report: { chatId, name: 'Dig in' } }])
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+
+  // Home reaches every space, and stopping an idle one says so.
+  const homeToken = send('main', 'hi').options.kotharMcp!.token
+  expect(await tool(homeToken, 'stop_chat', { chatId: otherId })).toMatchObject({ isError: false })
+  expect(sessionOf(otherId).interrupted).toBe(true)
+  sessionOf(otherId).end(undefined, 'Interrupted')
+  expect(await tool(homeToken, 'stop_chat', { chatId: otherId })).toEqual({
+    isError: false,
+    text: `Chat "${otherId}" is already idle`,
+  })
+})
+
+it('steers a message from send_message into a running turn whose engine can steer, and queues it while waiting', async () => {
+  const { core, json, send, sessionOf } = await startHeld({ steering: true })
+  workersOn(core, -1)
+  const token = send('main', 'Plan it').options.kotharMcp!.token
+  const { chatId } = await json(token, 'spawn_worker', { task: 'Dig in' })
+  expect(await json(token, 'send_message', { chatId, text: 'use y instead' })).toEqual({ delivered: 'steered' })
+  expect(sessionOf(chatId).steered).toEqual(['use y instead'])
+  expect(chatIn(core, chatId).queue).toMatchObject([{ text: 'use y instead', steering: true }])
+
+  sessionOf(chatId).emit({ type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} })
+  expect(chatIn(core, chatId).status).toBe('waiting')
+  expect(await json(token, 'send_message', { chatId, text: 'after that' })).toEqual({ delivered: 'queued' })
+  expect(sessionOf(chatId).steered).toEqual(['use y instead'])
+  expect(chatIn(core, chatId).queue.at(-1)).toMatchObject({ text: 'after that' })
+  expect(chatIn(core, chatId).queue.at(-1)).not.toHaveProperty('steering')
+})
+
+it("sends a limited turn again whole, a lead's reports included, and keeps a worker sent again", async () => {
   const retried: string[] = []
   const retrier: Mod = {
     id: 'retrier',
@@ -595,9 +656,9 @@ it("sends a limited turn again whole, a lead's reports included, and keeps a sub
     },
   }
   const { core, sessionOf, sessionsOf, json, send } = await startHeld({ mods: [mainMod, retrier] })
-  subagentsOn(core, -1)
+  workersOn(core, -1)
   const lead = send('main', 'Plan it')
-  const { chatId } = await json(lead.options.kotharMcp!.token, 'spawn_subagent', { task: 'Search' })
+  const { chatId } = await json(lead.options.kotharMcp!.token, 'spawn_worker', { task: 'Search' })
   const limit = (chat: string) => {
     sessionOf(chat).emit({ type: 'limit.reached', message: 'Out of usage' })
     sessionOf(chat).end(undefined, 'Out of usage')
@@ -619,27 +680,27 @@ it("sends a limited turn again whole, a lead's reports included, and keeps a sub
   expect(retried).toEqual([chatId, 'main'])
   expect(sessionsOf('main')).toHaveLength(3)
   const again = sessionOf('main').prompt!
-  expect(again).toContain(`Report from subagent "Search" (${chatId}):\n\nFound it`)
+  expect(again).toContain(`Report from worker "Search" (${chatId}):\n\nFound it`)
   expect(again.endsWith('New message from the user:\n\nAlso the FAQ')).toBe(true)
-  const inputs = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
+  const inputs = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'worker.report')
   expect(inputs.slice(-4).map((e) => e.type)).toEqual([
-    'subagent.report',
+    'worker.report',
     'user.message',
-    'subagent.report',
+    'worker.report',
     'user.message',
   ])
 })
 
-it("gives a subagent its parent's items plus its own while it works", async () => {
+it("gives a worker its parent's items plus its own while it works", async () => {
   const { core, garage, sessionOf, json, send } = await startHeld()
   const handle = handleOn(core)
-  subagentsOn(core)
+  workersOn(core)
   handle({ type: 'chat.create', name: 'Side' })
   const subchat = core.chats().find((c) => c.id !== 'main')!
   writeFileSync(join(garage, 'AGENTS.md'), 'WORKSHOP')
   writeFileSync(join(garage, 'chats', subchat.id, 'AGENTS.md'), 'PARENT')
   const lead = send(subchat.id, 'hi').options.kotharMcp!.token
-  const { chatId } = await json(lead, 'spawn_subagent', { task: 'Go' })
+  const { chatId } = await json(lead, 'spawn_worker', { task: 'Go' })
   writeFileSync(join(garage, 'chats', chatId, 'AGENTS.md'), 'OWN')
 
   const itemsOf = (id: string) => {
@@ -677,11 +738,11 @@ it('lets every chat zoom its own memory, and cuts a long message only where zoom
   }
 })
 
-it("gives a subagent its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
+it("gives a worker its parent's memory frozen at launch, with read-only zoom and date into it", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
-  subagentsOn(core, -1)
+  workersOn(core, -1)
   const parent = send('main', 'Plan the release')
-  const { chatId } = await json(parent.options.kotharMcp!.token, 'spawn_subagent', { task: 'Check the changelog' })
+  const { chatId } = await json(parent.options.kotharMcp!.token, 'spawn_worker', { task: 'Check the changelog' })
   const frozen = '<message id="0" kind="user">\nPlan the release\n</message>'
   const first = sessionOf(chatId)
   expect(first.options.instructions).toContain(`Your parent chat's memory when it started you`)

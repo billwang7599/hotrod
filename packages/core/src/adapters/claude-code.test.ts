@@ -564,6 +564,26 @@ describe('claudeCode adapter', () => {
     ])
   })
 
+  it('gives a read its file and a search its folder joined with its file filter', () => {
+    const { fake, events } = startSession()
+    const requests = [
+      { tool_name: 'Read', input: { file_path: '/a/b.ts' } },
+      { tool_name: 'Grep', input: { pattern: 'x', path: '/a', glob: '.env*' } },
+      { tool_name: 'Grep', input: { pattern: 'x' } },
+      { tool_name: 'Glob', input: { pattern: '**/*.ts', path: '/a' } },
+    ]
+    for (const [i, request] of requests.entries()) {
+      const message = { type: 'control_request', request_id: `r${i}`, request: { subtype: 'can_use_tool', ...request } }
+      fake.stdout(JSON.stringify(message) + '\n')
+    }
+    expect(events.map((e) => (e.type === 'permission.requested' ? [e.kind, e.path] : []))).toEqual([
+      ['read', '/a/b.ts'],
+      ['search', '/a/.env*'],
+      ['search', undefined],
+      ['search', '/a'],
+    ])
+  })
+
   it("tells Claude Code why a call was denied when given a reason", () => {
     const { fake, session } = startSession()
     const request = { subtype: 'can_use_tool', tool_name: 'Write', input: { file_path: '/c.ts', content: 'x' } }

@@ -21,9 +21,10 @@ import {
   type ModelRow,
   type ThinkingLevel,
   type ModInfo,
+  type RestartState,
   type WorkFolder,
-} from '@kotharhq/core/shared'
-import type { ModSetting } from '@kotharhq/mod-api'
+} from '@kothar/core/shared'
+import type { ModSetting } from '@kothar/mod-api'
 import { PERMISSIONS, SECTIONS } from './context-panel.tsx'
 import {
   Button,
@@ -41,9 +42,10 @@ import {
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { MarketplacePage, MOD_WARNING, modStatus, UsesList, type Market } from './marketplace.tsx'
+import { MOD_WARNING, modStatus, UsesList, type Market, type MarketKindFilter } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
+import { RestartNotice } from './restart.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -59,9 +61,15 @@ type PageProps = {
   market?: Market
   // The desktop app's folder picker, for Install from folder.
   pickFolder?: (title?: string) => Promise<string | null>
+  // The master switch for community mods, what waits for a restart, and how many chats a restart would stop.
+  communityMods?: boolean
+  restart?: RestartState
+  running?: number
+  // Opens the Marketplace window over Settings, showing one kind first.
+  openMarketplace?: (kind?: MarketKindFilter) => void
 }
 
-const NO_MARKET: Market = { marketFailures: {} }
+const NO_RESTART: RestartState = { changes: [], canRestart: false }
 
 type Page = {
   id: string
@@ -75,16 +83,19 @@ const NAV_GROUPS = ['Options', 'Mods'] as const
 
 const WORK_FOLDER_TITLE = 'Choose a work folder'
 const WORK_FOLDER_HINT =
-  'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
+  'Agents and workers do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
+
+const TERMINAL_ABOUT =
+  'What Open in Terminal opens. Automatic uses the app macOS opens shell scripts with, else Terminal.'
 
 const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every chat; each can choose otherwise in its Context panel.'
 
 const ROLE_ABOUT: Record<ModelRole, string> = {
   chat: 'Chats you start.',
-  planning: 'Subagents started to plan.',
-  searching: 'Subagents started to search.',
-  subagents: 'Every other subagent.',
+  planning: 'Workers started to plan.',
+  searching: 'Workers started to search.',
+  workers: 'Every other worker.',
 }
 
 const PAGES = [
@@ -135,6 +146,20 @@ const PAGES = [
             Change…
           </Button>
         </SettingRow>
+        {workFolder.terminals && (
+          <SettingRow name="Terminal" description={TERMINAL_ABOUT}>
+            <Select
+              label="Terminal"
+              value={workFolder.terminal ?? 'auto'}
+              disabled={!connected}
+              options={[
+                { value: 'auto', label: 'Automatic' },
+                ...workFolder.terminals.map((t) => ({ value: t.id, label: t.name })),
+              ]}
+              onChange={(terminal) => send({ type: 'terminal.set', terminal })}
+            />
+          </SettingRow>
+        )}
         {PERMISSION_SWITCHES.map((name) => {
           const { label, about, amberWhileOn } = PERMISSIONS[name]
           const on = switchedOn(name, workFolder)
@@ -160,22 +185,13 @@ const PAGES = [
     id: 'appearance',
     group: 'Options',
     title: 'Appearance',
-    body: () => (
+    body: ({ openMarketplace }: PageProps) => (
       <>
-        <Appearance />
+        <Appearance browse={openMarketplace && (() => openMarketplace('theme'))} />
         <ShownPaths />
         <ShownSteps />
         <ShownReports />
       </>
-    ),
-  },
-  {
-    id: 'marketplace',
-    group: 'Options',
-    title: 'Marketplace',
-    intro: 'Themes from their authors\' own repos, beyond Default and Glass. Installed themes show in Appearance.',
-    body: ({ market = NO_MARKET, connected, send, pickFolder }: PageProps) => (
-      <MarketplacePage market={market} connected={connected} send={send} pickFolder={pickFolder} />
     ),
   },
   {
@@ -243,36 +259,80 @@ const PAGES = [
     id: 'community-mods',
     group: 'Mods',
     title: 'Community mods',
-    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and runs from the next start.',
+    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
     body: (props: PageProps) => <CommunityModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
 
 export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
-function CommunityModsPage({ mods, connected, send }: PageProps) {
+export const COMMUNITY_RISKS =
+  'Community mods are code from other people, and they run inside Kothar with your permissions.\n\n' +
+  '• They can read your files and settings, and reach the network.\n' +
+  "• Kothar doesn't review them.\n" +
+  '• An update can change what a mod does.\n\n' +
+  'Each mod still stays off until you turn it on.'
+
+export async function setCommunityMods(enabled: boolean, send: (m: ClientMessage) => void) {
+  if (enabled) {
+    const ok = await confirm({ text: 'Turn on community mods?', body: COMMUNITY_RISKS, ok: 'Turn on community mods' })
+    if (!ok) return
+  }
+  send({ type: 'communityMods.setEnabled', enabled })
+}
+
+function CommunityModsPage(props: PageProps) {
+  const { mods, connected, send, communityMods = false, restart = NO_RESTART, running = 0, openMarketplace } = props
   const community = mods.filter((m) => m.community)
   const turn = async (m: ModInfo, enabled: boolean) => {
     if (enabled) {
-      const uses = m.community!.uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
-      const ok = await confirm(
-        `Turn on ${m.name}? It runs code on your computer with your permissions.` +
-          (uses ? `\n\nIt says it:\n${uses}` : '') +
-          '\n\nIt starts the next time Kothar starts.',
-      )
+      const { uses, repo, path } = m.community!
+      const listed = uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+      const ok = await confirm({
+        text: `Turn on ${m.name}?`,
+        body:
+          `From ${repo ? `github.com/${repo}` : (path ?? 'a folder on this computer')}. It runs code on your computer with ` +
+          'your permissions.' +
+          (listed ? `\n\nIt says it:\n${listed}` : '') +
+          '\n\nIt starts when Kothar restarts.',
+        ok: 'Turn on',
+      })
       if (!ok) return
     }
     send({ type: 'mod.setEnabled', modId: m.id, enabled })
   }
   return (
     <>
-      <p className="pb-12 text-sm text-amber">{MOD_WARNING}</p>
+      <RestartNotice restart={restart} running={running} connected={connected} send={send} />
+      <div className={`${GROUP} mb-12`}>
+        <SettingRow
+          name="Community mods"
+          description={
+            communityMods ? (
+              'On. A mod below runs while its own switch is on.'
+            ) : (
+              <span className="text-amber">Off. No community mod runs, whatever its own switch says.</span>
+            )
+          }
+        >
+          <Switch
+            label="Community mods"
+            checked={communityMods}
+            disabled={!connected}
+            onChange={(on) => void setCommunityMods(on, send)}
+          />
+        </SettingRow>
+      </div>
+      <div className="flex items-start gap-16 pb-12">
+        <p className="flex-1 text-sm text-amber">{MOD_WARNING}</p>
+        {openMarketplace && <Button onClick={() => openMarketplace('mod')}>Browse…</Button>}
+      </div>
       {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
       {community.length > 0 && (
-        <div className={GROUP}>
+        <div className={`${GROUP} transition-opacity ${communityMods ? '' : 'opacity-60'}`} aria-disabled={!communityMods}>
           {community.map((m) => {
             const { version, author, uses, source, repo, path } = m.community!
-            const status = modStatus(m)
+            const status = modStatus(m, communityMods)
             return (
               <SettingRow
                 key={m.id}
@@ -315,7 +375,12 @@ function CommunityModsPage({ mods, connected, send }: PageProps) {
                 >
                   Uninstall
                 </Button>
-                <Switch label={m.name} checked={m.enabled} disabled={!connected} onChange={(on) => void turn(m, on)} />
+                <Switch
+                  label={m.name}
+                  checked={m.enabled}
+                  disabled={!connected || (!communityMods && !m.enabled)}
+                  onChange={(on) => void turn(m, on)}
+                />
               </SettingRow>
             )
           })}
@@ -434,7 +499,7 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <div className="flex flex-col gap-4">
@@ -484,9 +549,9 @@ function ModSetupRow({ mod, connected, send }: SetupProps) {
   )
 }
 
-const modPages = (mods: ModInfo[]): Page[] =>
+const modPages = (mods: ModInfo[], communityMods: boolean): Page[] =>
   mods
-    .filter((mod) => mod.enabled && (mod.settings.length || mod.setup))
+    .filter((mod) => mod.enabled && (!mod.community || communityMods) && (mod.settings.length || mod.setup))
     .map((mod) => ({
       id: `mod:${mod.id}`,
       group: 'Mods',
@@ -550,13 +615,13 @@ function ShownReports() {
   const shown = useReportsDefault()
   return (
     <>
-      <div className="pt-24 pb-8 font-semibold">Subagent reports</div>
+      <div className="pt-24 pb-8 font-semibold">Worker reports</div>
       <div className={GROUP}>
         <SettingRow
           name="Show unfolded"
           description={`Folded, a report shows one line until opened. Each ${CHAT_NOUN.one} can override this in its General tab.`}
         >
-          <Switch label="Show subagent reports unfolded" checked={shown} onChange={showReportsByDefault} />
+          <Switch label="Show worker reports unfolded" checked={shown} onChange={showReportsByDefault} />
         </SettingRow>
       </div>
     </>
@@ -980,7 +1045,7 @@ export function WorkFolderDialog({ open, workFolder, connected, send, toasts, pi
               onCloseAutoFocus={focus.restore}
             >
               <m.form
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 overflow-y-auto rounded-xl border bg-panel px-16 pt-14 pb-16 text-text shadow-overlay"
+                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(520px,calc(100vw-32px))] flex-col gap-12 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
                 onSubmit={submit}
               >
@@ -1045,7 +1110,7 @@ type SettingsProps = PageProps & {
 
 export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
-  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods)]
+  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods, props.communityMods ?? false)]
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open={open} onOpenChange={(open) => open || close()}>
@@ -1075,7 +1140,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                 >
                   <Tabs.List
                     aria-label="Settings"
-                    className="flex w-200 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-panel px-8 pt-4 pb-12 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
+                    className="flex w-200 shrink-0 scroll-inset flex-col gap-1 overflow-y-auto border-r bg-panel pt-4 pr-0 pb-12 pl-8 max-[720px]:w-160 max-[600px]:w-auto max-[600px]:flex-row max-[600px]:flex-wrap max-[600px]:border-r-0 max-[600px]:border-b max-[600px]:py-8 max-[600px]:pr-44"
                   >
                     {NAV_GROUPS.map((group) => (
                       <Fragment key={group}>
@@ -1095,7 +1160,7 @@ export function SettingsDialog({ open, page, openPage, close, ...props }: Settin
                   {pages.map((p) => (
                     <Tabs.Content key={p.id} value={p.id} asChild>
                       <m.div
-                        className="min-h-0 min-w-0 flex-1 overflow-y-auto px-32 pt-20 pb-32 focus-visible:-outline-offset-2 max-[600px]:px-16"
+                        className="min-h-0 min-w-0 flex-1 scroll-inset overflow-y-auto pt-20 pr-18 pb-32 pl-32 [--scroll-top:48px] focus-visible:-outline-offset-2 max-[600px]:pr-2 max-[600px]:pl-16"
                         initial={MOTION.fade.initial}
                         animate={MOTION.fade.animate}
                       >

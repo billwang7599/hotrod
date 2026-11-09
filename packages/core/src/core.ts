@@ -26,9 +26,9 @@ import type {
   PermissionVerdict,
   SpaceDetail,
   TurnSummary,
-} from '@kotharhq/mod-api'
+} from '@kothar/mod-api'
 import { openAccounts } from './accounts.ts'
-import { CORE_TOOL_NAMES, openKotharMcp, SUBAGENTS_MOD, summaryOf } from './kothar-mcp.ts'
+import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_MOD, summaryOf } from './kothar-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   continuationPrompt,
@@ -85,6 +85,8 @@ import {
   type PermissionSwitch,
   type PermissionSwitches,
   type QueuedMessage,
+  type RestartChange,
+  type RestartState,
   type Session,
   type SetupState,
   type Upload,
@@ -92,7 +94,10 @@ import {
   type Worktree,
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
+import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
+import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
+import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -155,6 +160,11 @@ export function openCore(options: {
   marketplaceUrl?: string
   githubToken?: string
   fetch?: Fetch
+  // Restarts Kothar (the desktop app relaunches; npm run dev's core starts again in its process). Without it, the user
+  // restarts Kothar themselves.
+  restart?: () => void
+  // Opens the user's terminal app at a folder; choice is settings.json's terminal. Tests pass a stub.
+  openTerminal?: (dir: string, choice?: string) => Promise<void>
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
@@ -167,7 +177,7 @@ export function openCore(options: {
     }
   }
   checkEngine(defaultEngine)
-  const mods = [...(options.mods ?? []), SUBAGENTS_MOD]
+  const mods = [...(options.mods ?? []), WORKERS_MOD]
   const modChats = mods.flatMap((mod) => (mod.chats ?? []).map((chat) => ({ ...chat, mod })))
   const toolNames = [...CORE_TOOL_NAMES, ...mods.flatMap((mod) => (mod.tools ?? []).map((tool) => tool.name))]
   for (const [what, ids] of [
@@ -178,19 +188,24 @@ export function openCore(options: {
     const twin = ids.find((id, i) => ids.indexOf(id) !== i)
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
-  // Community mods come after the stock ones. One that clashes with a stock mod's id isn't listed; one whose tool or chat
+  // Community mods come after the built-in ones. One that clashes with a built-in mod's id isn't listed; one whose tool or chat
   // is taken doesn't run. A mod that didn't load (off, or broken) is listed as a stub with no hooks, so it can be turned
   // on or off; it runs from the next start.
-  const stockIds = new Set(mods.map((mod) => mod.id))
+  const builtInIds = new Set(mods.map((mod) => mod.id))
   const community = new Map<string, { manifest: ModManifest; item: InstalledItem; running?: string; loadError?: string }>()
+  // The community mods this run imported (whether or not they loaded), by id with their name, and those installed again
+  // since; what's pending a restart is worked out from these and the settings.
+  const imported = new Map<string, string>()
+  const reinstalled = new Set<string>()
   const stubOf = ({ id, name, description }: ModManifest): Mod => ({ id, name, description, enabledByDefault: false })
   for (const found of options.community ?? []) {
     const { manifest, item } = found
-    if (stockIds.has(manifest.id) || community.has(manifest.id)) {
+    if (builtInIds.has(manifest.id) || community.has(manifest.id)) {
       console.error(`Skipped the community mod "${manifest.id}": a mod already has that id`)
       continue
     }
     let { mod, loadError } = found
+    if (mod || loadError) imported.set(manifest.id, manifest.name)
     const clash =
       mod &&
       ((mod.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
@@ -220,8 +235,13 @@ export function openCore(options: {
       context?: Partial<Record<ContextSection, boolean>>
       mods?: Record<string, Record<string, unknown>>
       workFolder?: string
+      // The master switch for community mods; off unless the user turned it on.
+      communityMods?: boolean
+      // The terminal Open in Terminal uses: 'auto' or absent for the system's, else one of MAC_TERMINALS by id.
+      terminal?: string
     } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
+  if (renameSettings(settings)) saveSettings()
   const contextDefaults = (): Record<ContextSection, boolean> => ({
     agents: settings.context?.agents ?? true,
     folders: settings.context?.folders ?? true,
@@ -234,10 +254,13 @@ export function openCore(options: {
     const broken = brokenMods.find((m) => m.id === id)
     throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
   }
-  // A community mod is off until the user turns it on, whatever it says.
+  const communityOn = () => settings.communityMods === true
+  // A community mod's own switch: off until the user turns it on, whatever it says.
+  const ownSwitch = (mod: Mod) => settings.mods?.[mod.id]?.enabled === true
+  // Whether a mod runs: a community mod only while community mods are on too.
   const isOn = (mod: Mod) => {
     const saved = settings.mods?.[mod.id]?.enabled
-    if (community.has(mod.id)) return saved === true
+    if (community.has(mod.id)) return communityOn() && saved === true
     return typeof saved === 'boolean' ? saved : mod.enabledByDefault
   }
   const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
@@ -251,11 +274,13 @@ export function openCore(options: {
       description: typeof about === 'function' ? about(values) : about!,
       ...(setups.get(id) ?? { status: 'checking' }),
     }
-    const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
+    // A community mod shows its own switch; the master switch is beside it in the UI.
+    const enabled = community.has(id) ? ownSwitch(mod) : isOn(mod)
+    const info = { id, name, description, enabled, settings: declared, values }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
     const { source, repo, path } = from?.item ?? {}
-    const aftermarket = from && {
+    const communityFields = from && {
       community: {
         version: version!,
         author: author!,
@@ -267,7 +292,7 @@ export function openCore(options: {
       },
       ...(from.loadError && { loadError: from.loadError }),
     }
-    return { ...info, ...(setup && { setup }), ...aftermarket }
+    return { ...info, ...(setup && { setup }), ...communityFields }
   }
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
@@ -297,6 +322,8 @@ export function openCore(options: {
     ...(settings.workFolder && { path: settings.workFolder }),
     defaultPath: defaultWorkFolder,
     canSandbox: machine.canSandbox,
+    ...(settings.terminal && settings.terminal !== AUTOMATIC && { terminal: settings.terminal }),
+    ...(process.platform === 'darwin' && { terminals: MAC_TERMINALS.map(({ id, name }) => ({ id, name })) }),
     ...Object.fromEntries(
       PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
     ),
@@ -527,7 +554,7 @@ export function openCore(options: {
     return parent ? [...chainOf(parent), chat] : [chat]
   }
 
-  // A chat's permission switches, nearest first: its own, then each chat above it (a subagent follows its space live),
+  // A chat's permission switches, nearest first: its own, then each chat above it (a worker follows its space live),
   // then the defaults in settings.
   const switchesOf = (chat: Chat) => [...chainOf(chat).reverse().map((c) => c.info), settings]
 
@@ -565,8 +592,8 @@ export function openCore(options: {
     unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
-    // Only spaces and Home show unread; a subagent is removed once it reports, so it keeps no read state.
-    if (!chat.info.subagent) updateChat(chat, { doneAt: end.at })
+    // Only spaces and Home show unread; a worker is removed once it reports, so it keeps no read state.
+    if (!chat.info.worker) updateChat(chat, { doneAt: end.at })
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)
@@ -583,11 +610,11 @@ export function openCore(options: {
     if (limit) reportLimit(chat, account, limit)
     // A mod sent the message again, so the turn goes on.
     if (chat.status !== 'idle') return
-    const parent = chat.info.subagent ? parentOf(chat) : undefined
+    const parent = chat.info.worker ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
-    // Subagents are workers for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
-    if (chat.info.subagent && chat.status === 'idle') removeChats(familyOf(chat))
+    // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
+    if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
     sweepMergedWorktrees(chainOf(chat)[0]!)
   }
 
@@ -623,10 +650,10 @@ export function openCore(options: {
     }
   }
 
-  // A turn's input is the subagent reports and the message it started with, logged together at its start.
+  // A turn's input is the worker reports and the message it started with, logged together at its start.
   const retry = (chat: Chat) => {
     // A message steered into the turn isn't what started it.
-    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'subagent.report'
+    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'worker.report'
     const end = chat.entries.findLastIndex(isInput)
     if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
     const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
@@ -634,7 +661,7 @@ export function openCore(options: {
     while (together(chat.entries[start - 1])) start--
     const again = chat.entries.slice(start, end + 1).map((e): QueuedMessage => {
       const id = randomBytes(4).toString('hex')
-      if (e.type === 'subagent.report') {
+      if (e.type === 'worker.report') {
         const { chatId, name, error } = e
         return { id, text: e.text, report: { chatId, name, ...(error !== undefined && { error }) } }
       }
@@ -753,6 +780,36 @@ export function openCore(options: {
     return ask(0)
   }
 
+  // Every folder a chat's Open in Terminal may open: its context folders, its space's work folder, and the checkouts
+  // of its space and the chats above it.
+  const terminalRoots = (chat: Chat) => {
+    return chainOf(chat).flatMap(({ info }) =>
+      info.mod
+        ? []
+        : [
+            ...info.folders,
+            ...(info.workDir ? [info.workDir] : []),
+            ...Object.values(info.worktrees ?? {}).map((w) => w.path),
+          ],
+    )
+  }
+  const realOr = (path: string) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return resolve(path)
+    }
+  }
+  const openTerminalAt = (path: string) =>
+    (options.openTerminal ?? ((dir, choice) => openTerminal(dir, { choice })))(path, settings.terminal)
+  const terminalFor = async (chat: Chat, rawPath: unknown) => {
+    const path = typeof rawPath === 'string' ? rawPath : ''
+    if (!isAbsolute(path) || !terminalRoots(chat).some((root) => realOr(root) === realOr(path))) {
+      throw new Error(`${path || 'That'} isn't one of this chat's folders`)
+    }
+    await openTerminalAt(path)
+  }
+
   const hosts = new Map<string, ModHost>()
   const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
   const hostFor = (mod: Mod): ModHost => {
@@ -824,6 +881,15 @@ export function openCore(options: {
         remove: (name) => rmSync(fileOf(name), { force: true }),
       },
       refresh: (chatId) => refreshMod(mod, chatId),
+      // Only inside a folder some chat could open: a mod can't open a terminal anywhere it likes.
+      async openTerminal(path) {
+        const real = realOr(String(path))
+        const roots = shownChats().flatMap(terminalRoots).map(realOr)
+        if (!isAbsolute(String(path)) || !roots.some((root) => within(real, root))) {
+          throw new Error(`${path} isn't inside a space's folders, work folder or checkouts`)
+        }
+        await openTerminalAt(real)
+      },
     }
     const uses = community.get(mod.id)?.manifest.uses
     const given = uses ? guardHost(host, mod, uses) : host
@@ -933,19 +999,22 @@ export function openCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const { context = {}, title, parentId, mod, ...saved } = readJson(file)
+    const { context = {}, title, parentId, mod, ...saved } = renameChatFile(readJson(file))
     const declared = modChats.find((chat) => chat.id === fallback.id)
     const info: ChatInfo = {
       ...fallback,
       ...(title !== undefined && { name: title }),
       ...saved,
       id: fallback.id,
-      ...(saved.subagent && parentId !== undefined && { parentId }),
+      ...(saved.worker && parentId !== undefined && { parentId }),
       ...(declared && { name: declared.name, mod: declared.mod.id, folders: [], files: [] }),
     }
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
-    const entries: ChatEntry[] = log.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+    const entries: ChatEntry[] = log
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => renameEntry(JSON.parse(line)))
     const chat: Chat = {
       info,
       dir,
@@ -962,7 +1031,7 @@ export function openCore(options: {
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     const lastType = entries.at(-1)?.type
-    if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'subagent.report') {
+    if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'worker.report') {
       append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
     }
     return chat
@@ -983,28 +1052,28 @@ export function openCore(options: {
     if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
   }
-  // Nothing runs yet, so a subagent that has worked and is still here (Kothar quit or crashed mid-task, or an older
+  // Nothing runs yet, so a worker that has worked and is still here (Kothar quit or crashed mid-task, or an older
   // Kothar kept it) goes now.
   for (const chat of chats.values()) {
-    if (!chat.info.subagent || !chat.entries.length) continue
+    if (!chat.info.worker || !chat.entries.length) continue
     chats.delete(chat.info.id)
     rmSync(chat.dir, { recursive: true, force: true })
   }
 
-  const createChat = (spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }) => {
+  const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }) => {
     const name = checkName(spec.name)
     if (spec.engine !== undefined) {
       checkEngine(spec.engine)
       checkEnabled(spec.engine)
     }
-    const parent = spec.subagent ? chatFor(spec.parentId ?? '') : undefined
-    const role = parent ? (spec.role ?? 'subagents') : undefined
+    const parent = spec.worker ? chatFor(spec.parentId ?? '') : undefined
+    const role = parent ? (spec.role ?? 'workers') : undefined
     // Named engine: the chat's own pick of that engine's first model in its list, else the engine's default model.
-    // Otherwise it follows its list (a subagent: its role's, else Subagents', else Chat's).
+    // Otherwise it follows its list (a worker: its role's, else Workers', else Chat's).
     const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
     const engine = spec.engine ?? models.engineFor(role)
     if (parent) checkActive(parent)
-    if (parent?.info.subagent) throw new Error('A subagent cannot start chats')
+    if (parent?.info.worker) throw new Error('A worker cannot start chats')
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')
@@ -1015,7 +1084,7 @@ export function openCore(options: {
       name,
       ...(parent && parentMemory && {
         parentId: parent.info.id,
-        subagent: true,
+        worker: true,
         role,
         parentMessages: parentMemory.messages.length,
       }),
@@ -1081,6 +1150,9 @@ export function openCore(options: {
   }
 
   const setModEnabled = (mod: Mod, enabled: boolean) => {
+    if (community.has(mod.id) && !communityOn() && enabled) {
+      throw new Error(`Turn on community mods before turning on ${mod.name}`)
+    }
     const family = (mod.chats ?? []).flatMap(({ id }) => {
       const chat = chats.get(id)
       return chat ? familyOf(chat) : []
@@ -1089,12 +1161,63 @@ export function openCore(options: {
     if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${mod.name} off`)
     const changed = isOn(mod) !== enabled
     saveMod(mod, { enabled })
+    if (community.has(mod.id)) restartChanged()
     if (enabled) void checkSetup(mod)
-    if (!changed) return
+    if (changed) modSwitched(mod, enabled, family)
+  }
+
+  // What follows a mod starting or stopping to run: its chats show or hide, spawned processes stop, panels update.
+  const modSwitched = (mod: Mod, enabled: boolean, family = familyOfMod(mod)) => {
     if (!enabled) stopSpawned(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
+  }
+  const familyOfMod = (mod: Mod) =>
+    (mod.chats ?? []).flatMap(({ id }) => {
+      const chat = chats.get(id)
+      return chat ? familyOf(chat) : []
+    })
+
+  // The master switch. Off stops every community mod's hooks at once (its code stays loaded until a restart); on lets
+  // the ones whose own switch is on run, from the next start for any not loaded yet.
+  const setCommunityMods = (enabled: boolean) => {
+    if (communityOn() === enabled) return
+    const running = mods.filter((mod) => community.has(mod.id) && ownSwitch(mod))
+    if (!enabled) {
+      const busy = running.flatMap((mod) => familyOfMod(mod)).find((chat) => chat.status !== 'idle')
+      if (busy) throw new Error(`Stop "${busy.info.name}" before turning community mods off`)
+    }
+    settings.communityMods = enabled
+    saveSettings()
+    broadcast({ type: 'communityMods.updated', enabled })
+    for (const mod of running) {
+      if (enabled) void checkSetup(mod)
+      modSwitched(mod, enabled)
+    }
+    restartChanged()
+  }
+
+  // Community mod code this run doesn't match the settings: what a restart would start, update or stop.
+  const restartState = (): RestartState => {
+    const changes: RestartChange[] = []
+    for (const [id, { manifest }] of community) {
+      const mod = mods.find((m) => m.id === id)
+      const wanted = !!mod && isOn(mod)
+      const loaded = imported.has(id)
+      const change = wanted ? (!loaded ? 'start' : reinstalled.has(id) ? 'update' : undefined) : loaded ? 'stop' : undefined
+      if (change) changes.push({ id, name: manifest.name, change })
+    }
+    for (const [id, name] of imported) if (!community.has(id)) changes.push({ id, name, change: 'stop' })
+    return { changes, canRestart: options.restart !== undefined }
+  }
+  let lastRestart = JSON.stringify(restartState())
+  const restartChanged = () => {
+    const restart = restartState()
+    const text = JSON.stringify(restart)
+    if (text === lastRestart) return
+    lastRestart = text
+    broadcast({ type: 'restart.updated', restart })
   }
 
   // A community mod was installed or updated. It runs from the next start; an update that uses more than the version
@@ -1104,11 +1227,12 @@ export function openCore(options: {
     if (!install) return
     const known = community.get(id)
     community.set(id, { ...known, manifest: install.manifest, item: install.item })
+    if (imported.has(id)) reinstalled.add(id)
     const at = mods.findIndex((m) => m.id === id)
     if (at < 0) mods.push(stubOf(install.manifest))
     else if (!known?.running) mods[at] = stubOf(install.manifest)
     const mod = mods.find((m) => m.id === id)!
-    if (added.length && isOn(mod)) {
+    if (added.length && ownSwitch(mod)) {
       setModEnabled(mod, false)
       const more = added.map((use) => MOD_USES[use].toLowerCase()).join('; ')
       broadcast({
@@ -1117,13 +1241,14 @@ export function openCore(options: {
       })
     }
     broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+    restartChanged()
   }
 
-  // Turns the mod off and deletes its files. Its storage in <garage>/mods/<id>/ stays, as a stock mod's does.
+  // Turns the mod off and deletes its files. Its storage in <garage>/mods/<id>/ stays, as a built-in mod's does.
   const uninstallMod = (id: string) => {
     const mod = mods.find((m) => m.id === id)
     if (!community.has(id) || !mod) return marketplace.uninstall('mod', id)
-    if (isOn(mod)) setModEnabled(mod, false)
+    if (ownSwitch(mod)) setModEnabled(mod, false)
     marketplace.uninstall('mod', id)
     const { enabled: _, ...kept } = settings.mods?.[id] ?? {}
     settings.mods = { ...settings.mods, [id]: kept }
@@ -1132,6 +1257,7 @@ export function openCore(options: {
     hosts.delete(id)
     mods.splice(mods.indexOf(mod), 1)
     broadcast({ type: 'mod.removed', modId: id })
+    restartChanged()
   }
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
@@ -1154,7 +1280,7 @@ export function openCore(options: {
     if (pinned !== undefined) return pinned
     if (item.from === chat.info.id) return true
     const parent = parentOf(chat)
-    return chat.info.subagent && parent ? switchOf(parent, item) : contextDefaults()[item.section]
+    return chat.info.worker && parent ? switchOf(parent, item) : contextDefaults()[item.section]
   }
 
   const contextItems = (chat: Chat): ContextItem[] => {
@@ -1441,7 +1567,7 @@ export function openCore(options: {
     const at = new Date().toISOString()
     if (!continuation) {
       chat.produced = false
-      for (const { text, report } of reports) append(chat, { at, type: 'subagent.report', text, ...report })
+      for (const { text, report } of reports) append(chat, { at, type: 'worker.report', text, ...report })
       if (text || attachments.length || !reports.length) {
         append(chat, { at, type: 'user.message', text, ...(attachments.length && { attachments }) })
       }
@@ -1464,9 +1590,9 @@ export function openCore(options: {
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
     const zoomParent = zoomable ? ' (zoom and date read it with parent: true)' : ''
     const parentIntro = `Your parent chat's memory when it started you${zoomParent}:`
-    const spawns = zoomable && !chat.info.subagent && isOn(SUBAGENTS_MOD)
+    const spawns = zoomable && !chat.info.worker && isOn(WORKERS_MOD)
     const memory = [
-      ...(spawns ? [String(modValues(SUBAGENTS_MOD).instructions)] : []),
+      ...(spawns ? [String(modValues(WORKERS_MOD).instructions)] : []),
       MEMORY_INSTRUCTIONS,
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
@@ -1524,8 +1650,20 @@ export function openCore(options: {
         const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
         // Fetching writes nothing, so it needs no sandbox.
         if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
-        if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
+        // Reading writes nothing either, but logins and keys still ask.
+        const reading = { cwd, home: homedir(), secrets: secretPathsOf(homedir(), garage) }
+        if (request.kind === 'read' || request.kind === 'search') {
+          if (!on('autoRead')) return
+          if (request.kind === 'read') {
+            return request.path !== undefined && !isSecret(request.path, reading) ? { allow: true } : undefined
+          }
+          return searchReachesSecret(request.path ?? cwd, reading) ? undefined : { allow: true }
+        }
+        if (request.kind !== 'shell' || request.command === undefined) return
+        if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
+        if (!jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
+        if (mentionsSecret(request.command, reading)) return
         return { allow: true }
       }
 
@@ -1767,8 +1905,17 @@ export function openCore(options: {
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
-    subagents: () => {
-      const { enabled, values } = modInfo(SUBAGENTS_MOD)
+    deliver: (chatId, text) => {
+      const chat = chatFor(chatId)
+      const idle = chat.status === 'idle'
+      // Steered only while the turn runs; while it waits for an approval or is stopping, it's queued.
+      const steers = chat.status === 'running' && canSteer(chat)
+      sendMessage(chat, text, undefined, steers)
+      return idle ? 'sent' : steers ? 'steered' : 'queued'
+    },
+    stop: (chatId) => interrupt(chatFor(chatId), false),
+    workers: () => {
+      const { enabled, values } = modInfo(WORKERS_MOD)
       return { enabled, limit: Number(values.limit) }
     },
     memory: (chatId) => memoryOf(chatFor(chatId)),
@@ -1856,6 +2003,8 @@ export function openCore(options: {
     setWorkFolder,
     themes: marketplace.themes,
     installed: marketplace.installed,
+    communityMods: communityOn,
+    restart: restartState,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -1965,6 +2114,12 @@ export function openCore(options: {
           return install(modFor(String(message.modId)))
         case 'mod.cancelInstall':
           return installs.get(modFor(String(message.modId)).id)?.abort()
+        case 'communityMods.setEnabled':
+          return setCommunityMods(message.enabled === true)
+        case 'app.restart':
+          if (!options.restart) throw new Error('This Kothar can\'t restart itself. Stop it and start it again.')
+          if (quitting) return
+          return options.restart()
         case 'memory.set':
           return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':
@@ -1996,7 +2151,7 @@ export function openCore(options: {
         case 'market.install': {
           const { kind } = message
           const id = String(message.id)
-          if (kind === 'mod' && stockIds.has(id)) {
+          if (kind === 'mod' && builtInIds.has(id)) {
             return reply({ type: 'market.installFailed', kind, id, error: `A built-in mod is already called "${id}"` })
           }
           return void marketplace.install(kind, id).then(
@@ -2019,7 +2174,7 @@ export function openCore(options: {
                 return undefined
               }
             })()
-            if (typeof id === 'string' && stockIds.has(id)) throw new Error(`A built-in mod is already called "${id}"`)
+            if (typeof id === 'string' && builtInIds.has(id)) throw new Error(`A built-in mod is already called "${id}"`)
             result = marketplace.installLocal(path)
           } catch (error) {
             return reply({ type: 'market.localFailed', path, error: messageOf(error) })
@@ -2034,12 +2189,30 @@ export function openCore(options: {
           else marketplace.uninstall(message.kind, message.id)
           return marketChanged(message.kind)
         case 'search': {
-          const spaces = shownChats().filter((c) => !c.info.subagent)
+          const spaces = shownChats().filter((c) => !c.info.worker)
           const hits = searchChats(
             spaces.map((c) => ({ id: c.info.id, name: c.info.name, entries: c.entries })),
             String(message.query ?? ''),
           )
           return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
+        }
+        case 'terminal.set': {
+          const terminal = String(message.terminal ?? '')
+          if (terminal !== AUTOMATIC && !MAC_TERMINALS.some((t) => t.id === terminal)) {
+            throw new Error(`Unknown terminal "${terminal}"`)
+          }
+          if (terminal === AUTOMATIC) delete settings.terminal
+          else settings.terminal = terminal
+          saveSettings()
+          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
+        }
+        case 'terminal.open': {
+          const chat = chatFor(message.chatId)
+          const path = String(message.path ?? '')
+          return void terminalFor(chat, message.path).then(
+            () => reply({ type: 'terminal.result', chatId: chat.info.id, path }),
+            (error) => reply({ type: 'terminal.result', chatId: chat.info.id, path, error: messageOf(error) }),
+          )
         }
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)

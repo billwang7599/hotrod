@@ -3,7 +3,7 @@ import { createContext, useSyncExternalStore } from 'react'
 /**
  * Whether a chat shows something unfolded: a default set in Settings, and a choice per chat set in its panel's General
  * tab. Two of these: thinking and tool calls (a finished turn's steps stay listed instead of folding into "N steps",
- * and each thinking and tool row starts open; folded by default), and subagent reports (unfolded by default, so a
+ * and each thinking and tool row starts open; folded by default), and worker reports (unfolded by default, so a
  * report isn't missed). Each report card also keeps its own choice once the user opens or closes it.
  */
 type Saved = { default: boolean; chats: Record<string, boolean> }
@@ -60,7 +60,7 @@ function shownStore(key: string, fallback: boolean) {
     useChoice(id: string): boolean | undefined {
       return useSyncExternalStore(subscribe, snapshot, snapshot).chats[id]
     },
-    /** A chat without a choice of its own follows the first chat above it that has one (a subagent, its space's). */
+    /** A chat without a choice of its own follows the first chat above it that has one (a worker, its space's). */
     useShown(chatId: string, ...above: string[]): boolean {
       const saved = useSyncExternalStore(subscribe, snapshot, snapshot)
       return [chatId, ...above].map((id) => saved.chats[id]).find((on) => on !== undefined) ?? saved.default

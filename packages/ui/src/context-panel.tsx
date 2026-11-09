@@ -14,7 +14,7 @@ import {
   type PermissionSwitch,
   type WorkFolder,
   type Worktree,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
@@ -22,13 +22,13 @@ import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
 import { ModViewer } from './mod-view.tsx'
 import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
-import { folderName, lineOf, panelKey, type ChatView, type State } from './state.ts'
+import { folderName, lineOf, panelKey, terminalKey, type ChatView, type State } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
   agents: {
     label: 'AGENTS.md',
     about: 'Instructions: the global ones first, then each chat’s from the top down',
-    inherited: 'The global AGENTS.md, and for a subagent, its parent’s',
+    inherited: 'The global AGENTS.md, and for a worker, its parent’s',
   },
   folders: {
     label: 'Folders',
@@ -55,7 +55,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     label: 'Run commands without asking',
     about:
       'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
-      'anywhere on, or on a system Kothar can’t sandbox, every command asks.',
+      'anywhere on, or on a system Kothar can’t sandbox, every command asks but plain reads.',
   },
   askNetworkCommands: {
     label: 'Ask before commands that publish or reach the network',
@@ -67,9 +67,16 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     label: 'Fetch web pages without asking',
     about: 'Agents read web pages and search the web without asking you first.',
   },
+  autoRead: {
+    label: 'Read anywhere without asking',
+    about:
+      'Agents read and search files outside the work folder, and run commands that only read (ls, cat, grep, ' +
+      'git status, git log…), without asking, sandboxed or not. Logins and keys still ask: ~/.ssh, ~/.aws, ' +
+      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files and Kothar’s saved accounts.',
+  },
 }
 const PERMISSIONS_HINT =
-  'Each shows Settings → Work folder until you pick, or for a subagent, its space. A pick is for this chat only.'
+  'Each shows Settings → Work folder until you pick, or for a worker, its space. A pick is for this chat only.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -83,7 +90,7 @@ const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
 const COLLAPSED_KEY = 'kothar.contextCollapsed'
-const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
+const PREVIEW = 'scroll-inset scroll-inset-tight max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
   item: ContextItem
@@ -91,6 +98,46 @@ type ItemProps = {
   source: string
   readOnly: boolean
   send: (m: ClientMessage) => void
+}
+
+type TerminalErrors = State['terminalErrors']
+
+function TerminalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
+      <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+      <path d="M4.5 6.25 6.75 8 4.5 9.75M8.5 10h3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+/** Opens the user's terminal app at a folder; the core does it, so it works in a browser tab too. */
+function TerminalButton({ chatId, path, what, disabled, send }: {
+  chatId: string
+  path: string
+  what: string
+  disabled?: boolean
+  send: (m: ClientMessage) => void
+}) {
+  return (
+    <Hint text="Open in Terminal">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="grid place-items-center"
+        aria-label={`Open ${what} in Terminal`}
+        disabled={disabled}
+        onClick={() => send({ type: 'terminal.open', chatId, path })}
+      >
+        <TerminalIcon />
+      </Button>
+    </Hint>
+  )
+}
+
+function TerminalError({ chatId, path, errors }: { chatId: string; path: string; errors?: TerminalErrors }) {
+  const error = errors?.[terminalKey(chatId, path)]
+  return error ? <p className="text-xs leading-[normal] wrap-anywhere text-red">{error}</p> : null
 }
 
 function useCollapsed(item: ContextItem) {
@@ -195,7 +242,17 @@ function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   )
 }
 
-function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps & { worktree?: Worktree }) {
+function PathCard({
+  item,
+  chatId,
+  source,
+  readOnly,
+  send,
+  worktree,
+  terminalErrors,
+  connected,
+}: ItemProps & { worktree?: Worktree; terminalErrors?: TerminalErrors; connected: boolean }) {
+  const folder = item.section === 'folders'
   const own = item.from === chatId
   const section = item.section === 'folders' ? 'folders' : 'files'
   const preview = item.section === 'folders' ? 'AGENTS.md' : 'Contents'
@@ -211,6 +268,9 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
             </span>
           </Hint>
         </span>
+        {folder && (
+          <TerminalButton chatId={chatId} path={item.path} what={item.path} disabled={!connected} send={send} />
+        )}
         {own && (
           <Hint text="Remove from this chat's context">
             <Button
@@ -231,6 +291,7 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
           onChange={(enabled) => send({ type: 'context.set', chatId, path: item.path, enabled })}
         />
       </div>
+      {folder && <TerminalError chatId={chatId} path={item.path} errors={terminalErrors} />}
       <CardBody collapsed={collapsed} className="gap-4 pt-4">
         {paths.context && (
           <span className="font-mono text-xs leading-[normal] wrap-anywhere text-faint" title={item.path}>
@@ -238,13 +299,23 @@ function PathCard({ item, chatId, source, readOnly, send, worktree }: ItemProps 
           </span>
         )}
         {worktree && (
-          <Hint text={CHECKOUT_HINT} align="start">
-            <span className="w-fit text-xs leading-[normal] wrap-anywhere text-muted">
-              Checked out at <span className="font-mono">{worktree.path}</span> on{' '}
-              <span className="font-mono">{worktree.branch}</span>
-            </span>
-          </Hint>
+          <div className="flex items-center gap-4">
+            <Hint text={CHECKOUT_HINT} align="start">
+              <span className="min-w-0 text-xs leading-[normal] wrap-anywhere text-muted">
+                Checked out at <span className="font-mono">{worktree.path}</span> on{' '}
+                <span className="font-mono">{worktree.branch}</span>
+              </span>
+            </Hint>
+            <TerminalButton
+              chatId={chatId}
+              path={worktree.path}
+              what={`the checkout ${worktree.path}`}
+              disabled={!connected}
+              send={send}
+            />
+          </div>
         )}
+        {worktree && <TerminalError chatId={chatId} path={worktree.path} errors={terminalErrors} />}
         <div className="flex items-start gap-6 text-xs text-faint">
           <span className={PILL}>{own ? 'Own' : `From ${source}`}</span>
           {item.section === 'files' && (
@@ -394,7 +465,7 @@ function useDropPaths(add: ((section: 'folders' | 'files', path: string) => void
 }
 
 const STEPS_LABEL = 'Thinking and tool calls'
-const REPORTS_LABEL = 'Subagent reports'
+const REPORTS_LABEL = 'Worker reports'
 function FoldPicker({ label, shown, choose }: { label: string; shown: boolean; choose: (shown: boolean) => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
@@ -504,6 +575,25 @@ function ModCommands({ chatId, commands, disabled, send }: {
   )
 }
 
+function WorkFolderRow({ chatId, path, disabled, send, errors }: {
+  chatId: string
+  path: string
+  disabled: boolean
+  send: (m: ClientMessage) => void
+  errors?: TerminalErrors
+}) {
+  return (
+    <section className="flex flex-col gap-4" aria-label="Work folder">
+      <h3 className="font-semibold">Work folder</h3>
+      <div className="flex items-center gap-8">
+        <span className="min-w-0 flex-1 font-mono text-xs leading-[normal] wrap-anywhere text-muted">{path}</span>
+        <TerminalButton chatId={chatId} path={path} what="the work folder" disabled={disabled} send={send} />
+      </div>
+      <TerminalError chatId={chatId} path={path} errors={errors} />
+    </section>
+  )
+}
+
 /** A tab's how-it-works notes, folded under one quiet line until asked for. */
 function About({ intro, notes }: { intro: string; notes: readonly { label: string; about: string }[] }) {
   return (
@@ -532,6 +622,7 @@ type ContextPanelProps = {
   hide?: () => void
   modUi?: State['modUi']
   panelViews?: State['panelViews']
+  terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
   pickers?: Pickers
 }
@@ -543,8 +634,10 @@ export function ContextPanel(props: ContextPanelProps) {
   const sourceOf = (item: ContextItem) =>
     item.from === GLOBAL_CONTEXT ? GLOBAL_SOURCE : (chats.find((c) => c.id === item.from)?.name ?? item.from)
   const chat = chats.find((c) => c.id === chatId)
-  // A subagent follows its space's switches unless it has its own.
+  // A worker follows its space's switches unless it has its own.
   const above = chat ? lineOf(chats, chat).slice(1) : []
+  // The space's work folder, once its first message has picked one.
+  const workDir = chat && !chat.mod ? (above.at(-1) ?? chat).workDir : undefined
   const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
   const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const tab = usePanelTab()
@@ -592,7 +685,7 @@ export function ContextPanel(props: ContextPanelProps) {
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
       <div
-        className="flex flex-1 flex-col gap-18 overflow-y-auto p-12"
+        className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"
         role="tabpanel"
         aria-label={modTab?.title ?? TAB_LABEL[shown]}
       >
@@ -618,6 +711,8 @@ export function ContextPanel(props: ContextPanelProps) {
                           readOnly={locked}
                           send={send}
                           worktree={chats.find((c) => c.id === item.from)?.worktrees?.[item.path]}
+                          terminalErrors={props.terminalErrors}
+                          connected={connected}
                         />
                       )}
                     </m.div>
@@ -631,6 +726,15 @@ export function ContextPanel(props: ContextPanelProps) {
             )
           })}
         {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
+        {shown === 'general' && chat && workDir && (
+          <WorkFolderRow
+            chatId={chatId}
+            path={workDir}
+            disabled={!connected}
+            send={send}
+            errors={props.terminalErrors}
+          />
+        )}
         {shown === 'general' && chat && (
           <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
         )}

@@ -2,13 +2,15 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Mod, ModRun, ModValues } from '@kotharhq/mod-api'
+import type { Mod, ModRun, ModValues } from '@kothar/mod-api'
 import type { LoginsProfile } from './logins.ts'
 
 const require = createRequire(import.meta.url)
 const HERE = dirname(fileURLToPath(import.meta.url))
 // Copies a Chrome profile's logins, then runs Playwright MCP; see logins.ts.
 const LOGINS = join(HERE, 'logins.ts')
+// Picks Chrome or Kothar's Chromium for the default mode, on the session's machine; see background.ts.
+const BACKGROUND = join(HERE, 'background.ts')
 // Playwright passes Chrome a mock keychain on macOS (a plain password store on Linux), and then Chrome can't decrypt
 // the copied cookies.
 const LOGINS_CONFIG = join(HERE, 'chrome-logins.json')
@@ -73,6 +75,55 @@ export const BROWSER_INSTRUCTIONS =
 
 const usesChrome = (values: ModValues) => values.browser === 'chrome'
 const usesLogins = (values: ModValues) => values.browser === 'logins'
+const usesBackground = (values: ModValues) => values.browser === 'background'
+const usesAttach = (values: ModValues) => values.browser === 'attach'
+// Kothar's Chromium in a visible window. A new value rather than the old 'chromium', which was headless by default:
+// reusing it would open windows for everyone who had picked it.
+export const WINDOW = 'window'
+
+export const DEFAULT_PORT = 9222
+const portOf = (values: ModValues) => {
+  const port = Number(values.port)
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_PORT
+}
+export const endpointOf = (values: ModValues) => `http://localhost:${portOf(values)}`
+
+// What answers on the debugging port: the browser's name, or nothing. Run through the Machine, where sessions run.
+const ATTACH_CHECK_SCRIPT = `
+fetch(process.argv[1] + '/json/version', { signal: AbortSignal.timeout(2000) })
+  .then((response) => response.json())
+  .then((version) => console.log(JSON.stringify({ browser: version.Browser ?? 'A browser' })))
+  .catch(() => console.log(JSON.stringify({ browser: null })))
+`
+
+async function checkAttach(run: ModRun, values: ModValues) {
+  const { code, stdout, stderr } = await run(process.execPath, ['-e', ATTACH_CHECK_SCRIPT, endpointOf(values)], {
+    env: NODE_ENV,
+  })
+  if (code !== 0) throw new Error(stderr.trim() || `The debugging port check exited with code ${code}`)
+  const { browser } = JSON.parse(stdout) as { browser: string | null }
+  const port = portOf(values)
+  if (!browser) return { ready: false, message: `No browser is listening on port ${port}` }
+  return { ready: true, message: `${browser.replace('/', ' ')}, on port ${port}` }
+}
+
+async function checkChromium(run: ModRun) {
+  const { code, stdout, stderr } = await run(process.execPath, ['-e', CHECK_SCRIPT], { env: NODE_ENV })
+  if (code !== 0) throw new Error(stderr.trim() || `The browser check exited with code ${code}`)
+  const { ready, name } = JSON.parse(stdout)
+  return { ready: ready as boolean, message: ready ? `${name} installed` : 'Browser not installed' }
+}
+
+// The default mode is ready with Google Chrome as it is, and needs Kothar's Chromium only without it.
+async function checkBackground(run: ModRun) {
+  const { code, stdout, stderr } = await run(process.execPath, [BACKGROUND, 'check'], { env: NODE_ENV })
+  if (code !== 0) throw new Error(stderr.trim() || `The Chrome check exited with code ${code}`)
+  if ((JSON.parse(stdout) as { chrome: string | null }).chrome) {
+    return { ready: true, message: 'Google Chrome, headless, on a profile of Kothar’s own' }
+  }
+  const chromium = await checkChromium(run)
+  return chromium.ready ? { ...chromium, message: `${chromium.message}, headless` } : chromium
+}
 
 async function checkLogins(run: ModRun) {
   const chrome = await checkChrome(run)
@@ -100,27 +151,49 @@ const browser: Mod = {
   id: 'browser',
   name: 'Browser',
   description:
-    "Agents browse the web with Playwright. By default it's a Chromium of Kothar's own, never your Chrome or its " +
-    'logins, and each space keeps its own browser profile, so a login there stays.',
+    'Agents browse the web with Playwright. By default in the background: no window opens or takes focus, on your ' +
+    "Google Chrome if you have it, else a Chromium of Kothar's own, never your Chrome's profile or logins. Each space " +
+    'keeps its own browser profile, so a login there stays. Pick a mode with a window only to watch the agent.',
   enabledByDefault: false,
   settings: [
     {
       key: 'browser',
       label: 'Browser',
       description:
-        "Your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
+        'In the background: headless, so nothing opens or takes focus, on Google Chrome if it is installed (nothing to ' +
+        "install), else Kothar's Chromium, with a profile of the space's own. " +
+        "With your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
         "storage (not passwords or history), so agents are logged in where you are and can act as you there, " +
         'without opening a window. Logins you make in Chrome reach agents at their next message. ' +
+        "Kothar's Chromium, in a window: Playwright's Chromium in a window you can watch, which may take focus while " +
+        'the agent works. ' +
+        'Your open browser: agents attach to a Chromium-based browser you started with --remote-debugging-port, as ' +
+        "pi's browser extension does, and work in its tabs with its logins. Chrome 136 and later only allow this with " +
+        'a --user-data-dir other than your usual one. ' +
         "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
-        'Each message that browses opens a tab and brings Chrome to the front. Subagents share it, each in a tab ' +
+        'Each message that browses opens a tab and brings Chrome to the front. Workers share it, each in a tab ' +
         'group of its own.',
       type: 'select',
       options: [
-        { value: 'chromium', label: "Kothar's Chromium" },
-        { value: 'logins', label: "Your Chrome's logins, in the background" },
-        { value: 'chrome', label: 'Your Chrome, in front (extension)' },
+        // 'chromium' (Kothar's Chromium, headless unless a switch said otherwise) is gone: a saved one isn't an option,
+        // so it reads as the default, 'background', which stays headless as it was. See WINDOW.
+        { value: 'background', label: 'In the background (no window)' },
+        { value: 'logins', label: "In the background, with your Chrome's logins" },
+        { value: WINDOW, label: "Kothar's Chromium, in a window" },
+        { value: 'attach', label: 'Your open browser (debugging port)' },
+        { value: 'chrome', label: 'Your Chrome, in front (shows Chrome)' },
       ],
-      default: 'chromium',
+      default: 'background',
+    },
+    {
+      key: 'port',
+      label: 'Debugging port',
+      description: 'Your open browser only: the port you started it with, as in --remote-debugging-port=9222.',
+      type: 'number',
+      default: DEFAULT_PORT,
+      min: 1,
+      max: 65535,
+      integer: true,
     },
     {
       key: 'extensionToken',
@@ -131,15 +204,6 @@ const browser: Mod = {
       type: 'text',
       default: '',
       rows: 1,
-    },
-    {
-      key: 'background',
-      label: 'Keep the browser in the background',
-      description:
-        "Kothar's Chromium only; your Chrome's logins always run in the background. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
-        'visible window, which may take focus while the agent works.',
-      type: 'boolean',
-      default: true,
     },
     {
       key: 'askEachAction',
@@ -153,7 +217,13 @@ const browser: Mod = {
 
   setup: {
     description: (values) =>
-      usesLogins(values)
+      usesBackground(values)
+        ? 'Uses Google Chrome if it is installed, with nothing to install. Without it, Install runs Playwright’s ' +
+          'installer for its Chromium (Chrome for Testing), which other Playwright tools share.'
+        : usesAttach(values)
+        ? 'Start a Chromium-based browser with --remote-debugging-port=' + portOf(values) + ' (Chrome 136 and later ' +
+          'also need a --user-data-dir other than your usual one), and this turns ready.'
+        : usesLogins(values)
         ? 'Uses Google Chrome, with nothing to install. Each message that browses copies the logins of your last ' +
           "used Chrome profile into the space's work folder when Chrome's are newer, and Chrome reads them with " +
           'its key from your Keychain.'
@@ -161,16 +231,25 @@ const browser: Mod = {
         ? `Install opens the Playwright Extension in the Chrome Web Store (${EXTENSION_URL}). Add it to Chrome, ` +
           'and this turns ready once Chrome has it.'
         : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's " +
-          'browser folder, which other Playwright tools share. Nothing in it is removed.',
+          'browser folder, which other Playwright tools share. Nothing in it is removed. Its window may take focus ' +
+          'while the agent works.',
     async check(run, values) {
+      if (usesBackground(values)) return checkBackground(run)
+      if (usesAttach(values)) return checkAttach(run, values)
       if (usesLogins(values)) return checkLogins(run)
-      if (usesChrome(values)) return chromeStatus(await checkChrome(run))
-      const { code, stdout, stderr } = await run(process.execPath, ['-e', CHECK_SCRIPT], { env: NODE_ENV })
-      if (code !== 0) throw new Error(stderr.trim() || `The browser check exited with code ${code}`)
-      const { ready, name } = JSON.parse(stdout)
-      return { ready, message: ready ? `${name} installed` : 'Browser not installed' }
+      if (usesChrome(values)) {
+        // Kept for whoever picked it, but it's the one mode that brings Chrome to the front, so say so where it shows.
+        const status = chromeStatus(await checkChrome(run))
+        const front = 'Chrome comes to the front each message; pick In the background above for no pop-ups'
+        return status.ready ? { ...status, message: `${status.message}. ${front}` } : status
+      }
+      const chromium = await checkChromium(run)
+      return chromium.ready ? { ...chromium, message: `${chromium.message}, in a window` } : chromium
     },
     async install(run, report, values) {
+      if (usesAttach(values)) {
+        throw new Error(`Start your browser with --remote-debugging-port=${portOf(values)}; there's nothing to install`)
+      }
       if (usesLogins(values)) {
         if (!(await checkChrome(run)).chrome) throw new Error('Install Google Chrome first')
         return
@@ -211,23 +290,32 @@ const browser: Mod = {
       // Its list of running browsers is otherwise in ~/Library/Caches, which the sandbox keeps read-only.
       PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
     }
-    if (usesChrome(values)) {
-      // The extension takes a connection per session, each in a tab group of its own, so subagents share Chrome too.
+    if (usesBackground(values)) {
+      args.unshift(BACKGROUND, 'run', dir)
+      if (chat.worker) env.KOTHAR_BROWSER_WORKER = '1'
+      // Chrome and Chromium can't start their own sandboxes inside Kothar's.
+      if (sandboxed) args.push('--no-sandbox')
+      if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH
+    } else if (usesAttach(values)) {
+      // The user's browser, as it is: Playwright attaches over CDP and leaves it running when the session ends.
+      args.push('--cdp-endpoint', endpointOf(values))
+    } else if (usesChrome(values)) {
+      // The extension takes a connection per session, each in a tab group of its own, so workers share Chrome too.
       args.push('--extension', '--browser', 'chrome')
       const token = String(values.extensionToken ?? '').trim()
       if (token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token
     } else if (usesLogins(values)) {
-      // A subagent gets a copy of its own, since Chrome locks a profile to one browser at a time.
-      const copy = chat.subagent ? join(dir, 'logins-subagents', chat.id) : join(dir, 'logins')
-      if (chat.subagent) env.KOTHAR_LOGINS_TEMPORARY = '1'
+      // A worker gets a copy of its own, since Chrome locks a profile to one browser at a time.
+      const copy = chat.worker ? join(dir, 'logins-workers', chat.id) : join(dir, 'logins')
+      if (chat.worker) env.KOTHAR_LOGINS_TEMPORARY = '1'
       args.unshift(LOGINS, 'run', copy)
       args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
       if (sandboxed) args.push('--no-sandbox')
     } else {
+      // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless.
       args.push('--browser', 'chromium')
-      if (values.background) args.push('--headless')
-      // A space's subagents run beside it, and Chromium locks a profile to one browser at a time.
-      args.push(...(chat.subagent ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
+      // A space's workers run beside it, and Chromium locks a profile to one browser at a time.
+      args.push(...(chat.worker ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
       // Chromium can't start its own sandbox inside Kothar's.
       if (sandboxed) args.push('--no-sandbox')
       if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH

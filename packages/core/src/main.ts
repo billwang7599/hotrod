@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Mod } from '@kotharhq/mod-api'
+import type { Mod } from '@kothar/mod-api'
 import { claudeCode } from './adapters/claude-code.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { pi } from './adapters/pi.ts'
@@ -40,6 +40,10 @@ export async function startCore(
     mods?: Mod[]
     machine?: Machine
     home?: string
+    // How this host restarts Kothar; see openCore's restart.
+    restart?: () => void
+    // Tests pass a stub, so no terminal really opens.
+    openTerminal?: (dir: string, choice?: string) => Promise<void>
   } = {},
 ) {
   const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
@@ -64,6 +68,8 @@ export async function startCore(
     community,
     marketplaceUrl,
     githubToken,
+    ...(options.restart && { restart: options.restart }),
+    ...(options.openTerminal && { openTerminal: options.openTerminal }),
   })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')
@@ -83,13 +89,30 @@ export async function startCore(
   }
 }
 
-// Whether settings.json has the mod turned on, read before the core opens so only mods that are on get imported.
-function savedOn(garage: string, id: string) {
+// Whether settings.json has community mods on and this one turned on, read before the core opens so only mods that are
+// on get imported.
+export function savedOn(garage: string, id: string) {
   try {
-    return JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).mods?.[id]?.enabled === true
+    const settings = JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))
+    return settings.communityMods === true && settings.mods?.[id]?.enabled === true
   } catch {
     return false
   }
+}
+
+// Runs the core and restarts it in this process when asked (npm run dev): the old one stops every chat as quitting does,
+// and the new one reads the settings and community mods again on the same port and token, so the UI reconnects.
+export async function runRestartable(start: (restart: () => void) => ReturnType<typeof startCore>) {
+  let restarting: Promise<void> | undefined
+  const restart = () => {
+    restarting ??= (async () => {
+      await kothar.close()
+      kothar = await start(restart)
+      console.log('Kothar restarted.')
+    })().finally(() => (restarting = undefined))
+  }
+  let kothar = await start(restart)
+  return { current: () => kothar, close: async (force = false) => kothar.close(force) }
 }
 
 export function closeOnSignals(close: (force?: boolean) => Promise<void>) {
@@ -112,10 +135,14 @@ export function closeOnSignals(close: (force?: boolean) => Promise<void>) {
 
 if (import.meta.main) {
   try {
-    const kothar = await startCore()
+    const env = { ...process.env }
+    // The UI must find the core again after a restart, so the token stays the same.
+    env.KOTHAR_TOKEN ||= randomBytes(32).toString('base64url')
+    const run = await runRestartable((restart) => startCore({ env, restart }))
+    const kothar = run.current()
     console.log(`Kothar core on ws://127.0.0.1:${kothar.port} (garage ${kothar.garage})`)
     console.log(`Open ${kothar.openUrl}`)
-    closeOnSignals(kothar.close)
+    closeOnSignals(run.close)
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
