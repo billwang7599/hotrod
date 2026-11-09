@@ -128,7 +128,7 @@ export async function runStrategy(strategy: Exclude<Strategy, 'native'>, chat: S
     const handle = (message: Parameters<typeof core.handle>[0]) => core.handle(message, () => {})
     handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
     handle({ type: 'workFolder.set', path: join(garage, 'work') })
-    if (strategy === 'rolling') handle({ type: 'mod.setValue', modId: 'memory', key: 'mode', value: 'rolling' })
+    if (strategy === 'tree' || strategy === 'rolling') handle({ type: 'mod.setValue', modId: 'memory', key: 'mode', value: strategy })
     await core.refreshEngines()
     handle({ type: 'chat.create', name: 'Bench' })
     const chatId = core.chats().find((c) => c.name === 'Bench')!.id

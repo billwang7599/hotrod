@@ -16,7 +16,7 @@ export type MemoryMode = 'tree' | 'rolling'
 
 export const PARENT_ZOOM_INSTRUCTIONS = "zoom and date read your parent chat's memory, as it was when it started you, with parent: true."
 
-const modeOf = (values: ModValues): MemoryMode => (values.mode === 'rolling' ? 'rolling' : 'tree')
+const modeOf = (values: ModValues): MemoryMode => (values.mode === 'tree' ? 'tree' : 'rolling')
 
 // Options for tests and the bench; Kothar loads the default export.
 export type MemoryModOptions = { debounceMs?: number; retryBaseMs?: number; minChars?: number }
@@ -116,15 +116,15 @@ export function createMemoryMod(options: MemoryModOptions = {}): Mod & { whenIdl
         key: 'mode',
         label: 'Older messages',
         description:
-          'Summary tree: a line per message and per block, finer toward the present, which agents can zoom into. ' +
-          'Rolling summary: one summary of everything older than the latest messages, rewritten as they leave; ' +
-          'fewer summary calls, less detail.',
+          'Rolling summary (the default): one summary of everything older than the latest messages, rewritten as ' +
+          'they leave; few summary calls. Summary tree: a line per message and per block, finer toward the present, ' +
+          'which agents can zoom into; more detail, many more summary calls.',
         type: 'select',
         options: [
-          { value: 'tree', label: 'Summary tree (zoomable)' },
           { value: 'rolling', label: 'Rolling summary' },
+          { value: 'tree', label: 'Summary tree (zoomable)' },
         ],
-        default: 'tree',
+        default: 'rolling',
       },
     ],
     tools: [

@@ -70,9 +70,12 @@ async function start(
     complete?: Adapter['complete']
     mods?: Mod[]
     memory?: Mod
+    // A mode the user saved in Settings; without one the mod's default (Rolling summary) applies.
+    mode?: 'tree' | 'rolling'
   } = {},
 ) {
   const garage = options.garage ?? tempGarage()
+  if (options.mode) writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { memory: { mode: options.mode } } }))
   const memory = options.memory ?? createMemoryMod({ debounceMs: 0 })
   const sessions: { options: SessionOptions; prompt?: string; end(reply?: string): void }[] = []
   const completions: CompleteOptions[] = []
@@ -148,9 +151,9 @@ async function start(
   return { ...kothar, garage, sessions, completions, messages, handle, send, tool, names, space }
 }
 
-describe('Memory mod on (the default)', () => {
+describe('Summary tree mode, saved by the user', () => {
   it('seeds every session with the zoomable view and its instructions, and zoom brings a cut message back', async () => {
-    const t = await start()
+    const t = await start({ mode: 'tree' })
     const chatId = t.space()
     const long = 'x'.repeat(MESSAGE_MAX_CHARS + 10)
     t.send(chatId, long).end('ok')
@@ -168,7 +171,7 @@ describe('Memory mod on (the default)', () => {
     const garage = tempGarage()
     writeLog(garage, 'aaaa0001', 40)
     writeFileSync(join(garage, 'chats', 'aaaa0001', 'chat.json'), JSON.stringify({ id: 'aaaa0001', name: 'Old', folders: [], files: [], engine: 'held', archived: false, createdAt: at }))
-    const t = await start({ garage })
+    const t = await start({ garage, mode: 'tree' })
     await until(() => summarized(garage, 'aaaa0001', 40))
     expect(t.completions[0]).toMatchObject({ cwd: join(garage, 'work', 'home'), model: SUMMARY_MODEL, timeoutMs: COMPLETE_TIMEOUT_MS })
     expect(t.completions[0]?.prompt).toContain('<item key="39+1" kind="talk"')
@@ -182,7 +185,7 @@ describe('Memory mod on (the default)', () => {
     const garage = tempGarage()
     writeLog(garage, 'aaaa0001', 40)
     writeFileSync(join(garage, 'chats', 'aaaa0001', 'chat.json'), JSON.stringify({ id: 'aaaa0001', name: 'Old', folders: [], files: [], engine: 'held', archived: false, createdAt: at }))
-    const t = await start({ garage, work: false })
+    const t = await start({ garage, work: false, mode: 'tree' })
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(t.completions).toHaveLength(0)
     t.handle({ type: 'workFolder.set', path: join(garage, 'work') })
@@ -192,7 +195,7 @@ describe('Memory mod on (the default)', () => {
   })
 
   it('summarizes after a turn ends, once the chat passes COMPACT_MIN_CHARS', async () => {
-    const t = await start()
+    const t = await start({ mode: 'tree' })
     const chatId = t.space()
     t.send(chatId, 'q').end('r'.repeat(COMPACT_MIN_CHARS / 2))
     await new Promise((resolve) => setTimeout(resolve, 30))
@@ -219,7 +222,7 @@ describe('Memory mod on (the default)', () => {
   })
 
   it("gives a worker its parent's view frozen at launch, with read-only zoom and date into it", async () => {
-    const t = await start()
+    const t = await start({ mode: 'tree' })
     const chatId = t.space()
     const lead = t.send(chatId, 'Plan the release')
     await t.tool(lead.options.kotharMcp!.token, 'spawn_worker', { task: 'Check the changelog' })
@@ -248,7 +251,7 @@ describe('Memory mod off', () => {
     const garage = tempGarage()
     writeLog(garage, 'aaaa0001', 40)
     writeFileSync(join(garage, 'chats', 'aaaa0001', 'chat.json'), JSON.stringify({ id: 'aaaa0001', name: 'Old', folders: [], files: [], engine: 'held', archived: false, createdAt: at }))
-    const t = await start({ garage })
+    const t = await start({ garage, mode: 'tree' })
     await until(() => summarized(garage, 'aaaa0001', 40))
     const saved = readFileSync(summariesFile(garage, 'aaaa0001'), 'utf8')
     const callsBefore = t.completions.length
@@ -272,7 +275,7 @@ describe('Memory mod off', () => {
   })
 
   it("gives a worker its parent's latest messages frozen at launch, with no zoom", async () => {
-    const t = await start()
+    const t = await start({ mode: 'tree' })
     t.handle({ type: 'mod.setEnabled', modId: 'memory', enabled: false })
     const chatId = t.space()
     const lead = t.send(chatId, 'Plan the release')
@@ -287,12 +290,12 @@ describe('Memory mod off', () => {
   })
 })
 
-describe('Rolling summary mode', () => {
+describe('Rolling summary mode (the default)', () => {
   it('folds what leaves the tail into one summary, shown before the latest messages', async () => {
     const garage = tempGarage()
     writeLog(garage, 'aaaa0001', 120)
     writeFileSync(join(garage, 'chats', 'aaaa0001', 'chat.json'), JSON.stringify({ id: 'aaaa0001', name: 'Old', folders: [], files: [], engine: 'held', archived: false, createdAt: at }))
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { memory: { mode: 'rolling' } } }))
+    // No saved mode: Rolling summary is the default.
     const t = await start({ garage })
     const rolling = join(garage, 'chats', 'aaaa0001', ROLLING_FILE)
     await until(() => existsSync(rolling) && t.completions.length >= 2)
