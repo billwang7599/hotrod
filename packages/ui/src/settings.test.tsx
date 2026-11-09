@@ -8,6 +8,8 @@ import {
   PERMISSION_DEFAULTS,
   PERMISSION_SWITCHES,
   type ClientMessage,
+  type EngineInfo,
+  type ModelLists,
   type ModInfo,
   type SetupState,
   type WorkFolder,
@@ -318,4 +320,76 @@ test("a mod's text setting saves on blur and resets to its default while it diff
   blur()
   expect(area().value).toBe(notes.default)
   expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
+})
+
+test('Settings → Models gives each listed model its own thinking level, offering only the levels it takes', () => {
+  Element.prototype.scrollIntoView = vi.fn()
+  const engine: EngineInfo = {
+    id: 'claude-code',
+    enabled: true,
+    installed: true,
+    signedIn: true,
+    thinking: ['low', 'medium', 'high'],
+    defaultThinking: 'medium',
+    models: [
+      { id: 'opus', label: 'Opus' },
+      { id: 'haiku', label: 'Haiku', thinking: [] },
+      { id: 'sonnet', label: 'Sonnet', thinking: ['low', 'high'] },
+    ],
+  }
+  const lists: ModelLists = {
+    chat: [],
+    planning: [{ model: 'opus', thinking: 'high' }, { model: 'haiku' }, { model: 'sonnet', thinking: 'medium' }],
+    searching: [],
+    subagents: [],
+  }
+  const sent: ClientMessage[] = []
+  act(() =>
+    root.render(
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider>
+            <SettingsDialog
+              open
+              page="models"
+              openPage={() => {}}
+              close={() => {}}
+              engines={[engine]}
+              accounts={[]}
+              contextDefaults={{ agents: true, folders: true, files: true }}
+              mods={[]}
+              modelLists={{ 'claude-code': lists }}
+              workFolder={workFolder}
+              chooseWorkFolder={() => {}}
+              connected
+              send={(m) => sent.push(m)}
+            />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
+    ),
+  )
+  const select = (label: string) => dialog().querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+  const open = (label: string) =>
+    act(() => select(label)!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const options = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent?.replace('✓', ''))
+
+  expect(select('Thinking for Opus in Planning')!.textContent).toBe('high')
+  expect(select('Thinking for Haiku in Planning')).toBeNull()
+  // Sonnet's saved level is one it doesn't take, and so is the default: the row shows plain default.
+  expect(select('Thinking for Sonnet in Planning')!.textContent).toBe('default')
+  open('Thinking for Sonnet in Planning')
+  expect(options()).toEqual(['default', 'low', 'high'])
+  act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+
+  open('Thinking for Opus in Planning')
+  expect(options()).toEqual(['default (medium)', 'low', 'medium', 'high'])
+  const item = [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent?.endsWith('default (medium)'))!
+  act(() => item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent.at(-1)).toEqual({
+    type: 'models.setList',
+    engine: 'claude-code',
+    role: 'planning',
+    models: [{ model: 'opus' }, { model: 'haiku' }, { model: 'sonnet', thinking: 'medium' }],
+  })
 })

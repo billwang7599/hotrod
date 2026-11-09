@@ -1,5 +1,5 @@
 import type { ModView } from '@hotrod/mod-api'
-import { bySpaceOrder, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
+import { bySpaceOrder, levelsOf, looksBinary, pickModel, pickThinking } from '@hotrod/core/shared'
 import type {
   Account,
   Answers,
@@ -475,12 +475,15 @@ export function engineOptions(engines: EngineInfo[], current: string) {
 
 export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
 
-export const modelMenu = (chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) => ({
-  model: pickModel(engine, lists, chat),
-  models: engine?.models ?? [],
-  thinking: pickThinking(engine, chat),
-  levels: engine?.thinking ?? [],
-})
+export function modelMenu(chat: ChatView, engine?: EngineInfo, lists = NO_LISTS) {
+  const model = pickModel(engine, lists, chat)
+  return {
+    model,
+    models: engine?.models ?? [],
+    thinking: pickThinking(engine, lists, chat, model),
+    levels: levelsOf(engine, model),
+  }
+}
 
 export function formatBytes(bytes: number) {
   if (bytes < 1000) return `${bytes} B`

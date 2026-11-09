@@ -41,6 +41,16 @@ const MODELS = [
   'claude-haiku-4-5',
 ]
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// Models that take fewer --effort levels than EFFORTS; Claude Code silently lowers or drops the rest. From Claude
+// Code 2.1.319's own model list (supportedEffortLevels in its initialize reply) and, for the 4.5 models it doesn't
+// list, its effort, xhigh and max checks.
+const MODEL_EFFORTS: Record<string, string[]> = {
+  'claude-opus-4-6': ['low', 'medium', 'high', 'max'],
+  'claude-sonnet-4-6': ['low', 'medium', 'high', 'max'],
+  'claude-opus-4-5': ['low', 'medium', 'high'],
+  'claude-sonnet-4-5': [],
+  'claude-haiku-4-5': [],
+}
 // What Claude Code runs with no flags on a claude.ai or API login (code.claude.com/docs/en/model-config).
 const DEFAULTS = { defaultModel: 'claude-opus-5-5', defaultThinking: 'medium' }
 
@@ -140,7 +150,7 @@ export const claudeCode: Adapter = {
     if (version?.code !== 0) return { installed: false, signedIn: false }
     const { signedIn } = await authStatus(machine)
     const detail = version.stdout.trim()
-    const offers = { models: MODELS, thinking: EFFORTS, ...DEFAULTS }
+    const offers = { models: MODELS, thinking: EFFORTS, modelThinking: MODEL_EFFORTS, ...DEFAULTS }
     return { installed: true, signedIn, detail, ...offers }
   },
 

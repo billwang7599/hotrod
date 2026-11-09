@@ -42,7 +42,8 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
-export type ModelOption = { id: string; label: string }
+// thinking: the levels this model takes, when they differ from its engine's list; empty when it takes none.
+export type ModelOption = { id: string; label: string; thinking?: string[] }
 
 export type EngineStatus = {
   installed: boolean
@@ -50,6 +51,8 @@ export type EngineStatus = {
   detail?: string
   models?: string[]
   thinking?: string[]
+  // Per model id, the levels a model takes when they differ from `thinking` ([] when it takes none).
+  modelThinking?: Record<string, string[]>
   defaultModel?: string
   defaultThinking?: string
 }
@@ -189,17 +192,39 @@ export const MODEL_ROLES = ['chat', 'planning', 'searching', 'subagents'] as con
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
 
-export type ModelLists = Record<ModelRole, string[]>
+// One entry in a role's model list: a model and, optionally, the thinking level it runs at there.
+export type ModelRow = { model: string; thinking?: string }
+
+export type ModelLists = Record<ModelRole, ModelRow[]>
+
+/** A role's list, or the Chat list while the role's own is empty. */
+const listFor = (lists: ModelLists, role: ModelRole = 'chat') => (lists[role]?.length ? lists[role] : lists.chat) ?? []
 
 export function pickModel(engine: EngineInfo | undefined, lists: ModelLists, chat: Pick<ChatInfo, 'model' | 'role'>) {
   const offers = (id?: string) => engine?.models?.some((m) => m.id === id) ?? false
   if (offers(chat.model)) return chat.model
-  const list = lists[chat.role ?? 'chat']
-  return (list?.length ? list : lists.chat).find(offers) ?? engine?.defaultModel
+  return listFor(lists, chat.role).find((row) => offers(row.model))?.model ?? engine?.defaultModel
 }
 
-export const pickThinking = (engine: EngineInfo | undefined, chat: Pick<ChatInfo, 'thinking'>) =>
-  chat.thinking && engine?.thinking?.includes(chat.thinking) ? chat.thinking : engine?.defaultThinking
+/** The thinking levels a model takes: its own list if its engine gives one, else the engine's. */
+export const levelsOf = (engine: EngineInfo | undefined, model?: string) =>
+  engine?.models?.find((m) => m.id === model)?.thinking ?? engine?.thinking ?? []
+
+/**
+ * The thinking level a chat runs `model` at: the chat's own pick, else the level on that model's row in the chat's
+ * role list, else the engine's default. Each must be one the model takes; with none, the engine picks.
+ */
+export function pickThinking(
+  engine: EngineInfo | undefined,
+  lists: ModelLists,
+  chat: Pick<ChatInfo, 'thinking' | 'role'>,
+  model?: string,
+) {
+  const levels = levelsOf(engine, model)
+  const valid = (level?: string) => (level !== undefined && levels.includes(level) ? level : undefined)
+  const row = listFor(lists, chat.role).find((r) => r.model === model)
+  return valid(chat.thinking) ?? valid(row?.thinking) ?? valid(engine?.defaultThinking)
+}
 
 export type ModInfo = {
   id: string
@@ -324,7 +349,7 @@ export type ClientMessage =
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'mod.install'; modId: string }
   | { type: 'mod.cancelInstall'; modId: string }
-  | { type: 'models.setList'; engine: string; role: ModelRole; models: string[] }
+  | { type: 'models.setList'; engine: string; role: ModelRole; models: (ModelRow | string)[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
   | { type: 'account.code'; engine: string; code: string }

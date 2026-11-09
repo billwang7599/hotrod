@@ -14,6 +14,7 @@ import { Dialog } from 'radix-ui'
 import {
   editsAnywhere,
   IMAGE_TYPES,
+  levelsOf,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   type Attachment,
@@ -1077,8 +1078,11 @@ export function Chat(props: ChatProps) {
     if (await confirm(FORCE_STOP_TEXT)) send({ type: 'chat.interrupt', chatId: chat.id, force: true })
   }
   const menu = modelMenu(chat, offers, props.modelLists)
-  const setModel = (model?: string, thinking?: string) =>
-    send({ type: 'chat.setModel', chatId: chat.id, model, thinking })
+  const setModel = (model?: string, thinking?: string) => {
+    // A new model keeps the chat's own thinking level only if it takes it; otherwise Settings picks the level again.
+    const pinned = chat.thinking && levelsOf(offers, model).includes(chat.thinking) ? chat.thinking : undefined
+    send({ type: 'chat.setModel', chatId: chat.id, model, thinking: model === menu.model ? thinking : pinned })
+  }
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
   // A chat's nth reply keeps one name from draft to finished item, so its reveal carries over. Texts already there when
   // the chat was opened show whole; ones that arrive while it's open type out.
@@ -1628,12 +1632,13 @@ function Composer(props: ComposerProps) {
               onChange={(model) => setModel(model, menu.thinking)}
             />
           )}
-          {menu.thinking && (
+          {menu.levels.length > 0 && (
             <Select
               variant="chip"
               label="Thinking"
               hint={THINKING_HINT}
-              value={menu.thinking}
+              value={menu.thinking ?? ''}
+              placeholder="Thinking"
               disabled={!canChange}
               options={menu.levels.map((l) => ({ value: l, label: l }))}
               onChange={(thinking) => setModel(menu.model, thinking)}

@@ -97,6 +97,15 @@ describe('claudeCode adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--effort')
   })
 
+  it('reports the effort levels each model takes where they differ from the full list', async () => {
+    const { models = [], thinking = [], modelThinking = {} } = await claudeCode.detect(fakeMachine(detected).machine)
+    expect(thinking).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(modelThinking['claude-haiku-4-5']).toEqual([])
+    expect(modelThinking['claude-opus-4-6']).toEqual(['low', 'medium', 'high', 'max'])
+    expect(modelThinking['claude-opus-5-5']).toBeUndefined()
+    expect(Object.keys(modelThinking).every((id) => models.includes(id))).toBe(true)
+  })
+
   it('gives Claude Code the other folders with --add-dir', () => {
     const args = startSession('', { extraDirs: ['/tmp/a', '/tmp/b'] }).fake.spawned[0]!.args
     expect(args.filter((_, i) => args[i - 1] === '--add-dir')).toEqual(['/tmp/a', '/tmp/b'])

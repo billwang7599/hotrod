@@ -5,6 +5,7 @@ import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
   PERMISSION_SWITCHES,
+  levelsOf,
   settingProblem,
   switchedOn,
   type Account,
@@ -14,6 +15,7 @@ import {
   type EngineInfo,
   type ModelLists,
   type ModelRole,
+  type ModelRow,
   type ModInfo,
   type WorkFolder,
 } from '@hotrod/core/shared'
@@ -469,6 +471,12 @@ function SettingRow({ name, description, children, below }: RowProps) {
   )
 }
 
+// The row select's value for no level of its own, so the engine's default thinking applies.
+const DEFAULT_LEVEL = '\u0000default'
+
+const defaultLevelLabel = (engine: EngineInfo, levels: string[]) =>
+  engine.defaultThinking && levels.includes(engine.defaultThinking) ? `default (${engine.defaultThinking})` : 'default'
+
 type EngineModelsProps = {
   engine: EngineInfo
   lists: ModelLists
@@ -492,20 +500,39 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
           {MODEL_ROLES.map((role) => {
             const list = lists[role]
             const { name, about } = ROLES[role]
-            const setList = (models: string[]) => send({ type: 'models.setList', engine: engine.id, role, models })
+            const setList = (models: ModelRow[]) => send({ type: 'models.setList', engine: engine.id, role, models })
             const move = (from: number, to: number) => {
               const next = [...list]
               next.splice(to, 0, ...next.splice(from, 1))
               setList(next)
             }
-            const items = list.map((id, i) => {
+            const items = list.map((row, i) => {
+              const id = row.model
               const label = labelOf(id)
+              const levels = label ? levelsOf(engine, id) : []
+              const setThinking = (level: string) => {
+                const changed = { model: id, ...(level !== DEFAULT_LEVEL && { thinking: level }) }
+                setList(list.map((r, j) => (j === i ? changed : r)))
+              }
               return (
                 <li key={id} className="flex h-28 items-center gap-6 rounded pr-2 pl-8 hover:bg-raised">
                   <span className="w-16 text-sm text-faint">{i + 1}</span>
                   <span className={`min-w-0 flex-1 truncate ${label ? '' : 'font-mono text-muted'}`}>
                     {label ?? `${id} (not offered, skipped)`}
                   </span>
+                  {levels.length > 0 && (
+                    <Select
+                      variant="chip"
+                      label={`Thinking for ${label} in ${name}`}
+                      value={row.thinking && levels.includes(row.thinking) ? row.thinking : DEFAULT_LEVEL}
+                      disabled={!connected}
+                      options={[
+                        { value: DEFAULT_LEVEL, label: defaultLevelLabel(engine, levels) },
+                        ...levels.map((level) => ({ value: level, label: level })),
+                      ]}
+                      onChange={setThinking}
+                    />
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -529,14 +556,14 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
                     size="icon"
                     aria-label={`Remove ${label ?? id}`}
                     disabled={!connected}
-                    onClick={() => setList(list.filter((m) => m !== id))}
+                    onClick={() => setList(list.filter((r) => r.model !== id))}
                   >
                     ×
                   </Button>
                 </li>
               )
             })
-            const addable = offered.filter((m) => !list.includes(m.id))
+            const addable = offered.filter((m) => !list.some((r) => r.model === m.id))
             return (
               <SettingRow
                 key={role}
@@ -550,7 +577,7 @@ function EngineModels({ engine, lists, connected, send }: EngineModelsProps) {
                   placeholder="Add model…"
                   disabled={!connected || !addable.length}
                   options={addable.map((m) => ({ value: m.id, label: m.label }))}
-                  onChange={(model) => setList([...list, model])}
+                  onChange={(model) => setList([...list, { model }])}
                 />
               </SettingRow>
             )

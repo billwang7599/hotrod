@@ -3160,25 +3160,77 @@ describe('models', () => {
     const empty = { chat: [], planning: [], searching: [], subagents: [] }
     expect(t.core.modelLists()).toEqual({ fake: empty })
 
-    t.handle({ type: 'models.setList', engine: 'fake', role: 'planning', models: [older, newest] })
-    const lists = { ...empty, planning: [older, newest] }
+    const planning = [{ model: older, thinking: 'low' }, { model: newest }]
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'planning', models: [planning[0]!, newest] })
+    const lists = { ...empty, planning }
     expect(t.messages.at(-1)).toEqual({ type: 'models.updated', engine: 'fake', lists })
-    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({
-      theme: 'dark',
-      models: { fake: { planning: [older, newest] } },
-    })
+    expect(JSON.parse(readFileSync(settingsFile(t), 'utf8'))).toMatchObject({ theme: 'dark', models: { fake: { planning } } })
 
     expect(() => t.handle({ type: 'models.setList', engine: 'nope', role: 'chat', models: [] })).toThrow(/engine/)
     expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'nope', models: [] } as never)).toThrow(
       /role/,
     )
-    for (const models of ['x', [1], ['']]) {
+    for (const models of ['x', [1], [''], [{ model: '' }], [{ model: older, thinking: 3 }], [{ thinking: 'low' }]]) {
       expect(() => t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models } as never)).toThrow(
         /model ids/,
       )
     }
     t.core.close()
     expect(setup(textScript, garage).core.modelLists()).toEqual({ fake: lists })
+  })
+
+  it('migrates lists of plain model ids to rows without losing any, and saves them once', () => {
+    const garage = tempDir()
+    const old = { theme: 'dark', models: { fake: { chat: [newest, older], planning: [older] }, gone: { chat: ['x'] } } }
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify(old))
+    const t = setup(textScript, garage)
+    const fake = { chat: [{ model: newest }, { model: older }], planning: [{ model: older }] }
+    expect(t.core.modelLists().fake).toMatchObject(fake)
+    const saved = JSON.parse(readFileSync(settingsFile(t), 'utf8'))
+    expect(saved).toEqual({ ...saved, theme: 'dark', models: { fake, gone: { chat: [{ model: 'x' }] } } })
+  })
+
+  // A fake engine whose small model takes only low, and whose model "none" takes no thinking at all.
+  const perModel = () => {
+    const base = createFakeAdapter(textScript, 0)
+    const detect = async (machine: Machine) => ({
+      ...(await base.detect(machine)),
+      models: [...FAKE_MODELS, 'none'],
+      modelThinking: { [older]: ['low'], none: [] },
+    })
+    return setup({ ...base, detect })
+  }
+
+  it("runs a listed model at its row's thinking level, also when the list falls back to it", async () => {
+    const t = perModel()
+    await t.core.refreshEngines()
+    const rows = ['gone', { model: newest, thinking: 'low' }]
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: rows })
+    expect(await sendAndWait(t)).toBe(newest)
+    expect(t.calls.at(-1)!.options.thinking).toBe('low')
+    // The chat's own level wins over the row's, and picking the row's level unpins it again.
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'high' })
+    expect(chatOf(t.core, 'main')?.thinking).toBe('high')
+    await sendAndWait(t)
+    expect(t.calls.at(-1)!.options.thinking).toBe('high')
+    t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'low' })
+    expect(chatOf(t.core, 'main')?.thinking).toBeUndefined()
+  })
+
+  it("skips a level the model doesn't take, from its row or the default, and passes none without thinking", async () => {
+    const t = perModel()
+    await t.core.refreshEngines()
+    expect(t.core.engines()[0]?.models).toContainEqual({ id: older, label: older, thinking: ['low'] })
+    // Neither the row's level nor the default (high) is one the small model takes.
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [{ model: older, thinking: 'high' }] })
+    expect(await sendAndWait(t)).toBe(older)
+    expect(t.calls.at(-1)!.options).not.toHaveProperty('thinking')
+    expect(() => t.handle({ type: 'chat.setModel', chatId: 'main', thinking: 'high' })).toThrow(
+      /Model "fake-small" offers no thinking level "high"/,
+    )
+    t.handle({ type: 'models.setList', engine: 'fake', role: 'chat', models: [{ model: 'none', thinking: 'low' }] })
+    expect(await sendAndWait(t)).toBe('none')
+    expect(t.calls.at(-1)!.options).not.toHaveProperty('thinking')
   })
 
   it('starts an unpinned chat on the first listed model the engine offers', async () => {

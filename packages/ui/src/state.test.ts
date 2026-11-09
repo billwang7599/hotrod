@@ -534,7 +534,7 @@ describe('reduce', () => {
   })
 
   it('loads the model lists from the snapshot and replaces one engine on update', () => {
-    const lists = { ...noLists, chat: ['b'] }
+    const lists = { ...noLists, chat: [{ model: 'b', thinking: 'low' }] }
     const state = run(snapshot([chat(MAIN_CHAT_ID)]), { type: 'models.updated', engine: 'pi', lists })
     expect(state.modelLists).toEqual({ fake: noLists, pi: lists })
   })
@@ -683,14 +683,14 @@ describe('modelMenu', () => {
   })
 
   it("selects the chat's own picks, else the first listed model the engine offers", () => {
-    const lists = { ...noLists, chat: ['gone', 'haiku-5-5'] }
+    const lists = { ...noLists, chat: [{ model: 'gone' }, { model: 'haiku-5-5' }] }
     expect(modelMenu(view(), offers, lists).model).toBe('haiku-5-5')
     const picked = modelMenu(view({ model: 'opus-5-5', thinking: 'high' }), offers, lists)
     expect(picked).toMatchObject({ model: 'opus-5-5', thinking: 'high' })
   })
 
   it("uses a subagent's role list, falling back to the Chat list when it is empty", () => {
-    const lists = { ...noLists, chat: ['opus-5-5'], planning: ['haiku-5-5'] }
+    const lists = { ...noLists, chat: [{ model: 'opus-5-5' }], planning: [{ model: 'haiku-5-5' }] }
     expect(modelMenu(view({ role: 'planning' }), offers, lists).model).toBe('haiku-5-5')
     expect(modelMenu(view({ role: 'subagents' }), offers, lists).model).toBe('opus-5-5')
   })
@@ -698,6 +698,18 @@ describe('modelMenu', () => {
   it('selects what will run instead of a pick the engine no longer offers', () => {
     expect(modelMenu(view({ model: 'opus', thinking: 'ultra' }), offers, noLists)).toMatchObject({ model, thinking })
     expect(modelMenu(view(), undefined, undefined)).toEqual({ models: [], levels: [] })
+  })
+
+  it("runs a listed model at its row's thinking level unless the chat picked one, and offers only its levels", () => {
+    const perModel = { ...offers, models: [catalog[0]!, { ...catalog[1]!, thinking: [] }, { ...catalog[2]!, thinking: ['low'] }] }
+    const lists = { ...noLists, chat: [{ model: 'opus-5-5', thinking: 'high' }], planning: [{ model: 'haiku-5-5' }] }
+    expect(modelMenu(view(), perModel, lists)).toMatchObject({ model: 'opus-5-5', thinking: 'high', levels })
+    expect(modelMenu(view({ thinking: 'low' }), perModel, lists).thinking).toBe('low')
+    // Haiku takes only low, so neither its row (none) nor the engine default (medium) applies.
+    const haiku = modelMenu(view({ role: 'planning' }), perModel, lists)
+    expect(haiku).toMatchObject({ model: 'haiku-5-5', thinking: undefined, levels: ['low'] })
+    const none = modelMenu(view({ model: 'opus-4-8', thinking: 'high' }), perModel, lists)
+    expect(none).toMatchObject({ model: 'opus-4-8', thinking: undefined, levels: [] })
   })
 })
 

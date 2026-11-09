@@ -505,7 +505,7 @@ it('tells a chat that can spawn subagents the saved subagent instructions, or th
   expect(send('main', 'again').options.instructions).toContain(SUBAGENT_INSTRUCTIONS)
 })
 
-it("starts a subagent on its parent's model and thinking level, unless a role or the Subagents list picks one", async () => {
+it("starts a subagent on its parent's model and thinking level, unless a role or the Subagents list picks them", async () => {
   const { core, garage, json, send, sessionOf } = await startHeld()
   const handle = handleOn(core)
   await core.refreshEngines()
@@ -525,10 +525,12 @@ it("starts a subagent on its parent's model and thinking level, unless a role or
   expect(sessionOf(planner).options.model).toBe(large)
   expect(JSON.parse(readFileSync(join(garage, 'chats', planner, 'chat.json'), 'utf8')).role).toBe('planning')
 
-  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [small] })
+  // A Subagents row picks the model, and its own thinking level instead of the parent's.
+  handle({ type: 'models.setList', engine: 'held', role: 'subagents', models: [{ model: small, thinking: 'low' }] })
   const next = (await json(token, 'spawn_subagent', { task: 'Again' })).chatId
-  expect(chatIn(core, next).model).toBeUndefined()
-  expect(sessionOf(next).options).toMatchObject({ model: small, thinking })
+  expect(chatIn(core, next)).not.toHaveProperty('model')
+  expect(chatIn(core, next)).not.toHaveProperty('thinking')
+  expect(sessionOf(next).options).toMatchObject({ model: small, thinking: 'low' })
 })
 
 it("wakes the parent with a subagent's final reply, queued while the parent is busy, then removes the subagent", async () => {

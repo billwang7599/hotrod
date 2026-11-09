@@ -54,6 +54,7 @@ import {
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MODEL_ROLES,
   PERMISSION_SWITCHES,
+  levelsOf,
   pickModel,
   pickThinking,
   settingProblem,
@@ -77,6 +78,7 @@ import {
   type MemorySettings,
   type ModelLists,
   type ModelRole,
+  type ModelRow,
   type ModInfo,
   type NewChat,
   type PanelTab,
@@ -172,12 +174,19 @@ export function openCore(options: {
     engines: Record<string, boolean>
     context?: Partial<Record<ContextSection, boolean>>
     mods?: Record<string, Record<string, unknown>>
-    models?: Record<string, Partial<ModelLists>>
+    // Rows were plain model ids before each could carry a thinking level; reading them migrates them (rowsOf).
+    models?: Record<string, Partial<Record<ModelRole, (ModelRow | string)[]>>>
     defaultThinking?: Record<string, string>
     memory?: MemorySettings
     workFolder?: string
   } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
+  const lists = Object.values(settings.models ?? {}).flatMap((saved) => Object.values(saved))
+  if (lists.some((rows) => !Array.isArray(rows) || rows.some((row) => !isRow(row)))) {
+    const migrate = (saved: object) => Object.fromEntries(Object.entries(saved).map(([role, rows]) => [role, rowsOf(rows)]))
+    settings.models = Object.fromEntries(Object.entries(settings.models!).map(([id, saved]) => [id, migrate(saved)]))
+    saveSettings()
+  }
   const contextDefaults = (): Record<ContextSection, boolean> => ({
     agents: settings.context?.agents ?? true,
     folders: settings.context?.folders ?? true,
@@ -208,13 +217,10 @@ export function openCore(options: {
     const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
     return { ...info, ...(setup && { setup }) }
   }
-  const listsOf = (engine: string): ModelLists => ({
-    chat: [],
-    planning: [],
-    searching: [],
-    subagents: [],
-    ...settings.models?.[engine],
-  })
+  const listsOf = (engine: string): ModelLists => {
+    const saved = settings.models?.[engine] ?? {}
+    return Object.fromEntries(MODEL_ROLES.map((role) => [role, rowsOf(saved[role])])) as ModelLists
+  }
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
@@ -326,10 +332,12 @@ export function openCore(options: {
   const setModelList = (engine: string, role: unknown, models: unknown) => {
     checkEngine(engine)
     if (!MODEL_ROLES.includes(role as ModelRole)) throw new Error(`Unknown model role "${role}"`)
-    if (!Array.isArray(models) || !models.every((id) => typeof id === 'string' && id)) {
-      throw new Error('A model list must be a list of model ids')
+    if (!Array.isArray(models) || !models.every((row) => (typeof row === 'string' && row) || isRow(row))) {
+      throw new Error('A model list must be a list of model ids, each with an optional thinking level')
     }
-    settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: models } }
+    // A level its model doesn't take is kept, and skipped when a session starts (pickThinking).
+    const rows = rowsOf(models)
+    settings.models = { ...settings.models, [engine]: { ...settings.models?.[engine], [role as ModelRole]: rows } }
     saveSettings()
     broadcast({ type: 'models.updated', engine, lists: listsOf(engine) })
   }
@@ -962,12 +970,11 @@ export function openCore(options: {
       engine,
       archived: false,
       createdAt: new Date().toISOString(),
-      // A subagent on its parent's engine takes its thinking level, and its model unless a role picks one: the role
-      // the tool call names, or the Subagents model list once the user has filled it in.
-      ...(parent?.info.engine === engine && {
-        thinking: parent.info.thinking,
-        ...(spec.role === undefined && !listsOf(engine).subagents.length && { model: parent.info.model }),
-      }),
+      // A subagent on its parent's engine takes its model and thinking level unless a role picks them: the role the
+      // tool call names, or the Subagents model list once the user has filled it in. Then that row's level applies.
+      ...(parent?.info.engine === engine &&
+        spec.role === undefined &&
+        !listsOf(engine).subagents.length && { model: parent.info.model, thinking: parent.info.thinking }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parentMemory?.messages.length) {
@@ -1053,17 +1060,19 @@ export function openCore(options: {
 
   const setModel = (chat: Chat, model?: string, thinking?: string) => {
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')
-    const { engine } = chat.info
-    const offers = offered(engine)
+    const { engine, role } = chat.info
     if (model && !offersModel(engine, model)) throw new Error(`Engine "${engine}" offers no model "${model}"`)
-    if (thinking && !offers.thinking.includes(thinking)) {
-      throw new Error(`Engine "${engine}" offers no thinking level "${thinking}"`)
-    }
     const info = engineInfo(engine)
-    const unpinned = pickModel(info, listsOf(engine), { role: chat.info.role })
+    const lists = listsOf(engine)
+    const unpinned = pickModel(info, lists, { role })
+    const runs = model ?? unpinned
+    if (thinking && !levelsOf(info, runs).includes(thinking)) {
+      throw new Error(`${runs ? `Model "${runs}"` : `Engine "${engine}"`} offers no thinking level "${thinking}"`)
+    }
     updateChat(chat, {
       model: model === unpinned ? undefined : model,
-      thinking: thinking === info.defaultThinking ? undefined : thinking,
+      // Unpinned when it's the level Settings would pick for this model anyway, so the chat keeps following Settings.
+      thinking: thinking === pickThinking(info, lists, { role }, runs) ? undefined : thinking,
     })
   }
 
@@ -1456,8 +1465,9 @@ export function openCore(options: {
         chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
         const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
         const engine = engineInfo(adapter.id)
-        const model = pickModel(engine, listsOf(adapter.id), chat.info)
-        const thinking = pickThinking(engine, chat.info)
+        const lists = listsOf(adapter.id)
+        const model = pickModel(engine, lists, chat.info)
+        const thinking = pickThinking(engine, lists, chat.info, model)
         const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
         const images = imagesFor(adapter, attachments)
         const options = {
@@ -1872,15 +1882,17 @@ function describeModel(id: string) {
   return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
 }
 
-function nameModels({ models, defaultModel, ...status }: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
-  if (!models) return { ...status, ...(defaultModel && { defaultModel }) }
+function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
+  const { models, defaultModel, modelThinking, ...rest } = status
+  if (!models) return { ...rest, ...(defaultModel && { defaultModel }) }
   const providers = [...new Set(models.map(providerOf))]
   const named = models
     .filter((id) => !SNAPSHOT_ID.test(id))
     .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
     .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
   const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
-  return { ...status, models: named.map(({ id, label }) => ({ id, label })), ...(shown && { defaultModel: shown }) }
+  const options = named.map(({ id, label }) => ({ id, label, ...(modelThinking?.[id] && { thinking: modelThinking[id] }) }))
+  return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
 }
 
 const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
@@ -1892,6 +1904,20 @@ const freeName = (base: string, taken: (name: string) => boolean) => {
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+const isRow = (row: unknown): row is ModelRow => {
+  if (typeof row !== 'object' || row === null) return false
+  const { model, thinking } = row as Record<string, unknown>
+  const text = (value: unknown) => typeof value === 'string' && value !== ''
+  return text(model) && (thinking === undefined || text(thinking))
+}
+
+/** A saved model list as rows; a plain model id (saved before rows had thinking levels) becomes a row of its own. */
+const rowsOf = (saved: unknown): ModelRow[] =>
+  (Array.isArray(saved) ? saved : []).flatMap((row): ModelRow[] => {
+    if (typeof row === 'string') return row ? [{ model: row }] : []
+    return isRow(row) ? [{ model: row.model, ...(row.thinking && { thinking: row.thinking }) }] : []
+  })
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
