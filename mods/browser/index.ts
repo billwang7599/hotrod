@@ -77,6 +77,9 @@ const usesChrome = (values: ModValues) => values.browser === 'chrome'
 const usesLogins = (values: ModValues) => values.browser === 'logins'
 const usesBackground = (values: ModValues) => values.browser === 'background'
 const usesAttach = (values: ModValues) => values.browser === 'attach'
+// Kothar's Chromium in a visible window. A new value rather than the old 'chromium', which was headless by default:
+// reusing it would open windows for everyone who had picked it.
+export const WINDOW = 'window'
 
 export const DEFAULT_PORT = 9222
 const portOf = (values: ModValues) => {
@@ -150,7 +153,7 @@ const browser: Mod = {
   description:
     'Agents browse the web with Playwright. By default in the background: no window opens or takes focus, on your ' +
     "Google Chrome if you have it, else a Chromium of Kothar's own, never your Chrome's profile or logins. Each space " +
-    'keeps its own browser profile, so a login there stays.',
+    'keeps its own browser profile, so a login there stays. Pick a mode with a window only to watch the agent.',
   enabledByDefault: false,
   settings: [
     {
@@ -158,22 +161,25 @@ const browser: Mod = {
       label: 'Browser',
       description:
         'In the background: headless, so nothing opens or takes focus, on Google Chrome if it is installed (nothing to ' +
-        "install), else Kothar's Chromium. Kothar's Chromium: Playwright's Chromium, in a window unless kept in the " +
-        'background below. ' +
-        "Your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
+        "install), else Kothar's Chromium, with a profile of the space's own. " +
+        "With your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
         "storage (not passwords or history), so agents are logged in where you are and can act as you there, " +
         'without opening a window. Logins you make in Chrome reach agents at their next message. ' +
-        "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
-        'Each message that browses opens a tab and brings Chrome to the front. Subagents share it, each in a tab ' +
-        'group of its own. ' +
+        "Kothar's Chromium, in a window: Playwright's Chromium in a window you can watch, which may take focus while " +
+        'the agent works. ' +
         'Your open browser: agents attach to a Chromium-based browser you started with --remote-debugging-port, as ' +
         "pi's browser extension does, and work in its tabs with its logins. Chrome 136 and later only allow this with " +
-        'a --user-data-dir other than your usual one.',
+        'a --user-data-dir other than your usual one. ' +
+        "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
+        'Each message that browses opens a tab and brings Chrome to the front. Subagents share it, each in a tab ' +
+        'group of its own.',
       type: 'select',
       options: [
+        // 'chromium' (Kothar's Chromium, headless unless a switch said otherwise) is gone: a saved one isn't an option,
+        // so it reads as the default, 'background', which stays headless as it was. See WINDOW.
         { value: 'background', label: 'In the background (no window)' },
-        { value: 'chromium', label: "Kothar's Chromium" },
-        { value: 'logins', label: "Your Chrome's logins, in the background" },
+        { value: 'logins', label: "In the background, with your Chrome's logins" },
+        { value: WINDOW, label: "Kothar's Chromium, in a window" },
         { value: 'attach', label: 'Your open browser (debugging port)' },
         { value: 'chrome', label: 'Your Chrome, in front (shows Chrome)' },
       ],
@@ -198,15 +204,6 @@ const browser: Mod = {
       type: 'text',
       default: '',
       rows: 1,
-    },
-    {
-      key: 'background',
-      label: 'Keep the browser in the background',
-      description:
-        "Kothar's Chromium only; the other modes but Your Chrome, in front, always run in the background. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
-        'visible window, which may take focus while the agent works.',
-      type: 'boolean',
-      default: true,
     },
     {
       key: 'askEachAction',
@@ -234,7 +231,8 @@ const browser: Mod = {
         ? `Install opens the Playwright Extension in the Chrome Web Store (${EXTENSION_URL}). Add it to Chrome, ` +
           'and this turns ready once Chrome has it.'
         : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's " +
-          'browser folder, which other Playwright tools share. Nothing in it is removed.',
+          'browser folder, which other Playwright tools share. Nothing in it is removed. Its window may take focus ' +
+          'while the agent works.',
     async check(run, values) {
       if (usesBackground(values)) return checkBackground(run)
       if (usesAttach(values)) return checkAttach(run, values)
@@ -245,7 +243,8 @@ const browser: Mod = {
         const front = 'Chrome comes to the front each message; pick In the background above for no pop-ups'
         return status.ready ? { ...status, message: `${status.message}. ${front}` } : status
       }
-      return checkChromium(run)
+      const chromium = await checkChromium(run)
+      return chromium.ready ? { ...chromium, message: `${chromium.message}, in a window` } : chromium
     },
     async install(run, report, values) {
       if (usesAttach(values)) {
@@ -313,8 +312,8 @@ const browser: Mod = {
       args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
       if (sandboxed) args.push('--no-sandbox')
     } else {
+      // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless.
       args.push('--browser', 'chromium')
-      if (values.background) args.push('--headless')
       // A space's subagents run beside it, and Chromium locks a profile to one browser at a time.
       args.push(...(chat.subagent ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
       // Chromium can't start its own sandbox inside Kothar's.

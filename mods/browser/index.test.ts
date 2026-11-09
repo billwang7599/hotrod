@@ -7,10 +7,10 @@ import { crc32 } from 'node:zlib'
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
 import type { ModRun, ModSession } from '@kothar/mod-api'
 import { startCore } from '@kothar/core/main'
-import type { Adapter, SessionOptions } from '@kothar/core/shared'
+import { type Adapter, type SessionOptions, settingProblem } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import { backgroundArgs } from './background.ts'
-import browser, { BROWSER_INSTRUCTIONS, DEFAULT_PORT, EXTENSION_URL } from './index.ts'
+import browser, { BROWSER_INSTRUCTIONS, DEFAULT_PORT, EXTENSION_URL, WINDOW } from './index.ts'
 
 const dirs: string[] = []
 const tempDir = (prefix: string) => {
@@ -35,18 +35,18 @@ afterAll(() => {
 
 const run: ModRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
 const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
-const chromium = { ...defaults, browser: 'chromium' }
+const chromium = { ...defaults, browser: WINDOW }
 const space = { id: 'abc', name: 'Space', engine: 'claude-code' }
 const serverFor = (session: Partial<ModSession> = {}) =>
   browser.mcpServers!({ chat: space, workDir: '/work/abc', sandboxed: true, values: defaults, ...session })[0]!
 const valueAfter = (args: string[] = [], flag: string) =>
   args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
 
-it("runs Playwright MCP headless on Playwright's Chromium, with the space's own profile in its work folder", () => {
+it("runs Playwright MCP on Playwright's Chromium in a window, with the space's own profile in its work folder", () => {
   const { name, command, args, env, allowTools } = serverFor({ values: chromium })
   expect({ name, command, allowTools }).toEqual({ name: 'browser', command: process.execPath, allowTools: true })
   expect(existsSync(args![0]!)).toBe(true)
-  expect(args).toContain('--headless')
+  expect(args).not.toContain('--headless')
   expect(valueAfter(args, '--browser')).toBe('chromium')
   expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/profile')
   expect(valueAfter(args, '--output-dir')).toBe('/work/abc/.browser/output')
@@ -59,13 +59,28 @@ it("runs Playwright MCP headless on Playwright's Chromium, with the space's own 
   })
 })
 
-it("shows a window, asks before each action, keeps a subagent's profile in memory, as set", () => {
-  expect(serverFor({ values: { ...chromium, background: false } }).args).not.toContain('--headless')
+it("asks before each action and keeps a subagent's profile in memory, as set", () => {
   expect(serverFor({ values: { ...chromium, askEachAction: true } }).allowTools).toBe(false)
   const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true }, values: chromium }).args
   expect(subagent).toContain('--isolated')
   expect(subagent).not.toContain('--user-data-dir')
   expect(serverFor({ sandboxed: false, values: chromium }).args).not.toContain('--no-sandbox')
+})
+
+it('has one picker for where the browser runs, with no separate background switch', () => {
+  const keys = browser.settings!.map((setting) => setting.key)
+  expect(keys).not.toContain('background')
+  const picker = browser.settings!.find((setting) => setting.key === 'browser')!
+  expect(picker.type === 'select' && picker.options.map((option) => option.value)).toEqual([
+    'background', 'logins', WINDOW, 'attach', 'chrome',
+  ])
+})
+
+it("isn't offered the old 'chromium', once headless by default, so the core reads it as the default, background", () => {
+  const picker = browser.settings!.find((setting) => setting.key === 'browser')!
+  // The core swaps a saved value with a problem for the setting's default.
+  expect(settingProblem(picker, 'chromium')).toBeTruthy()
+  expect(picker.default).toBe('background')
 })
 
 it('browses in the background by default, through background.ts, which picks Chrome or Chromium where it runs', () => {
@@ -205,8 +220,6 @@ it("runs your Chrome headless on the space's copy of your Chrome logins, with Ch
   const config = JSON.parse(readFileSync(valueAfter(args, '--config')!, 'utf8'))
   expect(config.browser.launchOptions.ignoreDefaultArgs).toContain('--use-mock-keychain')
   expect(env).not.toHaveProperty('KOTHAR_LOGINS_TEMPORARY')
-  // A window would take focus, so this mode has none, whatever the Chromium setting says.
-  expect(serverFor({ values: { ...logins, background: false } }).args).toContain('--headless')
 })
 
 it('gives a subagent a copy of its own, removed when its session ends', () => {
@@ -403,7 +416,7 @@ it("installs Chromium with Playwright's installer, reporting progress, and never
   const reports: { text?: string; progress?: number }[] = []
   await browser.setup!.install(run, (update) => reports.push(update), chromium)
   expect(reports).toContainEqual({ text: expect.stringMatching(/^Downloading Chrome for Testing .*100%/), progress: 1 })
-  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed$/) })
+  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed, in a window$/) })
   expect(existsSync(other)).toBe(true)
 }, 60_000)
 
@@ -465,7 +478,7 @@ it('offers the browser once it is installed, and only to engines that take MCP s
 
   expect(kothar.core.mods().find((mod) => mod.id === 'browser')?.enabled).toBe(false)
   // Kothar's Chromium, which the test controls; the default mode depends on whether Chrome is installed here.
-  handle({ type: 'mod.setValue', modId: 'browser', key: 'browser', value: 'chromium' })
+  handle({ type: 'mod.setValue', modId: 'browser', key: 'browser', value: WINDOW })
   handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true })
   await until(() => statusOf() === 'missing')
   expect(turn('mcp').options.mcpServers).toBeUndefined()
