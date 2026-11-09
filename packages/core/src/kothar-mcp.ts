@@ -12,23 +12,23 @@ export const SUBAGENT_NAME_MAX_CHARS = 40
 
 export const SUBAGENT_INSTRUCTIONS =
   'Delegate by default. Any task that needs more than a few tool calls (exploring code, making a change, running ' +
-  'tests, researching) goes to a subagent you start with spawn_subagent, not to you, so you stay free to keep ' +
-  'talking with the user while it runs. Split the work into as many subagents as it needs, each with a whole task ' +
+  'tests, researching) goes to a worker you start with spawn_subagent, not to you, so you stay free to keep ' +
+  'talking with the user while it runs. Split the work into as many workers as it needs, each with a whole task ' +
   "it can finish on its own, independent of the others. You can edit the same files, just ensure they're in " +
   'different worktrees, and make a stack PR so we have less merge conflicts. Do the work yourself only for quick ' +
-  "answers and one-line changes. Each subagent's final reply comes back to you as a message, so don't wait for it " +
-  'or poll it; tell the user what you started and carry on. To stop a subagent you no longer need, use stop_chat.'
+  "answers and one-line changes. Each worker's final reply comes back to you as a message, so don't wait for it " +
+  'or poll it; tell the user what you started and carry on. To stop a worker you no longer need, use stop_chat.'
 
 export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
-  name: 'Subagents',
+  name: 'Workers',
   description: 'Chats can hand a task to a new chat that reports back when it ends.',
   enabledByDefault: true,
   settings: [
     {
       key: 'limit',
       label: 'Max running per chat',
-      description: 'How many subagents one chat can run at once. -1 for no limit.',
+      description: 'How many workers one chat can run at once. -1 for no limit.',
       type: 'number',
       default: 4,
       min: -1,
@@ -37,7 +37,7 @@ export const SUBAGENTS_MOD: Mod = {
     {
       key: 'instructions',
       label: 'Instructions',
-      description: 'What every chat that can spawn subagents is told about them.',
+      description: 'What every chat that can start workers is told about them.',
       type: 'text',
       default: SUBAGENT_INSTRUCTIONS,
       rows: 6,
@@ -78,7 +78,7 @@ const subagentName = (task: string) => {
 function messages(chat: ChatState) {
   return chat.entries.flatMap((entry) => {
     if (entry.type === 'user.message') return [`User: ${entry.text}`]
-    if (entry.type === 'subagent.report') return [`Subagent "${entry.name}" reported: ${entry.text || '(No reply)'}`]
+    if (entry.type === 'subagent.report') return [`Worker "${entry.name}" reported: ${entry.text || '(No reply)'}`]
     if (entry.type === 'text.completed') return [`Assistant: ${entry.text}`]
     if (entry.type === 'tool.started') return [`Tool ${entry.name}: ${entry.summary}`]
     if (entry.type === 'turn.completed' && entry.error) return [`[Turn ended early: ${entry.error}]`]
@@ -91,13 +91,13 @@ type Context = { hub: Hub; caller: ChatState; reachable: (chatId: string) => Cha
 const memoryOf = ({ hub, caller }: Context, parent = false) => {
   if (!parent) return hub.memory(caller.id)
   if (!caller.subagent || caller.parentId === undefined) {
-    throw new Error("Only a subagent can read its parent chat's memory")
+    throw new Error("Only a worker can read its parent chat's memory")
   }
   const { messages, summaries } = hub.memory(caller.parentId)
   return { messages: messages.slice(0, caller.parentMessages ?? 0), summaries }
 }
 
-const PARENT_INPUT = z.boolean().optional().describe("A subagent's parent chat, as it was at launch")
+const PARENT_INPUT = z.boolean().optional().describe("A worker's parent chat, as it was at launch")
 
 type Tool = {
   for: 'reach' | 'subagents' | 'memory'
@@ -166,7 +166,7 @@ const TOOLS: Record<string, Tool> = {
   stop_chat: {
     for: 'reach',
     description:
-      "Stop a chat this one can reach, such as one of your subagents, as its Stop button does. A stopped subagent's " +
+      "Stop a chat this one can reach, such as one of your workers, as its Stop button does. A stopped worker's " +
       'report still comes back to you.',
     input: z.object({ chatId: z.string() }),
     run({ hub, reachable }: Context, { chatId }: { chatId: string }) {
@@ -180,8 +180,8 @@ const TOOLS: Record<string, Tool> = {
   spawn_subagent: {
     for: 'subagents',
     description:
-      'Start a subagent: a new chat below this one that works on the task, in this folder, on the models the ' +
-      'user picked for subagents. Its final reply comes back to you as a message when its turn ends, so ' +
+      'Start a worker: a new chat below this one that works on the task, in this folder, on the models the ' +
+      'user picked for workers. Its final reply comes back to you as a message when its turn ends, so ' +
       "don't poll it. Give a role to run it on that role's models instead. Returns its id.",
     input: z.object({
       task: z.string().min(1),
@@ -191,7 +191,7 @@ const TOOLS: Record<string, Tool> = {
       const { limit } = hub.subagents()
       const running = hub.chats().filter((c) => c.parentId === caller.id && c.subagent && c.status !== 'idle').length
       if (limit !== -1 && running >= limit) {
-        throw new Error(`This chat already has ${running} subagents running; the limit is ${limit}`)
+        throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
       }
       const name = subagentName(task)
       const chat = hub.createChat({ parentId: caller.id, name, subagent: true, role })

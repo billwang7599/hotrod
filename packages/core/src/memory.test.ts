@@ -123,12 +123,12 @@ describe('messagesOf', () => {
       { id: 5, kind: 'work', at: at(9), text: '[subagent "Tests" (ab12cd34)] All green' },
       { id: 6, kind: 'note', at: at(10), text: 'Turn ended early: Interrupted' },
       { id: 7, kind: 'note', at: at(12), text: 'Turn ended early: Claude Code exited with code 1' },
-      { id: 8, kind: 'work', at: at(13), text: 'Report from subagent "Docs" (ef56ab78):\n\nFound it' },
+      { id: 8, kind: 'work', at: at(13), text: 'Report from worker "Docs" (ef56ab78):\n\nFound it' },
       {
         id: 9,
         kind: 'work',
         at: at(14),
-        text: 'Report from subagent "Lint" (ef56ab79):\n\n(No reply)\n\n(The turn ended early: Interrupted)',
+        text: 'Report from worker "Lint" (ef56ab79):\n\n(No reply)\n\n(The turn ended early: Interrupted)',
       },
     ])
   })
@@ -205,7 +205,7 @@ describe('memoryPrompt', () => {
 
   it("frames subagents' reports as theirs, before any words from the user", () => {
     const report = { text: 'Found it', report: { chatId: 'ef56ab78', name: 'Docs' } }
-    const found = 'Report from subagent "Docs" (ef56ab78):\n\nFound it'
+    const found = 'Report from worker "Docs" (ef56ab78):\n\nFound it'
     expect(memoryPrompt([], store(), '', { zoom: true }, [report])).toBe(found)
     const prompt = memoryPrompt(chat(2), store(), 'and the FAQ?', { zoom: true }, [report])
     expect(prompt.endsWith(`</message>\n\n${found}\n\nNew message from the user:\n\nand the FAQ?`)).toBe(true)

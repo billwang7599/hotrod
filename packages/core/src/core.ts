@@ -1068,7 +1068,7 @@ export function openCore(options: {
     const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
     const engine = spec.engine ?? models.engineFor(role)
     if (parent) checkActive(parent)
-    if (parent?.info.subagent) throw new Error('A subagent cannot start chats')
+    if (parent?.info.subagent) throw new Error('A worker cannot start chats')
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
     let id = randomBytes(4).toString('hex')

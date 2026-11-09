@@ -419,12 +419,12 @@ function PermissionPrompt({ permission, chat, connected, send, space, select, fr
   return (
     <div
       className="flex flex-col gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-12 shadow-raised"
-      aria-label={fromSubagent ? `Request from subagent ${chat.name}` : undefined}
+      aria-label={fromSubagent ? `Request from worker ${chat.name}` : undefined}
     >
       <div className="text-body">
         {fromSubagent ? (
           <>
-            Subagent <strong>{chat.name}</strong> wants to run <strong>{permission.name}</strong>
+            Worker <strong>{chat.name}</strong> wants to run <strong>{permission.name}</strong>
           </>
         ) : (
           <>
@@ -698,7 +698,7 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
   )
   const preview = item.text.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').trim() || 'No reply'
   return (
-    <section aria-label={`Report from subagent ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
+    <section aria-label={`Report from worker ${item.name}`} className="flex flex-col gap-4 border-l-2 pl-12">
       <div className="flex min-w-0 items-center gap-6 text-sm text-muted">
         <button
           type="button"
@@ -712,7 +712,7 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
         </button>
         {/* Wraps instead of holding its width: a long name or error would otherwise push the chat sideways. */}
         <span className="min-w-0 [overflow-wrap:anywhere]">
-          Subagent {name} reported
+          Worker {name} reported
           {item.error && <span> · ended early: {item.error}</span>}
         </span>
         {!shown && (
@@ -1381,7 +1381,7 @@ export function Chat(props: ChatProps) {
                         <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
                           <span className="flex min-w-0 flex-1 items-center gap-6" title={q.text}>
                             {q.steering && <span className="shrink-0 text-faint">At the next step:</span>}
-                            {q.report && <span className="shrink-0 text-faint">Subagent {q.report.name} reported:</span>}
+                            {q.report && <span className="shrink-0 text-faint">Worker {q.report.name} reported:</span>}
                             {q.text && <span className="truncate">{q.text}</span>}
                             {q.attachments && (
                               <span className="flex min-w-0 shrink-0 items-center gap-4 text-faint last:shrink">
@@ -1413,7 +1413,7 @@ export function Chat(props: ChatProps) {
           {requests.length > 0 && (
             <ul
               className="mx-auto mb-8 flex max-h-[50vh] max-w-column flex-col gap-8 overflow-y-auto"
-              aria-label="Subagent requests"
+              aria-label="Worker requests"
             >
               {requests.map(({ chat: below, permission }) => (
                 <li key={`${below.id}-${permission.requestId}`}>
@@ -1425,10 +1425,10 @@ export function Chat(props: ChatProps) {
           {viewOnly && !archived && (
             <div
               className="mx-auto flex max-w-column items-center gap-12 rounded-lg border border-dashed px-14 py-10 text-muted"
-              aria-label="Subagent"
+              aria-label="Worker"
             >
               <span className="min-w-0 flex-1 truncate">
-                Subagent of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
+                Worker of {props.chats.find((c) => c.id === chat.parentId)?.name ?? 'another chat'} · view only
               </span>
               {busy && (
                 <Hint text={chat.status === 'stopping' && FORCE_STOP_HINT}>

@@ -28,7 +28,7 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   agents: {
     label: 'AGENTS.md',
     about: 'Instructions: the global ones first, then each chat’s from the top down',
-    inherited: 'The global AGENTS.md, and for a subagent, its parent’s',
+    inherited: 'The global AGENTS.md, and for a worker, its parent’s',
   },
   folders: {
     label: 'Folders',
@@ -76,7 +76,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   },
 }
 const PERMISSIONS_HINT =
-  'Each shows Settings → Work folder until you pick, or for a subagent, its space. A pick is for this chat only.'
+  'Each shows Settings → Work folder until you pick, or for a worker, its space. A pick is for this chat only.'
 const EMPTY_SECTION: Record<ContextSection, string> = {
   agents: '',
   folders: 'No folders.',
@@ -465,7 +465,7 @@ function useDropPaths(add: ((section: 'folders' | 'files', path: string) => void
 }
 
 const STEPS_LABEL = 'Thinking and tool calls'
-const REPORTS_LABEL = 'Subagent reports'
+const REPORTS_LABEL = 'Worker reports'
 function FoldPicker({ label, shown, choose }: { label: string; shown: boolean; choose: (shown: boolean) => void }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">

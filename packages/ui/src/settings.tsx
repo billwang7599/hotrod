@@ -83,7 +83,7 @@ const NAV_GROUPS = ['Options', 'Mods'] as const
 
 const WORK_FOLDER_TITLE = 'Choose a work folder'
 const WORK_FOLDER_HINT =
-  'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
+  'Agents and workers do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
 
 const TERMINAL_ABOUT =
@@ -93,9 +93,9 @@ const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every ch
 
 const ROLE_ABOUT: Record<ModelRole, string> = {
   chat: 'Chats you start.',
-  planning: 'Subagents started to plan.',
-  searching: 'Subagents started to search.',
-  subagents: 'Every other subagent.',
+  planning: 'Workers started to plan.',
+  searching: 'Workers started to search.',
+  subagents: 'Every other worker.',
 }
 
 const PAGES = [
@@ -615,13 +615,13 @@ function ShownReports() {
   const shown = useReportsDefault()
   return (
     <>
-      <div className="pt-24 pb-8 font-semibold">Subagent reports</div>
+      <div className="pt-24 pb-8 font-semibold">Worker reports</div>
       <div className={GROUP}>
         <SettingRow
           name="Show unfolded"
           description={`Folded, a report shows one line until opened. Each ${CHAT_NOUN.one} can override this in its General tab.`}
         >
-          <Switch label="Show subagent reports unfolded" checked={shown} onChange={showReportsByDefault} />
+          <Switch label="Show worker reports unfolded" checked={shown} onChange={showReportsByDefault} />
         </SettingRow>
       </div>
     </>

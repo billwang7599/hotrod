@@ -342,7 +342,7 @@ describe('Kothar MCP server', () => {
       )
       expect(await tool(grant('aaaa0001'), 'spawn_subagent', { task: 'One more' })).toEqual({
         isError: true,
-        text: `This chat already has ${limit} subagents running; the limit is ${limit}`,
+        text: `This chat already has ${limit} workers running; the limit is ${limit}`,
       })
       expect(calls).toEqual([])
       chats.find((c) => c.id === 's3')!.status = 'idle'
@@ -407,7 +407,7 @@ describe('Kothar MCP server', () => {
       expect((await tool(token, 'zoom', { id: 0 })).text).toMatch(/\n\ngo$/)
       expect(await tool(grant('cccc0001'), 'zoom', { id: 0, parent: true })).toEqual({
         isError: true,
-        text: "Only a subagent can read its parent chat's memory",
+        text: "Only a worker can read its parent chat's memory",
       })
     })
   })

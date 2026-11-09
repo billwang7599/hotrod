@@ -244,7 +244,7 @@ export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',
   planning: 'Planning',
   searching: 'Searching',
-  subagents: 'Subagents',
+  subagents: 'Workers',
 }
 
 // One entry in a role's model list: a model on an engine, and the thinking level it runs at there. `thinking` is left

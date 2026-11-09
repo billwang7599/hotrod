@@ -171,7 +171,7 @@ const browser: Mod = {
         "pi's browser extension does, and work in its tabs with its logins. Chrome 136 and later only allow this with " +
         'a --user-data-dir other than your usual one. ' +
         "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
-        'Each message that browses opens a tab and brings Chrome to the front. Subagents share it, each in a tab ' +
+        'Each message that browses opens a tab and brings Chrome to the front. Workers share it, each in a tab ' +
         'group of its own.',
       type: 'select',
       options: [

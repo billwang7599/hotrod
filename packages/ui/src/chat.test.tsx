@@ -763,13 +763,13 @@ test('a subagent is view only: no composer, just a Stop button while it runs', (
   const sent: ClientMessage[] = []
   render({ subagent: true, parentId: 'p1', status: 'running' }, (m) => sent.push(m))
   expect(container.querySelector('textarea')).toBeNull()
-  const bar = container.querySelector('[aria-label="Subagent"]')!
+  const bar = container.querySelector('[aria-label="Worker"]')!
   expect(bar.textContent).toContain('view only')
   const stop = [...bar.querySelectorAll('button')].find((b) => b.textContent === 'Stop')!
   act(() => stop.click())
   expect(sent.at(-1)).toEqual({ type: 'chat.interrupt', chatId: 'c1' })
   render({ subagent: true, parentId: 'p1', status: 'idle' })
-  expect(container.querySelector('[aria-label="Subagent"] button')).toBeNull()
+  expect(container.querySelector('[aria-label="Worker"] button')).toBeNull()
 })
 
 test('while busy, the empty composer shows its status as a sweeping highlight instead of a plain placeholder', () => {
@@ -929,8 +929,8 @@ test("a subagent's permission request waits in its space, which answers it and t
   const sent: ClientMessage[] = []
   const space = { ...SPACE, status: 'running' as const, items: [USER, REPLY], draft: 'More' }
   render(space, (m) => sent.push(m), { chats: [subagent()] })
-  const card = () => container.querySelector('[aria-label="Request from subagent Fix tests"]')
-  expect(card()!.textContent).toContain('Subagent Fix tests wants to run Bash')
+  const card = () => container.querySelector('[aria-label="Request from worker Fix tests"]')
+  expect(card()!.textContent).toContain('Worker Fix tests wants to run Bash')
   expect(card()!.textContent).toContain('rm -rf build')
   scrollTo(0)
   grow(JUMP_BELOW_PX * 3)
@@ -1001,8 +1001,8 @@ test("shows a subagent's report as a report card, not as the user's message", ()
     () => {},
     { chats: [viewOf({ id: 's1', name: 'Docs', subagent: true, parentId: 'c1' })], select: (id) => selected.push(id) },
   )
-  const docs = container.querySelector('[aria-label="Report from subagent Docs"]')!
-  expect(docs.textContent).toContain('Subagent Docs reported')
+  const docs = container.querySelector('[aria-label="Report from worker Docs"]')!
+  expect(docs.textContent).toContain('Worker Docs reported')
   expect(docs.querySelector('strong')?.textContent).toBe('it')
   expect(docs.closest('.self-end')).toBeNull()
   const named = (card: Element, name: string) => [...card.querySelectorAll('button')].find((b) => b.textContent === name)
@@ -1010,9 +1010,9 @@ test("shows a subagent's report as a report card, not as the user's message", ()
   expect(selected).toEqual(['s1'])
 
   // A removed subagent's name is plain text; a report with no reply says so.
-  const lint = container.querySelector('[aria-label="Report from subagent Lint"]')!
+  const lint = container.querySelector('[aria-label="Report from worker Lint"]')!
   expect(named(lint, 'Lint')).toBeUndefined()
-  expect(lint.textContent).toContain('Subagent Lint reported · ended early: Interrupted')
+  expect(lint.textContent).toContain('Worker Lint reported · ended early: Interrupted')
   expect(lint.textContent).toContain('No reply')
 })
 
@@ -1024,8 +1024,8 @@ test('the transcript never scrolls sideways, and a long report heading wraps ins
   expect(list.className).toContain('overflow-x-hidden')
   // Gutters on both edges keep the column centred under a visible scrollbar, in line with the composer.
   expect(list.className).toContain('[scrollbar-gutter:stable_both-edges]')
-  const heading = [...container.querySelectorAll('[aria-label^="Report from subagent"] span')].find((s) =>
-    s.textContent?.startsWith('Subagent'),
+  const heading = [...container.querySelectorAll('[aria-label^="Report from worker"] span')].find((s) =>
+    s.textContent?.startsWith('Worker'),
   )!
   expect(heading.className).not.toContain('shrink-0')
   expect(heading.className).toContain('min-w-0')
@@ -1036,7 +1036,7 @@ test('a report card folds and unfolds on click, and remembers it', () => {
   reloadSteps()
   const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: '## Found **it**\n\nMore detail' }]
   render({ items })
-  const card = () => container.querySelector('[aria-label="Report from subagent Docs"]')!
+  const card = () => container.querySelector('[aria-label="Report from worker Docs"]')!
   const chevron = () => card().querySelector<HTMLButtonElement>('button[aria-expanded]')!
   expect(chevron().getAttribute('aria-expanded')).toBe('true')
   expect(card().textContent).toContain('More detail')
@@ -1069,7 +1069,7 @@ test('subagent reports fold by default from Settings, and each chat overrides th
   const items: Item[] = [USER, { kind: 'report', chatId: 's1', name: 'Docs', text: 'Found it\n\nMore detail' }]
   const expanded = () =>
     container
-      .querySelector('[aria-label="Report from subagent Docs"] button[aria-expanded]')!
+      .querySelector('[aria-label="Report from worker Docs"] button[aria-expanded]')!
       .getAttribute('aria-expanded')
   render({ items }, () => {}, { contextOpen: true })
   expect(expanded()).toBe('true')
@@ -1079,7 +1079,7 @@ test('subagent reports fold by default from Settings, and each chat overrides th
 
   const general = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => general.click())
-  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Subagent reports"]')!
+  const select = () => container.querySelector<HTMLButtonElement>('aside button[aria-label="Worker reports"]')!
   expect(select().textContent).toBe('Folded')
   act(() => select().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   const options = [...document.querySelectorAll('[role="option"]')]
@@ -1103,7 +1103,7 @@ test("labels a queued subagent report as the subagent's", () => {
   const queue = [{ id: 'q1', text: 'Found it', report: { chatId: 's1', name: 'Docs' } }]
   render({ status: 'running', items: [USER], queue })
   const queued = container.querySelector('[aria-label="Queued messages"]')!
-  expect(queued.textContent).toContain('Subagent Docs reported:Found it')
+  expect(queued.textContent).toContain('Worker Docs reported:Found it')
 })
 
 test('the empty composer starts one line high', () => {

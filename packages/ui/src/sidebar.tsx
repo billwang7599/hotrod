@@ -122,16 +122,16 @@ function ChatRow(props: RowProps) {
         <span className={`min-w-0 flex-1 truncate ${unread ? 'font-semibold' : ''}`} data-unread={unread || undefined}>
           {chat.name}
         </span>
-        {chat.subagent && <span className="rounded border px-5 text-xs text-muted">subagent</span>}
+        {chat.subagent && <span className="rounded border px-5 text-xs text-muted">worker</span>}
         {showEngine && <span className={`text-xs text-faint ${engineHidden}`}>{chat.engine}</span>}
       </button>
       {fold && (
-        <Hint text={fold.folded ? 'Show subagents' : 'Hide subagents'}>
+        <Hint text={fold.folded ? 'Show workers' : 'Hide workers'}>
           <Button
             variant="ghost"
             size="none"
             className="group mr-2 flex h-22 items-center gap-4 px-4 text-xs text-faint"
-            aria-label={fold.folded ? 'Show subagents' : 'Hide subagents'}
+            aria-label={fold.folded ? 'Show workers' : 'Hide workers'}
             aria-expanded={!fold.folded}
             data-open={fold.folded ? undefined : ''}
             onClick={fold.toggle}

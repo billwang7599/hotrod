@@ -71,7 +71,7 @@ test('Home sits above the spaces, outside their section, and still selects; Home
   const selected: string[] = []
   render([SPACE, SUBAGENT, HOME], selected)
   expect(container.querySelector('#spaces-label')?.textContent).toBe('spaces')
-  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workerworker'])
   const home = rowOf('Home')
   expect(spaces().contains(home)).toBe(false)
   expect(home.compareDocumentPosition(spaces()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -86,7 +86,7 @@ test('Home sits above the spaces, outside their section, and still selects; Home
 test('with Home off, only the spaces show', () => {
   render([SPACE, SUBAGENT])
   expect(rowOf('Home')).toBeUndefined()
-  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workerworker'])
   expect(names(container)).toEqual(names(spaces()))
 })
 

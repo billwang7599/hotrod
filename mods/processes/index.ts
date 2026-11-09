@@ -459,7 +459,7 @@ export function createProcessesMod(
         ? 'Start anything long-running (a dev server, a watcher, anything that doesn’t exit on its own) with the ' +
           'start_process tool, never in your shell’s background (`&`, nohup, run_in_background): your session ends ' +
           'with your turn and takes those with it. A process from start_process belongs to the space, keeps running ' +
-          'between messages, and the lead, its subagents and the user all see it. Call list_processes before ' +
+          'between messages, and the lead, its workers and the user all see it. Call list_processes before ' +
           'starting one and use what is already running instead of starting it twice. read_output shows what it ' +
           'printed (and its address, once it opens a port); stop_process stops it when it’s no longer needed.'
         : undefined,

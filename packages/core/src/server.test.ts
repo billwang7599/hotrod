@@ -490,7 +490,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
 
   expect(await tool(lead, 'spawn_subagent', { task: 'More' })).toEqual({
     isError: true,
-    text: 'This chat already has 1 subagents running; the limit is 1',
+    text: 'This chat already has 1 workers running; the limit is 1',
   })
   sessions.at(-1)!.end('Done')
   expect((await json(lead, 'spawn_subagent', { task: 'More' })).chatId).not.toBe(chatId)
@@ -565,7 +565,7 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   core.handle({ type: 'chat.send', chatId: 'main', text: 'Also check the FAQ' }, () => {})
   parent.end('Waiting')
   const prompt = sessionOf('main').prompt!
-  expect(prompt).toContain(`Report from subagent "Search the docs" (${chatId}):\n\nFound it`)
+  expect(prompt).toContain(`Report from worker "Search the docs" (${chatId}):\n\nFound it`)
   expect(prompt.endsWith('New message from the user:\n\nAlso check the FAQ')).toBe(true)
   expect(chatIn(core, 'main').status).toBe('running')
   // The report is its own entry, apart from the user's words, so neither the UI nor memory takes it as theirs.
@@ -579,7 +579,7 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   const stopped = (await json(lead.options.kotharMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
   lead.end('Thanks')
   sessionOf(stopped).end(undefined, 'Interrupted')
-  const failed = `Report from subagent "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
+  const failed = `Report from worker "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
   expect(sessionOf('main').prompt?.endsWith(failed)).toBe(true)
   expect(sessionOf('main').prompt).not.toContain('New message from the user')
   expect(chatIn(core, 'main').entries.at(-2)).toMatchObject({ type: 'subagent.report', text: '', error: 'Interrupted' })
@@ -680,7 +680,7 @@ it("sends a limited turn again whole, a lead's reports included, and keeps a sub
   expect(retried).toEqual([chatId, 'main'])
   expect(sessionsOf('main')).toHaveLength(3)
   const again = sessionOf('main').prompt!
-  expect(again).toContain(`Report from subagent "Search" (${chatId}):\n\nFound it`)
+  expect(again).toContain(`Report from worker "Search" (${chatId}):\n\nFound it`)
   expect(again.endsWith('New message from the user:\n\nAlso the FAQ')).toBe(true)
   const inputs = chatIn(core, 'main').entries.filter((e) => e.type === 'user.message' || e.type === 'subagent.report')
   expect(inputs.slice(-4).map((e) => e.type)).toEqual([
