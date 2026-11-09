@@ -19,6 +19,7 @@ import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, 
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
+import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
 import { ModViewer } from './mod-view.tsx'
 import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
 import { folderName, lineOf, panelKey, type ChatView, type State } from './state.ts'
@@ -332,13 +333,6 @@ function ViewPickers({ chatId }: { chatId: string }) {
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', permissions: 'Permissions', general: 'General' }
 
-type PanelTabProps = {
-  id: PanelTabId
-  tab: PanelTabId
-  choose: (id: PanelTabId) => void
-  children: ReactNode
-}
-
 /** Actions mods add for this chat, listed in the General tab. */
 function ModCommands({ chatId, commands, disabled, send }: {
   chatId: string
@@ -372,21 +366,6 @@ function ModCommands({ chatId, commands, disabled, send }: {
         })}
       </div>
     </section>
-  )
-}
-
-function PanelTab(props: PanelTabProps) {
-  const selected = props.id === props.tab
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={selected}
-      className="rounded px-8 py-4 font-semibold text-muted transition-[background-color,color] hover:bg-hover hover:text-text aria-selected:bg-hover aria-selected:text-text"
-      onClick={() => props.choose(props.id)}
-    >
-      {props.children}
-    </button>
   )
 }
 
@@ -442,30 +421,17 @@ export function ContextPanel(props: ContextPanelProps) {
     if (connected && modTab) send({ type: 'mod.panel.get', chatId, mod: modTab.mod, panel: modTab.id })
   }, [chatId, connected, modTab?.mod, modTab?.id, send])
   const width = usePanelWidth('context')
+  const tabs: TabEntry[] = [
+    ...(chat ? [{ id: 'general', label: TAB_LABEL.general! }] : []),
+    { id: 'context', label: TAB_LABEL.context! },
+    ...(chat ? [{ id: 'permissions', label: TAB_LABEL.permissions! }] : []),
+    ...modTabs.map((p) => ({ id: modTabId(p.mod, p.id), label: p.title })),
+  ]
   return (
     <aside className="relative flex shrink-0 flex-col border-l bg-panel" style={{ width }} aria-label="Context">
       <ResizeHandle panel="context" />
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
-        <div role="tablist" aria-label="Panel" className="flex min-w-0 items-center gap-2 overflow-x-auto">
-          {chat && (
-            <PanelTab id="general" tab={shown} choose={choosePanelTab}>
-              General
-            </PanelTab>
-          )}
-          <PanelTab id="context" tab={shown} choose={choosePanelTab}>
-            Context
-          </PanelTab>
-          {chat && (
-            <PanelTab id="permissions" tab={shown} choose={choosePanelTab}>
-              Permissions
-            </PanelTab>
-          )}
-          {modTabs.map((p) => (
-            <PanelTab key={modTabId(p.mod, p.id)} id={modTabId(p.mod, p.id)} tab={shown} choose={choosePanelTab}>
-              {p.title}
-            </PanelTab>
-          ))}
-        </div>
+        <PanelTabs tabs={tabs} active={shown} choose={choosePanelTab} />
         {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
       </header>
       <div
