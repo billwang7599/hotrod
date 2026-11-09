@@ -95,7 +95,7 @@ import {
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
 import { searchChats } from './search.ts'
-import { openTerminal } from './terminal.ts'
+import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -319,6 +319,8 @@ export function openCore(options: {
     ...(settings.workFolder && { path: settings.workFolder }),
     defaultPath: defaultWorkFolder,
     canSandbox: machine.canSandbox,
+    ...(settings.terminal && settings.terminal !== AUTOMATIC && { terminal: settings.terminal }),
+    ...(process.platform === 'darwin' && { terminals: MAC_TERMINALS.map(({ id, name }) => ({ id, name })) }),
     ...Object.fromEntries(
       PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
     ),
@@ -2175,6 +2177,16 @@ export function openCore(options: {
             String(message.query ?? ''),
           )
           return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
+        }
+        case 'terminal.set': {
+          const terminal = String(message.terminal ?? '')
+          if (terminal !== AUTOMATIC && !MAC_TERMINALS.some((t) => t.id === terminal)) {
+            throw new Error(`Unknown terminal "${terminal}"`)
+          }
+          if (terminal === AUTOMATIC) delete settings.terminal
+          else settings.terminal = terminal
+          saveSettings()
+          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
         }
         case 'terminal.open': {
           const chat = chatFor(message.chatId)

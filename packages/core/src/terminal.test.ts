@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -201,7 +201,7 @@ describe('terminal.open', () => {
       if (added?.type !== 'chat.added') throw new Error('no chat.added')
       return added.chat
     }
-    return { garage, handle, opened, fails, results, settle, create }
+    return { garage, handle, opened, fails, results, settle, create, messages }
   }
 
   it('opens a folder in the chat’s context, with the terminal from settings', async () => {
@@ -212,6 +212,32 @@ describe('terminal.open', () => {
     await t.settle()
     expect(t.opened).toEqual([{ dir: folder, choice: 'ghostty' }])
     expect(t.results()).toEqual([{ type: 'terminal.result', chatId: chat.id, path: folder }])
+  })
+
+  it('saves the terminal picked in Settings, and goes back to automatic', async () => {
+    const t = start()
+    const folder = tempDir()
+    const chat = t.create({ name: 'App', folders: [folder] })
+    t.handle({ type: 'terminal.set', terminal: 'ghostty' })
+    const updated = t.messages.findLast((m) => m.type === 'workFolder.updated')
+    expect(updated?.type === 'workFolder.updated' && updated.workFolder.terminal).toBe('ghostty')
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).terminal).toBe('ghostty')
+    t.handle({ type: 'terminal.open', chatId: chat.id, path: folder })
+    t.handle({ type: 'terminal.set', terminal: 'auto' })
+    t.handle({ type: 'terminal.open', chatId: chat.id, path: folder })
+    await t.settle()
+    expect(t.opened).toEqual([{ dir: folder, choice: 'ghostty' }, { dir: folder }])
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).terminal).toBeUndefined()
+    expect(() => t.handle({ type: 'terminal.set', terminal: 'xterm; rm -rf /' })).toThrow('Unknown terminal')
+  })
+
+  it('offers the terminals Kothar knows only on macOS', () => {
+    const t = start()
+    t.handle({ type: 'terminal.set', terminal: 'auto' })
+    const updated = t.messages.findLast((m) => m.type === 'workFolder.updated')
+    const terminals = updated?.type === 'workFolder.updated' ? updated.workFolder.terminals : undefined
+    if (process.platform === 'darwin') expect(terminals?.map((x) => x.name)).toContain('iTerm2')
+    else expect(terminals).toBeUndefined()
   })
 
   it('refuses a folder that isn’t the chat’s, and one of another chat’s', async () => {

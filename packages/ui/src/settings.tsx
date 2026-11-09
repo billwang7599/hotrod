@@ -86,6 +86,9 @@ const WORK_FOLDER_HINT =
   'Agents and subagents do all their work here, and can write nowhere else unless you allow it, here or for a chat. ' +
   `Each ${CHAT_NOUN.one} gets a folder of its own inside it.`
 
+const TERMINAL_ABOUT =
+  'What Open in Terminal opens. Automatic uses the app macOS opens shell scripts with, else Terminal.'
+
 const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every chat; each can choose otherwise in its Context panel.'
 
 const ROLE_ABOUT: Record<ModelRole, string> = {
@@ -143,6 +146,20 @@ const PAGES = [
             Change…
           </Button>
         </SettingRow>
+        {workFolder.terminals && (
+          <SettingRow name="Terminal" description={TERMINAL_ABOUT}>
+            <Select
+              label="Terminal"
+              value={workFolder.terminal ?? 'auto'}
+              disabled={!connected}
+              options={[
+                { value: 'auto', label: 'Automatic' },
+                ...workFolder.terminals.map((t) => ({ value: t.id, label: t.name })),
+              ]}
+              onChange={(terminal) => send({ type: 'terminal.set', terminal })}
+            />
+          </SettingRow>
+        )}
         {PERMISSION_SWITCHES.map((name) => {
           const { label, about, amberWhileOn } = PERMISSIONS[name]
           const on = switchedOn(name, workFolder)

@@ -142,6 +142,26 @@ test('Settings → Work folder sets the default of each permission every chat fo
   }
 })
 
+test('Settings → Work folder picks the terminal Open in Terminal uses, where there is a choice', () => {
+  const terminals = [
+    { id: 'terminal', name: 'Terminal' },
+    { id: 'ghostty', name: 'Ghostty' },
+  ]
+  const select = () => dialog().querySelector<HTMLButtonElement>('button[aria-label="Terminal"]')
+  renderSettings(workFolder)
+  expect(select()).toBeNull()
+  const sent = renderSettings({ ...workFolder, terminals })
+  expect(select()!.textContent).toBe('Automatic')
+  act(() => select()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  const options = [...document.querySelectorAll('[role="option"]')]
+  expect(options.map((o) => o.textContent?.replace('✓', ''))).toEqual(['Automatic', 'Terminal', 'Ghostty'])
+  const ghostty = options.find((o) => o.textContent?.endsWith('Ghostty'))!
+  act(() => ghostty.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
+  expect(sent).toEqual([{ type: 'terminal.set', terminal: 'ghostty' }])
+  renderSettings({ ...workFolder, terminals, terminal: 'ghostty' })
+  expect(select()!.textContent).toBe('Ghostty')
+})
+
 test('Settings has no Instructions page: the global AGENTS.md is edited in the Context panel', () => {
   renderSettings(workFolder)
   const tabs = [...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)

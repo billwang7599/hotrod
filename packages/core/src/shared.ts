@@ -217,7 +217,15 @@ export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>
   return (a.order ?? 0) - (b.order ?? 0) || b.createdAt.localeCompare(a.createdAt)
 }
 
-export type WorkFolder = PermissionSwitches & { path?: string; defaultPath: string; canSandbox: boolean }
+// terminal: the app Open in Terminal uses, absent for automatic; terminals: the ones the user can pick, only where
+// there's a choice (macOS).
+export type WorkFolder = PermissionSwitches & {
+  path?: string
+  defaultPath: string
+  canSandbox: boolean
+  terminal?: string
+  terminals?: { id: string; name: string }[]
+}
 
 // Layers nearest first: a chat, the chats above it, then the work folder's defaults.
 export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('editAnywhere', ...layers)
@@ -423,6 +431,8 @@ export type ClientMessage =
   // Opens the user's terminal app at one of the chat's folders: a context folder, its space's work folder or a
   // checkout. Replies terminal.result.
   | { type: 'terminal.open'; chatId: string; path: string }
+  // 'auto' for the system's default terminal, or one of WorkFolder.terminals by id.
+  | { type: 'terminal.set'; terminal: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.

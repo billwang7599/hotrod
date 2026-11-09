@@ -506,7 +506,8 @@ describe('work folder', () => {
     })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
-    expect(core.workFolder()).toEqual({ defaultPath: join(garage, 'work'), canSandbox: true })
+    expect(core.workFolder()).toMatchObject({ defaultPath: join(garage, 'work'), canSandbox: true })
+    expect(core.workFolder().path).toBeUndefined()
     const send = () => core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
     expect(send).toThrow('Choose a work folder first')
     expect(calls).toHaveLength(0)
@@ -515,11 +516,11 @@ describe('work folder', () => {
 
   it('makes the chosen folder, saves it and tells every client', () => {
     const t = setup(textScript)
-    expect(t.core.workFolder()).toEqual({ path: workOf(t), defaultPath: workOf(t), canSandbox: true })
+    expect(t.core.workFolder()).toMatchObject({ path: workOf(t), defaultPath: workOf(t), canSandbox: true })
     const chosen = join(tempDir(), 'deep', 'work')
     t.handle({ type: 'workFolder.set', path: chosen })
     expect(statSync(chosen).isDirectory()).toBe(true)
-    expect(t.core.workFolder()).toEqual({ path: chosen, defaultPath: workOf(t), canSandbox: true })
+    expect(t.core.workFolder()).toMatchObject({ path: chosen, defaultPath: workOf(t), canSandbox: true })
     expect(t.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: t.core.workFolder() })
     expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).workFolder).toBe(chosen)
   })
