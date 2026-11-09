@@ -1204,9 +1204,10 @@ test("the composer offers every engine's models, grouped, and picking one on ano
     { id: 'cc', name: 'Claude Code', enabled: true, installed: true, signedIn: true, thinking: ['low', 'high'], models: [{ id: 'opus', label: 'Opus' }] },
     { id: 'pi', enabled: true, installed: true, signedIn: true, thinking: ['off', 'high'], models: [{ id: 'p/one', label: 'One' }] },
   ]
-  const modelLists: ModelLists = { chat: [{ engine: 'cc', model: 'opus', thinking: 'high' }], planning: [], searching: [], subagents: [] }
   const sent: ClientMessage[] = []
-  render({ engine: 'cc', thinking: 'high' }, (m) => sent.push(m), { engines, modelLists })
+  // The core sends what the chat runs; the composer only shows it.
+  const run = { engine: 'cc', model: 'opus', thinking: 'high' as const }
+  render({ engine: 'cc', thinking: 'high', run }, (m) => sent.push(m), { engines })
   const select = (label: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!
   expect(select('Model').textContent).toBe('Opus · Claude Code')
   expect(select('Thinking').textContent).toBe('High')

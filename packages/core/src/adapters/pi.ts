@@ -20,19 +20,10 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   search: ['pattern'],
 }
 
-// Hotrod's thinking levels as pi's --thinking values. pi also has `minimal`, which Hotrod doesn't offer; read back
-// from pi, it counts as low.
-const LEVEL_OF: Record<ThinkingLevel, string> = {
-  off: 'off',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'max',
-}
-const THINKING = Object.keys(LEVEL_OF) as ThinkingLevel[]
-const levelFrom = (native: unknown) =>
-  native === 'minimal' ? 'low' : THINKING.find((level) => LEVEL_OF[level] === native)
+// The thinking levels pi takes, passed as --thinking as they are. pi also has `minimal`, which Hotrod doesn't offer;
+// read back from pi, it counts as low.
+const THINKING: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'xhigh', 'max']
+const levelFrom = (native: unknown) => (native === 'minimal' ? 'low' : THINKING.find((level) => level === native))
 
 // The levels one of pi's models takes, as pi works it out (getSupportedThinkingLevels in pi-ai 1.5): none for a model
 // without reasoning; xhigh and max only where its thinkingLevelMap names them; any level it maps to null, never.
@@ -41,7 +32,7 @@ function levelsOfModel({ reasoning, thinkingLevelMap: map }: { reasoning?: unkno
   if (reasoning === undefined) return undefined
   if (!reasoning) return []
   return THINKING.filter((level) => {
-    const mapped = map?.[LEVEL_OF[level]]
+    const mapped = map?.[level]
     return mapped !== null && (level === 'xhigh' || level === 'max' ? mapped !== undefined : true)
   })
 }
@@ -147,7 +138,7 @@ export const pi: Adapter = {
   start(machine, { cwd, instructions, hotrodMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
     const args = [...RPC_ARGS, '-e', 'builtin:mcp']
     if (model) args.push('--model', model)
-    if (thinking) args.push('--thinking', LEVEL_OF[thinking])
+    if (thinking) args.push('--thinking', thinking)
     const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
     const systemPrompt = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean)
     if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))

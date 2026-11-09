@@ -5,7 +5,6 @@ import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
   PERMISSION_SWITCHES,
-  fallbackLevel,
   levelsOf,
   settingProblem,
   ROLE_NAMES,
@@ -553,11 +552,8 @@ function ModelListsSection({ engines, lists, connected, send }: ModelListsProps)
             )
           })
           const addable = choices.filter((c) => !list.some((r) => r.engine === c.engine && r.model === c.model))
-          const add = (key: string) => {
-            const picked = fromModelKey(key)
-            const level = fallbackLevel(engineOf(picked.engine), picked.model)
-            setList([...list, { ...picked, ...(level && { thinking: level }) }])
-          }
+          // The core gives a new row the level it runs at.
+          const add = (key: string) => setList([...list, fromModelKey(key)])
           return (
             <SettingRow
               key={role}

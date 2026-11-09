@@ -42,8 +42,8 @@ export interface Machine {
   stopAll(): Promise<void>
 }
 
-// One set of thinking levels for every engine, cheapest first. Each adapter maps them onto its own flag and says which
-// ones each of its models takes.
+// One set of thinking levels for every engine, cheapest first, named as Claude Code's --effort and pi's --thinking
+// name them. Each adapter says which ones each of its models takes.
 export const THINKING_LEVELS = ['off', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number]
@@ -240,59 +240,13 @@ export type ModelLists = Record<ModelRole, ModelRow[]>
 
 export const NO_LISTS: ModelLists = { chat: [], planning: [], searching: [], subagents: [] }
 
-/** A role's list, or the Chat list while the role's own is empty. */
-export const listFor = (lists: ModelLists, role: ModelRole = 'chat') =>
-  (lists[role]?.length ? lists[role] : lists.chat) ?? []
-
 /** The thinking levels a model takes: its own list if its engine gives one, else the engine's. */
 export const levelsOf = (engine: EngineInfo | undefined, model?: string): ThinkingLevel[] =>
   engine?.models?.find((m) => m.id === model)?.thinking ?? engine?.thinking ?? []
 
-/** The level among `levels` nearest to `level`, the cheaper one on a tie; undefined when there are none. */
-export function snapLevel(level: ThinkingLevel, levels: readonly ThinkingLevel[]): ThinkingLevel | undefined {
-  const at = THINKING_LEVELS.indexOf(level)
-  const distance = (l: ThinkingLevel) => Math.abs(THINKING_LEVELS.indexOf(l) - at)
-  return [...levels].sort((a, b) => distance(a) - distance(b) || THINKING_LEVELS.indexOf(a) - THINKING_LEVELS.indexOf(b))[0]
-}
-
-// The level a model runs at when nothing names one: what its engine runs with no flag, else medium, snapped.
-export const fallbackLevel = (engine: EngineInfo | undefined, model?: string) =>
-  snapLevel(engine?.defaultThinking ?? 'medium', levelsOf(engine, model))
-
-/** Whether `model` can run on `engine` now: the engine is on and offers it. */
-export const canRun = (engine: EngineInfo | undefined, model?: string) =>
-  engine?.enabled === true && model !== undefined && (engine.models?.some((m) => m.id === model) ?? false)
-
-export type Run = { engine: string; model: string; thinking?: ThinkingLevel; pinned: boolean }
-
-/**
- * What a chat runs: its own model if it picked one (on its engine), else the first row in its role's list (or the
- * Chat list) that can run, even on another engine. The thinking level is the chat's own, else the row's, else the
- * fallback, snapped to one the model takes. Undefined when nothing can run; a chat's own pick that can't run doesn't
- * fall back to the list.
- */
-export function pickRun(
-  engines: EngineInfo[],
-  lists: ModelLists,
-  chat: Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>,
-): Run | undefined {
-  const engineOf = (id: string) => engines.find((e) => e.id === id)
-  const list = listFor(lists, chat.role)
-  const pinned = chat.model !== undefined
-  const row = pinned
-    ? { engine: chat.engine, model: chat.model!, ...list.find((r) => r.engine === chat.engine && r.model === chat.model) }
-    : list.find((r) => canRun(engineOf(r.engine), r.model))
-  if (!row || !canRun(engineOf(row.engine), row.model)) return undefined
-  const engine = engineOf(row.engine)
-  const levels = levelsOf(engine, row.model)
-  const wanted = chat.thinking ?? row.thinking
-  const thinking = wanted ? snapLevel(wanted, levels) : fallbackLevel(engine, row.model)
-  return { engine: row.engine, model: row.model, ...(thinking && { thinking }), pinned }
-}
-
-/** Whether two runs are the same model on the same engine. */
-export const sameModel = (a?: Pick<Run, 'engine' | 'model'>, b?: Pick<Run, 'engine' | 'model'>) =>
-  a !== undefined && b !== undefined && a.engine === b.engine && a.model === b.model
+// What a chat runs now: the engine, model and thinking level the core picked for it (models.ts). The core sends it
+// with every chat and never saves it; it's absent when nothing can run.
+export type Run = { engine: string; model: string; thinking?: ThinkingLevel }
 
 export type ModInfo = {
   id: string
@@ -376,6 +330,7 @@ export type PanelTab = { mod: string; id: string; title: string }
 export type CommandInfo = { mod: string; id: string; label: string; hint?: string }
 
 export type ChatState = ChatInfo & {
+  run?: Run
   status: ChatStatus
   entries: ChatEntry[]
   draft: string
@@ -445,7 +400,7 @@ export type CoreMessage =
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
   | { type: 'chat.added'; chat: ChatState }
-  | { type: 'chat.updated'; chat: ChatInfo }
+  | { type: 'chat.updated'; chat: ChatInfo & { run?: Run } }
   | { type: 'chat.removed'; chatId: string }
   | { type: 'chat.entry'; chatId: string; entry: ChatEntry }
   | { type: 'chat.delta'; chatId: string; text: string }

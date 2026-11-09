@@ -1013,7 +1013,7 @@ export function Chat(props: ChatProps) {
   const archived = chat.archived
   const canChange = connected && chat.status === 'idle' && !archived
   const offers = engines.find((e) => e.id === chat.engine)
-  const menu = modelMenu(chat, engines, props.modelLists)
+  const menu = modelMenu(chat, engines)
   const engineOff = !menu.runnable
   const noEngineOn = !engines.some((e) => e.enabled)
   const canSend = canChange && !engineOff

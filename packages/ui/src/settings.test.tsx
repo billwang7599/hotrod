@@ -410,7 +410,7 @@ test('Settings → Models lists each role once across engines, each model with i
     models: [lists.planning[0], lists.planning[1], { engine: 'pi', model: 'p/one', thinking: 'high' }],
   })
 
-  // Adding a model offers every engine's, grouped, and starts it at its engine's default level, snapped.
+  // Adding a model offers every engine's, grouped; the core gives it the level it runs at.
   open('Add a Searching model')
   expect([...document.querySelectorAll('[role="group"]')].map((g) => g.firstElementChild?.textContent)).toEqual([
     'Claude Code',
@@ -420,6 +420,6 @@ test('Settings → Models lists each role once across engines, each model with i
   expect(sent.at(-1)).toEqual({
     type: 'models.setList',
     role: 'searching',
-    models: [{ engine: 'claude-code', model: 'sonnet', thinking: 'low' }],
+    models: [{ engine: 'claude-code', model: 'sonnet' }],
   })
 })
