@@ -272,6 +272,13 @@ export type ModInfo = {
   }
 }
 
+// A community mod whose code this run of Kothar doesn't match what the settings ask for, so it changes only when Kothar
+// restarts: start (on, never loaded), update (loaded, then updated or reinstalled), stop (loaded, now off or uninstalled).
+export type RestartChange = { id: string; name: string; change: 'start' | 'update' | 'stop' }
+
+// What waits for a restart, and whether this Kothar can restart itself (the desktop app, or npm run dev's core).
+export type RestartState = { changes: RestartChange[]; canRestart: boolean }
+
 export type SetupState = {
   description: string
   status: 'checking' | 'missing' | 'installing' | 'ready'
@@ -387,6 +394,10 @@ export type ClientMessage =
   | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
   | { type: 'mod.install'; modId: string }
   | { type: 'mod.cancelInstall'; modId: string }
+  // The master switch for community mods (off by default): while it's off, none loads, whatever its own switch says.
+  | { type: 'communityMods.setEnabled'; enabled: boolean }
+  // Stops every chat as quitting does, then starts Kothar again, so community mod changes apply.
+  | { type: 'app.restart' }
   | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string }
@@ -436,6 +447,8 @@ export type CoreMessage =
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
+      communityMods: boolean
+      restart: RestartState
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -455,6 +468,8 @@ export type CoreMessage =
   // A mod that's new to the list (a community mod just installed) is added.
   | { type: 'mod.updated'; mod: ModInfo }
   | { type: 'mod.removed'; modId: string }
+  | { type: 'communityMods.updated'; enabled: boolean }
+  | { type: 'restart.updated'; restart: RestartState }
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }

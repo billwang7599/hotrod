@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Mod, ModHost, ModManifest } from '@kothar/mod-api'
@@ -10,6 +10,7 @@ import { communityDir, openMarketplace, type Fetch } from './marketplace.ts'
 import { guardHost, loadCommunityMods, usesOf } from './mods.ts'
 import { checkModManifest, type CatalogEntry, type CoreMessage } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
+import { runRestartable, savedOn } from './main.ts'
 
 let dirs: string[] = []
 let cores: Core[] = []
@@ -186,6 +187,7 @@ describe('the core', () => {
     const commands = `, commands: [{ id: 'hi', label: 'Say hi', run() {} }]`
     install(garage, 'greeter', source('greeter', commands))
     const t = start({ garage, community: await loadCommunityMods(garage, () => false) })
+    t.handle({ type: 'communityMods.setEnabled', enabled: true })
     t.handle({ type: 'mod.setEnabled', modId: 'greeter', enabled: true })
     expect(settingsOf(garage).mods.greeter.enabled).toBe(true)
     const info = t.core.mods().find((m) => m.id === 'greeter')!
@@ -200,7 +202,7 @@ describe('the core', () => {
     const garage = tempGarage()
     const command = `, commands: [{ id: 'go', label: 'Go', run(chat, { host }) { host.note(chat.id, 'noted'); host.run('echo', ['hi']) } }]`
     install(garage, 'runner', source('runner', command))
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { runner: { enabled: true } } }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { runner: { enabled: true } } }))
     const t = start({ garage, community: await loadCommunityMods(garage, () => true) })
     t.handle({ type: 'chat.create', name: 'A space' })
     const added = t.messages.findLast((m) => m.type === 'chat.added')
@@ -233,7 +235,7 @@ describe('the core', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const garage = tempGarage()
     install(garage, 'crashy', 'throw new Error("boom")')
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { crashy: { enabled: true } } }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { crashy: { enabled: true } } }))
     const t = start({ garage, community: await loadCommunityMods(garage, () => true) })
     expect(t.core.mods().find((m) => m.id === 'crashy')).toMatchObject({ enabled: true, loadError: 'boom' })
     t.handle({ type: 'mod.setEnabled', modId: 'crashy', enabled: false })
@@ -264,6 +266,7 @@ describe('the core', () => {
     // Nothing was imported.
     expect(t.core.mods().find((m) => m.id === 'counter')!.community?.running).toBeUndefined()
 
+    t.handle({ type: 'communityMods.setEnabled', enabled: true })
     t.handle({ type: 'mod.setEnabled', modId: 'counter', enabled: true })
     t.handle({ type: 'market.uninstall', kind: 'mod', id: 'counter' })
     expect(existsSync(dir)).toBe(false)
@@ -275,7 +278,7 @@ describe('the core', () => {
   it('turns a mod off when an update uses more than the version the user turned on, and says why', async () => {
     const garage = tempGarage()
     install(garage, 'counter')
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { counter: { enabled: true } } }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { counter: { enabled: true } } }))
     const newer = manifestOf('counter', { version: '2.0.0', uses: ['commands', 'run'] })
     const entry: CatalogEntry = { id: 'counter', kind: 'mod', name: 'Counter', author: 'Someone', description: 'Counts.', repo: 'someone/counter' }
     const files = { 'manifest.json': JSON.stringify(newer), 'main.mjs': source('counter') }
@@ -284,6 +287,7 @@ describe('the core', () => {
       community: await loadCommunityMods(garage, () => true),
       fetch: fakeGitHub([entry], { 'someone/counter': { tag: 'v2.0.0', files } }).fetch,
     })
+    expect(t.core.restart().changes).toEqual([])
     t.handle({ type: 'market.install', kind: 'mod', id: 'counter' })
     await settle()
     const info = t.core.mods().find((m) => m.id === 'counter')!
@@ -292,12 +296,14 @@ describe('the core', () => {
       type: 'error',
       message: 'Mod counter was turned off: its update also runs programs on your computer. Turn it on again in Community mods to allow that.',
     })
+    // Its old code is still loaded.
+    expect(t.core.restart().changes).toEqual([{ id: 'counter', name: 'Mod counter', change: 'stop' }])
   })
 
   it('keeps an update that uses no more on', async () => {
     const garage = tempGarage()
     install(garage, 'counter')
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { counter: { enabled: true } } }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { counter: { enabled: true } } }))
     const newer = manifestOf('counter', { version: '1.1.0' })
     const entry: CatalogEntry = { id: 'counter', kind: 'mod', name: 'Counter', author: 'Someone', description: 'Counts.', repo: 'someone/counter' }
     const t = start({
@@ -310,6 +316,91 @@ describe('the core', () => {
     t.handle({ type: 'market.install', kind: 'mod', id: 'counter' })
     await settle()
     expect(t.core.mods().find((m) => m.id === 'counter')).toMatchObject({ enabled: true, community: { version: '1.1.0', running: '1.0.0' } })
+    expect(t.messages).toContainEqual({
+      type: 'restart.updated',
+      restart: { changes: [{ id: 'counter', name: 'Mod counter', change: 'update' }], canRestart: false },
+    })
+  })
+
+  it('keeps every community mod off while the master switch is off, which it is by default', async () => {
+    const garage = tempGarage()
+    install(garage, 'counter')
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { counter: { enabled: true } } }))
+    // Its own switch is on, but nothing is imported at startup.
+    expect(savedOn(garage, 'counter')).toBe(false)
+    const t = start({ garage, community: await loadCommunityMods(garage, (id) => savedOn(garage, id)) })
+    expect(t.core.communityMods()).toBe(false)
+    expect(t.core.mods().find((m) => m.id === 'counter')).toMatchObject({ enabled: true, community: { version: '1.0.0' } })
+    expect(t.core.mods().find((m) => m.id === 'counter')!.community?.running).toBeUndefined()
+    install(garage, 'other')
+    const u = start({ garage, community: await loadCommunityMods(garage, () => false) })
+    expect(() => u.handle({ type: 'mod.setEnabled', modId: 'other', enabled: true })).toThrow(
+      'Turn on community mods before turning on Mod other',
+    )
+
+    t.handle({ type: 'communityMods.setEnabled', enabled: true })
+    expect(settingsOf(garage).communityMods).toBe(true)
+    expect(t.messages).toContainEqual({ type: 'communityMods.updated', enabled: true })
+    expect(savedOn(garage, 'counter')).toBe(true)
+  })
+
+  it('stops a loaded mod at once when the master switch goes off, until it goes on again', async () => {
+    const garage = tempGarage()
+    const command = `, commands: [{ id: 'go', label: 'Go', run(chat, { host }) { host.note(chat.id, 'went') } }]`
+    install(garage, 'runner', source('runner', command))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { runner: { enabled: true } } }))
+    const t = start({ garage, community: await loadCommunityMods(garage, (id) => savedOn(garage, id)) })
+    t.handle({ type: 'chat.create', name: 'A space' })
+    const added = t.messages.findLast((m) => m.type === 'chat.added')
+    const id = added?.type === 'chat.added' ? added.chat.id : ''
+    t.handle({ type: 'communityMods.setEnabled', enabled: false })
+    expect(() => t.handle({ type: 'mod.command', chatId: id, mod: 'runner', command: 'go' })).toThrow('Mod runner is off')
+    expect(t.core.restart().changes).toEqual([{ id: 'runner', name: 'Mod runner', change: 'stop' }])
+    t.handle({ type: 'communityMods.setEnabled', enabled: true })
+    t.handle({ type: 'mod.command', chatId: id, mod: 'runner', command: 'go' })
+    expect(t.messages).toContainEqual({ type: 'chat.entry', chatId: id, entry: expect.objectContaining({ text: 'went' }) })
+    expect(t.core.restart().changes).toEqual([])
+  })
+
+  it('says what waits for a restart, comparing what this run loaded with the settings', async () => {
+    const garage = tempGarage()
+    install(garage, 'loaded')
+    install(garage, 'fresh')
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityMods: true, mods: { loaded: { enabled: true } } }))
+    const t = start({ garage, community: await loadCommunityMods(garage, (id) => savedOn(garage, id)) })
+    expect(t.core.restart()).toEqual({ changes: [], canRestart: false })
+
+    t.handle({ type: 'mod.setEnabled', modId: 'fresh', enabled: true })
+    expect(t.core.restart().changes).toEqual([{ id: 'fresh', name: 'Mod fresh', change: 'start' }])
+    t.handle({ type: 'mod.setEnabled', modId: 'loaded', enabled: false })
+    expect(t.core.restart().changes).toEqual([
+      { id: 'fresh', name: 'Mod fresh', change: 'start' },
+      { id: 'loaded', name: 'Mod loaded', change: 'stop' },
+    ])
+    // Back as it started: nothing waits.
+    t.handle({ type: 'mod.setEnabled', modId: 'fresh', enabled: false })
+    t.handle({ type: 'mod.setEnabled', modId: 'loaded', enabled: true })
+    expect(t.core.restart().changes).toEqual([])
+    expect(t.messages.filter((m) => m.type === 'restart.updated').at(-1)).toEqual({
+      type: 'restart.updated',
+      restart: { changes: [], canRestart: false },
+    })
+    // Uninstalled, its code is still loaded until a restart.
+    t.handle({ type: 'market.uninstall', kind: 'mod', id: 'loaded' })
+    expect(t.core.restart().changes).toEqual([{ id: 'loaded', name: 'Mod loaded', change: 'stop' }])
+  })
+
+  it('restarts through its host, and says so where it has none', () => {
+    const t = start()
+    expect(() => t.handle({ type: 'app.restart' })).toThrow("This Kothar can't restart itself")
+    const restart = vi.fn()
+    const garage = tempGarage()
+    const adapter = createFakeAdapter([], 0)
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: adapter.id, machine: sandboxingMachine, restart })
+    cores.push(core)
+    expect(core.restart().canRestart).toBe(true)
+    core.handle({ type: 'app.restart' }, () => {})
+    expect(restart).toHaveBeenCalledTimes(1)
   })
 
   it("refuses a mod release with a broken manifest, a missing main.mjs or one that's too big", async () => {
@@ -389,5 +480,41 @@ describe('the core', () => {
       if (reply?.type === 'market.localFailed') expect(reply.error, path).toMatch(error)
     }
     expect(existsSync(communityDir(t.garage))).toBe(false)
+  })
+})
+
+describe('a restartable core (npm run dev)', () => {
+  it('closes the running core, then starts a new one that the next close reaches', async () => {
+    const closed: number[] = []
+    let started = 0
+    let restartOf: (() => void) | undefined
+    const start = async (restart: () => void) => {
+      const n = ++started
+      restartOf = restart
+      return { close: async () => void closed.push(n) } as unknown as Awaited<ReturnType<Parameters<typeof runRestartable>[0]>>
+    }
+    const run = await runRestartable(start)
+    expect(started).toBe(1)
+    restartOf!()
+    restartOf!()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(closed).toEqual([1])
+    expect(started).toBe(2)
+    await run.close()
+    expect(closed).toEqual([1, 2])
+  })
+})
+
+describe('importing a community mod again', () => {
+  it('reads main.mjs from disk each time, so a restart in the same process runs an update', async () => {
+    const garage = tempGarage()
+    const dir = install(garage, 'again', source('again', ", description: 'one'"))
+    const first = await loadCommunityMods(garage, () => true)
+    writeFileSync(join(dir, 'main.mjs'), source('again', ", description: 'two'").replace("description: 'Does a thing.', ", ''))
+    const later = Date.now() / 1000 + 5
+    utimesSync(join(dir, 'main.mjs'), later, later)
+    const second = await loadCommunityMods(garage, () => true)
+    expect(first[0]!.mod?.description).toBe('one')
+    expect(second[0]!.mod?.description).toBe('two')
   })
 })

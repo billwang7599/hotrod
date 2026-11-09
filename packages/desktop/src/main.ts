@@ -30,7 +30,14 @@ else
 async function start() {
   await app.whenReady()
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
-  const kothar = await startCore({ uiDir })
+  // Restart (Settings, after community mod changes) quits as usual, stopping every chat and process, then relaunches.
+  const kothar = await startCore({
+    uiDir,
+    restart: () => {
+      app.relaunch()
+      app.quit()
+    },
+  })
 
   const window = new BrowserWindow({
     width: 1200,

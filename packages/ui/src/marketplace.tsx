@@ -17,7 +17,7 @@ import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
 export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'> &
-  Partial<Pick<State, 'mods' | 'localInstall'>>
+  Partial<Pick<State, 'mods' | 'localInstall' | 'communityMods'>>
 
 type Props = {
   market: Market
@@ -187,17 +187,20 @@ export function UsesList({ uses }: { uses: readonly ModUse[] }) {
 }
 
 // Whether an installed mod is on and running, as one quiet line.
-export function ModStatus({ info }: { info?: ModInfo }) {
-  const status = modStatus(info)
+export function ModStatus({ info, communityMods }: { info?: ModInfo; communityMods: boolean }) {
+  const status = modStatus(info, communityMods)
   return status ? <span className="text-sm text-faint">{status}</span> : null
 }
 
-export function modStatus(info?: ModInfo) {
+// communityMods: the master switch; a mod runs only while it and the mod's own switch are on.
+export function modStatus(info: ModInfo | undefined, communityMods: boolean) {
   if (!info?.community) return undefined
   const { version, running } = info.community
-  if (!info.enabled) return running ? 'Off. Its code stays loaded until Kothar restarts.' : 'Off. Turn it on in Community mods.'
+  const stays = running ? ' Its code stays loaded until Kothar restarts.' : ''
+  if (!info.enabled) return `Off.${stays || ' Turn it on in Community mods.'}`
+  if (!communityMods) return `Off while community mods are off.${stays}`
   if (info.loadError) return undefined
-  if (!running) return 'On from the next start of Kothar.'
+  if (!running) return 'Starts when Kothar restarts.'
   if (running !== version) return `Running ${running}. Restart Kothar to run ${version}.`
   return undefined
 }
@@ -395,7 +398,7 @@ function Section({ title, rows, empty, warning, market, pending, connected, send
                     <span className="text-sm text-faint">No longer in the marketplace</span>
                   )}
                   {row.kind === 'mod' && row.uses && <UsesList uses={row.uses} />}
-                  {row.kind === 'mod' && row.installed && <ModStatus info={market.mods?.find((m) => m.id === row.id)} />}
+                  {row.kind === 'mod' && row.installed && <ModStatus info={market.mods?.find((m) => m.id === row.id)} communityMods={market.communityMods ?? false} />}
                   {row.problem && <span className="text-sm text-amber">{row.problem}</span>}
                 </div>
                 <div className="flex items-center gap-6">

@@ -94,6 +94,8 @@ export async function startServer(options: {
       workFolder: core.workFolder(),
       themes: core.themes(),
       installed: core.installed(),
+      communityMods: core.communityMods(),
+      restart: core.restart(),
     })
     socket.on('message', (data) => {
       try {

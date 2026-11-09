@@ -1,6 +1,7 @@
 import type { ModView } from '@kothar/mod-api'
 import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
+  RestartState,
   Account,
   Answers,
   Attachment,
@@ -94,6 +95,9 @@ export type State = {
   // marketKey), counted so the same error twice still reads as a new answer.
   catalog?: { entries?: MarketEntry[]; error?: string }
   marketFailures: Record<string, { error: string; count: number }>
+  // The master switch for community mods, and the community mod changes that wait for a restart.
+  communityMods: boolean
+  restart: RestartState
   // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
   localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
   // The core's latest answer to the search palette.
@@ -125,6 +129,8 @@ export const initialState: State = {
   modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
   marketFailures: {},
+  communityMods: false,
+  restart: { changes: [], canRestart: false },
   panelViews: {},
   toasts: [],
   nextToastId: 1,
@@ -298,6 +304,8 @@ export function reduce(state: State, action: Action): State {
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
+        communityMods: action.communityMods,
+        restart: action.restart,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -382,6 +390,10 @@ export function reduce(state: State, action: Action): State {
     }
     case 'mod.removed':
       return { ...state, mods: state.mods.filter((m) => m.id !== action.modId) }
+    case 'communityMods.updated':
+      return { ...state, communityMods: action.enabled }
+    case 'restart.updated':
+      return { ...state, restart: action.restart }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
     case 'memory.updated':

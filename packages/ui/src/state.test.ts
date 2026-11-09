@@ -74,6 +74,8 @@ const snapshot = (chats: ChatState[]): Action =>
     workFolder: { defaultPath: '/g/work', canSandbox: true },
     themes: [],
     installed: [],
+    communityMods: false,
+    restart: { changes: [], canRestart: false },
   })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
 const entry = (chatId: string, e: NewEntry): CoreMessage =>

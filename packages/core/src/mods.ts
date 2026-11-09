@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Mod, ModHost, ModUse, ModValues } from '@kothar/mod-api'
@@ -123,7 +123,10 @@ export async function loadCommunityMods(garage: string, isOn: (id: string) => bo
       continue
     }
     try {
-      const mod: Mod | undefined = (await import(pathToFileURL(join(dir, MOD_MAIN)).href)).default
+      // Node keeps every module it imported, so a core restarted in the same process (npm run dev) would get the old
+      // main.mjs back; the file's time asks for the one on disk now.
+      const url = `${pathToFileURL(join(dir, MOD_MAIN)).href}?at=${statSync(join(dir, MOD_MAIN)).mtimeMs}`
+      const mod: Mod | undefined = (await import(url)).default
       if (!mod || typeof mod !== 'object') throw new Error('main.mjs has no default export')
       if (mod.id !== manifest.id) throw new Error(`its id "${mod.id}" is not its manifest's "${manifest.id}"`)
       if (mod.settings?.some((s) => s.key === 'enabled')) throw new Error('"enabled" is not a setting key')

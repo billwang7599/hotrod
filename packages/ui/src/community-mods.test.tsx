@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage, InstalledItem, MarketEntry, ModInfo } from '@kothar/core/shared'
+import type { ClientMessage, InstalledItem, MarketEntry, ModInfo, RestartState } from '@kothar/core/shared'
 import { ConfirmDialog } from './controls.tsx'
 import { MarketplacePage, type Market } from './marketplace.tsx'
 import { SettingsDialog } from './settings.tsx'
@@ -69,7 +69,9 @@ function render(node: ReactNode) {
   )
 }
 
-function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
+type Extra = { communityMods?: boolean; restart?: RestartState; running?: number }
+
+function settings(mods: ModInfo[], sent: ClientMessage[] = [], extra: Extra = { communityMods: true }) {
   render(
     <SettingsDialog
       open
@@ -85,6 +87,7 @@ function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
       chooseWorkFolder={() => {}}
       connected
       send={(m) => sent.push(m)}
+      {...extra}
     />,
   )
   return sent
@@ -92,9 +95,13 @@ function settings(mods: ModInfo[], sent: ClientMessage[] = []) {
 
 const buttons = (label: string) => [...document.querySelectorAll('button')].filter((b) => b.textContent === label)
 const confirmText = () => document.querySelector('[role="alertdialog"]')?.textContent ?? ''
+// The confirm's own button (OK, Turn on, Restart…) or Cancel.
 const answer = async (ok: boolean) => {
-  await act(async () => buttons(ok ? 'OK' : 'Cancel')[0]!.click())
+  const dialog = document.querySelector('[role="alertdialog"]')!
+  const [cancel, confirming] = [...dialog.querySelectorAll('button')]
+  await act(async () => (ok ? confirming : cancel)!.click())
 }
+const modSwitch = (name = 'Counter') => document.querySelector(`[role="switch"][aria-label="${name}"]`) as HTMLButtonElement
 
 test('Community mods lists only community mods, with the warning, what each uses and where it came from', () => {
   settings([builtIn, counter()])
@@ -117,26 +124,104 @@ test('says when no community mods are installed', () => {
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No community mods installed.')
 })
 
-test('turning a mod on asks first, listing what it uses, and says it starts on the next start', async () => {
+test('turning a mod on asks first, naming its repo and what it uses, and says it starts on a restart', async () => {
   const sent = settings([counter()])
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   expect(confirmText()).toContain('Turn on Counter?')
+  expect(confirmText()).toContain('From github.com/someone/counter.')
   expect(confirmText()).toContain('• Runs programs on your computer')
+  expect(buttons('Turn on')).toHaveLength(1)
   await answer(false)
   expect(sent).toEqual([])
 
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   await answer(true)
   expect(sent).toEqual([{ type: 'mod.setEnabled', modId: 'counter', enabled: true }])
 
   settings([counter({ enabled: true })], sent)
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('On from the next start of Kothar.')
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Starts when Kothar restarts.')
+})
+
+test('the master switch is off by default: mods are greyed out and can only be turned off', () => {
+  settings([counter(), counter({ id: 'notes', name: 'Notes', enabled: true })], [], {})
+  const text = document.querySelector('[role="dialog"]')!.textContent!
+  expect(text).toContain('Off. No community mod runs, whatever its own switch says.')
+  expect(modSwitch('Community mods').getAttribute('aria-checked')).toBe('false')
+  expect(document.querySelector('[aria-disabled="true"]')?.className).toContain('opacity-60')
+  expect(modSwitch().disabled).toBe(true)
+  // One that's on can still be turned off.
+  expect(modSwitch('Notes').disabled).toBe(false)
+  expect(text).toContain('Off while community mods are off.')
+})
+
+test('turning community mods on warns about the risks first; turning them off asks nothing', async () => {
+  const sent = settings([counter()], [], { communityMods: false })
+  await act(async () => modSwitch('Community mods').click())
+  expect(confirmText()).toContain('Turn on community mods?')
+  expect(confirmText()).toContain('They can read your files and settings, and reach the network.')
+  expect(confirmText()).toContain("Kothar doesn't review them.")
+  expect(confirmText()).toContain('An update can change what a mod does.')
+  expect(buttons('Turn on community mods')).toHaveLength(1)
+  await answer(false)
+  expect(sent).toEqual([])
+  await act(async () => modSwitch('Community mods').click())
+  await answer(true)
+  expect(sent).toEqual([{ type: 'communityMods.setEnabled', enabled: true }])
+
+  settings([counter()], sent, { communityMods: true })
+  await act(async () => modSwitch('Community mods').click())
+  expect(confirmText()).toBe('')
+  expect(sent.at(-1)).toEqual({ type: 'communityMods.setEnabled', enabled: false })
+})
+
+test('a change waiting for a restart shows with a Restart button that warns about running chats', async () => {
+  const restart: RestartState = {
+    changes: [
+      { id: 'counter', name: 'Counter', change: 'start' },
+      { id: 'notes', name: 'Notes', change: 'stop' },
+    ],
+    canRestart: true,
+  }
+  const sent = settings([counter({ enabled: true })], [], { communityMods: true, restart, running: 2 })
+  const notice = document.querySelector('[role="dialog"] [role="status"]')!
+  expect(notice.textContent).toContain('Restart Kothar to apply: Counter starts, Notes stops')
+  await act(async () => buttons('Restart')[0]!.click())
+  expect(confirmText()).toContain('Restart Kothar?')
+  expect(confirmText()).toContain('2 chats are running and will stop.')
+  await answer(false)
+  expect(sent).toEqual([])
+  await act(async () => buttons('Restart')[0]!.click())
+  await answer(true)
+  expect(sent).toEqual([{ type: 'app.restart' }])
+
+  // Nothing running: no question.
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart, running: 0 })
+  await act(async () => buttons('Restart')[0]!.click())
+  expect(confirmText()).toBe('')
+  expect(sent.at(-1)).toEqual({ type: 'app.restart' })
+
+  // A Kothar that can't restart itself says what to do instead.
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart: { ...restart, canRestart: false } })
+  expect(buttons('Restart')).toHaveLength(0)
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('Restart the dev server')
+
+  settings([counter({ enabled: true })], sent, { communityMods: true, restart: { changes: [], canRestart: true } })
+  expect(document.querySelector('[role="dialog"] [role="status"]')).toBeNull()
+})
+
+test('the state follows the master switch and what waits for a restart', () => {
+  expect(initialState.communityMods).toBe(false)
+  let state = reduce(initialState, { type: 'communityMods.updated', enabled: true })
+  expect(state.communityMods).toBe(true)
+  const restart: RestartState = { changes: [{ id: 'counter', name: 'Counter', change: 'update' }], canRestart: true }
+  state = reduce(state, { type: 'restart.updated', restart })
+  expect(state.restart).toEqual(restart)
 })
 
 test('turning a mod off, uninstalling it, and a mod that failed to load', async () => {
   const sent = settings([counter({ enabled: true, loadError: 'boom' }, { running: undefined })])
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain("Couldn't load: boom")
-  await act(async () => (document.querySelector('[role="switch"]') as HTMLElement).click())
+  await act(async () => modSwitch().click())
   expect(sent).toEqual([{ type: 'mod.setEnabled', modId: 'counter', enabled: false }])
   act(() => buttons('Uninstall')[0]!.click())
   expect(sent.at(-1)).toEqual({ type: 'market.uninstall', kind: 'mod', id: 'counter' })
@@ -164,6 +249,7 @@ test("a mod's own settings page lists what it uses", () => {
       chooseWorkFolder={() => {}}
       connected
       send={() => {}}
+      communityMods
     />,
   )
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('UsesRuns programs on your computer')

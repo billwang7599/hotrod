@@ -85,6 +85,8 @@ import {
   type PermissionSwitch,
   type PermissionSwitches,
   type QueuedMessage,
+  type RestartChange,
+  type RestartState,
   type Session,
   type SetupState,
   type Upload,
@@ -155,6 +157,9 @@ export function openCore(options: {
   marketplaceUrl?: string
   githubToken?: string
   fetch?: Fetch
+  // Restarts Kothar (the desktop app relaunches; npm run dev's core starts again in its process). Without it, the user
+  // restarts Kothar themselves.
+  restart?: () => void
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
@@ -183,6 +188,10 @@ export function openCore(options: {
   // on or off; it runs from the next start.
   const stockIds = new Set(mods.map((mod) => mod.id))
   const community = new Map<string, { manifest: ModManifest; item: InstalledItem; running?: string; loadError?: string }>()
+  // The community mods this run imported (whether or not they loaded), by id with their name, and those installed again
+  // since; what's pending a restart is worked out from these and the settings.
+  const imported = new Map<string, string>()
+  const reinstalled = new Set<string>()
   const stubOf = ({ id, name, description }: ModManifest): Mod => ({ id, name, description, enabledByDefault: false })
   for (const found of options.community ?? []) {
     const { manifest, item } = found
@@ -191,6 +200,7 @@ export function openCore(options: {
       continue
     }
     let { mod, loadError } = found
+    if (mod || loadError) imported.set(manifest.id, manifest.name)
     const clash =
       mod &&
       ((mod.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
@@ -220,6 +230,8 @@ export function openCore(options: {
       context?: Partial<Record<ContextSection, boolean>>
       mods?: Record<string, Record<string, unknown>>
       workFolder?: string
+      // The master switch for community mods; off unless the user turned it on.
+      communityMods?: boolean
     } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -234,10 +246,13 @@ export function openCore(options: {
     const broken = brokenMods.find((m) => m.id === id)
     throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
   }
-  // A community mod is off until the user turns it on, whatever it says.
+  const communityOn = () => settings.communityMods === true
+  // A community mod's own switch: off until the user turns it on, whatever it says.
+  const ownSwitch = (mod: Mod) => settings.mods?.[mod.id]?.enabled === true
+  // Whether a mod runs: a community mod only while community mods are on too.
   const isOn = (mod: Mod) => {
     const saved = settings.mods?.[mod.id]?.enabled
-    if (community.has(mod.id)) return saved === true
+    if (community.has(mod.id)) return communityOn() && saved === true
     return typeof saved === 'boolean' ? saved : mod.enabledByDefault
   }
   const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
@@ -251,7 +266,9 @@ export function openCore(options: {
       description: typeof about === 'function' ? about(values) : about!,
       ...(setups.get(id) ?? { status: 'checking' }),
     }
-    const info = { id, name, description, enabled: isOn(mod), settings: declared, values }
+    // A community mod shows its own switch; the master switch is beside it in the UI.
+    const enabled = community.has(id) ? ownSwitch(mod) : isOn(mod)
+    const info = { id, name, description, enabled, settings: declared, values }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
     const { source, repo, path } = from?.item ?? {}
@@ -1081,6 +1098,9 @@ export function openCore(options: {
   }
 
   const setModEnabled = (mod: Mod, enabled: boolean) => {
+    if (community.has(mod.id) && !communityOn() && enabled) {
+      throw new Error(`Turn on community mods before turning on ${mod.name}`)
+    }
     const family = (mod.chats ?? []).flatMap(({ id }) => {
       const chat = chats.get(id)
       return chat ? familyOf(chat) : []
@@ -1089,12 +1109,63 @@ export function openCore(options: {
     if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${mod.name} off`)
     const changed = isOn(mod) !== enabled
     saveMod(mod, { enabled })
+    if (community.has(mod.id)) restartChanged()
     if (enabled) void checkSetup(mod)
-    if (!changed) return
+    if (changed) modSwitched(mod, enabled, family)
+  }
+
+  // What follows a mod starting or stopping to run: its chats show or hide, spawned processes stop, panels update.
+  const modSwitched = (mod: Mod, enabled: boolean, family = familyOfMod(mod)) => {
     if (!enabled) stopSpawned(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
+  }
+  const familyOfMod = (mod: Mod) =>
+    (mod.chats ?? []).flatMap(({ id }) => {
+      const chat = chats.get(id)
+      return chat ? familyOf(chat) : []
+    })
+
+  // The master switch. Off stops every community mod's hooks at once (its code stays loaded until a restart); on lets
+  // the ones whose own switch is on run, from the next start for any not loaded yet.
+  const setCommunityMods = (enabled: boolean) => {
+    if (communityOn() === enabled) return
+    const running = mods.filter((mod) => community.has(mod.id) && ownSwitch(mod))
+    if (!enabled) {
+      const busy = running.flatMap((mod) => familyOfMod(mod)).find((chat) => chat.status !== 'idle')
+      if (busy) throw new Error(`Stop "${busy.info.name}" before turning community mods off`)
+    }
+    settings.communityMods = enabled
+    saveSettings()
+    broadcast({ type: 'communityMods.updated', enabled })
+    for (const mod of running) {
+      if (enabled) void checkSetup(mod)
+      modSwitched(mod, enabled)
+    }
+    restartChanged()
+  }
+
+  // Community mod code this run doesn't match the settings: what a restart would start, update or stop.
+  const restartState = (): RestartState => {
+    const changes: RestartChange[] = []
+    for (const [id, { manifest }] of community) {
+      const mod = mods.find((m) => m.id === id)
+      const wanted = !!mod && isOn(mod)
+      const loaded = imported.has(id)
+      const change = wanted ? (!loaded ? 'start' : reinstalled.has(id) ? 'update' : undefined) : loaded ? 'stop' : undefined
+      if (change) changes.push({ id, name: manifest.name, change })
+    }
+    for (const [id, name] of imported) if (!community.has(id)) changes.push({ id, name, change: 'stop' })
+    return { changes, canRestart: options.restart !== undefined }
+  }
+  let lastRestart = JSON.stringify(restartState())
+  const restartChanged = () => {
+    const restart = restartState()
+    const text = JSON.stringify(restart)
+    if (text === lastRestart) return
+    lastRestart = text
+    broadcast({ type: 'restart.updated', restart })
   }
 
   // A community mod was installed or updated. It runs from the next start; an update that uses more than the version
@@ -1104,11 +1175,12 @@ export function openCore(options: {
     if (!install) return
     const known = community.get(id)
     community.set(id, { ...known, manifest: install.manifest, item: install.item })
+    if (imported.has(id)) reinstalled.add(id)
     const at = mods.findIndex((m) => m.id === id)
     if (at < 0) mods.push(stubOf(install.manifest))
     else if (!known?.running) mods[at] = stubOf(install.manifest)
     const mod = mods.find((m) => m.id === id)!
-    if (added.length && isOn(mod)) {
+    if (added.length && ownSwitch(mod)) {
       setModEnabled(mod, false)
       const more = added.map((use) => MOD_USES[use].toLowerCase()).join('; ')
       broadcast({
@@ -1117,13 +1189,14 @@ export function openCore(options: {
       })
     }
     broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+    restartChanged()
   }
 
   // Turns the mod off and deletes its files. Its storage in <garage>/mods/<id>/ stays, as a stock mod's does.
   const uninstallMod = (id: string) => {
     const mod = mods.find((m) => m.id === id)
     if (!community.has(id) || !mod) return marketplace.uninstall('mod', id)
-    if (isOn(mod)) setModEnabled(mod, false)
+    if (ownSwitch(mod)) setModEnabled(mod, false)
     marketplace.uninstall('mod', id)
     const { enabled: _, ...kept } = settings.mods?.[id] ?? {}
     settings.mods = { ...settings.mods, [id]: kept }
@@ -1132,6 +1205,7 @@ export function openCore(options: {
     hosts.delete(id)
     mods.splice(mods.indexOf(mod), 1)
     broadcast({ type: 'mod.removed', modId: id })
+    restartChanged()
   }
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
@@ -1865,6 +1939,8 @@ export function openCore(options: {
     setWorkFolder,
     themes: marketplace.themes,
     installed: marketplace.installed,
+    communityMods: communityOn,
+    restart: restartState,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -1974,6 +2050,12 @@ export function openCore(options: {
           return install(modFor(String(message.modId)))
         case 'mod.cancelInstall':
           return installs.get(modFor(String(message.modId)).id)?.abort()
+        case 'communityMods.setEnabled':
+          return setCommunityMods(message.enabled === true)
+        case 'app.restart':
+          if (!options.restart) throw new Error('This Kothar can\'t restart itself. Stop it and start it again.')
+          if (quitting) return
+          return options.restart()
         case 'memory.set':
           return setMemory(optionalText(message.engine), optionalText(message.model))
         case 'models.setList':

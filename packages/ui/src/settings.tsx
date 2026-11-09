@@ -21,6 +21,7 @@ import {
   type ModelRow,
   type ThinkingLevel,
   type ModInfo,
+  type RestartState,
   type WorkFolder,
 } from '@kothar/core/shared'
 import type { ModSetting } from '@kothar/mod-api'
@@ -44,6 +45,7 @@ import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDe
 import { MarketplacePage, MOD_WARNING, modStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
+import { RestartNotice } from './restart.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -59,7 +61,13 @@ type PageProps = {
   market?: Market
   // The desktop app's folder picker, for Install from folder.
   pickFolder?: (title?: string) => Promise<string | null>
+  // The master switch for community mods, what waits for a restart, and how many chats a restart would stop.
+  communityMods?: boolean
+  restart?: RestartState
+  running?: number
 }
+
+const NO_RESTART: RestartState = { changes: [], canRestart: false }
 
 const NO_MARKET: Market = { marketFailures: {} }
 
@@ -243,36 +251,76 @@ const PAGES = [
     id: 'community-mods',
     group: 'Mods',
     title: 'Community mods',
-    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and runs from the next start.',
+    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
     body: (props: PageProps) => <CommunityModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
 
 export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
-function CommunityModsPage({ mods, connected, send }: PageProps) {
+export const COMMUNITY_RISKS =
+  'Community mods are code from other people, and they run inside Kothar with your permissions.\n\n' +
+  '• They can read your files and settings, and reach the network.\n' +
+  "• Kothar doesn't review them.\n" +
+  '• An update can change what a mod does.\n\n' +
+  'Each mod still stays off until you turn it on.'
+
+export async function setCommunityMods(enabled: boolean, send: (m: ClientMessage) => void) {
+  if (enabled) {
+    const ok = await confirm({ text: 'Turn on community mods?', body: COMMUNITY_RISKS, ok: 'Turn on community mods' })
+    if (!ok) return
+  }
+  send({ type: 'communityMods.setEnabled', enabled })
+}
+
+function CommunityModsPage({ mods, connected, send, communityMods = false, restart = NO_RESTART, running = 0 }: PageProps) {
   const community = mods.filter((m) => m.community)
   const turn = async (m: ModInfo, enabled: boolean) => {
     if (enabled) {
-      const uses = m.community!.uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
-      const ok = await confirm(
-        `Turn on ${m.name}? It runs code on your computer with your permissions.` +
-          (uses ? `\n\nIt says it:\n${uses}` : '') +
-          '\n\nIt starts the next time Kothar starts.',
-      )
+      const { uses, repo, path } = m.community!
+      const listed = uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+      const ok = await confirm({
+        text: `Turn on ${m.name}?`,
+        body:
+          `From ${repo ? `github.com/${repo}` : (path ?? 'a folder on this computer')}. It runs code on your computer with ` +
+          'your permissions.' +
+          (listed ? `\n\nIt says it:\n${listed}` : '') +
+          '\n\nIt starts when Kothar restarts.',
+        ok: 'Turn on',
+      })
       if (!ok) return
     }
     send({ type: 'mod.setEnabled', modId: m.id, enabled })
   }
   return (
     <>
+      <RestartNotice restart={restart} running={running} connected={connected} send={send} />
+      <div className={`${GROUP} mb-12`}>
+        <SettingRow
+          name="Community mods"
+          description={
+            communityMods ? (
+              'On. A mod below runs while its own switch is on.'
+            ) : (
+              <span className="text-amber">Off. No community mod runs, whatever its own switch says.</span>
+            )
+          }
+        >
+          <Switch
+            label="Community mods"
+            checked={communityMods}
+            disabled={!connected}
+            onChange={(on) => void setCommunityMods(on, send)}
+          />
+        </SettingRow>
+      </div>
       <p className="pb-12 text-sm text-amber">{MOD_WARNING}</p>
       {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
       {community.length > 0 && (
-        <div className={GROUP}>
+        <div className={`${GROUP} transition-opacity ${communityMods ? '' : 'opacity-60'}`} aria-disabled={!communityMods}>
           {community.map((m) => {
             const { version, author, uses, source, repo, path } = m.community!
-            const status = modStatus(m)
+            const status = modStatus(m, communityMods)
             return (
               <SettingRow
                 key={m.id}
@@ -315,7 +363,12 @@ function CommunityModsPage({ mods, connected, send }: PageProps) {
                 >
                   Uninstall
                 </Button>
-                <Switch label={m.name} checked={m.enabled} disabled={!connected} onChange={(on) => void turn(m, on)} />
+                <Switch
+                  label={m.name}
+                  checked={m.enabled}
+                  disabled={!connected || (!communityMods && !m.enabled)}
+                  onChange={(on) => void turn(m, on)}
+                />
               </SettingRow>
             )
           })}
@@ -484,9 +537,9 @@ function ModSetupRow({ mod, connected, send }: SetupProps) {
   )
 }
 
-const modPages = (mods: ModInfo[]): Page[] =>
+const modPages = (mods: ModInfo[], communityMods: boolean): Page[] =>
   mods
-    .filter((mod) => mod.enabled && (mod.settings.length || mod.setup))
+    .filter((mod) => mod.enabled && (!mod.community || communityMods) && (mod.settings.length || mod.setup))
     .map((mod) => ({
       id: `mod:${mod.id}`,
       group: 'Mods',
@@ -1045,7 +1098,7 @@ type SettingsProps = PageProps & {
 
 export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
-  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods)]
+  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods, props.communityMods ?? false)]
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open={open} onOpenChange={(open) => open || close()}>

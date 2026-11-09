@@ -13,6 +13,7 @@ import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
+import { changesText, RestartButton } from './restart.tsx'
 import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { useLooking, useMarkRead } from './unread.ts'
@@ -146,11 +147,13 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, installed, marketFailures, mods, localInstall } = state
+  const { catalog, themes, installed, marketFailures, mods, localInstall, communityMods } = state
   const market = useMemo(
-    () => ({ catalog, themes, installed, marketFailures, mods, localInstall }),
-    [catalog, themes, installed, marketFailures, mods, localInstall],
+    () => ({ catalog, themes, installed, marketFailures, mods, localInstall, communityMods }),
+    [catalog, themes, installed, marketFailures, mods, localInstall, communityMods],
   )
+  // What a restart would stop.
+  const running = state.chats.filter((c) => c.status !== 'idle').length
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
     const picked = await window.kothar.pickFolder()
@@ -236,6 +239,14 @@ function App() {
             ) : (
               !state.connected && !quitting && <Banner tone="warning">Disconnected from the core. Reconnecting…</Banner>
             )}
+            {state.connected && !quitting && state.restart.changes.length > 0 && (
+              <Banner
+                tone="warning"
+                action={<RestartButton restart={state.restart} running={running} connected={connected} send={send} />}
+              >
+                Restart Kothar to apply community mod changes: {changesText(state.restart.changes)}.
+              </Banner>
+            )}
             {engine?.enabled && (!engine.installed || !signedIn) && (
               <Banner tone="warning">
                 {engine.id} is{' '}
@@ -256,6 +267,9 @@ function App() {
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
+              communityMods={communityMods}
+              restart={state.restart}
+              running={running}
               pickFolder={window.kothar?.pickFolder}
               connected={connected}
               send={send}
