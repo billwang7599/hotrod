@@ -253,6 +253,10 @@ export type ModListItem = {
   detail?: string
   mono?: boolean
   badges?: { text: string; tone?: ModTone; hint?: string }[]
+  // A status dot before the label, in this tone.
+  dot?: ModTone
+  // A link at the end of the row, apart from its action.
+  link?: { text: string; url: string }
   selected?: boolean
   action?: ModAction
   hint?: string
@@ -274,8 +278,10 @@ export type ModView =
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ModListItem[]; empty?: string; label?: string }
-  // language 'diff' colours added and removed lines; others are shown plain.
-  | { type: 'code'; text: string; language?: string; maxLines?: number }
+  // language 'diff' colours added and removed lines; others are shown plain. follow: for output that grows, such as a
+  // log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end as lines arrive
+  // unless the user scrolls up.
+  | { type: 'code'; text: string; language?: string; maxLines?: number; follow?: boolean }
   // A card with a title that folds; open says how it starts.
   | { type: 'card'; title: string; badges?: ModListItem['badges']; open?: boolean; children: ModView[] }
   | { type: 'divider' }

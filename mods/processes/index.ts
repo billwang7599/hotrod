@@ -1,12 +1,19 @@
 import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
-import { isAbsolute, join, resolve, sep } from 'node:path'
-import type { ChatSummary, Mod, ModHost, ModProcess, SpaceDetail } from '@hotrod/mod-api'
+import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@hotrod/mod-api'
 
 // Long-running commands (dev servers, watchers) that a space's agents start with start_process. An engine's own
 // background shell dies with its session, which ends with every turn; these belong to the space instead, so they keep
 // running between messages, outlive the subagent that started them, and stop when someone stops them, the space goes,
 // the mod is turned off or Hotrod quits. Each one runs through the Machine (host.spawn), sandboxed as the space's own
-// commands are, with its output in a plain log file in the mod's storage.
+// commands are, with its output in a plain log file in the mod's storage. The Processes tab shows them to the user,
+// once a space has one.
+
+export const PANEL = 'processes'
+// A tab that's open is drawn again at most this often while output streams in; starts and ends draw it at once.
+export const REFRESH_MS = 500
+// How many lines of output the tab shows.
+export const PANEL_LINES = 200
 
 // Kept in memory per process for read_output; the log file has the rest.
 export const TAIL_LINES = 1000
@@ -96,17 +103,36 @@ const real = (path: string) => {
 const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
 
 export function createProcessesMod(
-  options: { now?: () => number; settleMs?: number; stopWaitMs?: number; logMaxBytes?: number } = {},
+  options: {
+    now?: () => number
+    settleMs?: number
+    stopWaitMs?: number
+    logMaxBytes?: number
+    refreshMs?: number
+  } = {},
 ) {
   const now = options.now ?? Date.now
   const logMaxBytes = options.logMaxBytes ?? LOG_MAX_BYTES
   const settleMs = options.settleMs ?? SETTLE_MS
   const stopWaitMs = options.stopWaitMs ?? STOP_WAIT_MS
+  const refreshMs = options.refreshMs ?? REFRESH_MS
   // Per space, in the order they started.
   const spaces = new Map<string, Proc[]>()
   const counters = new Map<string, number>()
-  const changeListeners: ((spaceId: string) => void)[] = []
-  const changed = (spaceId: string) => changeListeners.forEach((listener) => listener(spaceId))
+  // Per chat looking at the tab, the process whose output it shows.
+  const selected = new Map<string, string>()
+
+  // The space's tab and its subagents' show the same processes, so all of them are drawn again.
+  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  const redraw = (host: ModHost, spaceId: string) => {
+    clearTimeout(pending.get(spaceId))
+    pending.delete(spaceId)
+    for (const chat of host.chats()) if (chat.id === spaceId || chat.parentId === spaceId) host.refresh(chat.id)
+  }
+  const changed = (host: ModHost, spaceId: string, now = true) => {
+    if (now) return redraw(host, spaceId)
+    if (!pending.has(spaceId)) pending.set(spaceId, setTimeout(() => redraw(host, spaceId), refreshMs))
+  }
 
   const listOf = (spaceId: string) => spaces.get(spaceId) ?? []
   const logDir = (host: ModHost, spaceId: string) => join(host.storage.dir, spaceId)
@@ -154,10 +180,13 @@ export function createProcessesMod(
 
   const writeLog = (proc: Proc, chunk: string) => {
     try {
-      if (existsSync(proc.log) && statSync(proc.log).size + Buffer.byteLength(chunk) > logMaxBytes) {
+      let bytes = Buffer.from(chunk)
+      if (existsSync(proc.log) && statSync(proc.log).size + bytes.length > logMaxBytes) {
         renameSync(proc.log, `${proc.log}.1`)
       }
-      appendFileSync(proc.log, chunk)
+      // A chunk bigger than a whole log keeps its end.
+      if (bytes.length > logMaxBytes) bytes = bytes.subarray(bytes.length - logMaxBytes)
+      appendFileSync(proc.log, bytes)
     } catch {
       // A log that can't be written (the space went) leaves the tail in memory.
     }
@@ -187,8 +216,9 @@ export function createProcessesMod(
     proc.handle = handle
     handle.onOutput((chunk) => {
       writeLog(proc, chunk)
+      const port = proc.port
       addLines(proc, chunk)
-      changed(proc.spaceId)
+      changed(host, proc.spaceId, proc.port !== port)
     })
     handle.onExit((code, stderrTail) => {
       if (proc.handle !== handle) return
@@ -201,21 +231,28 @@ export function createProcessesMod(
       delete proc.stopping
       proc.end()
       prune(proc.spaceId)
-      changed(proc.spaceId)
+      changed(host, proc.spaceId)
+      // A process that failed on its own is worth a line in the space; one killed by a signal was stopped.
+      if (proc.status === 'exited' && typeof code === 'number' && code !== 0 && host.chat(proc.spaceId)) {
+        host.note(proc.spaceId, `${proc.name} exited with code ${code}`, { panel: PANEL })
+      }
     })
   }
 
-  const newProc = (spaceId: string, fields: Pick<Proc, 'name' | 'command' | 'cwd' | 'startedBy' | 'log' | 'id'>) => {
+  const endable = () => {
     let end = () => {}
     const ended = new Promise<void>((resolve) => (end = resolve))
-    const proc: Proc = { ...fields, spaceId, status: 'running', startedAt: now(), lines: [], partial: '', ended, end }
+    return { ended, end }
+  }
+
+  const newProc = (spaceId: string, fields: Pick<Proc, 'name' | 'command' | 'cwd' | 'startedBy' | 'log' | 'id'>) => {
+    const proc: Proc = { ...fields, spaceId, status: 'running', startedAt: now(), lines: [], partial: '', ...endable() }
     return proc
   }
 
-  type Spec = Pick<Proc, 'command' | 'cwd' | 'name' | 'startedBy'>
-  const start = async (host: ModHost, space: SpaceDetail, spec: Spec) => {
-    const list = listOf(space.id)
-    const running = list.filter((p) => p.status === 'running')
+  // A running process that would do the same as one about to start.
+  const checkFree = (spaceId: string, spec: Pick<Proc, 'name' | 'command' | 'cwd'>, self?: Proc) => {
+    const running = listOf(spaceId).filter((p) => p.status === 'running' && p !== self)
     const same = running.find((p) => p.name === spec.name || (p.command === spec.command && p.cwd === spec.cwd))
     if (same) {
       throw new Error(
@@ -226,6 +263,12 @@ export function createProcessesMod(
     if (running.length >= MAX_RUNNING) {
       throw new Error(`This space already runs ${MAX_RUNNING} processes. Stop one with stop_process first.`)
     }
+  }
+
+  type Spec = Pick<Proc, 'command' | 'cwd' | 'name' | 'startedBy'>
+  const start = async (host: ModHost, space: SpaceDetail, spec: Spec) => {
+    const list = listOf(space.id)
+    checkFree(space.id, spec)
     // A space's first process this run clears logs left from the last.
     if (!spaces.has(space.id)) rmSync(logDir(host, space.id), { recursive: true, force: true })
     mkdirSync(logDir(host, space.id), { recursive: true })
@@ -240,7 +283,7 @@ export function createProcessesMod(
       spaces.set(space.id, listOf(space.id).filter((p) => p !== proc))
       throw error
     }
-    changed(space.id)
+    changed(host, space.id)
     return proc
   }
 
@@ -254,6 +297,40 @@ export function createProcessesMod(
 
   const waitFor = (promise: Promise<unknown>, ms: number) =>
     Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))])
+
+  // The same command again, under the same id, with its output so far kept above a line that says so.
+  const restart = async (host: ModHost, proc: Proc) => {
+    if (proc.status === 'running') {
+      stop(proc)
+      await waitFor(proc.ended, stopWaitMs)
+      if (proc.status === 'running') throw new Error(`${proc.name} hasn’t stopped yet`)
+    }
+    checkFree(proc.spaceId, proc, proc)
+    mkdirSync(dirname(proc.log), { recursive: true })
+    const mark = '--- restarted ---\n'
+    writeLog(proc, mark)
+    addLines(proc, mark)
+    for (const key of ['code', 'endedAt', 'port', 'url'] as const) delete proc[key]
+    Object.assign(proc, { status: 'running', startedAt: now(), ...endable() })
+    try {
+      await launch(host, proc)
+    } catch (error) {
+      Object.assign(proc, { status: 'exited', code: null, endedAt: now() })
+      proc.end()
+      throw error
+    } finally {
+      changed(host, proc.spaceId)
+    }
+  }
+
+  // Ended processes leave the list, with their logs.
+  const clear = (spaceId: string) => {
+    const list = listOf(spaceId)
+    for (const proc of list.filter((p) => p.status !== 'running')) {
+      removeLogs(proc)
+      list.splice(list.indexOf(proc), 1)
+    }
+  }
 
   const summary = (proc: Proc) => ({
     id: proc.id,
@@ -270,6 +347,91 @@ export function createProcessesMod(
   const tail = (proc: Proc, lines: number) => {
     const all = proc.partial ? [...proc.lines, proc.partial] : proc.lines
     return lines > 0 ? all.slice(-lines).join('\n') : ''
+  }
+
+  const spaceIdOf = (host: ModHost, chatId: string) => host.space(chatId)?.id
+
+  const ended = (proc: Proc): { text: string; tone: ModTone; hint: string } | undefined => {
+    if (proc.status === 'running') return undefined
+    const ran = duration((proc.endedAt ?? now()) - proc.startedAt)
+    if (proc.status === 'stopped') return { text: 'stopped', tone: 'faint', hint: `Stopped after ${ran}` }
+    if (typeof proc.code !== 'number') return { text: 'killed', tone: 'faint', hint: `Killed after ${ran}` }
+    const failed = proc.code !== 0
+    const text = failed ? `exit ${proc.code}` : 'done'
+    return { text, tone: failed ? 'error' : 'faint', hint: `Exited with code ${proc.code} after ${ran}` }
+  }
+
+  const rowOf = (proc: Proc, open: boolean): ModListItem => {
+    const end = ended(proc)
+    return {
+      key: proc.id,
+      label: proc.name,
+      dot: proc.status === 'running' ? 'success' : (end?.tone ?? 'faint'),
+      ...(proc.status === 'running' && { detail: duration(now() - proc.startedAt) }),
+      ...(end && { badges: [end] }),
+      ...(proc.url && { link: { text: `localhost:${proc.port}`, url: proc.url } }),
+      selected: open,
+      action: { name: 'open', value: proc.id },
+      hint: open ? 'Hide its output' : 'Show its output',
+    }
+  }
+
+  const detailOf = (proc: Proc): ModView => {
+    const output = tail(proc, PANEL_LINES)
+    const stopButton: ModView = {
+      type: 'button',
+      label: 'Stop',
+      action: { name: 'stop', value: proc.id },
+      hint: 'Stop it and everything it started',
+    }
+    const buttons: ModView[] = [
+      ...(proc.status === 'running' ? [stopButton] : []),
+      {
+        type: 'button',
+        label: 'Restart',
+        action: { name: 'restart', value: proc.id },
+        hint: proc.status === 'running' ? 'Stop it, then run the same command again' : 'Run the same command again',
+      },
+    ]
+    return {
+      type: 'stack',
+      gap: 'tight',
+      children: [
+        {
+          type: 'text',
+          text: proc.command,
+          mono: true,
+          tone: 'muted',
+          hint: `In ${proc.cwd}, started by ${proc.startedBy}`,
+        },
+        { type: 'row', children: buttons },
+        output.trim()
+          ? { type: 'code', text: output, maxLines: PANEL_LINES, follow: true }
+          : { type: 'empty', text: 'No output yet' },
+      ],
+    }
+  }
+
+  const panelView = (spaceId: string, chatId: string): ModView => {
+    const list = listOf(spaceId)
+    if (!list.length) return { type: 'empty', text: 'No processes' }
+    const open = selected.get(chatId)
+    const children: ModView[] = []
+    if (list.some((p) => p.status !== 'running')) {
+      const clearButton: ModView = {
+        type: 'button',
+        label: 'Clear ended',
+        variant: 'ghost',
+        action: { name: 'clear' },
+        hint: 'Remove the processes that have ended, with their logs',
+      }
+      children.push({ type: 'row', justify: 'end', children: [clearButton] })
+    }
+    for (const proc of list) {
+      children.push({ type: 'list', label: proc.name, items: [rowOf(proc, proc.id === open)] })
+      if (proc.id === open) children.push(detailOf(proc))
+    }
+    return { type: 'stack', gap: 'normal', children }
   }
 
   const mod: Mod = {
@@ -377,11 +539,48 @@ export function createProcessesMod(
         },
       },
     ],
+    panels: [
+      {
+        id: PANEL,
+        title: 'Processes',
+        // Only once the space has run something: the panel is crowded enough.
+        shown(chat, { host }) {
+          const spaceId = spaceIdOf(host, chat.id)
+          return !chat.mod && spaceId !== undefined && listOf(spaceId).length > 0
+        },
+        render(chat, { host }) {
+          const spaceId = spaceIdOf(host, chat.id)
+          return spaceId === undefined ? { type: 'empty', text: 'No processes' } : panelView(spaceId, chat.id)
+        },
+        async onAction(action, chat, { host }) {
+          const spaceId = spaceIdOf(host, chat.id)
+          if (spaceId === undefined) return
+          if (action.name === 'clear') {
+            clear(spaceId)
+            return changed(host, spaceId)
+          }
+          const proc = listOf(spaceId).find((p) => p.id === action.value)
+          if (!proc) return
+          if (action.name === 'open') {
+            if (selected.get(chat.id) === proc.id) selected.delete(chat.id)
+            else selected.set(chat.id, proc.id)
+          } else if (action.name === 'stop') {
+            stop(proc)
+          } else if (action.name === 'restart') {
+            selected.set(chat.id, proc.id)
+            await restart(host, proc)
+          }
+        },
+      },
+    ],
     onChatArchived(chat, archived) {
       if (archived && chat.parentId === undefined) stopSpace(chat.id)
     },
     onChatRemoved(chat, { host }) {
+      selected.delete(chat.id)
       if (chat.parentId !== undefined) return
+      clearTimeout(pending.get(chat.id))
+      pending.delete(chat.id)
       stopSpace(chat.id)
       // Its logs go once everything in it has ended.
       const list = listOf(chat.id)
@@ -394,10 +593,8 @@ export function createProcessesMod(
 
   return {
     mod,
-    // For the panel and tests.
+    // For tests.
     processes: (spaceId: string) => [...listOf(spaceId)],
-    stop,
-    onChange: (listener: (spaceId: string) => void) => void changeListeners.push(listener),
   }
 }
 

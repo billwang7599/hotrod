@@ -2,10 +2,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ChatSummary, Mod, ModHost } from '@hotrod/mod-api'
+import type { ChatSummary, Mod, ModHost, ModView } from '@hotrod/mod-api'
 import { createFakeAdapter } from '@hotrod/core/fake'
 import { startCore } from '@hotrod/core/main'
-import type { ClientMessage, Machine, Sandbox } from '@hotrod/core/shared'
+import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@hotrod/core/shared'
 import { sandboxingMachine as localMachine } from '@hotrod/core/test-machine'
 import { createProcessesMod, duration, plain, portOf } from './index.ts'
 
@@ -62,7 +62,7 @@ async function start(options: { logMaxBytes?: number } = {}) {
       return localMachine.spawn(command, args, rest)
     },
   }
-  const made = createProcessesMod({ settleMs: 300, stopWaitMs: 3000, ...options })
+  const made = createProcessesMod({ settleMs: 300, stopWaitMs: 3000, refreshMs: 50, ...options })
   let host: ModHost | undefined
   const mod: Mod = { ...made.mod, onChatCreated: (_chat, context) => void (host = context.host) }
   const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: work, HOTROD_PORT: '0' }
@@ -74,7 +74,10 @@ async function start(options: { logMaxBytes?: number } = {}) {
   }
   cleanups.push(close)
   const { core } = hotrod
-  const handle = (m: ClientMessage) => core.handle(m, () => {})
+  const messages: CoreMessage[] = []
+  core.onMessage((m) => messages.push(m))
+  const replies: CoreMessage[] = []
+  const handle = (m: ClientMessage) => core.handle(m, (r) => replies.push(r))
   // Any chat made hands the test the mod's host.
   handle({ type: 'chat.create', name: 'Other' })
   const caller = (id: string): ChatSummary => {
@@ -86,7 +89,26 @@ async function start(options: { logMaxBytes?: number } = {}) {
     return found.run(input, { caller: caller(from), values: {}, host: host! })
   }
   const logDir = join(garage, 'mods', 'processes')
-  return { core, garage, workDir, spaceId, handle, tool, spawned, made, close, logDir }
+  const tabs = (chatId = spaceId) => {
+    handle({ type: 'context.get', chatId })
+    const listed = replies.findLast((m) => m.type === 'chat.mods' && m.chatId === chatId)
+    return listed?.type === 'chat.mods' ? listed.panels.map((p) => p.title) : []
+  }
+  const views = (chatId = spaceId) => messages.filter((m) => m.type === 'mod.panel' && m.chatId === chatId)
+  type Action = Extract<ClientMessage, { type: 'mod.panel.action' }>['action']
+  const panel = async (action?: Action, chatId = spaceId) => {
+    const seen = views(chatId).length
+    const where = { chatId, mod: 'processes', panel: 'processes' }
+    handle(action ? { type: 'mod.panel.action', ...where, action } : { type: 'mod.panel.get', ...where })
+    await until(() => views(chatId).length > seen)
+    return lastView(chatId)
+  }
+  const lastView = (chatId = spaceId) => {
+    const shown = views(chatId).at(-1)
+    if (shown?.type !== 'mod.panel' || !shown.view) throw new Error('no view')
+    return shown.view
+  }
+  return { core, garage, workDir, spaceId, handle, tool, spawned, made, close, logDir, tabs, panel, views, lastView }
 }
 
 describe('output', () => {
@@ -230,5 +252,92 @@ describe('stopping', () => {
     const pid = await running(t)
     await t.close()
     expect(alive(pid)).toBe(false)
+  })
+})
+
+// The view's parts, flattened in order.
+function partsOf(view: ModView): ModView[] {
+  return view.type === 'stack' || view.type === 'row' ? view.children.flatMap(partsOf) : [view]
+}
+const rows = (view: ModView) =>
+  partsOf(view).flatMap((part) => (part.type === 'list' ? part.items : []))
+const buttons = (view: ModView) => partsOf(view).flatMap((part) => (part.type === 'button' ? [part.label] : []))
+const code = (view: ModView) => partsOf(view).find((part) => part.type === 'code')
+
+describe('the Processes tab', () => {
+  it('shows once the space has a process, in the space and its subagents, and goes once they are cleared', async () => {
+    const t = await start()
+    expect(t.tabs()).toEqual([])
+    await t.tool('start_process', { command: 'echo hi', name: 'once' })
+    expect(t.tabs()).toEqual(['Processes'])
+    expect(t.tabs('sub001')).toEqual(['Processes'])
+    const view = await t.panel({ name: 'clear' })
+    expect(view).toEqual({ type: 'empty', text: 'No processes' })
+    expect(t.tabs()).toEqual([])
+  })
+
+  it('lists each process with a status dot, its uptime and its address', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo "Local: http://localhost:5173/"; sleep 300', name: 'web' })
+    await t.tool('start_process', { command: 'exit 2', name: 'broken' })
+    const view = await t.panel()
+    expect(rows(view)).toEqual([
+      expect.objectContaining({
+        label: 'web',
+        dot: 'success',
+        detail: expect.stringMatching(/^\d+s$/),
+        link: { text: 'localhost:5173', url: 'http://localhost:5173/' },
+        selected: false,
+      }),
+      expect.objectContaining({ label: 'broken', dot: 'error', badges: [expect.objectContaining({ text: 'exit 2' })] }),
+    ])
+    expect(buttons(view)).toEqual(['Clear ended'])
+  })
+
+  it('opens a row to show its command and live output, followed to the end', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo first; sleep 1.5; echo second; sleep 300', name: 'web' })
+    await t.panel()
+    const open = await t.panel({ name: 'open', value: 'p1' })
+    expect(rows(open)[0]).toMatchObject({ selected: true, hint: 'Hide its output' })
+    const command = 'echo first; sleep 1.5; echo second; sleep 300'
+    expect(partsOf(open)).toContainEqual(expect.objectContaining({ type: 'text', text: command }))
+    expect(buttons(open)).toEqual(['Stop', 'Restart'])
+    expect(code(open)).toMatchObject({ follow: true, text: 'first' })
+    // New output draws the open tab again by itself.
+    await until(() => (code(t.lastView()) as { text?: string } | undefined)?.text === 'first\nsecond')
+    const closed = await t.panel({ name: 'open', value: 'p1' })
+    expect(code(closed)).toBeUndefined()
+  })
+
+  it('stops and restarts a process under the same id', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo "run $$"; exec sleep 300', name: 'web' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const stopped = await t.panel({ name: 'stop', value: 'p1' })
+    await until(() => t.made.processes(t.spaceId)[0]?.status === 'stopped')
+    expect(buttons(stopped)).toContain('Restart')
+    await t.panel({ name: 'restart', value: 'p1' })
+    await until(() => (code(t.lastView()) as { text?: string } | undefined)?.text?.split('run ').length === 3)
+    const [proc] = t.made.processes(t.spaceId)
+    expect(proc).toMatchObject({ id: 'p1', status: 'running' })
+    expect((code(t.lastView()) as { text: string }).text).toMatch(/^run \d+\n--- restarted ---\nrun \d+$/)
+    expect(buttons(t.lastView())).toEqual(['Stop', 'Restart'])
+    // Restarting a running one stops it first.
+    const pid = Number(/run (\d+)$/.exec(proc!.lines.join('\n'))?.[1])
+    await t.panel({ name: 'restart', value: 'p1' })
+    await until(() => !alive(pid))
+    expect(t.made.processes(t.spaceId)).toMatchObject([{ id: 'p1', status: 'running' }])
+  })
+
+  it('notes in the space when a process fails on its own', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exit 4', name: 'web' })
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'quiet' })
+    await t.tool('stop_process', { id: 'quiet' })
+    const notes = t.core.chats().find((c) => c.id === t.spaceId)!.entries.filter((e) => e.type === 'mod.note')
+    const note = { text: 'web exited with code 4', mod: 'processes', panel: 'processes' }
+    expect(notes).toEqual([expect.objectContaining(note)])
   })
 })
