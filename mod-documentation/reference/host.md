@@ -19,6 +19,7 @@ the missing entry.
 | `run`, `spawn`, `openTerminal` | `run` |
 | `complete` | `models` |
 | `chatStorage` | `memory` |
+| `spaceValues`, `setSpaceValue` | `settings` |
 | `note`, `error`, `storage`, `refresh` | nothing |
 
 ## Reading chats
@@ -240,6 +241,15 @@ export { titleFor }
 ```
 
 List `models` in the manifest's `uses`: each call runs on your account.
+
+## Settings per space
+
+| Call | What it does |
+|---|---|
+| `spaceValues(chatId)` | The mod's `spaceSettings` for the chat's space (a worker's space), defaults filled in. |
+| `setSpaceValue(chatId, key, value)` | Saves one for the chat's space, checked as Settings checks, and draws the mod's panels again. Throws for an unknown key or a bad value. |
+
+See [Settings per space](settings.md#settings-per-space).
 
 ## Storage
 

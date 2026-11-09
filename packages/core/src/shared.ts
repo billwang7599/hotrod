@@ -217,6 +217,8 @@ export type ChatInfo = PermissionSwitches & {
   // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
   doneAt?: string
   readAt?: string
+  // Spaces only: each mod's spaceSettings as saved, by mod id.
+  modValues?: Record<string, Record<string, unknown>>
 }
 
 /** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
@@ -408,6 +410,7 @@ export type ClientMessage =
   | { type: 'context.get'; chatId: string }
   | { type: 'mod.panel.get'; chatId: string; mod: string; panel: string }
   | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
+  | { type: 'mod.space.set'; chatId: string; mod: string; key: string; value: string | number | boolean }
   | { type: 'mod.command'; chatId: string; mod: string; command: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }

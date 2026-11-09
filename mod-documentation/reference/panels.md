@@ -106,6 +106,8 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |
 | `divider` | none | A line. |
 | `empty` | `text` | A quiet placeholder, such as "No processes". |
+| `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the mod's boolean `spaceSettings`. See below. |
+| `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the mod's select `spaceSettings`. See below. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
 
@@ -115,6 +117,16 @@ the user's theme.
 **Code:** `language: 'diff'` colours added and removed lines; other languages are shown plain. For output that grows,
 such as a log, set `follow: true`. Then `maxLines` keeps the last lines instead of the first, and the view stays
 scrolled to the end as lines arrive, unless the user scrolls up.
+
+### Switches and pickers
+
+A `switch` or `picker` shows one of the mod's [settings per space](settings.md#settings-per-space) for the panel's space
+(a worker's panel shows its space's). Name the setting's `key` in `setting`; `label` defaults to the setting's label.
+
+- Kothar fills in the current value and a picker's options. You don't set them.
+- When the user changes one, Kothar checks and saves the value and draws the panel again. No `onAction` is needed.
+- A `switch` needs a `boolean` setting and a `picker` a `select` one. Naming anything else shows an error in place of
+  the panel.
 
 ### List rows
 

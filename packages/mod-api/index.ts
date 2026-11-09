@@ -180,6 +180,11 @@ export type ModHost = {
   send(chatId: string, text: string): void
   // Every chat the user can see, spaces and workers.
   chats(): ChatDetail[]
+  // The mod's spaceSettings for chatId's space (the chat itself, or the space a worker is in), defaults filled in.
+  spaceValues(chatId: string): ModValues
+  // Saves one of the mod's spaceSettings for chatId's space, checked as Settings checks a global one, and draws the
+  // mod's panels again.
+  setSpaceValue(chatId: string, key: string, value: string | number | boolean): void
   // Whether the chat callerId may reach chatId, by the rule the core's list_chats, read_chat, send_message and
   // stop_chat use: a chat reaches its own workers, and a chat that sees every chat (Home) also reaches every other chat
   // except other chats' workers. No chat reaches itself. A mod tool learns its caller from run's `caller`; check before
@@ -362,6 +367,20 @@ export type ModView =
   | { type: 'card'; title: string; badges?: ModListItem['badges']; open?: boolean; children: ModView[] }
   | { type: 'divider' }
   | { type: 'empty'; text: string }
+  // Controls for one of the mod's spaceSettings in the panel's space (a worker's panel shows its space's): a switch
+  // for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws again.
+  // label defaults to the setting's. value and options are filled in by the core from the space's saved values and the
+  // setting; a mod leaves them out.
+  | { type: 'switch'; setting: string; label?: string; hint?: string; disabled?: boolean; value?: boolean }
+  | {
+      type: 'picker'
+      setting: string
+      label?: string
+      hint?: string
+      disabled?: boolean
+      value?: string | number
+      options?: { value: string | number; label: string }[]
+    }
 
 // A tab beside General, Context and Permissions in the right sidebar.
 export type ModPanel = {
@@ -390,6 +409,16 @@ export type Mod = {
   description: string
   enabledByDefault: boolean
   settings?: ModSetting[]
+  // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
+  // a worker uses its space's. Read them with host.spaceValues, change them with host.setSpaceValue or with a switch or
+  // picker in a panel. They're saved in the space's chat.json, so they go when the space is deleted.
+  spaceSettings?: ModSetting[]
+  // The version of the mod's saved settings, 1 or more; leave it out until they first need migrating. When the
+  // garage holds an older version (none saved counts as 0), migrateSettings runs once at load, before the mod is
+  // used: on the global values and on each space's, as saved (no defaults filled in). What it returns replaces them
+  // and the new version is saved. If it throws, the error shows, nothing is saved, and it runs again next launch.
+  settingsVersion?: number
+  migrateSettings?(saved: Record<string, unknown>, from: number, where: { spaceId?: string }): Record<string, unknown>
   chats?: ModChat[]
   tools?: ModTool[]
   mcpServers?(session: ModSession): McpServer[]

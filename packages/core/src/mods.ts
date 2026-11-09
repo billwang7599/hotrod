@@ -38,9 +38,9 @@ export async function loadMods(dir: string) {
   return { mods, brokenMods }
 }
 
-export const valuesOf = (mod: Mod, saved: Record<string, unknown> = {}): ModValues =>
+export const valuesOf = (mod: Mod, saved: Record<string, unknown> = {}, list = mod.settings): ModValues =>
   Object.fromEntries(
-    (mod.settings ?? []).map((setting) => {
+    (list ?? []).map((setting) => {
       const value = saved[setting.key]
       const blank = setting.type === 'text' && !String(value).trim()
       return [setting.key, blank || settingProblem(setting, value) ? setting.default : (value as ModValues[string])]
@@ -67,6 +67,8 @@ const FIELD_USES: [keyof Mod, ModUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['settings', 'settings'],
+  ['spaceSettings', 'settings'],
+  ['migrateSettings', 'settings'],
   ['chats', 'chats'],
   ['setup', 'setup'],
   ['memory', 'memory'],
@@ -81,6 +83,8 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   read: 'readChats',
   space: 'readChats',
   messages: 'readChats',
+  spaceValues: 'settings',
+  setSpaceValue: 'settings',
   reaches: 'readChats',
   reachable: 'readChats',
   chatStorage: 'memory',

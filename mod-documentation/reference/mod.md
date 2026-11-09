@@ -22,6 +22,8 @@ cover each group in detail.
 | Field | What it adds | Page |
 |---|---|---|
 | `settings` | Settings on the mod's own page in Settings | [Settings and setup](settings.md) |
+| `spaceSettings` | Settings kept per space, shown in the mod's panels | [Settings and setup](settings.md#settings-per-space) |
+| `settingsVersion`, `migrateSettings` | Updating saved settings once when their shape changes | [Settings and setup](settings.md#migrating-saved-settings) |
 | `setup` | A check and an install step for something the mod needs | [Settings and setup](settings.md#setup) |
 | `tools` | Tools agents can call | [Tools, MCP servers, instructions and memory](agents.md#tools) |
 | `mcpServers` | MCP servers for each session | [Tools, MCP servers, instructions and memory](agents.md#mcp-servers) |

@@ -63,7 +63,7 @@ you turn it on, and holds the mod to it:
 | `chats` | Adds chats of its own | `chats` |
 | `panels` | Adds panels | `panels` |
 | `commands` | Adds commands | `commands` |
-| `settings` | Has settings | `settings` |
+| `settings` | Has settings | `settings`, `spaceSettings`, `settingsVersion`/`migrateSettings`, `host.spaceValues`, `host.setSpaceValue` |
 
 `host.note`, `host.error`, `host.storage` and `host.refresh` need nothing listed. An empty list, such as `tools: []`, counts as
 unset.

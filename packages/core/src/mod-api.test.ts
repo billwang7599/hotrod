@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatDetail, Mod, ModContext, ModHost, ModView, PermissionVerdict } from '@kothar/mod-api'
@@ -585,5 +585,133 @@ describe('panels and commands', () => {
     expect(t.messages.findLast((m) => m.type === 'chat.mods' && m.chatId === id)).toMatchObject({
       panels: expect.arrayContaining([expect.objectContaining({ id: 'count' })]),
     })
+  })
+})
+
+describe('space settings', () => {
+  const spaceSettings: Mod['spaceSettings'] = [
+    { key: 'auto', label: 'Run on its own', type: 'boolean', default: false },
+    { key: 'size', label: 'Size', type: 'select', options: [{ value: 1, label: 'Small' }, { value: 2, label: 'Large' }], default: 1 },
+  ]
+  const controls: ModView = {
+    type: 'stack',
+    children: [
+      { type: 'switch', setting: 'auto' },
+      { type: 'card', title: 'More', children: [{ type: 'picker', setting: 'size', label: 'How big' }] },
+    ],
+  }
+  const panels: Mod['panels'] = [{ id: 'p', title: 'P', render: () => controls }]
+
+  it('keeps values per space, a worker reads its space’s, and they’re checked as Settings checks', () => {
+    const t = withHost({ spaceSettings })
+    const a = t.create('A')
+    const b = t.create('B')
+    const host = t.host()
+    expect(host.spaceValues(a)).toEqual({ auto: false, size: 1 })
+    host.setSpaceValue(a, 'auto', true)
+    const child = host.createChat({ name: 'Helper', parentId: a }).id
+    host.setSpaceValue(child, 'size', 2)
+    expect(host.spaceValues(a)).toEqual({ auto: true, size: 2 })
+    expect(host.spaceValues(child)).toEqual({ auto: true, size: 2 })
+    expect(host.spaceValues(b)).toEqual({ auto: false, size: 1 })
+    const saved = JSON.parse(readFileSync(join(t.garage, 'chats', a, 'chat.json'), 'utf8'))
+    expect(saved.modValues).toEqual({ test: { auto: true, size: 2 } })
+    expect(existsSync(join(t.garage, 'chats', child, 'chat.json')) && JSON.parse(readFileSync(join(t.garage, 'chats', child, 'chat.json'), 'utf8')).modValues).toBeFalsy()
+    expect(() => host.setSpaceValue(a, 'nope', 1)).toThrow('Test mod has no space setting "nope"')
+    expect(() => host.setSpaceValue(a, 'size', 3)).toThrow(/^Size /)
+    expect(() => host.setSpaceValue(a, 'auto', 'yes')).toThrow(/^Run on its own /)
+  })
+
+  it('fills in a panel’s switch and picker, and a change from the UI saves and draws the panel again', async () => {
+    const t = start({ spaceSettings, panels })
+    const id = t.create('A')
+    const views = () => t.messages.filter((m) => m.type === 'mod.panel')
+    t.handle({ type: 'mod.panel.get', chatId: id, mod: 'test', panel: 'p' })
+    await until(() => views().length === 1)
+    const options = [{ value: 1, label: 'Small' }, { value: 2, label: 'Large' }]
+    expect(views()[0]).toMatchObject({
+      view: {
+        children: [
+          { type: 'switch', setting: 'auto', label: 'Run on its own', value: false },
+          { type: 'card', children: [{ type: 'picker', setting: 'size', label: 'How big', value: 1, options }] },
+        ],
+      },
+    })
+    t.handle({ type: 'mod.space.set', chatId: id, mod: 'test', key: 'auto', value: true })
+    await until(() => views().length === 2)
+    const redrawn = views()[1]!
+    expect(redrawn.type === 'mod.panel' && redrawn.view?.type === 'stack' && redrawn.view.children[0]).toMatchObject({ type: 'switch', value: true })
+  })
+
+  it('shows an error in place of a panel whose control names no such setting', async () => {
+    const t = start({ spaceSettings, panels: [{ id: 'p', title: 'P', render: () => ({ type: 'switch', setting: 'size' }) }] })
+    const id = t.create('A')
+    t.handle({ type: 'mod.panel.get', chatId: id, mod: 'test', panel: 'p' })
+    await until(() => t.messages.some((m) => m.type === 'mod.panel'))
+    expect(t.messages.find((m) => m.type === 'mod.panel')).toMatchObject({
+      error: 'Test mod has no boolean space setting "size"',
+    })
+  })
+})
+
+describe('settings migration', () => {
+  // A garage saved by version 1 of the mod: one global value and one space's.
+  function oldGarage() {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { test: { colour: 'red' } } }))
+    const dir = join(garage, 'chats', 'aaaa0001')
+    mkdirSync(dir, { recursive: true })
+    const chat = { id: 'aaaa0001', name: 'Old', folders: [], files: [], engine: 'fake', archived: false, createdAt: '2026-01-01T00:00:00.000Z' }
+    writeFileSync(join(dir, 'chat.json'), JSON.stringify({ ...chat, modValues: { test: { size: 'big' } } }))
+    return garage
+  }
+  const open = (garage: string, mod: Partial<Mod>) => {
+    const full: Mod = {
+      id: 'test',
+      name: 'Test mod',
+      description: '',
+      enabledByDefault: true,
+      settings: [{ key: 'tint', label: 'Tint', type: 'text', default: '' }],
+      spaceSettings: [{ key: 'size', label: 'Size', type: 'number', default: 1 }],
+      ...mod,
+    }
+    const core = openCore({ garage, adapters: [createFakeAdapter(replied, 0)], defaultEngine: 'fake', machine: sandboxingMachine, mods: [full] })
+    cleanups.push(() => core.close(true))
+    return core
+  }
+  const read = (garage: string, ...path: string[]) => JSON.parse(readFileSync(join(garage, ...path), 'utf8'))
+
+  it('runs once at load on the global values and each space’s, then saves them with the new version', () => {
+    const garage = oldGarage()
+    const calls: unknown[] = []
+    const migrateSettings = (saved: Record<string, unknown>, from: number, where: { spaceId?: string }) => {
+      calls.push([saved, from, where])
+      return where.spaceId ? { size: saved.size === 'big' ? 3 : 1 } : { tint: saved.colour }
+    }
+    const core = open(garage, { settingsVersion: 2, migrateSettings })
+    expect(calls).toEqual([
+      [{ colour: 'red' }, 0, {}],
+      [{ size: 'big' }, 0, { spaceId: 'aaaa0001' }],
+    ])
+    expect(read(garage, 'settings.json')).toMatchObject({ mods: { test: { tint: 'red' } }, modVersions: { test: 2 } })
+    expect(read(garage, 'chats', 'aaaa0001', 'chat.json').modValues).toEqual({ test: { size: 3 } })
+    expect(core.mods().find((m) => m.id === 'test')).toMatchObject({ values: { tint: 'red' } })
+    expect(core.mods().find((m) => m.id === 'test')!.loadError).toBeUndefined()
+    void core.close(true)
+    open(garage, { settingsVersion: 2, migrateSettings })
+    expect(calls).toHaveLength(2)
+  })
+
+  it('saves nothing when migrate throws, says so on the mod, and tries again next launch', () => {
+    const garage = oldGarage()
+    const core = open(garage, {
+      settingsVersion: 2,
+      migrateSettings: () => {
+        throw new Error('Unknown colour')
+      },
+    })
+    expect(core.mods().find((m) => m.id === 'test')!.loadError).toBe("Its saved settings couldn't be updated: Unknown colour")
+    expect(read(garage, 'settings.json')).toEqual({ mods: { test: { colour: 'red' } } })
+    expect(read(garage, 'chats', 'aaaa0001', 'chat.json').modValues).toEqual({ test: { size: 'big' } })
   })
 })

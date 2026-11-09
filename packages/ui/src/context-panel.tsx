@@ -746,6 +746,7 @@ export function ContextPanel(props: ContextPanelProps) {
             view={panelView?.view}
             error={panelView?.error}
             act={(action) => send({ type: 'mod.panel.action', chatId, mod: modTab.mod, panel: modTab.id, action })}
+            set={(key, value) => send({ type: 'mod.space.set', chatId, mod: modTab.mod, key, value })}
           />
         )}
       </div>

@@ -21,6 +21,7 @@ import type {
   ModHost,
   ModInstructionsFor,
   ModPanel,
+  ModView,
   ModStorage,
   ModRun,
   ModUse,
@@ -228,6 +229,8 @@ export function openCore(options: {
     ModelSettings & {
       context?: Partial<Record<ContextSection, boolean>>
       mods?: Record<string, Record<string, unknown>>
+      // The version of each mod's saved settings (Mod.settingsVersion), once one has been migrated.
+      modVersions?: Record<string, number>
       workFolder?: string
       // The master switch for community mods; off unless the user turned it on.
       communityMods?: boolean
@@ -242,6 +245,8 @@ export function openCore(options: {
     files: settings.context?.files ?? true,
   })
   const brokenMods = options.brokenMods ?? []
+  // Mods whose saved settings failed to migrate at load, and why; shown on the mod like a load error.
+  const settingsErrors = new Map<string, string>()
   const modFor = (id: string) => {
     const mod = mods.find((m) => m.id === id)
     if (mod) return mod
@@ -270,7 +275,8 @@ export function openCore(options: {
     }
     // A community mod shows its own switch; the master switch is beside it in the UI.
     const enabled = community.has(id) ? ownSwitch(mod) : isOn(mod)
-    const info = { id, name, description, enabled, settings: declared, values }
+    const settingsError = settingsErrors.get(id)
+    const info = { id, name, description, enabled, settings: declared, values, ...(settingsError && { loadError: settingsError }) }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
     const { source, repo, path } = from?.item ?? {}
@@ -406,6 +412,20 @@ export function openCore(options: {
     if (problem) throw new Error(`${setting.label} ${problem}`)
     saveMod(mod, { [key]: value })
     if (isOn(mod)) void checkSetup(mod)
+  }
+  // A space's own values for a mod's spaceSettings: the space a worker is in, else the chat itself.
+  const spaceChat = (chat: Chat) => chainOf(chat)[0]!
+  const spaceValuesOf = (mod: Mod, chat: Chat) =>
+    valuesOf(mod, spaceChat(chat).info.modValues?.[mod.id], mod.spaceSettings)
+  const setSpaceValue = (mod: Mod, chat: Chat, key: string, value: unknown) => {
+    const setting = mod.spaceSettings?.find((s) => s.key === key)
+    if (!setting) throw new Error(`${mod.name} has no space setting "${key}"`)
+    const problem = settingProblem(setting, value)
+    if (problem) throw new Error(`${setting.label} ${problem}`)
+    const space = spaceChat(chat)
+    const modValues = { ...space.info.modValues, [mod.id]: { ...space.info.modValues?.[mod.id], [key]: value } }
+    updateChat(space, { modValues })
+    refreshMod(mod)
   }
   const setMemory = (engine?: string, model?: string) => {
     if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
@@ -896,6 +916,8 @@ export function openCore(options: {
         const chat = chats.get(chatId)
         return chat && shown(chat) ? spaceOf(chat) : undefined
       },
+      spaceValues: (chatId) => spaceValuesOf(mod, chatFor(chatId)),
+      setSpaceValue: (chatId, key, value) => setSpaceValue(mod, chatFor(chatId), String(key), value),
       reaches(callerId, chatId) {
         const chat = chats.get(String(chatId))
         return !!chat && reachable(String(callerId), chat)
@@ -982,6 +1004,21 @@ export function openCore(options: {
     if (!panel) throw new Error(`${mod.name} has no panel "${panelId}"`)
     return { mod, panel }
   }
+  // Fills in a panel's switches and pickers from the space's values and the settings they're for.
+  const withControls = (mod: Mod, chat: Chat, view: ModView): ModView => {
+    if (view.type === 'stack' || view.type === 'row' || view.type === 'card') {
+      return { ...view, children: view.children.map((child) => withControls(mod, chat, child)) }
+    }
+    if (view.type !== 'switch' && view.type !== 'picker') return view
+    const setting = mod.spaceSettings?.find((s) => s.key === view.setting)
+    const kind = view.type === 'switch' ? 'boolean' : 'select'
+    if (setting?.type !== kind) throw new Error(`${mod.name} has no ${kind} space setting "${view.setting}"`)
+    const value = spaceValuesOf(mod, chat)[setting.key]!
+    const label = view.label ?? setting.label
+    if (view.type === 'switch') return { ...view, label, value: value === true }
+    const options = setting.type === 'select' ? setting.options : []
+    return { ...view, label, value: value as string | number, options }
+  }
   const renderPanel = async (chat: Chat, mod: Mod, panel: ModPanel) => {
     const key = `${chat.info.id}\n${mod.id}\n${panel.id}`
     const turn = (renders.get(key) ?? 0) + 1
@@ -989,7 +1026,7 @@ export function openCore(options: {
     const base = { type: 'mod.panel' as const, chatId: chat.info.id, mod: mod.id, panel: panel.id }
     let shownView: Extract<CoreMessage, { type: 'mod.panel' }>
     try {
-      shownView = { ...base, view: await panel.render(detailOf(chat), contextOf(mod)) }
+      shownView = { ...base, view: withControls(mod, chat, await panel.render(detailOf(chat), contextOf(mod))) }
     } catch (error) {
       shownView = { ...base, error: messageOf(error) }
     }
@@ -1108,6 +1145,33 @@ export function openCore(options: {
     if (!chat.info.worker || !chat.entries.length) continue
     chats.delete(chat.info.id)
     rmSync(chat.dir, { recursive: true, force: true })
+  }
+
+  // Once at load: each mod whose settings are saved at an older version than its settingsVersion migrates them, the
+  // global values and every space's together, and they're saved with the new version. A throw saves nothing.
+  for (const mod of mods) {
+    const version = mod.settingsVersion
+    const from = settings.modVersions?.[mod.id] ?? 0
+    if (!version || from >= version) continue
+    try {
+      if (!mod.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
+      const global = settings.mods?.[mod.id]
+      const migratedGlobal = global && mod.migrateSettings({ ...global }, from, {})
+      const spaces = [...chats.values()].flatMap((chat) => {
+        const saved = chat.info.modValues?.[mod.id]
+        return saved ? [{ chat, values: mod.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
+      })
+      for (const { chat, values } of spaces) {
+        chat.info = { ...chat.info, modValues: { ...chat.info.modValues, [mod.id]: values } }
+        saveChat(chat)
+      }
+      if (migratedGlobal) settings.mods = { ...settings.mods, [mod.id]: migratedGlobal }
+      settings.modVersions = { ...settings.modVersions, [mod.id]: version }
+      saveSettings()
+    } catch (error) {
+      settingsErrors.set(mod.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
+      modError(mod, error)
+    }
   }
 
   const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }) => {
@@ -2134,6 +2198,8 @@ export function openCore(options: {
             broadcast({ type: 'error', message: messageOf(error) }),
           )
         }
+        case 'mod.space.set':
+          return setSpaceValue(modFor(String(message.mod)), chatFor(message.chatId), String(message.key), message.value)
         case 'mod.command':
           return runCommand(chatFor(message.chatId), message.mod, message.command)
         case 'context.add':

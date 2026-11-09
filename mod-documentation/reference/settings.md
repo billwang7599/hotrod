@@ -63,6 +63,83 @@ How values behave:
 
 List `settings` in the manifest's `uses`.
 
+## Settings per space
+
+`spaceSettings` lists settings kept for each space instead of once for all of Kothar. They take the same types as
+`settings`. Every space starts at the defaults, and a worker uses its space's values.
+
+- **Read** them with `host.spaceValues(chatId)`, which fills in the defaults. Pass any chat; a worker's id gives its
+  space's values.
+- **Change** them with `host.setSpaceValue(chatId, key, value)`, which checks the value as Settings does and draws the
+  mod's panels again, or let the user change them with a `switch` or `picker` in a [panel](panels.md#switches-and-pickers).
+- They aren't shown in Settings. A mod that has them shows them in a panel.
+- They're saved in the space's `chat.json` (`modValues`), so they go when the space is deleted.
+
+```ts
+const tidy: Mod = {
+  id: 'tidy',
+  name: 'Tidy',
+  description: 'Asks agents to run the formatter before they finish.',
+  enabledByDefault: false,
+  spaceSettings: [
+    { key: 'on', label: 'Format before finishing', type: 'boolean', default: false },
+    {
+      key: 'tool',
+      label: 'Formatter',
+      type: 'select',
+      options: [
+        { value: 'prettier', label: 'Prettier' },
+        { value: 'biome', label: 'Biome' },
+      ],
+      default: 'prettier',
+    },
+  ],
+  instructions({ chat }, { host }) {
+    const { on, tool } = host.spaceValues(chat.id)
+    return on ? `Before you finish, run ${tool} on the files you changed.` : undefined
+  },
+  panels: [
+    {
+      id: 'tidy',
+      title: 'Tidy',
+      render: () => ({
+        type: 'stack',
+        children: [
+          { type: 'switch', setting: 'on' },
+          { type: 'picker', setting: 'tool' },
+        ],
+      }),
+    },
+  ],
+}
+```
+
+`spaceSettings`, `host.spaceValues` and `host.setSpaceValue` need `settings` in the manifest's `uses`.
+
+## Migrating saved settings
+
+When you rename a setting's key or change what its values mean, give the mod a `settingsVersion` (1 or more) and a
+`migrateSettings` function. Raise the version each time the saved shape changes again.
+
+```ts
+settingsVersion: 2,
+migrateSettings(saved, from, { spaceId }) {
+  // from: the version the garage holds; 0 when none was saved.
+  if (spaceId) return saved // a space's spaceSettings
+  const { colour, ...rest } = saved
+  return from < 2 && colour !== undefined ? { ...rest, tint: colour } : saved
+},
+```
+
+- It runs **once, when Kothar starts**, before the mod is used, if the saved version is older than `settingsVersion`.
+- It's called with the **saved values as stored**, with no defaults filled in: once for the global values (if any were
+  saved), and once per space that has saved `spaceSettings`, with `spaceId` set.
+- What it returns replaces the saved values, and the new version is saved.
+- If it throws, nothing is saved, the error shows on the mod's page in Settings, and it runs again at the next start.
+- A value it leaves invalid still reads as the default.
+
+`settingsVersion` and `migrateSettings` need `settings` in the manifest's `uses`.
+
 ## Setup
 
 A `setup` checks for something the mod needs, such as a program, and installs it if it's missing. Kothar shows the
