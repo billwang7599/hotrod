@@ -1,9 +1,17 @@
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Mod, ModRun, ModValues } from '@kotharhq/mod-api'
+import type { LoginsProfile } from './logins.ts'
 
 const require = createRequire(import.meta.url)
+const HERE = dirname(fileURLToPath(import.meta.url))
+// Copies a Chrome profile's logins, then runs Playwright MCP; see logins.ts.
+const LOGINS = join(HERE, 'logins.ts')
+// Playwright passes Chrome a mock keychain on macOS (a plain password store on Linux), and then Chrome can't decrypt
+// the copied cookies.
+const LOGINS_CONFIG = join(HERE, 'chrome-logins.json')
 const MCP_DIR = dirname(require.resolve('@playwright/mcp/package.json'))
 const CLI = join(MCP_DIR, 'cli.js')
 const CORE_BUNDLE = require.resolve('playwright-core/lib/coreBundle', { paths: [MCP_DIR] })
@@ -59,6 +67,17 @@ type ChromeCheck = { chrome: boolean; executable: string | null; profile: string
 const ANSI = /\x1b\[[0-9;]*m/g
 
 const usesChrome = (values: ModValues) => values.browser === 'chrome'
+const usesLogins = (values: ModValues) => values.browser === 'logins'
+
+async function checkLogins(run: ModRun) {
+  const chrome = await checkChrome(run)
+  if (!chrome.chrome) return { ready: false, message: 'Google Chrome not found' }
+  const { code, stdout, stderr } = await run(process.execPath, [LOGINS, 'check'], { env: NODE_ENV })
+  if (code !== 0) throw new Error(stderr.trim() || `The Chrome profile check exited with code ${code}`)
+  const { profile } = JSON.parse(stdout) as { profile: LoginsProfile | null }
+  if (!profile) return { ready: false, message: 'No Chrome profile with logins found' }
+  return { ready: true, message: `Logins from Chrome profile “${profile.label}”` }
+}
 
 async function checkChrome(run: ModRun): Promise<ChromeCheck> {
   const { code, stdout, stderr } = await run(process.execPath, ['-e', CHROME_CHECK_SCRIPT], { env: NODE_ENV })
@@ -84,13 +103,17 @@ const browser: Mod = {
       key: 'browser',
       label: 'Browser',
       description:
-        "Your Chrome: agents work in tabs of the Chrome you're running, through the Playwright Extension, so they " +
-        'are logged in wherever you are and can act as you on every one of those sites. Subagents share it, each ' +
-        'in a tab group of its own.',
+        "Your Chrome's logins: Google Chrome runs headless on a copy of your Chrome profile's cookies and site " +
+        "storage (not passwords or history), so agents are logged in where you are and can act as you there, " +
+        'without opening a window. Logins you make in Chrome reach agents at their next message. ' +
+        "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
+        'Each message that browses opens a tab and brings Chrome to the front. Subagents share it, each in a tab ' +
+        'group of its own.',
       type: 'select',
       options: [
         { value: 'chromium', label: "Kothar's Chromium" },
-        { value: 'chrome', label: 'Your Chrome' },
+        { value: 'logins', label: "Your Chrome's logins, in the background" },
+        { value: 'chrome', label: 'Your Chrome, in front (extension)' },
       ],
       default: 'chromium',
     },
@@ -98,7 +121,7 @@ const browser: Mod = {
       key: 'extensionToken',
       label: 'Extension token',
       description:
-        "Your Chrome only. Without it, Chrome asks you to pick a tab each time an agent connects, which is every " +
+        "Your Chrome, in front, only. Without it, Chrome asks you to pick a tab each time an agent connects, which is every " +
         "message. Copy it from the Playwright Extension's page: click its icon in Chrome's toolbar.",
       type: 'text',
       default: '',
@@ -108,7 +131,7 @@ const browser: Mod = {
       key: 'background',
       label: 'Keep the browser in the background',
       description:
-        "Kothar's Chromium only. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
+        "Kothar's Chromium only; your Chrome's logins always run in the background. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
         'visible window, which may take focus while the agent works.',
       type: 'boolean',
       default: true,
@@ -125,12 +148,17 @@ const browser: Mod = {
 
   setup: {
     description: (values) =>
-      usesChrome(values)
+      usesLogins(values)
+        ? 'Uses Google Chrome, with nothing to install. Each message that browses copies the logins of your last ' +
+          "used Chrome profile into the space's work folder when Chrome's are newer, and Chrome reads them with " +
+          'its key from your Keychain.'
+        : usesChrome(values)
         ? `Install opens the Playwright Extension in the Chrome Web Store (${EXTENSION_URL}). Add it to Chrome, ` +
           'and this turns ready once Chrome has it.'
         : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's " +
           'browser folder, which other Playwright tools share. Nothing in it is removed.',
     async check(run, values) {
+      if (usesLogins(values)) return checkLogins(run)
       if (usesChrome(values)) return chromeStatus(await checkChrome(run))
       const { code, stdout, stderr } = await run(process.execPath, ['-e', CHECK_SCRIPT], { env: NODE_ENV })
       if (code !== 0) throw new Error(stderr.trim() || `The browser check exited with code ${code}`)
@@ -138,6 +166,10 @@ const browser: Mod = {
       return { ready, message: ready ? `${name} installed` : 'Browser not installed' }
     },
     async install(run, report, values) {
+      if (usesLogins(values)) {
+        if (!(await checkChrome(run)).chrome) throw new Error('Install Google Chrome first')
+        return
+      }
       if (usesChrome(values)) return installExtension(run, report)
       let downloading = 'the browser'
       let partial = ''
@@ -175,6 +207,13 @@ const browser: Mod = {
       args.push('--extension', '--browser', 'chrome')
       const token = String(values.extensionToken ?? '').trim()
       if (token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token
+    } else if (usesLogins(values)) {
+      // A subagent gets a copy of its own, since Chrome locks a profile to one browser at a time.
+      const copy = chat.subagent ? join(dir, 'logins-subagents', chat.id) : join(dir, 'logins')
+      if (chat.subagent) env.KOTHAR_LOGINS_TEMPORARY = '1'
+      args.unshift(LOGINS, 'run', copy)
+      args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
+      if (sandboxed) args.push('--no-sandbox')
     } else {
       args.push('--browser', 'chromium')
       if (values.background) args.push('--headless')

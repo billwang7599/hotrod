@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -87,6 +87,84 @@ it("connects to your running Chrome through the Playwright Extension, with its t
 it("gives a subagent the same Chrome as its space, since the extension takes a connection per session", () => {
   const subagent = { ...space, id: 'def', parentId: 'abc', subagent: true }
   expect(serverFor({ chat: subagent, values: chrome }).args).toEqual(serverFor({ values: chrome }).args)
+})
+
+const logins = { ...defaults, browser: 'logins' }
+
+it("runs your Chrome headless on the space's copy of your Chrome logins, with Chrome's keychain, never in front", () => {
+  const { args, env, allowTools } = serverFor({ values: logins })
+  expect(allowTools).toBe(true)
+  // logins.ts copies the logins, then runs Playwright MCP's CLI with the rest.
+  expect(args!.slice(0, 3)).toEqual([join(import.meta.dirname, 'logins.ts'), 'run', '/work/abc/.browser/logins'])
+  expect(existsSync(args![0]!)).toBe(true)
+  expect(args![3]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
+  expect(valueAfter(args, '--browser')).toBe('chrome')
+  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins')
+  expect(args).toContain('--headless')
+  expect(args).toContain('--no-sandbox')
+  for (const flag of ['--extension', '--isolated']) expect(args).not.toContain(flag)
+  const config = JSON.parse(readFileSync(valueAfter(args, '--config')!, 'utf8'))
+  expect(config.browser.launchOptions.ignoreDefaultArgs).toContain('--use-mock-keychain')
+  expect(env).not.toHaveProperty('KOTHAR_LOGINS_TEMPORARY')
+  // A window would take focus, so this mode has none, whatever the Chromium setting says.
+  expect(serverFor({ values: { ...logins, background: false } }).args).toContain('--headless')
+})
+
+it('gives a subagent a copy of its own, removed when its session ends', () => {
+  const subagent = { ...space, id: 'def', parentId: 'abc', subagent: true }
+  const { args, env } = serverFor({ chat: subagent, values: logins })
+  expect(args![2]).toBe('/work/abc/.browser/logins-subagents/def')
+  expect(valueAfter(args, '--user-data-dir')).toBe('/work/abc/.browser/logins-subagents/def')
+  expect(env).toHaveProperty('KOTHAR_LOGINS_TEMPORARY', '1')
+})
+
+it("is ready with your Chrome's logins once Chrome and a profile with cookies are there", async () => {
+  const check = (...results: object[]) => browser.setup!.check(fakeRun(...results).run, logins)
+  expect(await check({ chrome: false, executable: null, profile: null })).toEqual({
+    ready: false,
+    message: 'Google Chrome not found',
+  })
+  expect(await check({ ...found, profile: null }, { profile: null })).toEqual({
+    ready: false,
+    message: 'No Chrome profile with logins found',
+  })
+  const profile = { dir: '/chrome/Profile 1', name: 'Profile 1', label: 'Work' }
+  expect(await check({ ...found, profile: null }, { profile })).toEqual({
+    ready: true,
+    message: 'Logins from Chrome profile “Work”',
+  })
+  const about = browser.setup!.description
+  expect(typeof about === 'function' && about(logins)).toContain('Keychain')
+  // Nothing to install but Chrome itself, and nothing opens.
+  const installed = fakeRun({ ...found, profile: null })
+  await browser.setup!.install(installed.run, () => {}, logins)
+  expect(installed.calls).toHaveLength(1)
+  const missing = fakeRun({ chrome: false, executable: null, profile: null })
+  await expect(browser.setup!.install(missing.run, () => {}, logins)).rejects.toThrow('Install Google Chrome first')
+})
+
+it("finds the logins in Chrome's last used profile, through the session's own logins.ts", async () => {
+  if (process.platform === 'win32') return
+  const home = tempDir('kothar-chrome-home-')
+  const dataDir =
+    process.platform === 'darwin'
+      ? join(home, 'Library', 'Application Support', 'Google', 'Chrome')
+      : join(home, '.config', 'google-chrome')
+  mkdirSync(join(dataDir, 'Profile 2', 'Network'), { recursive: true })
+  writeFileSync(join(dataDir, 'Profile 2', 'Network', 'Cookies'), '')
+  writeFileSync(
+    join(dataDir, 'Local State'),
+    JSON.stringify({ profile: { last_used: 'Profile 2', info_cache: { 'Profile 2': { name: 'Personal' } } } }),
+  )
+  const atHome: ModRun = (command, args, options = {}) => {
+    // The Chrome check needs Chrome installed; the profile check is the one under test.
+    if (args[0] === '-e') return Promise.resolve({ code: 0, stdout: JSON.stringify({ ...found, profile: null }), stderr: '' })
+    return run(command, args, { ...options, env: { ...options.env, HOME: home } })
+  }
+  expect(await browser.setup!.check(atHome, logins)).toEqual({
+    ready: true,
+    message: 'Logins from Chrome profile “Personal”',
+  })
 })
 
 const fakeRun = (...results: object[]) => {
