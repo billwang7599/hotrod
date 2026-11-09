@@ -71,6 +71,15 @@ async function start(subagents = { enabled: false, limit: 4 }) {
     send(chatId, text) {
       calls.push(['send', chatId, text])
     },
+    deliver(chatId, text) {
+      calls.push(['deliver', chatId, text])
+      const status = chats.find((c) => c.id === chatId)!.status
+      return status === 'idle' ? 'sent' : status === 'running' ? 'steered' : 'queued'
+    },
+    stop(chatId) {
+      calls.push(['stop', chatId])
+      chats.find((c) => c.id === chatId)!.status = 'stopping'
+    },
   })
   const http = createServer((request, response) => void mcp.handle(request, response))
   await new Promise<void>((resolve) => http.listen(0, '127.0.0.1', resolve))
@@ -132,7 +141,7 @@ describe('Kothar MCP server', () => {
 
   it('offers the chat tools to a chat that sees every chat', async () => {
     const { names } = await start()
-    expect(await names('main')).toEqual(['date', 'list_chats', 'read_chat', 'send_message', 'zoom'])
+    expect(await names('main')).toEqual(['date', 'list_chats', 'read_chat', 'send_message', 'stop_chat', 'zoom'])
   })
 
   it('lists every other chat to a chat that sees every chat', async () => {
@@ -177,22 +186,48 @@ describe('Kothar MCP server', () => {
       const refused = { isError: true, text: `No chat "${chatId}" this chat can reach` }
       expect(await tool(token, 'read_chat', { chatId })).toEqual(refused)
       expect((await tool(token, 'send_message', { chatId, text: 'hi' })).isError).toBe(true)
+      expect(await tool(token, 'stop_chat', { chatId })).toEqual(refused)
     }
     expect(await tool(grant('main'), 'read_chat', { chatId: 'main' })).toMatchObject({ isError: true })
     expect(calls).toEqual([])
   })
 
-  it('sends a message to an idle chat it can reach and refuses a busy one', async () => {
+  it('sends a message to a chat it can reach, steering or queueing it into a busy one', async () => {
     const { chats, calls, tool, grant } = await start()
     const token = grant('main')
-    expect(await tool(token, 'send_message', { chatId: 'cccc0001', text: 'Go on' })).toMatchObject({ isError: false })
-    expect(calls).toEqual([['send', 'cccc0001', 'Go on']])
+    expect(await tool(token, 'send_message', { chatId: 'cccc0001', text: 'Go on' })).toEqual({
+      isError: false,
+      text: '{"delivered":"sent"}',
+    })
     chats.find((c) => c.id === 'aaaa0001')!.status = 'running'
     expect(await tool(token, 'send_message', { chatId: 'aaaa0001', text: 'Hi' })).toEqual({
-      isError: true,
-      text: 'Chat "aaaa0001" is running; wait until it is idle',
+      isError: false,
+      text: '{"delivered":"steered"}',
     })
-    expect(calls).toHaveLength(1)
+    chats.find((c) => c.id === 'bbbb0001')!.status = 'waiting'
+    expect((await tool(token, 'send_message', { chatId: 'bbbb0001', text: 'Hey' })).text).toBe('{"delivered":"queued"}')
+    expect(calls).toEqual([
+      ['deliver', 'cccc0001', 'Go on'],
+      ['deliver', 'aaaa0001', 'Hi'],
+      ['deliver', 'bbbb0001', 'Hey'],
+    ])
+  })
+
+  it('stops a chat it can reach, and says so when it is already idle or stopping', async () => {
+    const { chats, calls, tool, grant } = await start()
+    const token = grant('main')
+    expect(await tool(token, 'stop_chat', { chatId: 'cccc0001' })).toEqual({
+      isError: false,
+      text: 'Chat "cccc0001" is already idle',
+    })
+    chats.find((c) => c.id === 'aaaa0001')!.status = 'running'
+    expect(await tool(token, 'stop_chat', { chatId: 'aaaa0001' })).toEqual({
+      isError: false,
+      text: 'Stopping chat "aaaa0001"',
+    })
+    expect((await tool(token, 'stop_chat', { chatId: 'aaaa0001' })).text).toBe('Chat "aaaa0001" is already stopping')
+    expect(await tool(token, 'stop_chat', { chatId: 'main' })).toMatchObject({ isError: true })
+    expect(calls).toEqual([['stop', 'aaaa0001']])
   })
 
   describe('mod tools', () => {
@@ -255,7 +290,7 @@ describe('Kothar MCP server', () => {
 
       const { names, mcp, chats } = await on()
       expect(await names('main')).toContain('spawn_subagent')
-      const tools = ['date', 'list_chats', 'read_chat', 'send_message', 'spawn_subagent', 'zoom']
+      const tools = ['date', 'list_chats', 'read_chat', 'send_message', 'spawn_subagent', 'stop_chat', 'zoom']
       expect(await names('aaaa0001')).toEqual(tools)
       expect(await names('bbbb0001')).toEqual(tools)
       chats.push(chat('eeee0001', { parentId: 'bbbb0001', subagent: true }))

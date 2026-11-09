@@ -1767,6 +1767,15 @@ export function openCore(options: {
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,
     send: (chatId, text) => send(chatFor(chatId), text),
+    deliver: (chatId, text) => {
+      const chat = chatFor(chatId)
+      const idle = chat.status === 'idle'
+      // Steered only while the turn runs; while it waits for an approval or is stopping, it's queued.
+      const steers = chat.status === 'running' && canSteer(chat)
+      sendMessage(chat, text, undefined, steers)
+      return idle ? 'sent' : steers ? 'steered' : 'queued'
+    },
+    stop: (chatId) => interrupt(chatFor(chatId), false),
     subagents: () => {
       const { enabled, values } = modInfo(SUBAGENTS_MOD)
       return { enabled, limit: Number(values.limit) }

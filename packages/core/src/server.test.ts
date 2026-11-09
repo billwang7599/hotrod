@@ -316,13 +316,15 @@ const mainMod: Mod = {
   ],
 }
 
-async function startHeld({ kotharMcp = true, mods = [mainMod] } = {}) {
+async function startHeld({ kotharMcp = true, mods = [mainMod], steering = false } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-test-')))
   const sessions: {
     options: SessionOptions
     prompt?: string
     end: (reply?: string, error?: string) => void
     emit: (event: EngineEvent) => void
+    interrupted?: boolean
+    steered?: string[]
   }[] = []
   const held: Adapter = {
     id: 'held',
@@ -340,9 +342,12 @@ async function startHeld({ kotharMcp = true, mods = [mainMod] } = {}) {
           session.prompt = text
           emit({ type: 'turn.started' })
         },
-        interrupt: () => {},
+        interrupt: () => {
+          session.interrupted = true
+        },
         respond: () => {},
         close: () => {},
+        ...(steering && { steer: (_id: string, text: string) => void (session.steered ??= []).push(text) }),
       }
     },
   }
@@ -430,13 +435,14 @@ it("runs a mod's tool, whose host makes a top-level chat and starts it, shown li
   expect(sessions.at(-1)?.prompt).toBe('Look around')
   expect(sessions.at(-1)?.options).toMatchObject({ cwd: join(garage, 'work', chatId), extraDirs: folders })
 
-  expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toEqual({
-    isError: true,
-    text: `Chat "${chatId}" is running; wait until it is idle`,
-  })
+  // Busy, it queues the message for the end of the turn, as the composer does when the engine can't steer.
+  expect(await json(bearer, 'send_message', { chatId, text: 'more' })).toEqual({ delivered: 'queued' })
+  expect(chatIn(core, chatId).queue).toMatchObject([{ text: 'more' }])
   sessions.at(-1)!.end()
-  expect(await tool(bearer, 'send_message', { chatId, text: 'more' })).toMatchObject({ isError: false })
   expect(sessions.at(-1)?.prompt).toContain('more')
+  sessions.at(-1)!.end()
+  expect(await json(bearer, 'send_message', { chatId, text: 'again' })).toEqual({ delivered: 'sent' })
+  expect(sessions.at(-1)?.prompt).toContain('again')
 })
 
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
@@ -580,6 +586,61 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   expect(sessionsOf('main')).toHaveLength(3)
   expect(core.chats().some((c) => c.id === stopped)).toBe(false)
   expect(existsSync(join(garage, 'chats', stopped))).toBe(false)
+})
+
+it("lets a lead stop its running subagent as the Stop button does, and nothing outside its reach", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld()
+  subagentsOn(core, -1)
+  const handle = handleOn(core)
+  handle({ type: 'chat.create', name: 'Lead' })
+  handle({ type: 'chat.create', name: 'Other' })
+  const [leadId, otherId] = core.chats().filter((c) => c.id !== 'main').map((c) => c.id) as [string, string]
+  send(otherId, 'busy elsewhere')
+  const lead = send(leadId, 'Plan it')
+  const token = lead.options.kotharMcp!.token
+  const { chatId } = await json(token, 'spawn_subagent', { task: 'Dig in' })
+
+  const refused = (id: string) => ({ isError: true, text: `No chat "${id}" this chat can reach` })
+  for (const id of [otherId, 'main', leadId]) expect(await tool(token, 'stop_chat', { chatId: id })).toEqual(refused(id))
+  expect(chatIn(core, otherId).status).toBe('running')
+  expect(sessionOf(otherId).interrupted).toBeUndefined()
+
+  expect(await tool(token, 'stop_chat', { chatId })).toEqual({ isError: false, text: `Stopping chat "${chatId}"` })
+  expect(sessionOf(chatId).interrupted).toBe(true)
+  expect(chatIn(core, chatId).status).toBe('stopping')
+  expect((await tool(token, 'stop_chat', { chatId })).text).toBe(`Chat "${chatId}" is already stopping`)
+  // The engine ends the turn, and the subagent reports and goes, as after Stop in the UI.
+  sessionOf(chatId).end(undefined, 'Interrupted')
+  expect(chatIn(core, leadId).queue).toMatchObject([{ text: '', report: { chatId, name: 'Dig in' } }])
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+
+  // Home reaches every space, and stopping an idle one says so.
+  const homeToken = send('main', 'hi').options.kotharMcp!.token
+  expect(await tool(homeToken, 'stop_chat', { chatId: otherId })).toMatchObject({ isError: false })
+  expect(sessionOf(otherId).interrupted).toBe(true)
+  sessionOf(otherId).end(undefined, 'Interrupted')
+  expect(await tool(homeToken, 'stop_chat', { chatId: otherId })).toEqual({
+    isError: false,
+    text: `Chat "${otherId}" is already idle`,
+  })
+})
+
+it('steers a message from send_message into a running turn whose engine can steer, and queues it while waiting', async () => {
+  const { core, json, send, sessionOf } = await startHeld({ steering: true })
+  subagentsOn(core, -1)
+  const token = send('main', 'Plan it').options.kotharMcp!.token
+  const { chatId } = await json(token, 'spawn_subagent', { task: 'Dig in' })
+  expect(await json(token, 'send_message', { chatId, text: 'use y instead' })).toEqual({ delivered: 'steered' })
+  expect(sessionOf(chatId).steered).toEqual(['use y instead'])
+  expect(chatIn(core, chatId).queue).toMatchObject([{ text: 'use y instead', steering: true }])
+
+  sessionOf(chatId).emit({ type: 'permission.requested', requestId: 'r1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} })
+  expect(chatIn(core, chatId).status).toBe('waiting')
+  expect(await json(token, 'send_message', { chatId, text: 'after that' })).toEqual({ delivered: 'queued' })
+  expect(sessionOf(chatId).steered).toEqual(['use y instead'])
+  expect(chatIn(core, chatId).queue.at(-1)).toMatchObject({ text: 'after that' })
+  expect(chatIn(core, chatId).queue.at(-1)).not.toHaveProperty('steering')
 })
 
 it("sends a limited turn again whole, a lead's reports included, and keeps a subagent sent again", async () => {

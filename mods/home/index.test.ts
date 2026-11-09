@@ -81,6 +81,7 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
     'read_chat',
     'send_message',
     'spawn_subagent',
+    'stop_chat',
     'zoom',
   ])
 
@@ -110,6 +111,7 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
     'read_chat',
     'send_message',
     'spawn_subagent',
+    'stop_chat',
     'zoom',
   ])
 })

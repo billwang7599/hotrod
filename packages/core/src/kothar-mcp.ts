@@ -17,7 +17,7 @@ export const SUBAGENT_INSTRUCTIONS =
   "it can finish on its own, independent of the others. You can edit the same files, just ensure they're in " +
   'different worktrees, and make a stack PR so we have less merge conflicts. Do the work yourself only for quick ' +
   "answers and one-line changes. Each subagent's final reply comes back to you as a message, so don't wait for it " +
-  'or poll it; tell the user what you started and carry on.'
+  'or poll it; tell the user what you started and carry on. To stop a subagent you no longer need, use stop_chat.'
 
 export const SUBAGENTS_MOD: Mod = {
   id: 'subagents',
@@ -50,6 +50,10 @@ type Hub = {
   seesAll(chatId: string): boolean
   createChat(spec: NewChat & { parentId?: string; subagent?: boolean; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
+  // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
+  deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
+  // What the chat's Stop button does.
+  stop(chatId: string): void
   subagents(): { enabled: boolean; limit: number }
   memory(chatId: string): { messages: MemoryMessage[]; summaries: Summaries }
   modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
@@ -149,13 +153,28 @@ const TOOLS: Record<string, Tool> = {
   },
   send_message: {
     for: 'reach',
-    description: 'Send a message to an idle chat this one can reach. It starts a turn there.',
+    description:
+      'Send a message to a chat this one can reach. An idle chat starts a turn with it. A running chat takes it in ' +
+      'at its next step when its engine can steer, as Enter does in its composer; otherwise, or while it waits for ' +
+      'an approval or is stopping, it is queued and sent when the turn ends. Returns how it was delivered.',
     input: z.object({ chatId: z.string(), text: z.string().min(1) }),
     run({ hub, reachable }: Context, { chatId, text }: { chatId: string; text: string }) {
-      const chat = reachable(chatId)
-      if (chat.status !== 'idle') throw new Error(`Chat "${chatId}" is ${chat.status}; wait until it is idle`)
-      hub.send(chatId, text)
-      return { ok: true }
+      reachable(chatId)
+      return { delivered: hub.deliver(chatId, text) }
+    },
+  },
+  stop_chat: {
+    for: 'reach',
+    description:
+      "Stop a chat this one can reach, such as one of your subagents, as its Stop button does. A stopped subagent's " +
+      'report still comes back to you.',
+    input: z.object({ chatId: z.string() }),
+    run({ hub, reachable }: Context, { chatId }: { chatId: string }) {
+      const { status } = reachable(chatId)
+      if (status === 'idle') return `Chat "${chatId}" is already idle`
+      if (status === 'stopping') return `Chat "${chatId}" is already stopping`
+      hub.stop(chatId)
+      return `Stopping chat "${chatId}"`
     },
   },
   spawn_subagent: {
