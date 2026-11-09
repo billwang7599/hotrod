@@ -13,7 +13,7 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@kotharhq/mod-api'
+import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@kothar/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'

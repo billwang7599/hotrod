@@ -31,7 +31,7 @@ import {
   type ToolKind,
   type Upload,
   type WorkFolder,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { choosePanelTab, modTabId } from './panel-tab.ts'

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import { readdirSync, readFileSync } from 'node:fs'
-import { checkTheme, type ThemeFile } from '@kotharhq/core/shared'
+import { checkTheme, type ThemeFile } from '@kothar/core/shared'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Tooltip } from 'radix-ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'

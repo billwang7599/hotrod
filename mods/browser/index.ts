@@ -2,7 +2,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Mod, ModRun, ModValues } from '@kotharhq/mod-api'
+import type { Mod, ModRun, ModValues } from '@kothar/mod-api'
 import type { LoginsProfile } from './logins.ts'
 
 const require = createRequire(import.meta.url)

@@ -21,7 +21,7 @@ import {
   type ModelLists,
   type ToolKind,
   type WorkFolder,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })

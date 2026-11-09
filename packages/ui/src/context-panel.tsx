@@ -14,7 +14,7 @@ import {
   type PermissionSwitch,
   type WorkFolder,
   type Worktree,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'

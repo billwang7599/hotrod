@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@kotharhq/mod-api'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@kothar/mod-api'
 
 // Long-running commands (dev servers, watchers) that a space's agents start with start_process. An engine's own
 // background shell dies with its session, which ends with every turn; these belong to the space instead, so they keep

@@ -10,7 +10,7 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Mod } from '@kotharhq/mod-api'
+import type { Mod } from '@kothar/mod-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'

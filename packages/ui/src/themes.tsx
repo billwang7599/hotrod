@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type CSSProperties } from 'react'
-import { checkTheme, THEME_TOKENS, type ThemeFile, type ThemePalette } from '@kotharhq/core/shared'
+import { checkTheme, THEME_TOKENS, type ThemeFile, type ThemePalette } from '@kothar/core/shared'
 import { GROUP, Select } from './controls.tsx'
 
 export const TOKENS = THEME_TOKENS

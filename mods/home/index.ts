@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import type { Mod } from '@kotharhq/mod-api'
+import type { Mod } from '@kothar/mod-api'
 
 const HOME_ID = 'main'
 

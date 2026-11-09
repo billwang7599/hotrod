@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kotharhq/mod-api'
+import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kothar/mod-api'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'

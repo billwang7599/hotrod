@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Mod, ModHost, ModManifest } from '@kotharhq/mod-api'
+import type { Mod, ModHost, ModManifest } from '@kothar/mod-api'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'

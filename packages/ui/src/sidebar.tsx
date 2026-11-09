@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
-import type { ChatStatus, ClientMessage } from '@kotharhq/core/shared'
+import type { ChatStatus, ClientMessage } from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
 import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'

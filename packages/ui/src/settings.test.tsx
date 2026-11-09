@@ -13,8 +13,8 @@ import {
   type ModInfo,
   type SetupState,
   type WorkFolder,
-} from '@kotharhq/core/shared'
-import type { ModSetting } from '@kotharhq/mod-api'
+} from '@kothar/core/shared'
+import type { ModSetting } from '@kothar/mod-api'
 import { PERMISSIONS } from './context-panel.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 

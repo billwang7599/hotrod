@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
-import type { ClientMessage, SearchHit } from '@kotharhq/core/shared'
+import type { ClientMessage, SearchHit } from '@kothar/core/shared'
 import { MOTION, useReturnFocus } from './controls.tsx'
 import { Keys } from './shortcuts-page.tsx'
 import { useBindings } from './shortcuts.ts'

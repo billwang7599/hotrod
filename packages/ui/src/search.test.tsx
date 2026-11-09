@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage, SearchHit } from '@kotharhq/core/shared'
+import type { ClientMessage, SearchHit } from '@kothar/core/shared'
 import { ago, paletteResults, revealIn, SEARCH_DEBOUNCE_MS, SearchPalette, takeReveal } from './search.tsx'
 import type { ChatView } from './state.ts'
 

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import type { ModUse } from '@kotharhq/mod-api'
+import type { ModUse } from '@kothar/mod-api'
 import {
   changesUrl,
   MOD_USES,
@@ -11,7 +11,7 @@ import {
   type ModInfo,
   type ThemeFile,
   type ThemePreview,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import { Button, confirm, ErrorText, GROUP, Hint } from './controls.tsx'
 import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'

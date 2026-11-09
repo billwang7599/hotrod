@@ -11,9 +11,9 @@ import type {
   ModUse,
   ModValues,
   ModView,
-} from '@kotharhq/mod-api'
+} from '@kothar/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kotharhq/mod-api'
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kothar/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -322,7 +322,7 @@ export const MAX_ATTACHMENT_BYTES = 20_000_000
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type { Attachment } from '@kotharhq/mod-api'
+export type { Attachment } from '@kothar/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 

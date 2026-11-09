@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { startCore } from '@kotharhq/core/main'
+import { startCore } from '@kothar/core/main'
 import { userDataDir } from './user-data.ts'
 
 const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))

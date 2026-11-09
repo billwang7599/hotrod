@@ -26,7 +26,7 @@ import type {
   PermissionVerdict,
   SpaceDetail,
   TurnSummary,
-} from '@kotharhq/mod-api'
+} from '@kothar/mod-api'
 import { openAccounts } from './accounts.ts'
 import { CORE_TOOL_NAMES, openKotharMcp, SUBAGENTS_MOD, summaryOf } from './kothar-mcp.ts'
 import {

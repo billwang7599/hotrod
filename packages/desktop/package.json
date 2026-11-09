@@ -1,12 +1,12 @@
 {
-  "name": "@kotharhq/desktop",
+  "name": "@kothar/desktop",
   "productName": "Kothar",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "main": "src/main.ts",
   "dependencies": {
-    "@kotharhq/core": "*"
+    "@kothar/core": "*"
   },
   "devDependencies": {
     "electron": "^45.2.3"

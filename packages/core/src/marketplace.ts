@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import type { ModManifest, ModUse } from '@kotharhq/mod-api'
+import type { ModManifest, ModUse } from '@kothar/mod-api'
 import {
   type CatalogEntry,
   checkCatalog,

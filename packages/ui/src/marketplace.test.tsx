@@ -14,7 +14,7 @@ import {
   type InstalledItem,
   type MarketEntry,
   type ThemeFile,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 import { MarketplacePage, type Market } from './marketplace.tsx'
 import { reduce, initialState } from './state.ts'
 import { SettingsDialog } from './settings.tsx'

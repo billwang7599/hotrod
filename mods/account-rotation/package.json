@@ -1,10 +1,10 @@
 {
-  "name": "@kotharhq/mod-account-rotation",
+  "name": "@kothar/mod-account-rotation",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "devDependencies": {
-    "@kotharhq/core": "*",
-    "@kotharhq/mod-api": "*"
+    "@kothar/core": "*",
+    "@kothar/mod-api": "*"
   }
 }

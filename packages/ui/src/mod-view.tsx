@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import type { ModAction, ModListItem, ModTone, ModView } from '@kotharhq/mod-api'
+import type { ModAction, ModListItem, ModTone, ModView } from '@kothar/mod-api'
 import { Button, Chevron, Hint } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
 
 /**
- * Draws a mod's panel from the view tree its core side sends (ModView in @kotharhq/mod-api), with Kothar's own
+ * Draws a mod's panel from the view tree its core side sends (ModView in @kothar/mod-api), with Kothar's own
  * controls, so it matches every theme. Actions go back to the mod through `act`.
  */
 const TONES: Record<ModTone, string> = {

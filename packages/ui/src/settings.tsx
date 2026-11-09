@@ -22,8 +22,8 @@ import {
   type ThinkingLevel,
   type ModInfo,
   type WorkFolder,
-} from '@kotharhq/core/shared'
-import type { ModSetting } from '@kotharhq/mod-api'
+} from '@kothar/core/shared'
+import type { ModSetting } from '@kothar/mod-api'
 import { PERMISSIONS, SECTIONS } from './context-panel.tsx'
 import {
   Button,

@@ -1,4 +1,4 @@
-import type { Checkout, ModHost } from '@kotharhq/mod-api'
+import type { Checkout, ModHost } from '@kothar/mod-api'
 
 // Removing a space's checkout once its work is merged. The checkout's folder is the user's own checkout and is never
 // touched; a checkout with any uncommitted or untracked file stays. The core makes a fresh checkout at the space's

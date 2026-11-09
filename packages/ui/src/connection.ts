@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
-import { BAD_TOKEN_CLOSE_CODE, type ClientMessage } from '@kotharhq/core/shared'
+import { BAD_TOKEN_CLOSE_CODE, type ClientMessage } from '@kothar/core/shared'
 import type { Action } from './state.ts'
 
 const DEV_CORE_URL = 'ws://127.0.0.1:4317'

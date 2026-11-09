@@ -1,5 +1,5 @@
-import type { ModView } from '@kotharhq/mod-api'
-import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kotharhq/core/shared'
+import type { ModView } from '@kothar/mod-api'
+import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
   Account,
   Answers,
@@ -27,7 +27,7 @@ import type {
   ThemeFile,
   ToolKind,
   WorkFolder,
-} from '@kotharhq/core/shared'
+} from '@kothar/core/shared'
 
 export type Permission = {
   requestId: string

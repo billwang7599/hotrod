@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Mod, ModHost, ModUse, ModValues } from '@kotharhq/mod-api'
+import type { Mod, ModHost, ModUse, ModValues } from '@kothar/mod-api'
 import { type CommunityInstall, installedMods, MOD_MAIN } from './marketplace.ts'
 import { MOD_USES, settingProblem, sortUses } from './shared.ts'
 
