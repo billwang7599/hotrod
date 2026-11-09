@@ -1,0 +1,17 @@
+{
+  "name": "short-fix",
+  "description": "3 turns: find and fix a parsing bug, with hidden acceptance tests.",
+  "fixture": "../fixtures/calc",
+  "turns": [
+    "Run the tests in this folder with `node --test tests.mjs` and tell me which ones fail and why. Don't change anything yet.",
+    "Fix the bug in calc.mjs so every test passes. Don't edit tests.mjs.",
+    "Run the tests again, then tell me in one sentence what the root cause was."
+  ],
+  "check": { "command": "node", "args": ["--test", "tests.mjs", "hidden.mjs"], "hidden": "../hidden/calc" },
+  "probes": [
+    {
+      "question": "Without opening any files or running anything: which test or tests failed the first time you ran them? Give their names.",
+      "expect": "thousands separators"
+    }
+  ]
+}

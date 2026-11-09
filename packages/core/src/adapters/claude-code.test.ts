@@ -198,6 +198,31 @@ describe('claudeCode adapter', () => {
     expect(events.at(-2)).toEqual({ type: 'text.completed', text: 'No.' })
   })
 
+  it("reports a turn's usage and cost from the result's per-model usage since the last result", () => {
+    const { fake, events, session } = startSession()
+    session.prompt('Ask me how to format the output and which sections to include.')
+    fake.stdout(fixture('question'))
+    const usage = { input: 4, output: 272, cacheRead: 43485, cacheWrite: 2455, costUsd: expect.closeTo(0.00106225, 10) }
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', usage })
+  })
+
+  it("sums the turn's API calls, once each, when the result names no per-model usage", () => {
+    const { fake, events, session } = startSession()
+    session.prompt('hi')
+    const out = (msg: object) => fake.stdout(JSON.stringify(msg) + '\n')
+    const first = { input_tokens: 3, cache_read_input_tokens: 100, cache_creation_input_tokens: 40, output_tokens: 1 }
+    const second = { input_tokens: 2, cache_read_input_tokens: 140, cache_creation_input_tokens: 5, output_tokens: 1 }
+    out({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: first } } })
+    out({ type: 'assistant', message: { id: 'm1', usage: first, content: [] } })
+    out({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 30 } } })
+    out({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm2', usage: second } } })
+    out({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 12 } } })
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', usage: { input: 5, output: 42, cacheRead: 240, cacheWrite: 45 } })
+    out({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed' })
+  })
+
   it('shows nothing for thinking that arrives as a signature only', () => {
     const { fake, events, session } = startSession()
     session.prompt('Think hard: is 91 prime? Answer in one short sentence.')

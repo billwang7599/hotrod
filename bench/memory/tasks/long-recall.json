@@ -1,0 +1,38 @@
+{
+  "name": "long-recall",
+  "description": "24 turns that print a 7.5 KB data file again and again, so the chat outgrows Hotrod's 40,000-character tail and older turns become summaries; facts from the first turns are probed at the end.",
+  "fixture": "../fixtures/inventory",
+  "turns": [
+    "Before we start, two facts to keep for later: the release codename is BLUE-HERON, and our warehouse code is WH-7731. Just acknowledge them.",
+    "Print items.csv in full with `cat items.csv`, then tell me how many rows there are and which categories appear.",
+    "Read inventory.mjs and tests.mjs. What do they export and test?",
+    "Add `byCategory(items)`, returning an object that maps each category to its item count. Add a test to tests.mjs.",
+    "Print items.csv again with `cat items.csv` and tell me which supplier has the most rows.",
+    "Add `lowStock(items, threshold = 10)`, returning the items whose stock is below the threshold, lowest stock first. Add a test.",
+    "We decided: the low-stock threshold for reports is 15, not 10. Remember that. Don't change lowStock's default.",
+    "Show the 20 most expensive items with `sort -t, -k6 -nr items.csv | head -20` and comment on the price range.",
+    "Add `inventoryValue(items)`, the sum of stock × unit_price rounded to 2 decimals. Add a test.",
+    "Print the whole file once more with `cat -n items.csv` and point out any rows with very low stock.",
+    "Add `bySupplier(items)`, mapping each supplier to { items, units } where units is its total stock. Add a test.",
+    "Run `node --test tests.mjs` and fix anything that fails.",
+    "Run `awk -F, 'NR>1{s[$3]+=$5}END{for(k in s)print k,s[k]}' items.csv` and tell me which category has the most units.",
+    "Add `restockPlan(items, threshold)`, returning [{ sku, order }] for the items below the threshold, where order = threshold * 2 - stock. Add a test.",
+    "Print items.csv sorted by supplier with `sort -t, -k4 items.csv` and sum up each supplier in one line.",
+    "Add `report(items)`, returning a few lines of text: the number of items, the total value, and how many items are low on stock by the report threshold we agreed on. Add a test.",
+    "Print `head -80 items.csv` and `tail -80 items.csv`, then tell me whether the two halves differ much in average price.",
+    "Add `search(items, text)`, a case-insensitive match on name or sku. Add a test.",
+    "Run all the tests and fix anything that fails.",
+    "Print the full items.csv one last time with `cat items.csv` and list every SKU in the fasteners category.",
+    "Add `topSuppliers(items, n)`, returning the n suppliers with the highest inventory value as [{ supplier, value }], highest first. Add a test.",
+    "Add a JSDoc comment to every exported function.",
+    "Run all the tests once more and fix anything that fails.",
+    "Sum up in bullets what inventory.mjs can do now."
+  ],
+  "check": { "command": "node", "args": ["--test", "tests.mjs", "hidden.mjs"], "hidden": "../hidden/inventory" },
+  "probes": [
+    { "question": "Without opening any files: what is the release codename I gave you at the start?", "expect": "blue-heron" },
+    { "question": "Without opening any files: what is our warehouse code?", "expect": "wh-7731" },
+    { "question": "Without opening any files: what low-stock threshold did we agree on for reports?", "expect": "\\b15\\b" },
+    { "question": "Without opening any files or running anything: which supplier had the most rows when you first checked?", "expect": "castellan" }
+  ]
+}

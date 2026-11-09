@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type Adapter, type Sandbox, type ToolKind } from '../shared.ts'
+import { type Adapter, type Sandbox, type TokenUsage, type ToolKind } from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -140,11 +140,25 @@ export const pi: Adapter = {
     let buffer = ''
     let turnError: string | undefined
     let closed = false
+    // pi reports each assistant message's usage and cost; a turn is the sum of its messages.
+    let usage: TokenUsage | undefined
 
     const endTurn = (error?: string) => {
       turnError = undefined
       if (error && error !== 'Interrupted' && LIMIT_ERROR.test(error)) emit({ type: 'limit.reached', message: error })
-      emit({ type: 'turn.completed', ...(error && { error }) })
+      const used = usage
+      usage = undefined
+      emit({ type: 'turn.completed', ...(error && { error }), ...(used && { usage: used }) })
+    }
+    const addUsage = (reported: any) => {
+      if (!reported || typeof reported !== 'object') return
+      const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+      usage ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 }
+      usage.input += count(reported.input)
+      usage.output += count(reported.output)
+      usage.cacheRead += count(reported.cacheRead)
+      usage.cacheWrite += count(reported.cacheWrite)
+      usage.costUsd! += count(reported.cost?.total)
     }
 
     const handle = (msg: any) => {
@@ -159,6 +173,7 @@ export const pi: Adapter = {
         case 'message_end': {
           const message = msg.message ?? {}
           if (message.role !== 'assistant') return
+          addUsage(message.usage)
           for (const block of message.content ?? []) {
             if (block.type === 'text' && block.text) emit({ type: 'text.completed', text: block.text })
           }

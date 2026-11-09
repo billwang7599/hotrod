@@ -22,6 +22,11 @@ export type Question = {
 // Keyed by question text: the labels picked, then any text the user typed. Sent without answers, a question is declined.
 export type Answers = Record<string, string[]>
 
+// What a turn's model calls used, summed over the turn, when the engine reports it. input counts uncached input
+// tokens only; cacheRead and cacheWrite are input tokens read from and written to the prompt cache. costUsd is the
+// engine's own figure.
+export type TokenUsage = { input: number; output: number; cacheRead: number; cacheWrite: number; costUsd?: number }
+
 export type EngineEvent =
   | { type: 'turn.started' }
   | { type: 'text.delta'; text: string }
@@ -52,7 +57,7 @@ export type EngineEvent =
   | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
   // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
   | { type: 'limit.reached'; message: string; resetsAt?: string }
-  | { type: 'turn.completed'; error?: string }
+  | { type: 'turn.completed'; error?: string; usage?: TokenUsage }
   | { type: 'session.ended'; error?: string }
 
 export type PermissionRequest = Extract<EngineEvent, { type: 'permission.requested' }>

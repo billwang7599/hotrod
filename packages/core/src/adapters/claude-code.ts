@@ -1,6 +1,14 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ToolKind } from '../shared.ts'
+import {
+  type AccountStatus,
+  type Adapter,
+  type Machine,
+  type Question,
+  type Sandbox,
+  type TokenUsage,
+  type ToolKind,
+} from '../shared.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -114,6 +122,34 @@ const questionsOf = (input: any): Question[] =>
     })),
     multiSelect: q.multiSelect === true,
   }))
+
+const count = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0)
+
+// A result names the turn's usage per model since the last result; older versions don't, so the turn's API calls are
+// summed instead (each call's usage, keyed by message id), without a cost.
+function turnUsage(result: any, calls: Map<string, any>): TokenUsage | undefined {
+  const models = result.model_usage_since_last_result
+  if (models && typeof models === 'object' && Object.keys(models).length) {
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 }
+    for (const model of Object.values<any>(models)) {
+      usage.input += count(model?.inputTokens)
+      usage.output += count(model?.outputTokens)
+      usage.cacheRead += count(model?.cacheReadInputTokens)
+      usage.cacheWrite += count(model?.cacheCreationInputTokens)
+      usage.costUsd += count(model?.costUSD)
+    }
+    return usage
+  }
+  if (!calls.size) return undefined
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  for (const call of calls.values()) {
+    usage.input += count(call.input_tokens)
+    usage.output += count(call.output_tokens)
+    usage.cacheRead += count(call.cache_read_input_tokens)
+    usage.cacheWrite += count(call.cache_creation_input_tokens)
+  }
+  return usage
+}
 
 function summarize(kind: ToolKind, input: any): string {
   const picked = SUMMARY_FIELDS[kind]?.map((key) => input?.[key]).find((value) => typeof value === 'string')
@@ -254,6 +290,14 @@ export const claudeCode: Adapter = {
     let closed = false
     let interruptCount = 0
     let limited = false
+    // This turn's API calls: each message's usage, as its stream reports it.
+    const calls = new Map<string, any>()
+    let lastCall = ''
+    const noteUsage = (id: unknown, usage: any) => {
+      if (typeof id !== 'string' || !usage || typeof usage !== 'object') return
+      calls.set(id, { ...calls.get(id), ...usage })
+      lastCall = id
+    }
     const limit = (message: string, resetsAt?: string) => {
       if (limited) return
       limited = true
@@ -272,12 +316,15 @@ export const claudeCode: Adapter = {
         }
         case 'stream_event': {
           const delta = msg.event?.delta
+          if (msg.event?.type === 'message_start') noteUsage(msg.event.message?.id, msg.event.message?.usage)
+          if (msg.event?.type === 'message_delta') noteUsage(lastCall, msg.event.usage)
           if (subagent) return
           if (delta?.type === 'text_delta') emit({ type: 'text.delta', text: delta.text })
           if (delta?.type === 'thinking_delta' && delta.thinking) emit({ type: 'thinking.delta', text: delta.thinking })
           return
         }
         case 'assistant':
+          if (!calls.has(msg.message?.id)) noteUsage(msg.message?.id, msg.message?.usage)
           for (const block of msg.message?.content ?? []) {
             // An API error arrives as a made-up reply, then again as the error result.
             const reply = block.type === 'text' && !subagent && msg.is_api_error_message !== true
@@ -352,7 +399,9 @@ export const claudeCode: Adapter = {
               ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
               : undefined
           interrupted = false
-          emit({ type: 'turn.completed', ...(error && { error }) })
+          const usage = turnUsage(msg, calls)
+          calls.clear()
+          emit({ type: 'turn.completed', ...(error && { error }), ...(usage && { usage }) })
         }
       }
     }

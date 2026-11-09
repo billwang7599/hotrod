@@ -11,7 +11,7 @@ import type {
   ModView,
 } from '@hotrod/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@hotrod/mod-api'
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, TokenUsage, ToolKind } from '@hotrod/mod-api'
 
 export interface EngineProcess {
   write(data: string): void

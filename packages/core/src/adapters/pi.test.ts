@@ -97,7 +97,8 @@ describe('pi adapter', () => {
     expect(alone.at(-1)).toMatch(/^[^\n]+\n- \/tmp\/a$/)
   })
 
-  it('sends the prompt command and streams text', () => {
+  it('sends the prompt command and streams text, with the turn\'s usage', () => {
+    const usage = { input: 4, output: 6, cacheRead: 0, cacheWrite: 2394, costUsd: expect.closeTo(0.00030265, 8) }
     const { fake, events, session } = startSession()
     session.prompt('Reply with exactly: Hello there')
     expect(fake.sent()).toEqual([{ type: 'prompt', message: 'Reply with exactly: Hello there' }])
@@ -106,7 +107,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'text.delta', text: 'Hello there' },
       { type: 'text.completed', text: 'Hello there' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', usage },
     ])
   })
 
@@ -133,7 +134,7 @@ describe('pi adapter', () => {
       { type: 'tool.completed', toolId, output: 'a.txt\nAGENTS.md\n', isError: false },
       { type: 'text.delta', text: 'Done' },
       { type: 'text.completed', text: 'Done' },
-      { type: 'turn.completed' },
+      { type: 'turn.completed', usage: expect.any(Object) },
     ])
   })
 
@@ -148,6 +149,7 @@ describe('pi adapter', () => {
         error:
           '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},' +
           '"request_id":"req_011Cgnpak7k1PTbanzGJJQ4d"}',
+        usage: expect.any(Object),
       },
     ])
   })
@@ -158,6 +160,29 @@ describe('pi adapter', () => {
     fake.stdout(line({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'ok' }], stopReason: 'stop' } }))
     fake.stdout(line({ type: 'agent_settled', aborted: false }))
     expect(events.at(-1)).toEqual({ type: 'turn.completed' })
+  })
+
+  it("sums a turn's usage and cost over its assistant messages, and starts over for the next turn", () => {
+    const { fake, events } = startSession()
+    const usage = (input: number, output: number, cacheRead: number, cacheWrite: number, total: number) => ({
+      input, output, cacheRead, cacheWrite, totalTokens: 0, cost: { total },
+    })
+    const message = (u: object) =>
+      line({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'stop', usage: u } })
+    fake.stdout(message(usage(10, 20, 1000, 50, 0.01)))
+    fake.stdout(line({ type: 'message_end', message: { role: 'toolResult', content: [], usage: usage(9, 9, 9, 9, 9) } }))
+    fake.stdout(message(usage(1, 5, 1100, 0, 0.002)))
+    fake.stdout(line({ type: 'agent_settled', aborted: false }))
+    expect(events.at(-1)).toEqual({
+      type: 'turn.completed',
+      usage: { input: 11, output: 25, cacheRead: 2100, cacheWrite: 50, costUsd: expect.closeTo(0.012, 9) },
+    })
+    fake.stdout(message(usage(2, 2, 0, 0, 0.001)))
+    fake.stdout(line({ type: 'agent_settled', aborted: false }))
+    expect(events.at(-1)).toEqual({
+      type: 'turn.completed',
+      usage: { input: 2, output: 2, cacheRead: 0, cacheWrite: 0, costUsd: 0.001 },
+    })
   })
 
   it('reports a limit when the turn ends on a rate or usage limit error, not while pi retries', () => {
@@ -188,7 +213,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'bash', kind: 'shell', summary: 'sleep 30', input: { command: 'sleep 30', timeout: 60 } },
       { type: 'tool.completed', toolId, output: 'Command aborted', isError: true },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', usage: expect.any(Object) },
     ])
   })
 

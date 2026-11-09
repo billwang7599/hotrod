@@ -1,0 +1,28 @@
+{
+  "name": "feature",
+  "description": "15 turns: grow a small to-do library feature by feature, with a rule set mid-way and hidden acceptance tests.",
+  "fixture": "../fixtures/todo",
+  "turns": [
+    "Read todo.mjs and tests.mjs and summarize the API in three short bullets.",
+    "Give addTask an optional third argument, an options object. First option: `priority`, one of 'low', 'normal' or 'high', default 'normal'. Add a test.",
+    "Make addTask throw a TypeError whose message names the bad value when the priority isn't one of those three. Add a test.",
+    "Add `completeTask(list, id)`: it returns a new list with that task marked done and doesn't change the list it gets. Add a test.",
+    "Make listTasks sort by priority, high first, then by the order tasks were created. Add a test.",
+    "Add `filterTasks(list, { done, priority })`; each filter is optional. Add a test.",
+    "Run the tests with `node --test tests.mjs` and fix anything that fails.",
+    "Add `toJSON(list)` and `fromJSON(text)` so a list survives a round trip; fromJSON throws on an unknown priority. Add a test.",
+    "Add an optional `due` option to addTask, an ISO date like '2026-03-01', and `overdue(list, today)`, which returns the tasks not done and due before `today`. Add a test.",
+    "Rename listTasks to sortedTasks. Keep listTasks exported as a deprecated alias so old callers still work.",
+    "Write a README.md that documents every exported function in one line each.",
+    "A rule from now on: every exported function needs a JSDoc comment. Add the missing ones now.",
+    "Add `stats(list)`, returning { total, done, byPriority } where byPriority counts tasks per priority. Add a test.",
+    "Run all the tests and fix anything that fails.",
+    "List every change we made in this chat as short bullets, oldest first."
+  ],
+  "check": { "command": "node", "args": ["--test", "tests.mjs", "hidden.mjs"], "hidden": "../hidden/todo" },
+  "probes": [
+    { "question": "Without opening any files: what default priority does a new task get?", "expect": "normal" },
+    { "question": "Without opening any files: what rule did I set for exported functions partway through?", "expect": "jsdoc" },
+    { "question": "Without opening any files: which function did we rename, and what is the new name?", "expect": "sortedTasks" }
+  ]
+}

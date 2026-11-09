@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "export HOTROD_TOKEN=$(node -p 'crypto.randomUUID()'); npm run dev -w @hotrod/core & npm run dev -w @hotrod/ui & wait",
     "desktop": "npm run build -w @hotrod/ui && electron packages/desktop",
-    "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p packages/desktop && tsc -p mods",
-    "test": "vitest run --passWithNoTests"
+    "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p packages/desktop && tsc -p mods && tsc -p bench",
+    "test": "vitest run --passWithNoTests",
+    "bench:memory": "node bench/memory/run.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
