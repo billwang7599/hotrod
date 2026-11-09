@@ -23,6 +23,7 @@ import {
   storedColumn,
   storedFlag,
 } from './state.ts'
+import { KotharMark } from './mark.tsx'
 import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'
@@ -176,7 +177,10 @@ function App() {
                     {!sidebarDocks && (
                       <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
                     )}
-                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Kothar</span>
+                    <span className="flex flex-1 items-center gap-6 font-bold tracking-[0.02em] text-accent">
+                      <KotharMark className="size-16 shrink-0" />
+                      Kothar
+                    </span>
                     <Hint text={`New ${CHAT_NOUN.one}`}>
                       <Button
                         variant="ghost"

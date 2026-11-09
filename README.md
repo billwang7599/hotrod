@@ -1,8 +1,10 @@
-<img src="packages/ui/src/logo.svg" alt="" width="72" height="72">
+<p align="center">
+  <img src="packages/desktop/assets/icon.png" alt="Kothar's icon: a blue anvil and a spark" width="128" height="128">
+</p>
 
-# Kothar
+<h1 align="center">Kothar</h1>
 
-A desktop app for running coding agents.
+<p align="center">A desktop app for running coding agents.</p>
 
 Bring your own engines (coding-agent CLIs like Claude Code, Codex and pi) and drive them all from one place. Kothar
 keeps a small core and lets you customize the rest with mods, which work with every engine.
