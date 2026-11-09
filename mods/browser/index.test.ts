@@ -9,7 +9,8 @@ import type { ModRun, ModSession } from '@kothar/mod-api'
 import { startCore } from '@kothar/core/main'
 import type { Adapter, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import browser, { BROWSER_INSTRUCTIONS, EXTENSION_URL } from './index.ts'
+import { backgroundArgs } from './background.ts'
+import browser, { BROWSER_INSTRUCTIONS, DEFAULT_PORT, EXTENSION_URL } from './index.ts'
 
 const dirs: string[] = []
 const tempDir = (prefix: string) => {
@@ -34,6 +35,7 @@ afterAll(() => {
 
 const run: ModRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
 const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
+const chromium = { ...defaults, browser: 'chromium' }
 const space = { id: 'abc', name: 'Space', engine: 'claude-code' }
 const serverFor = (session: Partial<ModSession> = {}) =>
   browser.mcpServers!({ chat: space, workDir: '/work/abc', sandboxed: true, values: defaults, ...session })[0]!
@@ -41,7 +43,7 @@ const valueAfter = (args: string[] = [], flag: string) =>
   args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
 
 it("runs Playwright MCP headless on Playwright's Chromium, with the space's own profile in its work folder", () => {
-  const { name, command, args, env, allowTools } = serverFor()
+  const { name, command, args, env, allowTools } = serverFor({ values: chromium })
   expect({ name, command, allowTools }).toEqual({ name: 'browser', command: process.execPath, allowTools: true })
   expect(existsSync(args![0]!)).toBe(true)
   expect(args).toContain('--headless')
@@ -58,12 +60,99 @@ it("runs Playwright MCP headless on Playwright's Chromium, with the space's own 
 })
 
 it("shows a window, asks before each action, keeps a subagent's profile in memory, as set", () => {
-  expect(serverFor({ values: { ...defaults, background: false } }).args).not.toContain('--headless')
-  expect(serverFor({ values: { ...defaults, askEachAction: true } }).allowTools).toBe(false)
-  const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true } }).args
+  expect(serverFor({ values: { ...chromium, background: false } }).args).not.toContain('--headless')
+  expect(serverFor({ values: { ...chromium, askEachAction: true } }).allowTools).toBe(false)
+  const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true }, values: chromium }).args
   expect(subagent).toContain('--isolated')
   expect(subagent).not.toContain('--user-data-dir')
+  expect(serverFor({ sandboxed: false, values: chromium }).args).not.toContain('--no-sandbox')
+})
+
+it('browses in the background by default, through background.ts, which picks Chrome or Chromium where it runs', () => {
+  expect(defaults.browser).toBe('background')
+  const { args, env } = serverFor()
+  expect(args!.slice(0, 3)).toEqual([expect.stringMatching(/background\.ts$/), 'run', '/work/abc/.browser'])
+  expect(existsSync(args![0]!)).toBe(true)
+  expect(args![3]).toMatch(/cli\.js$/)
+  expect(args).toContain('--no-sandbox')
+  expect(args).not.toContain('--extension')
+  expect(args).not.toContain('--cdp-endpoint')
+  expect(env?.KOTHAR_BROWSER_SUBAGENT).toBeUndefined()
+  const subagent = serverFor({ chat: { ...space, id: 'def', parentId: 'abc', subagent: true } })
+  expect(subagent.env?.KOTHAR_BROWSER_SUBAGENT).toBe('1')
   expect(serverFor({ sandboxed: false }).args).not.toContain('--no-sandbox')
+})
+
+it('runs headless on Chrome with a profile of its own, else on Chromium, and a subagent keeps its in memory', () => {
+  expect(backgroundArgs('/w/.browser', true, false)).toEqual([
+    '--browser', 'chrome', '--headless', '--user-data-dir', '/w/.browser/chrome-profile',
+  ])
+  expect(backgroundArgs('/w/.browser', false, false)).toEqual([
+    '--browser', 'chromium', '--headless', '--user-data-dir', '/w/.browser/profile',
+  ])
+  expect(backgroundArgs('/w/.browser', true, true)).toEqual(['--browser', 'chrome', '--headless', '--isolated'])
+})
+
+it('is ready in the background with Chrome as it is, and needs Chromium installed only without Chrome', async () => {
+  const withChrome = fakeRun({ chrome: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' })
+  expect(await browser.setup!.check(withChrome.run, defaults)).toEqual({
+    ready: true,
+    message: 'Google Chrome, headless, on a profile of Kothar’s own',
+  })
+  expect(withChrome.calls).toEqual([[expect.stringMatching(/background\.ts$/), 'check']])
+  const without = fakeRun({ chrome: null }, { ready: false, name: 'Chrome for Testing 1' })
+  expect(await browser.setup!.check(without.run, defaults)).toEqual({ ready: false, message: 'Browser not installed' })
+  const installed = fakeRun({ chrome: null }, { ready: true, name: 'Chrome for Testing 1' })
+  expect(await browser.setup!.check(installed.run, defaults)).toEqual({
+    ready: true,
+    message: 'Chrome for Testing 1 installed, headless',
+  })
+  const about = browser.setup!.description
+  expect(typeof about === 'function' && about(defaults)).toContain('nothing to install')
+})
+
+it("background.ts check finds Chrome where Playwright would, or says there's none", async () => {
+  const { code, stdout } = await run(process.execPath, [serverFor().args![0]!, 'check'], {
+    env: { ELECTRON_RUN_AS_NODE: '1' },
+  })
+  expect(code).toBe(0)
+  const { chrome } = JSON.parse(stdout)
+  if (chrome !== null) expect(existsSync(chrome)).toBe(true)
+})
+
+it("attaches to the browser you're running on its debugging port, as pi's browser extension does", async () => {
+  const attach = { ...defaults, browser: 'attach' }
+  const { args } = serverFor({ values: attach })
+  expect(valueAfter(args, '--cdp-endpoint')).toBe(`http://localhost:${DEFAULT_PORT}`)
+  for (const flag of ['--headless', '--browser', '--user-data-dir', '--isolated', '--extension']) {
+    expect(args).not.toContain(flag)
+  }
+  expect(valueAfter(serverFor({ values: { ...attach, port: 9333 } }).args, '--cdp-endpoint')).toBe(
+    'http://localhost:9333',
+  )
+
+  const devtools = createServer((request, response) => {
+    if (request.url !== '/json/version') return void response.writeHead(404).end()
+    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ Browser: 'Chrome/157.0.1' }))
+  })
+  await new Promise<void>((resolve) => devtools.listen(0, '127.0.0.1', resolve))
+  const { port } = devtools.address() as { port: number }
+  const plain: ModRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
+  try {
+    expect(await browser.setup!.check(plain, { ...attach, port })).toEqual({
+      ready: true,
+      message: `Chrome 157.0.1, on port ${port}`,
+    })
+  } finally {
+    await new Promise<void>((resolve) => devtools.close(() => resolve()))
+  }
+  expect(await browser.setup!.check(plain, { ...attach, port })).toEqual({
+    ready: false,
+    message: `No browser is listening on port ${port}`,
+  })
+  await expect(browser.setup!.install(plain, () => {}, { ...attach, port })).rejects.toThrow(
+    `--remote-debugging-port=${port}`,
+  )
 })
 
 const chrome = { ...defaults, browser: 'chrome' }
@@ -201,13 +290,14 @@ it('is ready with your Chrome once Chrome has the Playwright Extension', async (
   })
   expect(await check({ ...found, profile: 'Profile 1' })).toEqual({
     ready: true,
-    message: 'Your Chrome, profile “Profile 1”',
+    message:
+      'Your Chrome, profile “Profile 1”. Chrome comes to the front each message; pick In the background above for no pop-ups',
   })
   const failing: ModRun = async () => ({ code: 1, stdout: '', stderr: 'boom' })
   await expect(browser.setup!.check(failing, chrome)).rejects.toThrow('boom')
   const about = browser.setup!.description
   expect(typeof about === 'function' && about(chrome)).toContain(EXTENSION_URL)
-  expect(typeof about === 'function' && about(defaults)).toContain('Chromium')
+  expect(typeof about === 'function' && about(chromium)).toContain('Chromium')
 })
 
 it("finds the extension in Chrome's last used profile that has it, as Playwright does", async () => {
@@ -227,10 +317,10 @@ it("finds the extension in Chrome's last used profile that has it, as Playwright
     run(command, args, { ...options, env: { ...options.env, HOME: home } })
   const { message } = await browser.setup!.check(atHome, chrome)
   // Chrome itself may or may not be installed where the tests run.
-  if (message !== 'Google Chrome not found') expect(message).toBe('Your Chrome, profile “Profile 1”')
+  if (message !== 'Google Chrome not found') expect(message).toMatch(/^Your Chrome, profile “Profile 1”\. Chrome comes to the front/)
   writeFileSync(join(dataDir, 'Local State'), JSON.stringify({ profile: { last_used: 'Profile 2' } }))
   const again = await browser.setup!.check(atHome, chrome)
-  if (again.message !== 'Google Chrome not found') expect(again.message).toBe('Your Chrome, profile “Profile 2”')
+  if (again.message !== 'Google Chrome not found') expect(again.message).toMatch(/^Your Chrome, profile “Profile 2”\. /)
   rmSync(join(dataDir, 'Profile 1', 'Extensions'), { recursive: true })
   rmSync(join(dataDir, 'Profile 2', 'Secure Preferences'))
   const none = await browser.setup!.check(atHome, chrome)
@@ -309,19 +399,19 @@ it("installs Chromium with Playwright's installer, reporting progress, and never
   const other = join(browsers, 'chromium-1000', 'INSTALLATION_COMPLETE')
   mkdirSync(dirname(other))
   writeFileSync(other, '')
-  expect(await browser.setup!.check(run, defaults)).toEqual({ ready: false, message: 'Browser not installed' })
+  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: false, message: 'Browser not installed' })
   const reports: { text?: string; progress?: number }[] = []
-  await browser.setup!.install(run, (update) => reports.push(update), defaults)
+  await browser.setup!.install(run, (update) => reports.push(update), chromium)
   expect(reports).toContainEqual({ text: expect.stringMatching(/^Downloading Chrome for Testing .*100%/), progress: 1 })
-  expect(await browser.setup!.check(run, defaults)).toEqual({ ready: true, message: expect.stringMatching(/ installed$/) })
+  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed$/) })
   expect(existsSync(other)).toBe(true)
 }, 60_000)
 
 it("fails with the installer's error", async () => {
   downloads.failing = true
   try {
-    await expect(browser.setup!.install(run, () => {}, defaults)).rejects.toThrow(/404/)
-    expect((await browser.setup!.check(run, defaults)).ready).toBe(false)
+    await expect(browser.setup!.install(run, () => {}, chromium)).rejects.toThrow(/404/)
+    expect((await browser.setup!.check(run, chromium)).ready).toBe(false)
   } finally {
     downloads.failing = false
   }
@@ -374,6 +464,8 @@ it('offers the browser once it is installed, and only to engines that take MCP s
   }
 
   expect(kothar.core.mods().find((mod) => mod.id === 'browser')?.enabled).toBe(false)
+  // Kothar's Chromium, which the test controls; the default mode depends on whether Chrome is installed here.
+  handle({ type: 'mod.setValue', modId: 'browser', key: 'browser', value: 'chromium' })
   handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true })
   await until(() => statusOf() === 'missing')
   expect(turn('mcp').options.mcpServers).toBeUndefined()
