@@ -52,6 +52,9 @@ export type EngineEvent =
   | { type: 'question.asked'; requestId: string; toolId?: string; questions: Question[] }
   // The account ran into a usage or rate limit; resetsAt (ISO) is when it lifts, if the engine says.
   | { type: 'limit.reached'; message: string; resetsAt?: string }
+  // A message the core passed to Session.steer entered the running turn here, or is handed back unsent.
+  | { type: 'steer.landed'; id: string }
+  | { type: 'steer.returned'; id: string }
   | { type: 'turn.completed'; error?: string }
   | { type: 'session.ended'; error?: string }
 
@@ -89,13 +92,14 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 
 // One entry of a chat's log, as stored in log.jsonl. Streamed deltas aren't logged; the completed text is.
 export type ChatEntry = { at: string } & (
-  | { type: 'user.message'; text: string; attachments?: Attachment[] }
+  // midTurn: sent while a turn ran, and taken in by it at this point (steering).
+  | { type: 'user.message'; text: string; attachments?: Attachment[]; midTurn?: true }
   | { type: 'subagent.report'; text: string; chatId: string; name: string; error?: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
   // panel: clicking the note opens that panel of the mod's.
   | { type: 'mod.note'; text: string; mod?: string; panel?: string }
-  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' }>
+  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
 
 // A mod's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its own.

@@ -34,7 +34,7 @@ export type Permission = {
 }
 
 export type Item =
-  | { kind: 'user'; text: string; attachments?: Attachment[] }
+  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true }
   | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
   | { kind: 'text'; text: string }
   | { kind: 'thinking'; text: string }
@@ -125,7 +125,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
         const replyText = reply === NO_REPLY ? '' : reply!
         return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
       }
-      return [...items, { kind: 'user', text, ...(attachments && { attachments }) }]
+      return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
     }
     case 'subagent.report': {
       const { chatId, name, text, error } = entry

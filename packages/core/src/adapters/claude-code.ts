@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ToolKind } from '../shared.ts'
@@ -120,10 +121,18 @@ function summarize(kind: ToolKind, input: any): string {
   return (picked ?? JSON.stringify(input) ?? '').replace(/\s+/g, ' ').trim()
 }
 
+const contentOf = (text: string, images: { mimeType: string; base64: string }[] = []) => {
+  const blocks = images
+    .filter(({ base64 }) => base64.length <= MAX_IMAGE_BASE64_CHARS)
+    .map(({ mimeType, base64 }) => ({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }))
+  return blocks.length ? [{ type: 'text', text }, ...blocks] : text
+}
+
 export const claudeCode: Adapter = {
   id: 'claude-code',
   imageInput: true,
   hotrodMcp: true,
+  steering: true,
 
   async detect(machine) {
     const options = { cwd: '/' }
@@ -211,6 +220,8 @@ export const claudeCode: Adapter = {
       // Claude Code's own subagents run out of sight, where the user can't open or stop them; Hotrod's
       // spawn_subagent replaces them. `Task` is the tool's name before Claude Code 2.1.
       '--disallowedTools', 'Agent', 'Task',
+      // Echoes a steered message, with its uuid, once a turn takes it in.
+      '--replay-user-messages',
     ]
     if (model) args.push('--model', model)
     if (thinking) args.push('--effort', thinking)
@@ -254,6 +265,24 @@ export const claudeCode: Adapter = {
     let closed = false
     let interruptCount = 0
     let limited = false
+    // Steered messages written mid-turn and not yet taken in: Hotrod's id by the uuid Claude Code knows, oldest first.
+    const steers = new Map<string, string>()
+    let cancelCount = 0
+    const land = (uuid: unknown) => {
+      const id = typeof uuid === 'string' ? steers.get(uuid) : undefined
+      if (id === undefined) return
+      steers.delete(uuid as string)
+      emit({ type: 'steer.landed', id })
+    }
+    // A turn that ends with steers still waiting would run them as a turn of their own; Hotrod queues them instead.
+    const returnSteers = () => {
+      for (const [uuid, id] of steers) {
+        const request = { subtype: 'cancel_async_message', message_uuid: uuid }
+        send({ type: 'control_request', request_id: `cancel-${++cancelCount}`, request })
+        emit({ type: 'steer.returned', id })
+      }
+      steers.clear()
+    }
     const limit = (message: string, resetsAt?: string) => {
       if (limited) return
       limited = true
@@ -299,7 +328,11 @@ export const claudeCode: Adapter = {
             }
           }
           return
+        case 'command_lifecycle':
+          if (msg.state === 'started') land(msg.command_uuid)
+          return
         case 'user':
+          if (msg.isReplay === true) return land(msg.uuid)
           if (!Array.isArray(msg.message?.content)) return
           for (const block of msg.message.content) {
             if (block.type !== 'tool_result') continue
@@ -352,6 +385,7 @@ export const claudeCode: Adapter = {
               ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
               : undefined
           interrupted = false
+          returnSteers()
           emit({ type: 'turn.completed', ...(error && { error }) })
         }
       }
@@ -380,13 +414,15 @@ export const claudeCode: Adapter = {
 
     return {
       prompt(text, images = []) {
-        const blocks = images
-          .filter(({ base64 }) => base64.length <= MAX_IMAGE_BASE64_CHARS)
-          .map(({ mimeType, base64 }) => ({ type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }))
-        const content = blocks.length ? [{ type: 'text', text }, ...blocks] : text
         limited = false
-        send({ type: 'user', message: { role: 'user', content } })
+        send({ type: 'user', message: { role: 'user', content: contentOf(text, images) } })
         emit({ type: 'turn.started' })
+      },
+      // Written mid-turn, Claude Code takes it in after the turn's next tool step (priority "next", its default).
+      steer(id, text, images = []) {
+        const uuid = randomUUID()
+        steers.set(uuid, id)
+        send({ type: 'user', uuid, message: { role: 'user', content: contentOf(text, images) } })
       },
       interrupt() {
         interrupted = true

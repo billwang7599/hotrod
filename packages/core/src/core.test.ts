@@ -1996,6 +1996,114 @@ describe('queue', () => {
   })
 })
 
+describe('steering', () => {
+  const steerer = (script: FakeStep[]) => setup(createFakeAdapter(script, 0, { steering: true }))
+  const queued = (core: Core, id: string) => chatOf(core, id)?.queue ?? []
+  const users = (core: Core, id: string) =>
+    entriesOf(core, id).flatMap((e) => (e.type === 'user.message' ? [{ text: e.text, midTurn: e.midTurn }] : []))
+  const replyOnly: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
+
+  it('logs a steered message where the turn took it in, after the tool result, and starts no other turn', async () => {
+    const t = steerer(permissionScript)
+    const chat = folderChat(t)
+    expect(t.core.engines()[0]).toMatchObject({ steering: true })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'use y instead', steer: true })
+    expect(queued(t.core, chat.id)).toMatchObject([{ text: 'use y instead', steering: true }])
+    expect(() => t.handle({ type: 'chat.unqueue', chatId: chat.id, id: queued(t.core, chat.id)[0]!.id })).toThrow(
+      /already with the engine/,
+    )
+
+    const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+    if (request?.type !== 'permission.requested') throw new Error('no request')
+    t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+
+    expect(types(entriesOf(t.core, chat.id)).slice(-4)).toEqual([
+      'tool.completed',
+      'user.message',
+      'text.completed',
+      'turn.completed',
+    ])
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'use y instead', midTurn: true },
+    ])
+    expect(queued(t.core, chat.id)).toEqual([])
+    expect(t.calls).toHaveLength(1)
+    const log = readFileSync(join(t.garage, 'chats', chat.id, 'log.jsonl'), 'utf8')
+    expect(log).toContain('"text":"use y instead","midTurn":true')
+  })
+
+  it('puts a steer the turn never took in back at the front of the queue and sends it after the turn', async () => {
+    const t = steerer(replyOnly)
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'later' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    expect(queued(t.core, chat.id).map((q) => [q.text, q.steering])).toEqual([
+      ['later', undefined],
+      ['nudge', true],
+    ])
+    await until(() => t.calls.length === 2)
+    expect(t.calls[1]?.prompt?.endsWith('nudge\n\nlater')).toBe(true)
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'nudge\n\nlater', midTurn: undefined },
+    ])
+  })
+
+  it('queues without steer (Alt+Enter), and on Enter when the engine cannot steer', async () => {
+    for (const t of [steerer(permissionScript), setup(permissionScript)]) {
+      const chat = folderChat(t)
+      t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+      await until(() => statusOf(t.core, chat.id) === 'waiting')
+      const steer = t.core.engines()[0]?.steering !== true
+      t.handle({ type: 'chat.send', chatId: chat.id, text: 'two', ...(steer && { steer }) })
+      expect(queued(t.core, chat.id)).toMatchObject([{ text: 'two' }])
+      expect(queued(t.core, chat.id)[0]?.steering).toBeUndefined()
+      const request = entriesOf(t.core, chat.id).find((e) => e.type === 'permission.requested')
+      if (request?.type !== 'permission.requested') throw new Error('no request')
+      t.handle({ type: 'permission.respond', chatId: chat.id, requestId: request.requestId, allow: true })
+      await until(() => t.calls.length === 2)
+      expect(users(t.core, chat.id).map((u) => u.midTurn)).toEqual([undefined, undefined])
+    }
+  })
+
+  it('returns a pending steer to the queue on Stop, which sends it next like any queued message', async () => {
+    const t = steerer(permissionScript)
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
+    await until(() => statusOf(t.core, chat.id) === 'waiting')
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => t.calls.length === 2)
+    expect(users(t.core, chat.id)).toEqual([
+      { text: 'one', midTurn: undefined },
+      { text: 'nudge', midTurn: undefined },
+    ])
+  })
+
+  it('returns pending steers when the session dies without saying', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const steered: string[] = []
+    const t = setup({
+      ...stubAdapter((_machine, _options, emit) => {
+        emits.push(emit)
+        return { prompt() {}, interrupt() {}, respond() {}, close() {}, steer: (_id, text) => steered.push(text) }
+      }),
+      steering: true,
+    })
+    const chat = folderChat(t)
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'go' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'nudge', steer: true })
+    expect(steered).toEqual(['nudge'])
+    emits[0]?.({ type: 'session.ended', error: 'crashed' })
+    expect(users(t.core, chat.id).map((u) => u.text)).toEqual(['go', 'nudge'])
+  })
+})
+
 describe('attachments', () => {
   const PNG = Buffer.from('89504e470d0a1a0a', 'hex')
   const BIG_JPEG = Buffer.alloc(6 * 1024 * 1024)

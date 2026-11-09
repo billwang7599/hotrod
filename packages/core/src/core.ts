@@ -221,7 +221,9 @@ export function openCore(options: {
     const status = detected.get(id) ?? { installed: false, signedIn: false }
     const chosen = settings.defaultThinking?.[id]
     const offersChosen = chosen !== undefined && status.thinking?.includes(chosen)
-    return { id, enabled: isEnabled(id), ...status, ...(offersChosen && { defaultThinking: chosen }) }
+    const steering = adapters.find((adapter) => adapter.id === id)?.steering === true
+    const extra = { ...(offersChosen && { defaultThinking: chosen }), ...(steering && { steering }) }
+    return { id, enabled: isEnabled(id), ...status, ...extra }
   }
   const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const offered = (engine: string) => {
@@ -510,6 +512,7 @@ export function openCore(options: {
     chat.unsavedText = ''
     append(chat, end)
     stopSession(chat)
+    unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
@@ -570,7 +573,8 @@ export function openCore(options: {
 
   // A turn's input is the subagent reports and the message it started with, logged together at its start.
   const retry = (chat: Chat) => {
-    const isInput = (e: ChatEntry) => e.type === 'user.message' || e.type === 'subagent.report'
+    // A message steered into the turn isn't what started it.
+    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'subagent.report'
     const end = chat.entries.findLastIndex(isInput)
     if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
     const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
@@ -1391,6 +1395,8 @@ export function openCore(options: {
           if (tool) tool.isError = true
         }
         if (event.type === 'turn.completed' || event.type === 'session.ended') return endTurn(chat, { at, ...event })
+        if (event.type === 'steer.landed') return landSteer(chat, event.id, at)
+        if (event.type === 'steer.returned') return unsteer(chat, event.id)
         if (['text.delta', 'text.completed', 'thinking.delta', 'tool.started'].includes(event.type)) chat.produced = true
         if (event.type === 'text.delta') {
           chat.unsavedText += event.text
@@ -1453,11 +1459,7 @@ export function openCore(options: {
         const model = pickModel(engine, listsOf(adapter.id), chat.info)
         const thinking = pickThinking(engine, chat.info)
         const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
-        const images = adapter.imageInput
-          ? attachments
-              .filter((a) => IMAGE_TYPES.includes(a.mimeType))
-              .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
-          : []
+        const images = imagesFor(adapter, attachments)
         const options = {
           cwd,
           instructions,
@@ -1499,6 +1501,44 @@ export function openCore(options: {
     )
   }
 
+  const imagesFor = (adapter: Adapter, attachments: Attachment[]) =>
+    adapter.imageInput
+      ? attachments
+          .filter((a) => IMAGE_TYPES.includes(a.mimeType))
+          .map((a) => ({ mimeType: a.mimeType, base64: readFileSync(a.path).toString('base64') }))
+      : []
+
+  // Steering: the message waits in the queue, marked, until the turn takes it in at its next tool boundary.
+  const canSteer = (chat: Chat) => chat.session?.steer !== undefined && ['running', 'waiting'].includes(chat.status)
+
+  const steer = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
+    const session = chat.session!
+    const adapter = adapterFor(chat.info.engine)!
+    const { text, attachments = [] } = message
+    const id = randomBytes(4).toString('hex')
+    const sent = withAttachments(text ? transformed('transformMessage', chat, text) : text, attachments)
+    const images = imagesFor(adapter, attachments)
+    setQueue(chat, [...chat.queue, { id, ...message, steering: true }])
+    session.steer!(id, sent, images)
+  }
+
+  // Logged where the engine took it in, between a tool's result and the rest of the turn.
+  const landSteer = (chat: Chat, id: string, at: string) => {
+    const landed = chat.queue.find((q) => q.id === id && q.steering)
+    if (!landed) return
+    setQueue(chat, chat.queue.filter((q) => q !== landed))
+    const { text, attachments } = landed
+    append(chat, { at, type: 'user.message', text, ...(attachments && { attachments }), midTurn: true })
+  }
+
+  // A steered message the turn didn't take in goes back to the front of the queue, as typed. Without an id, every one.
+  const unsteer = (chat: Chat, id?: string) => {
+    const back = chat.queue.filter((q) => q.steering && (id === undefined || q.id === id))
+    if (!back.length) return
+    const plain = back.map(({ steering, ...q }) => q)
+    setQueue(chat, [...plain, ...chat.queue.filter((q) => !back.includes(q))])
+  }
+
   const setQueue = (chat: Chat, queue: QueuedMessage[]) => {
     chat.queue = queue
     broadcast({ type: 'chat.queue', chatId: chat.info.id, queue })
@@ -1526,7 +1566,7 @@ export function openCore(options: {
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
   }
 
-  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown) => {
+  const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown, steering = false) => {
     if (uploads !== undefined && !Array.isArray(uploads)) throw new Error('Attachments must be a list')
     const files = (uploads ?? []).map((upload: Partial<Upload>) => {
       const { name, mimeType, base64 } = upload ?? {}
@@ -1562,7 +1602,11 @@ export function openCore(options: {
       }
     })
     try {
-      enqueue(chat, { text, ...(attachments.length && { attachments }) })
+      const message = { text, ...(attachments.length && { attachments }) }
+      if (steering && canSteer(chat)) {
+        checkActive(chat)
+        steer(chat, message)
+      } else enqueue(chat, message)
     } catch (error) {
       for (const { path } of attachments) rmSync(path, { force: true })
       throw error
@@ -1705,11 +1749,12 @@ export function openCore(options: {
           return updateChat(chat, { [name]: typeof message.enabled === 'boolean' ? message.enabled : undefined })
         }
         case 'chat.send':
-          return sendMessage(chatFor(message.chatId), message.text, message.attachments)
+          return sendMessage(chatFor(message.chatId), message.text, message.attachments, message.steer === true)
         case 'chat.unqueue': {
           const chat = chatFor(message.chatId)
           const removed = chat.queue.find((q) => q.id === message.id)
           if (!removed) return
+          if (removed.steering) throw new Error('That message is already with the engine, so it can no longer be taken back')
           for (const { path } of removed.attachments ?? []) rmSync(path, { force: true })
           return setQueue(chat, chat.queue.filter((q) => q !== removed))
         }

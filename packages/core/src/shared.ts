@@ -54,7 +54,12 @@ export type EngineStatus = {
   defaultThinking?: string
 }
 
-export type EngineInfo = Omit<EngineStatus, 'models'> & { id: string; enabled: boolean; models?: ModelOption[] }
+export type EngineInfo = Omit<EngineStatus, 'models'> & {
+  id: string
+  enabled: boolean
+  models?: ModelOption[]
+  steering?: boolean
+}
 
 export type SessionOptions = {
   cwd: string
@@ -87,6 +92,9 @@ export interface Session {
   interrupt(): void
   respond(requestId: string, allow: boolean, message?: string): void
   answer?(requestId: string, answers?: Answers): void
+  // Steering: hands the running turn a message to take in at its next tool boundary. The session later emits
+  // steer.landed (where it entered the turn) or steer.returned (not taken in) for the id. Only engines that can.
+  steer?(id: string, text: string, images?: ImageInput[]): void
   close(): void
 }
 
@@ -106,6 +114,8 @@ export interface Adapter {
   complete?(machine: Machine, options: CompleteOptions): Promise<string>
   imageInput?: boolean
   hotrodMcp?: boolean
+  // Its sessions have steer, so the UI can say Enter steers.
+  steering?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
@@ -259,7 +269,14 @@ export type Upload = { name: string; mimeType: string; base64: string }
 // A subagent's final reply to its lead: which subagent, and why its turn ended early, if it did.
 export type SubagentReport = { chatId: string; name: string; error?: string }
 
-export type QueuedMessage = { id: string; text: string; attachments?: Attachment[]; report?: SubagentReport }
+// steering: handed to the running turn, waiting for its next tool boundary; it can't be taken back.
+export type QueuedMessage = {
+  id: string
+  text: string
+  attachments?: Attachment[]
+  report?: SubagentReport
+  steering?: true
+}
 
 // A mod's tab in the right sidebar, and a mod's action in the General tab, for one chat.
 export type PanelTab = { mod: string; id: string; title: string }
@@ -284,7 +301,8 @@ export type ClientMessage =
   | { type: 'chat.setEngine'; chatId: string; engine: string }
   | { type: 'chat.setModel'; chatId: string; model?: string; thinking?: string }
   | { type: 'chat.setPermission'; chatId: string; name: PermissionSwitch; enabled?: boolean }
-  | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[] }
+  // steer: hand it to the running turn if its engine can steer; otherwise, or without it, it waits for the turn to end.
+  | { type: 'chat.send'; chatId: string; text: string; attachments?: Upload[]; steer?: boolean }
   | { type: 'chat.unqueue'; chatId: string; id: string }
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }

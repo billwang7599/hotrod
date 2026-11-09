@@ -94,6 +94,7 @@ type RenderOptions = {
   folder?: string
   chats?: ChatView[]
   select?: (chatId: string) => void
+  steering?: boolean
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -123,7 +124,9 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               folder={options.folder}
               chats={[view, ...(options.chats ?? [])]}
               select={options.select}
-              engines={[{ id: 'fake', enabled: true, installed: true, signedIn: true }]}
+              engines={[
+                { id: 'fake', enabled: true, installed: true, signedIn: true, ...(options.steering && { steering: true }) },
+              ]}
               connected
               send={send}
               openSettings={() => {}}
@@ -247,14 +250,14 @@ const scrollTo = (top: number) =>
     list().dispatchEvent(new Event('scroll'))
   })
 
-function type(text: string) {
+function type(text: string, keys: KeyboardEventInit = {}) {
   const area = container.querySelector('textarea')!
   act(() => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(area, text)
     area.dispatchEvent(new Event('input', { bubbles: true }))
   })
   act(() => {
-    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    area.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, ...keys }))
   })
 }
 
@@ -1119,4 +1122,39 @@ test('a message queued during a turn clears its draft too', () => {
   expect(localStorage.getItem('hotrod.drafts')).toContain('later')
   act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
   expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+})
+
+test('while a turn runs, Enter steers when the engine can and ⌥Enter queues; otherwise Enter queues', () => {
+  const sent: ClientMessage[] = []
+  const shimmer = () => container.querySelector('.shimmer')?.textContent
+  render({ status: 'running', items: [USER] }, (m) => sent.push(m), { steering: true })
+  expect(shimmer()).toBe('Working… Enter steers · ⌥Enter queues')
+  type('use y')
+  type('then z', { altKey: true })
+  render({ status: 'running', items: [USER] }, (m) => sent.push(m))
+  expect(shimmer()).toBe('Working… Enter queues a message')
+  type('plain')
+  render({ status: 'idle', items: [USER] }, (m) => sent.push(m), { steering: true })
+  type('fresh')
+  expect(sent.filter((m) => m.type === 'chat.send')).toEqual([
+    { type: 'chat.send', chatId: 'c1', text: 'use y', steer: true },
+    { type: 'chat.send', chatId: 'c1', text: 'then z' },
+    { type: 'chat.send', chatId: 'c1', text: 'plain' },
+    { type: 'chat.send', chatId: 'c1', text: 'fresh' },
+  ])
+})
+
+test('a steering message waits in the queue with no way to take it back, then shows in place marked as sent mid-turn', () => {
+  const queue = [
+    { id: 'q1', text: 'use y', steering: true as const },
+    { id: 'q2', text: 'later' },
+  ]
+  render({ status: 'running', items: [USER], queue }, () => {}, { steering: true })
+  const queued = container.querySelector('[aria-label="Queued messages"]')!
+  expect(queued.textContent).toContain('At the next step:use y')
+  expect(queued.querySelectorAll('[aria-label="Remove from queue"]')).toHaveLength(1)
+  expect(queued.textContent).toContain('Sends when this turn ends')
+  const items: Item[] = [USER, tool('done', 'a'), { kind: 'user', text: 'use y', midTurn: true }]
+  render({ status: 'running', items, queue: [] }, () => {}, { steering: true })
+  expect(container.textContent).toContain('Sent mid-turn')
 })

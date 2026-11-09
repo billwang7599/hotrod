@@ -82,6 +82,7 @@ import {
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
+const STEER_HINT = 'Enter steers it in at the next step · ⌥Enter queues · ⌘Enter interrupts and sends'
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_HINT = 'Click Stopping… again to force stop'
 const MODEL_HINT = 'Model'
@@ -105,6 +106,11 @@ const PLACEHOLDERS: Record<ChatStatus, string> = {
   stopping: 'Stopping… Enter queues a message',
 }
 const ANSWER_PLACEHOLDER = 'Waiting for your answer… Enter queues a message'
+// When the engine can steer, Enter hands a message to the running turn and ⌥Enter queues it.
+const STEER_PLACEHOLDERS: Partial<Record<ChatStatus, string>> = {
+  running: 'Working… Enter steers · ⌥Enter queues',
+  waiting: 'Waiting for your approval… Enter steers · ⌥Enter queues',
+}
 const ASSISTANT = 'min-w-0 text-body leading-[1.6] wrap-break-word'
 const TOOL_NAME = 'shrink-0 font-mono text-sm leading-[normal] font-semibold'
 const TOOL_INPUT = 'min-w-0 flex-1 truncate font-mono text-sm leading-[normal] text-muted'
@@ -744,6 +750,7 @@ function ItemView(props: ItemProps) {
               ))}
             </div>
           )}
+          {item.midTurn && <span className="text-xs text-faint">Sent mid-turn</span>}
           {item.text && (
             <div className="flex items-start gap-6">
               <CopyButton label="Copy message" text={item.text} className="mt-6" />
@@ -1012,7 +1019,10 @@ export function Chat(props: ChatProps) {
   const working = busy && !archived && !text
   const asking = chat.status === 'waiting' || requests.length > 0
   const questionWaits = asking && chat.items.some((i) => i.kind === 'question' && i.outcome === 'pending')
-  const placeholder = questionWaits ? ANSWER_PLACEHOLDER : PLACEHOLDERS[chat.status]
+  const steers = offers?.steering === true && (chat.status === 'running' || chat.status === 'waiting')
+  const placeholder = questionWaits
+    ? ANSWER_PLACEHOLDER
+    : ((steers ? STEER_PLACEHOLDERS[chat.status] : undefined) ?? PLACEHOLDERS[chat.status])
   const canQueue = connected && busy && !archived
   const showEngineNote = engineOff && !archived && chat.status === 'idle' && !viewOnly
   const last = chat.items.at(-1)
@@ -1055,10 +1065,11 @@ export function Chat(props: ChatProps) {
     }
   }
   const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files')
-  const submit = () => {
+  const submit = (steer = false) => {
     if (!canAttach || !hasContent) return
     const attachments = pending.map(({ name, mimeType, base64 }) => ({ name, mimeType, base64 }))
-    send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }) })
+    const steering = steer && steers
+    send({ type: 'chat.send', chatId: chat.id, text, ...(attachments.length && { attachments }), ...(steering && { steer: true }) })
     following.current = true
     toBottom()
     setText('')
@@ -1357,6 +1368,7 @@ export function Chat(props: ChatProps) {
                       <m.li key={q.id} {...MOTION.collapse}>
                         <div className="mb-4 flex items-center gap-8 rounded border border-dashed py-2 pr-4 pl-10 text-muted">
                           <span className="flex min-w-0 flex-1 items-center gap-6" title={q.text}>
+                            {q.steering && <span className="shrink-0 text-faint">At the next step:</span>}
                             {q.report && <span className="shrink-0 text-faint">Subagent {q.report.name} reported:</span>}
                             {q.text && <span className="truncate">{q.text}</span>}
                             {q.attachments && (
@@ -1366,20 +1378,22 @@ export function Chat(props: ChatProps) {
                               </span>
                             )}
                           </span>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label="Remove from queue"
-                            disabled={!connected}
-                            onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
-                          >
-                            ×
-                          </Button>
+                          {!q.steering && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label="Remove from queue"
+                              disabled={!connected}
+                              onClick={() => send({ type: 'chat.unqueue', chatId: chat.id, id: q.id })}
+                            >
+                              ×
+                            </Button>
+                          )}
                         </div>
                       </m.li>
                     ))}
                   </AnimatePresence>
-                  <li className="text-sm text-faint">Sends when this turn ends</li>
+                  {chat.queue.some((q) => !q.steering) && <li className="text-sm text-faint">Sends when this turn ends</li>}
                 </ul>
               </m.div>
             )}
@@ -1481,7 +1495,7 @@ export function Chat(props: ChatProps) {
                     e.preventDefault()
                     const emptyWithQueue = !hasContent && chat.queue.length > 0
                     if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
-                    else submit()
+                    else submit(!e.altKey)
                   }}
                 />
               </div>
@@ -1536,8 +1550,8 @@ export function Chat(props: ChatProps) {
                   {busy ? (
                     <>
                       {hasContent && (
-                        <Hint text={QUEUE_HINT}>
-                          <Button size="small" disabled={!canQueue} onClick={submit}>
+                        <Hint text={steers ? STEER_HINT : QUEUE_HINT}>
+                          <Button size="small" disabled={!canQueue} onClick={() => submit()}>
                             Queue
                           </Button>
                         </Hint>
@@ -1560,7 +1574,7 @@ export function Chat(props: ChatProps) {
                           variant="primary"
                           className="disabled:pointer-events-none"
                           disabled={!canSend || !hasContent}
-                          onClick={submit}
+                          onClick={() => submit()}
                         >
                           Send
                         </Button>
