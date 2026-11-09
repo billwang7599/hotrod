@@ -423,9 +423,50 @@ function ViewPickers({ chatId }: { chatId: string }) {
   )
 }
 
+/** The chat's permission switches, in the General tab below the view options. */
+function Permissions({ chat, above, workFolder, disabled, send }: {
+  chat: ChatView
+  above: ChatView[]
+  workFolder: WorkFolder
+  disabled: boolean
+  send: (m: ClientMessage) => void
+}) {
+  return (
+    <section className="flex flex-col gap-8" aria-label="Permissions">
+      <h3 className="font-semibold">Permissions</h3>
+      <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
+      {PERMISSION_SWITCHES.map((name) => {
+        const { label, amberWhileOn } = PERMISSIONS[name]
+        const on = switchedOn(name, chat, ...above, workFolder)
+        const amber = amberWhileOn && on
+        return (
+          <div
+            key={name}
+            className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8"
+          >
+            <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
+            <Select
+              label={label}
+              value={on ? 'on' : 'off'}
+              disabled={disabled}
+              options={[
+                { value: 'on', label: 'On' },
+                { value: 'off', label: 'Off' },
+              ]}
+              onChange={(value) =>
+                send({ type: 'chat.setPermission', chatId: chat.id, name, enabled: value === 'on' })
+              }
+            />
+          </div>
+        )
+      })}
+    </section>
+  )
+}
+
 // Hotrod's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
 type PanelTabId = string
-const TAB_LABEL: Record<string, string> = { context: 'Context', permissions: 'Permissions', general: 'General' }
+const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
 /** Actions mods add for this chat, listed in the General tab. */
 function ModCommands({ chatId, commands, disabled, send }: {
@@ -510,7 +551,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const modUi = props.modUi?.chatId === chatId ? props.modUi : undefined
   const modTabs: ModTab[] = chat ? (modUi?.panels ?? []) : []
   const modTab = modTabs.find((p) => modTabId(p.mod, p.id) === tab)
-  const known = ['permissions', 'general'].includes(tab) || modTab
+  const known = tab === 'general' || modTab
   const shown: PanelTabId = chat && known ? tab : 'context'
   const panelView = modTab && props.panelViews?.[panelKey(chatId, modTab.mod, modTab.id)]
   useEffect(() => {
@@ -525,7 +566,6 @@ export function ContextPanel(props: ContextPanelProps) {
   const tabs: TabEntry[] = [
     ...(chat ? [{ id: 'general', label: TAB_LABEL.general! }] : []),
     { id: 'context', label: TAB_LABEL.context! },
-    ...(chat ? [{ id: 'permissions', label: TAB_LABEL.permissions! }] : []),
     ...modTabs.map((p) => ({ id: modTabId(p.mod, p.id), label: p.title })),
   ]
   return (
@@ -556,34 +596,6 @@ export function ContextPanel(props: ContextPanelProps) {
         role="tabpanel"
         aria-label={modTab?.title ?? TAB_LABEL[shown]}
       >
-        {shown === 'permissions' && chat && (
-          <section className="flex flex-col gap-8" aria-label="Permissions">
-            <About intro={PERMISSIONS_HINT} notes={PERMISSION_SWITCHES.map((name) => PERMISSIONS[name])} />
-            {PERMISSION_SWITCHES.map((name) => {
-              const { label, amberWhileOn } = PERMISSIONS[name]
-              const on = switchedOn(name, chat, ...above, workFolder)
-              const amber = amberWhileOn && on
-              return (
-                <div
-                  key={name}
-                  className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8"
-                >
-                  <span className={`min-w-0 flex-1 ${amber ? 'text-amber' : ''}`}>{label}</span>
-                  <Select
-                    label={label}
-                    value={on ? 'on' : 'off'}
-                    disabled={locked}
-                    options={[
-                      { value: 'on', label: 'On' },
-                      { value: 'off', label: 'Off' },
-                    ]}
-                    onChange={(value) => send({ type: 'chat.setPermission', chatId, name, enabled: value === 'on' })}
-                  />
-                </div>
-              )
-            })}
-          </section>
-        )}
         {shown === 'context' && (
           <About intro={`${intro} Edits apply from the next message.`} notes={sections.map((s) => SECTIONS[s])} />
         )}
@@ -619,6 +631,9 @@ export function ContextPanel(props: ContextPanelProps) {
             )
           })}
         {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
+        {shown === 'general' && chat && (
+          <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
+        )}
         {shown === 'general' && chat && (
           <ModCommands chatId={chatId} commands={modUi?.commands ?? []} disabled={locked} send={send} />
         )}

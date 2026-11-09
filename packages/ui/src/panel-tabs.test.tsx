@@ -42,9 +42,16 @@ const space: ChatView = {
   draft: '',
   queue: [],
 }
-const modUi: State['modUi'] = { chatId: 'space', panels: [{ mod: 'git', id: 'changes', title: 'Changes' }], commands: [] }
+const modUi: State['modUi'] = {
+  chatId: 'space',
+  panels: [
+    { mod: 'git', id: 'changes', title: 'Changes' },
+    { mod: 'processes', id: 'processes', title: 'Processes' },
+  ],
+  commands: [],
+}
 
-// Each tab is 7px a letter plus 16px padding (General 65, Context 65, Permissions 93, Changes 65; 294 with gaps); the
+// Each tab is 7px a letter plus 16px padding (General 65, Context 65, Changes 65, Processes 79; 280 with gaps); the
 // More button 24.
 let room: number
 let resize: () => void
@@ -115,7 +122,7 @@ function openMore() {
 
 test('the tabs sit in one row with no More menu when they fit', () => {
   render()
-  expect(tabs()).toEqual(['General', 'Context', 'Permissions', 'Changes'])
+  expect(tabs()).toEqual(['General', 'Context', 'Changes', 'Processes'])
   expect(more()).toBeNull()
   expect(host.querySelector('[role="tablist"]')!.className).not.toContain('overflow-x-auto')
 })
@@ -123,10 +130,10 @@ test('the tabs sit in one row with no More menu when they fit', () => {
 test("tabs that don't fit go into the More menu, in order", () => {
   room = 200
   render()
-  // More 24 + Context 67 + General 67 = 158; Permissions would need 95 more.
+  // More 24 + Context 67 + General 67 = 158; Changes would need 67 more.
   expect(tabs()).toEqual(['General', 'Context'])
-  expect(more()!.getAttribute('aria-label')).toBe('More tabs: Permissions, Changes')
-  expect(openMore().map((i) => i.textContent)).toEqual(['Permissions', 'Changes'])
+  expect(more()!.getAttribute('aria-label')).toBe('More tabs: Changes, Processes')
+  expect(openMore().map((i) => i.textContent)).toEqual(['Changes', 'Processes'])
 })
 
 test('the open tab stays in the row even when later tabs fold away', () => {
@@ -140,11 +147,11 @@ test('the open tab stays in the row even when later tabs fold away', () => {
 test('choosing a tab from More opens it and brings it into the row', () => {
   room = 200
   render()
-  const permissions = openMore().find((i) => i.textContent === 'Permissions')!
-  act(() => permissions.click())
-  expect(tab('Permissions').getAttribute('aria-selected')).toBe('true')
-  expect(tabs()).toEqual(['General', 'Permissions'])
-  expect(host.querySelector('[role="tabpanel"]')!.getAttribute('aria-label')).toBe('Permissions')
+  const processes = openMore().find((i) => i.textContent === 'Processes')!
+  act(() => processes.click())
+  expect(tab('Processes').getAttribute('aria-selected')).toBe('true')
+  expect(tabs()).toEqual(['General', 'Processes'])
+  expect(host.querySelector('[role="tabpanel"]')!.getAttribute('aria-label')).toBe('Processes')
 })
 
 test('widening the panel brings folded tabs back', () => {
@@ -153,6 +160,6 @@ test('widening the panel brings folded tabs back', () => {
   expect(more()).not.toBeNull()
   room = 320
   resize()
-  expect(tabs()).toEqual(['General', 'Context', 'Permissions', 'Changes'])
+  expect(tabs()).toEqual(['General', 'Context', 'Changes', 'Processes'])
   expect(more()).toBeNull()
 })

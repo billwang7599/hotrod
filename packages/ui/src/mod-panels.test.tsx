@@ -94,7 +94,6 @@ test("a mod's panel is a tab beside Hotrod's own, and asks the core for its view
   expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual([
     'General',
     'Context',
-    'Permissions',
     'Changes',
   ])
   expect(sent).toEqual([])

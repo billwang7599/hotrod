@@ -752,7 +752,7 @@ test("each panel tab folds its explanations under How this works, not in tooltip
   expect(about().open).toBe(false)
   expect(about().querySelector('summary')!.textContent).toBe('How this works')
   expect(about().textContent).toContain('Folders:')
-  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'Permissions')!
+  const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => tab.click())
   expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
   expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
@@ -786,21 +786,33 @@ test('while busy, the empty composer shows its status as a sweeping highlight in
   expect(shimmer()!.getAttribute('data-status')).toBe('waiting')
 })
 
-test('the right panel shows context and permissions as two tabs, remembering the last one', () => {
+test('the right panel has two tabs, General with the permissions and Context, remembering the last one', () => {
   localStorage.clear()
-  const tab = (name: string) =>
-    [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')].find((t) => t.textContent === name)!
+  const tabs = () => [...container.querySelectorAll<HTMLButtonElement>('aside [role="tab"]')]
+  const tab = (name: string) => tabs().find((t) => t.textContent === name)!
   const permission = () => container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)
   render({}, () => {}, { contextOpen: true })
+  expect(tabs().map((t) => t.textContent)).toEqual(['General', 'Context'])
   expect(tab('Context').getAttribute('aria-selected')).toBe('true')
   expect(permission()).toBeNull()
   expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).not.toBeNull()
-  act(() => tab('Permissions').click())
+  act(() => tab('General').click())
+  expect(container.querySelector('aside section[aria-label="Permissions"] h3')!.textContent).toBe('Permissions')
+  expect(container.querySelector('aside section[aria-label="View"]')).not.toBeNull()
   expect(permission()).not.toBeNull()
   expect(container.querySelector('aside section[aria-label="AGENTS.md"]')).toBeNull()
   act(() => root.render(<></>))
   render({}, () => {}, { contextOpen: true })
-  expect(tab('Permissions').getAttribute('aria-selected')).toBe('true')
+  expect(tab('General').getAttribute('aria-selected')).toBe('true')
+  localStorage.clear()
+})
+
+test('a panel saved on the old Permissions tab opens General, where the switches now are', () => {
+  localStorage.setItem('hotrod.panelTab', 'permissions')
+  render({}, () => {}, { contextOpen: true })
+  const selected = container.querySelector('aside [role="tab"][aria-selected="true"]')!
+  expect(selected.textContent).toBe('General')
+  expect(container.querySelector(`aside button[aria-label="${PERMISSIONS.editAnywhere.label}"]`)).not.toBeNull()
   localStorage.clear()
 })
 
@@ -822,7 +834,7 @@ test('file paths stay hidden at the top of a space and in the Context panel unti
 
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.setItem('hotrod.panelTab', 'permissions')
+  localStorage.setItem('hotrod.panelTab', 'general')
   const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
     act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
@@ -859,7 +871,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   const { label } = PERMISSIONS.editAnywhere
   const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
-  localStorage.setItem('hotrod.panelTab', 'permissions')
+  localStorage.setItem('hotrod.panelTab', 'general')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('On')
   expect(amber()).toContain('text-amber')
