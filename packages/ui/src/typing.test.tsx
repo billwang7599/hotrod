@@ -120,3 +120,40 @@ test('a new item in a long chat parses only its own Markdown', () => {
   render([...items, { kind: 'text', text: 'One more **reply**' }])
   expect(parses.count).toBe(1)
 })
+
+test("a sent message's lists render as lists, without a Markdown parse", () => {
+  parses.count = 0
+  render([{ kind: 'user', text: 'Two things:\n- a\n- b' }])
+  const ul = container.querySelector('ul.list-disc')!
+  expect([...ul.querySelectorAll('li')].map((li) => li.textContent)).toEqual(['a', 'b'])
+  expect(parses.count).toBe(0)
+})
+
+test('the message box continues and nests lists, and leaves other keys alone', () => {
+  render([])
+  const box = container.querySelector('textarea')!
+  typeEach('- a')
+  const key = (init: KeyboardEventInit) => {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init })
+    act(() => box.dispatchEvent(event))
+    return event.defaultPrevented
+  }
+  box.setSelectionRange(3, 3)
+  expect(key({ key: 'Enter', shiftKey: true })).toBe(true)
+  expect(box.value).toBe('- a\n- ')
+  expect(key({ key: 'Tab' })).toBe(true)
+  expect(box.value).toBe('- a\n  - ')
+  expect(key({ key: 'Enter', shiftKey: true })).toBe(true)
+  expect(box.value).toBe('- a\n')
+  // Mid-composition (IME), nothing happens.
+  typeEach('- a\n- b')
+  box.setSelectionRange(7, 7)
+  expect(key({ key: 'Enter', shiftKey: true, isComposing: true })).toBe(false)
+  expect(box.value).toBe('- a\n- b')
+  // Off a list line, Tab and Shift+Enter keep their usual behaviour.
+  typeEach('plain')
+  box.setSelectionRange(5, 5)
+  expect(key({ key: 'Tab' })).toBe(false)
+  expect(key({ key: 'Enter', shiftKey: true })).toBe(false)
+  expect(box.value).toBe('plain')
+})

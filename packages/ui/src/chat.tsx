@@ -63,6 +63,7 @@ import {
   useSettled,
 } from './controls.tsx'
 import { Markdown } from './markdown.tsx'
+import { applyEdit, continueList, indentList, UserText } from './lists.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
   accountLabel,
@@ -763,7 +764,7 @@ function ItemView(props: ItemProps) {
             <div className="flex items-start gap-6">
               <CopyButton label="Copy message" text={item.text} className="mt-6" />
               <div className="min-w-0 rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
-                {item.text}
+                <UserText text={item.text} />
               </div>
             </div>
           )}
@@ -1604,7 +1605,19 @@ function Composer(props: ComposerProps) {
             void attach([...files])
           }}
           onKeyDown={(e) => {
-            if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return
+            if (e.nativeEvent.isComposing) return
+            // Lists: a new line (Shift+Enter) continues one, Tab and Shift+Tab nest a list line.
+            const listKey = e.key === 'Tab' ? !e.altKey && !e.metaKey && !e.ctrlKey : e.key === 'Enter' && e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey
+            if (listKey) {
+              const box = e.currentTarget
+              const { value, selectionStart, selectionEnd } = box
+              const edit = e.key === 'Tab' ? indentList(value, selectionStart, selectionEnd, e.shiftKey) : continueList(value, selectionStart, selectionEnd)
+              if (!edit) return
+              e.preventDefault()
+              applyEdit(box, edit)
+              return
+            }
+            if (e.key !== 'Enter' || e.shiftKey) return
             e.preventDefault()
             const emptyWithQueue = !hasContent && chat.queue.length > 0
             if (busy && (e.metaKey || e.ctrlKey || emptyWithQueue)) interruptAndSend()
