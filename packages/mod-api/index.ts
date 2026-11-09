@@ -151,9 +151,31 @@ export type ModStorage = {
   remove(name: string): void
 }
 
+// Which of the user's model lists (Settings → Models) a chat runs on.
+export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
+
+export type NewChatSpec = {
+  name: string
+  folders?: string[]
+  files?: string[]
+  // An engine that is on; without one, the chat follows its role's model list.
+  engine?: string
+  // Makes a child of this chat (see ModHost.createChat).
+  parentId?: string
+  // A child's model list; only with parentId.
+  role?: ModelRole
+}
+
 // Each mod gets a host of its own, so storage and notes know which mod they belong to.
 export type ModHost = {
-  createChat(spec: { name: string; folders?: string[]; files?: string[]; engine?: string }): { id: string }
+  // A new chat; send it its first message with send. Without parentId it's a space, with its own folders and files.
+  // With parentId it's a child of that chat, made exactly as spawn_worker makes a worker: listed under its parent and
+  // view only (the user can watch and stop it, not write to it), working in its space's work folder and checkouts,
+  // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
+  // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
+  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
+  // sets no limit on how many run; spawn_worker counts them toward the Workers mod's.
+  createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
   // Every chat the user can see, spaces and workers.

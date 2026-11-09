@@ -1,4 +1,5 @@
 import type {
+  ModelRole as ApiModelRole,
   Answers,
   Attachment,
   ChatEntry,
@@ -248,6 +249,9 @@ export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('ed
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'workers'] as const
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
+// The mod API names the same roles; this fails to compile if the two lists drift apart.
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+export const ROLES_MATCH_MOD_API: Same<ModelRole, ApiModelRole> = true
 
 export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',

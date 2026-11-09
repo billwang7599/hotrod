@@ -727,6 +727,53 @@ it('without a memory mod, offers no zoom and sends long messages whole', async (
   expect(reply.error.message).toBe('Tool zoom not found')
 })
 
+// A mod that starts a child of whoever calls its tool, as a Workers mod would.
+const childMod: Mod = {
+  id: 'kids',
+  name: 'Kids',
+  description: '',
+  enabledByDefault: true,
+  tools: [
+    {
+      name: 'delegate',
+      description: 'Start a child chat',
+      offered: (caller) => !caller.worker,
+      inputSchema: { type: 'object', properties: { task: { type: 'string' }, spec: { type: 'object' } }, required: ['task'] },
+      run({ task, spec }, { caller, host }) {
+        const child = host.createChat({ name: String(task), parentId: caller.id, ...(spec as object) })
+        host.send(child.id, String(task))
+        return { chatId: child.id }
+      },
+    },
+  ],
+}
+
+it("lets a mod start a child chat as spawn_worker does, with the Workers mod off: frozen view, report, removal", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld({ mods: [mainMod, childMod] })
+  handleOn(core)({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: false })
+  const parent = send('main', 'Plan the release')
+  const token = parent.options.kotharMcp!.token
+  const { chatId } = await json(token, 'delegate', { task: 'Check the changelog', spec: { role: 'searching' } })
+  expect(chatIn(core, chatId)).toMatchObject({ parentId: 'main', worker: true, role: 'searching', parentMessages: 1 })
+  const child = sessionOf(chatId)
+  expect(child.prompt).toBe('Check the changelog')
+  expect(child.options.instructions).toContain('<message id="0" kind="user">\nPlan the release\n</message>')
+  // Its tool isn't offered to a child, and no memory mod is on, so the child has no Kothar MCP server at all.
+  expect(child.options.kotharMcp).toBeUndefined()
+
+  // A child takes its folders from its space, and can't have children of its own.
+  const refused = await tool(token, 'delegate', { task: 'More', spec: { folders: [garage] } })
+  expect(refused).toEqual({ isError: true, text: 'A child chat takes its folders from its space' })
+  const grandchild = await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId } })
+  expect(grandchild).toEqual({ isError: true, text: 'A worker cannot start chats' })
+  expect((await tool(token, 'delegate', { task: 'Odd', spec: { role: 'boss' } })).text).toBe('Unknown role "boss"')
+
+  child.end('Checked')
+  expect(chatIn(core, 'main').queue).toMatchObject([{ text: 'Checked', report: { chatId, name: 'Check the changelog' } }])
+  expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+  expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
+})
+
 it("gives a worker its parent's latest messages frozen at launch when no memory mod is on", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   workersOn(core, -1)

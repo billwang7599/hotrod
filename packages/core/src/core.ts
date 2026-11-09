@@ -72,6 +72,7 @@ import {
   type MemoryMessage,
   MOD_USES,
   type ModInfo,
+  MODEL_ROLES,
   type NewChat,
   type PanelTab,
   type PermissionSwitch,
@@ -865,7 +866,13 @@ export function openCore(options: {
     if (known) return known
     const dir = join(garage, 'mods', mod.id)
     const host: ModHost = {
-      createChat: ({ name, folders, files, engine }) => createChat({ name, folders, files, engine }),
+      createChat({ name, folders, files, engine, parentId, role }) {
+        if (parentId === undefined) {
+          if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
+          return createChat({ name, folders, files, engine })
+        }
+        return createChild(String(parentId), { name, engine, role, folders, files })
+      },
       send: (chatId, text) => enqueue(chatFor(chatId), { text }),
       chats: () => shownChats().map(detailOf),
       chat(chatId) {
@@ -1132,6 +1139,13 @@ export function openCore(options: {
     broadcast({ type: 'chat.added', chat: state(chat) })
     callMods('onChatCreated', (mod, context) => mod.onChatCreated!(detailOf(chat), context))
     return chat.info
+  }
+
+  // A chat below another, for one task: what spawn_worker and a mod's host.createChat with a parentId both make.
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
+    if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
+    if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -1930,7 +1944,7 @@ export function openCore(options: {
   const mcp = openKotharMcp({
     chats: () => shownChats().map(state),
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
-    createChat,
+    createChild,
     send: (chatId, text) => send(chatFor(chatId), text),
     deliver: (chatId, text) => {
       const chat = chatFor(chatId)

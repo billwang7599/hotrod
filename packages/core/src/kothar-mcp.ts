@@ -47,7 +47,8 @@ export const WORKERS_MOD: Mod = {
 type Hub = {
   chats(): ChatState[]
   seesAll(chatId: string): boolean
-  createChat(spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }): ChatInfo
+  // A worker below parentId: the same call a mod's host.createChat makes with a parentId.
+  createChild(parentId: string, spec: { name: string; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
   deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
@@ -156,7 +157,7 @@ const TOOLS: Record<string, Tool> = {
         throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
       }
       const name = workerName(task)
-      const chat = hub.createChat({ parentId: caller.id, name, worker: true, role })
+      const chat = hub.createChild(caller.id, { name, ...(role && { role }) })
       hub.send(chat.id, task)
       return { chatId: chat.id }
     },

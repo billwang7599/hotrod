@@ -60,7 +60,7 @@ async function start(workers = { enabled: false, limit: 4 }) {
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
     modTools: () => modTools.map((entry) => ({ ...entry, host })),
-    createChat: (spec) => created(spec),
+    createChild: (parentId, spec) => created({ parentId, ...spec, worker: true }),
     workers: () => workers,
     send(chatId, text) {
       calls.push(['send', chatId, text])
@@ -232,7 +232,7 @@ describe('Kothar MCP server', () => {
       offered: (caller) => caller.id !== 'bbbb0001',
       async run(input, { caller, values, host }) {
         if (input.name === 'fail') throw new Error('No such luck')
-        const made = host.createChat({ name: String(input.name), folders: ['/tmp/x'], parentId: 'aaaa0001' } as never)
+        const made = host.createChat({ name: String(input.name), folders: ['/tmp/x'] })
         host.send(made.id, 'Go')
         return { caller: caller.id, worker: caller.worker ?? false, values, chatId: made.id }
       },

@@ -322,6 +322,20 @@ describe('the host', () => {
     expect(host.read(id, { last: 1 }).map((e) => e.type)).toEqual(['turn.completed'])
   })
 
+  it('makes a space, or a child of a chat when given parentId; a role only for a child', async () => {
+    const t = withHost()
+    const space = t.create('Space')
+    const host = t.host()
+    const made = host.createChat({ name: 'Other' })
+    expect(host.chat(made.id)).toMatchObject({ name: 'Other' })
+    expect(host.chat(made.id)!.parentId).toBeUndefined()
+    expect(() => host.createChat({ name: 'Odd', role: 'planning' })).toThrow('Only a child chat (with parentId) takes a role')
+    const child = host.createChat({ name: 'Helper', parentId: space })
+    expect(host.chat(child.id)).toMatchObject({ parentId: space, worker: true })
+    expect(host.chats().filter((c) => c.parentId === space).map((c) => c.id)).toEqual([child.id])
+    expect(() => host.createChat({ name: 'Lost', parentId: 'nope' })).toThrow()
+  })
+
   it('sends a message, queued behind a running turn, and interrupts a turn', async () => {
     const slow = createFakeAdapter([{ type: 'text.completed', text: 'Done' }], 30)
     const garage = tempDir()
