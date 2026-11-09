@@ -1146,7 +1146,7 @@ describe('commands', () => {
   })
 
   it('asks before every command once the default is off, and saves the default in settings.json', async () => {
-    const t = setup(commandScript('ls'))
+    const t = setup(commandScript('npm test'))
     t.handle({ type: 'permission.setDefault', name: 'autoRunCommands', enabled: false })
     expect(t.core.workFolder()).toMatchObject({ autoRunCommands: false })
     expect(t.messages.at(-1)).toEqual({ type: 'workFolder.updated', workFolder: t.core.workFolder() })
@@ -1157,7 +1157,7 @@ describe('commands', () => {
   })
 
   it("lets a space, Home too, turn a default off or on for itself, saved in its chat.json", async () => {
-    const t = setup(commandScript('ls'))
+    const t = setup(commandScript('npm test'))
     const space = createChat(t, { name: 'Space' })
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: false })
     expect(t.messages.at(-1)).toEqual({

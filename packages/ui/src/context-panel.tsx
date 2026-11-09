@@ -55,7 +55,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     label: 'Run commands without asking',
     about:
       'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
-      'anywhere on, or on a system Kothar can’t sandbox, every command asks.',
+      'anywhere on, or on a system Kothar can’t sandbox, every command asks but plain reads.',
   },
   askNetworkCommands: {
     label: 'Ask before commands that publish or reach the network',
@@ -66,6 +66,13 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   autoFetch: {
     label: 'Fetch web pages without asking',
     about: 'Agents read web pages and search the web without asking you first.',
+  },
+  autoRead: {
+    label: 'Read anywhere without asking',
+    about:
+      'Agents read and search files outside the work folder, and run commands that only read (ls, cat, grep, ' +
+      'git status, git log…), without asking, sandboxed or not. Logins and keys still ask: ~/.ssh, ~/.aws, ' +
+      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files and Kothar’s saved accounts.',
   },
 }
 const PERMISSIONS_HINT =
