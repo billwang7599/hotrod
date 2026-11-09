@@ -156,7 +156,7 @@ it("attaches to the browser you're running on its debugging port, as pi's browse
   try {
     expect(await browser.setup!.check(plain, { ...attach, port })).toEqual({
       ready: true,
-      message: `Chrome 157.0.1, on port ${port}`,
+      message: `Chrome 157.0.1, on port ${port}. Its tabs aren’t grouped`,
     })
   } finally {
     await new Promise<void>((resolve) => devtools.close(() => resolve()))
@@ -304,7 +304,8 @@ it('is ready with your Chrome once Chrome has the Playwright Extension', async (
   expect(await check({ ...found, profile: 'Profile 1' })).toEqual({
     ready: true,
     message:
-      'Your Chrome, profile “Profile 1”. Chrome comes to the front each message; pick In the background above for no pop-ups',
+      'Your Chrome, profile “Profile 1”, its tabs in the “Playwright · Kothar” group. Chrome comes to the front each ' +
+      'message; pick In the background above for no pop-ups',
   })
   const failing: ModRun = async () => ({ code: 1, stdout: '', stderr: 'boom' })
   await expect(browser.setup!.check(failing, chrome)).rejects.toThrow('boom')
@@ -330,10 +331,10 @@ it("finds the extension in Chrome's last used profile that has it, as Playwright
     run(command, args, { ...options, env: { ...options.env, HOME: home } })
   const { message } = await browser.setup!.check(atHome, chrome)
   // Chrome itself may or may not be installed where the tests run.
-  if (message !== 'Google Chrome not found') expect(message).toMatch(/^Your Chrome, profile “Profile 1”\. Chrome comes to the front/)
+  if (message !== 'Google Chrome not found') expect(message).toMatch(/^Your Chrome, profile “Profile 1”, its tabs in the “Playwright · Kothar” group\. Chrome comes to the front/)
   writeFileSync(join(dataDir, 'Local State'), JSON.stringify({ profile: { last_used: 'Profile 2' } }))
   const again = await browser.setup!.check(atHome, chrome)
-  if (again.message !== 'Google Chrome not found') expect(again.message).toMatch(/^Your Chrome, profile “Profile 2”\. /)
+  if (again.message !== 'Google Chrome not found') expect(again.message).toMatch(/^Your Chrome, profile “Profile 2”, /)
   rmSync(join(dataDir, 'Profile 1', 'Extensions'), { recursive: true })
   rmSync(join(dataDir, 'Profile 2', 'Secure Preferences'))
   const none = await browser.setup!.check(atHome, chrome)
@@ -416,7 +417,7 @@ it("installs Chromium with Playwright's installer, reporting progress, and never
   const reports: { text?: string; progress?: number }[] = []
   await browser.setup!.install(run, (update) => reports.push(update), chromium)
   expect(reports).toContainEqual({ text: expect.stringMatching(/^Downloading Chrome for Testing .*100%/), progress: 1 })
-  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed, in a window$/) })
+  expect(await browser.setup!.check(run, chromium)).toEqual({ ready: true, message: expect.stringMatching(/ installed, in a window, its tabs in the “Kothar” group$/) })
   expect(existsSync(other)).toBe(true)
 }, 60_000)
 

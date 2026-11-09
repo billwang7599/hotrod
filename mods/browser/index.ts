@@ -11,6 +11,8 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const LOGINS = join(HERE, 'logins.ts')
 // Picks Chrome or Kothar's Chromium for the default mode, on the session's machine; see background.ts.
 const BACKGROUND = join(HERE, 'background.ts')
+// Puts the agent's tabs in a "Kothar" tab group where a window shows them; see group.ts.
+const GROUP = join(HERE, 'group.ts')
 // Playwright passes Chrome a mock keychain on macOS (a plain password store on Linux), and then Chrome can't decrypt
 // the copied cookies.
 const LOGINS_CONFIG = join(HERE, 'chrome-logins.json')
@@ -104,7 +106,8 @@ async function checkAttach(run: ModRun, values: ModValues) {
   const { browser } = JSON.parse(stdout) as { browser: string | null }
   const port = portOf(values)
   if (!browser) return { ready: false, message: `No browser is listening on port ${port}` }
-  return { ready: true, message: `${browser.replace('/', ' ')}, on port ${port}` }
+  // Chrome lets only extensions make tab groups, and none is told which of these tabs are the agent's.
+  return { ready: true, message: `${browser.replace('/', ' ')}, on port ${port}. Its tabs aren’t grouped` }
 }
 
 async function checkChromium(run: ModRun) {
@@ -144,7 +147,7 @@ async function checkChrome(run: ModRun): Promise<ChromeCheck> {
 const chromeStatus = ({ chrome, profile }: ChromeCheck) => {
   if (!chrome) return { ready: false, message: 'Google Chrome not found' }
   if (!profile) return { ready: false, message: 'The Playwright Extension isn’t in Chrome' }
-  return { ready: true, message: `Your Chrome, profile “${profile}”` }
+  return { ready: true, message: `Your Chrome, profile “${profile}”, its tabs in the “Playwright · Kothar” group` }
 }
 
 const browser: Mod = {
@@ -166,13 +169,13 @@ const browser: Mod = {
         "storage (not passwords or history), so agents are logged in where you are and can act as you there, " +
         'without opening a window. Logins you make in Chrome reach agents at their next message. ' +
         "Kothar's Chromium, in a window: Playwright's Chromium in a window you can watch, which may take focus while " +
-        'the agent works. ' +
+        'the agent works, its tabs in a tab group named Kothar. ' +
         'Your open browser: agents attach to a Chromium-based browser you started with --remote-debugging-port, as ' +
         "pi's browser extension does, and work in its tabs with its logins. Chrome 136 and later only allow this with " +
         'a --user-data-dir other than your usual one. ' +
         "Your Chrome, in front: agents work in tabs of the Chrome you're running, through the Playwright Extension. " +
-        'Each message that browses opens a tab and brings Chrome to the front. Workers share it, each in a tab ' +
-        'group of its own.',
+        'Each message that browses opens a tab and brings Chrome to the front. Its tabs sit in a tab group named ' +
+        '“Playwright · Kothar”, and each worker gets a group of its own. Your other tabs are left alone.',
       type: 'select',
       options: [
         // 'chromium' (Kothar's Chromium, headless unless a switch said otherwise) is gone: a saved one isn't an option,
@@ -244,7 +247,9 @@ const browser: Mod = {
         return status.ready ? { ...status, message: `${status.message}. ${front}` } : status
       }
       const chromium = await checkChromium(run)
-      return chromium.ready ? { ...chromium, message: `${chromium.message}, in a window` } : chromium
+      return chromium.ready
+        ? { ...chromium, message: `${chromium.message}, in a window, its tabs in the “Kothar” group` }
+        : chromium
     },
     async install(run, report, values) {
       if (usesAttach(values)) {
@@ -301,6 +306,8 @@ const browser: Mod = {
       args.push('--cdp-endpoint', endpointOf(values))
     } else if (usesChrome(values)) {
       // The extension takes a connection per session, each in a tab group of its own, so workers share Chrome too.
+      // The group is named for the MCP client, which group.ts names Kothar: "Playwright · Kothar".
+      args.unshift(GROUP, 'name')
       args.push('--extension', '--browser', 'chrome')
       const token = String(values.extensionToken ?? '').trim()
       if (token) env.PLAYWRIGHT_MCP_EXTENSION_TOKEN = token
@@ -312,7 +319,9 @@ const browser: Mod = {
       args.push('--browser', 'chrome', '--headless', '--user-data-dir', copy, '--config', LOGINS_CONFIG)
       if (sandboxed) args.push('--no-sandbox')
     } else {
-      // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless.
+      // Kothar's Chromium, in a window: the one mode of Kothar's own browser that isn't headless. group.ts loads an
+      // extension that keeps its tabs in a "Kothar" group.
+      args.unshift(GROUP, 'window', dir)
       args.push('--browser', 'chromium')
       // A space's workers run beside it, and Chromium locks a profile to one browser at a time.
       args.push(...(chat.worker ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
