@@ -251,6 +251,9 @@ export type ModListItem = {
   label: string
   // A second, quieter line or column.
   detail?: string
+  // A live time since this moment (epoch ms), such as an uptime, in place of detail. The UI ticks it itself, so the mod
+  // needn't redraw the panel to keep it current. Shown as 5s, 2m 5s, 1h 2m, 1d 1h.
+  since?: number
   mono?: boolean
   badges?: { text: string; tone?: ModTone; hint?: string }[]
   // A status dot before the label, in this tone.
@@ -268,6 +271,8 @@ export type ModView =
   | { type: 'heading'; text: string; hint?: string }
   | { type: 'text'; text: string; tone?: ModTone; mono?: boolean; small?: boolean; hint?: string }
   | { type: 'badge'; text: string; tone?: ModTone; hint?: string }
+  // A live time since this moment (epoch ms), ticked by the UI as ModListItem.since is.
+  | { type: 'elapsed'; since: number; tone?: ModTone; mono?: boolean; small?: boolean; hint?: string }
   | {
       type: 'button'
       label: string

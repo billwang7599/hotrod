@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ModAction, ModListItem, ModTone, ModView } from '@kotharhq/mod-api'
 import { Button, Chevron, Hint } from './controls.tsx'
+import { useElapsed } from './elapsed.ts'
 
 /**
  * Draws a mod's panel from the view tree its core side sends (ModView in @kotharhq/mod-api), with Kothar's own
@@ -49,6 +50,11 @@ function Badges({ badges }: { badges?: ModListItem['badges'] }) {
       <span className={`${BADGE} ${TONES[badge.tone ?? 'muted']}`}>{badge.text}</span>
     </Hinted>
   ))
+}
+
+// Its own component, so the shared clock redraws only this text.
+function Elapsed({ since, className }: { since: number; className: string }) {
+  return <span className={className}>{useElapsed(since)}</span>
 }
 
 function lineTone(line: string) {
@@ -129,7 +135,11 @@ function List({ node, act }: { node: Extract<ModView, { type: 'list' }>; act: Ac
           <>
             {item.dot && <span className={`size-7 shrink-0 rounded-full ${DOTS[item.dot]}`} data-tone={item.dot} />}
             <span className={`min-w-0 flex-1 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>{item.label}</span>
-            {item.detail && <span className="shrink-0 font-mono text-xs text-faint">{item.detail}</span>}
+            {item.since !== undefined ? (
+              <Elapsed since={item.since} className="shrink-0 font-mono text-xs text-faint" />
+            ) : (
+              item.detail && <span className="shrink-0 font-mono text-xs text-faint">{item.detail}</span>
+            )}
             <Badges badges={item.badges} />
           </>
         )
@@ -204,6 +214,15 @@ function Node({ node, act }: { node: ModView; act: Act }): ReactNode {
       )
     case 'badge':
       return <Badges badges={[node]} />
+    case 'elapsed':
+      return (
+        <Hinted hint={node.hint}>
+          <Elapsed
+            since={node.since}
+            className={`${TONES[node.tone ?? 'normal']} ${node.mono ? 'font-mono text-xs' : ''} ${node.small ? 'text-sm' : ''}`}
+          />
+        </Hinted>
+      )
     case 'button': {
       const button = (
         <Button
