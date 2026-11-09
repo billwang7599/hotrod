@@ -43,6 +43,19 @@ here. Its README says how to publish and submit a theme or a mod.
 
 Early development. Nothing to install yet.
 
+**Building the Mac app:** `npm run package` builds `packages/desktop/release/Kothar-<version>-arm64.dmg` (Apple
+Silicon). With no signing setup it's ad-hoc signed, which runs on the Mac that built it; elsewhere macOS blocks it until
+it's opened with right-click → Open. Signing and notarization switch on with environment variables:
+
+- **Signing** (Developer ID certificate): `CSC_LINK` (path or base64 of a .p12) with `CSC_KEY_PASSWORD`, or `CSC_NAME`
+  naming a certificate in the keychain.
+- **Notarization** (needs signing too), one of: `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER` (App Store
+  Connect API key), `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID`, or `APPLE_KEYCHAIN` +
+  `APPLE_KEYCHAIN_PROFILE`.
+
+To try a build beside your own Kothar, run it on a throwaway garage:
+`KOTHAR_GARAGE=/tmp/k/garage KOTHAR_WORK=/tmp/k/work KOTHAR_USER_DATA=/tmp/k/data KOTHAR_PORT=4391 packages/desktop/release/mac-arm64/Kothar.app/Contents/MacOS/Kothar`.
+
 ## License
 
 - **Kothar's core, app and built-in mods:** [Functional Source License 1.1, Apache 2.0 future licence](LICENSE.md)
