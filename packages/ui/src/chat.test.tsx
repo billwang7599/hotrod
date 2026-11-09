@@ -692,6 +692,21 @@ test('an answered question shrinks to a row of its answers that folds with the s
   expect(rowButtons()[0]!.querySelector('[data-verdict]')?.textContent).toBe('Skipped')
 })
 
+test('with steps folded, a question waiting for an answer shows below the fold, not inside it', () => {
+  const steps: Item[] = [tool('done'), { kind: 'thinking', text: 'Which format?' }, tool('done', '', { toolId: 't2' })]
+  render({ status: 'waiting', items: [USER, ...steps, question()] })
+  const fold = foldButton()!
+  expect(fold.textContent).toBe('3 steps')
+  expect(fold.getAttribute('aria-expanded')).toBe('false')
+  expect(container.textContent).not.toContain('Which format?')
+  expect(card()).not.toBeNull()
+  expect(before(fold, card()!)).toBe(true)
+  const composer = container.querySelector('textarea')!
+  expect(composer.placeholder || composer.getAttribute('aria-placeholder')).toBe(
+    'Waiting for your answer… Enter queues a message',
+  )
+})
+
 test('the down button points at a question waiting below', () => {
   render({ status: 'running', items: [USER, REPLY], draft: 'More' })
   scrollTo(0)

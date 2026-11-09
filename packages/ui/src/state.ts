@@ -220,7 +220,10 @@ const waiting = (item: Item) =>
   (item.kind === 'permission' && item.outcome === 'pending') ||
   (item.kind === 'tool' && (item.state === 'waiting' || item.permission?.outcome === 'pending'))
 
-// The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits.
+const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pending'
+
+// The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits. A question
+// waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   let turn: Shown[] = []
@@ -228,8 +231,12 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
-    if (live || end < 2) rows.push(...turn)
-    else rows.push({ at: turn[0]!.at, steps: turn.slice(0, end).map((s) => s.item) }, ...turn.slice(end))
+    const steps = turn.slice(0, end).filter((s) => !asking(s.item))
+    if (live || steps.length < 2) rows.push(...turn)
+    else {
+      const kept = turn.slice(0, end).filter((s) => asking(s.item))
+      rows.push({ at: steps[0]!.at, steps: steps.map((s) => s.item) }, ...kept, ...turn.slice(end))
+    }
     turn = []
   }
   items.forEach((item, at) => {
