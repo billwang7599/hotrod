@@ -1,8 +1,8 @@
-import type { Mod, ModAccount } from '@hotrod/mod-api'
+import type { Mod, ModAccount } from '@kotharhq/mod-api'
 
 // Sent when the turn had already done some of the work, so the new account picks up instead of starting over.
 export const CONTINUE_PROMPT =
-  'Your previous turn stopped because the account hit its usage limit, and Hotrod switched accounts. Check what ' +
+  'Your previous turn stopped because the account hit its usage limit, and Kothar switched accounts. Check what ' +
   'you already finished (files, commands, replies above) and continue the task from where you left off. Don’t redo ' +
   'finished work.'
 

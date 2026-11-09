@@ -21,7 +21,7 @@ import {
   type ModelLists,
   type ToolKind,
   type WorkFolder,
-} from '@hotrod/core/shared'
+} from '@kotharhq/core/shared'
 import type { ChatView, Item } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -507,7 +507,7 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   reloadSteps()
 })
 
-test('says why Hotrod allowed a command or an edit without asking', async () => {
+test('says why Kothar allowed a command or an edit without asking', async () => {
   const allowed = (toolKind: 'shell' | 'edit'): Item =>
     tool('done', '', {
       permission: { requestId: 'r1', name: 'X', toolKind, summary: 'x', input: {}, outcome: 'allowed', auto: true },
@@ -808,7 +808,7 @@ test('the right panel has two tabs, General with the permissions and Context, re
 })
 
 test('a panel saved on the old Permissions tab opens General, where the switches now are', () => {
-  localStorage.setItem('hotrod.panelTab', 'permissions')
+  localStorage.setItem('kothar.panelTab', 'permissions')
   render({}, () => {}, { contextOpen: true })
   const selected = container.querySelector('aside [role="tab"][aria-selected="true"]')!
   expect(selected.textContent).toBe('General')
@@ -834,7 +834,7 @@ test('file paths stay hidden at the top of a space and in the Context panel unti
 
 test('every chat, Home too, overrides each permission default in its Context panel', () => {
   Element.prototype.scrollIntoView = vi.fn()
-  localStorage.setItem('hotrod.panelTab', 'general')
+  localStorage.setItem('kothar.panelTab', 'general')
   const choose = (select: HTMLButtonElement, option: (text: string) => boolean) => {
     act(() => select.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
     const item = [...document.querySelectorAll('[role="option"]')].find((o) => option(o.textContent ?? ''))!
@@ -871,7 +871,7 @@ test('a chat turns edits anywhere off while Settings turns it on by default, its
   const { label } = PERMISSIONS.editAnywhere
   const select = () => container.querySelector<HTMLButtonElement>(`aside button[aria-label="${label}"]`)!
   const amber = () => [...container.querySelectorAll('aside span')].find((s) => s.textContent === label)!.className
-  localStorage.setItem('hotrod.panelTab', 'general')
+  localStorage.setItem('kothar.panelTab', 'general')
   render({}, () => {}, { contextOpen: true, workFolder: { editAnywhere: true } })
   expect(select().textContent).toBe('On')
   expect(amber()).toContain('text-amber')
@@ -1019,7 +1019,7 @@ test("shows a subagent's report as a report card, not as the user's message", ()
 // jsdom has no layout, so these check the classes that keep the transcript from scrolling sideways at a narrow width.
 test('the transcript never scrolls sideways, and a long report heading wraps instead of widening it', () => {
   const long = 'ended early: Claude Code exited with code 143 while running a very long command'
-  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Hotrod subagents hands-off for the…', text: '', error: long }] })
+  render({ items: [USER, { kind: 'report', chatId: 's1', name: 'Make Kothar subagents hands-off for the…', text: '', error: long }] })
   const list = container.querySelector('[class*="overflow-anchor"]')!
   expect(list.className).toContain('overflow-x-hidden')
   // Gutters on both edges keep the column centred under a visible scrollbar, in line with the composer.
@@ -1133,7 +1133,7 @@ test('an unsent message stays in its chat across a switch and a reload, and is c
   write('other chat')
   reopen('c1')
   expect(box().value).toBe('half a thought')
-  expect(JSON.parse(localStorage.getItem('hotrod.drafts')!)).toEqual({ c1: 'half a thought', c2: 'other chat' })
+  expect(JSON.parse(localStorage.getItem('kothar.drafts')!)).toEqual({ c1: 'half a thought', c2: 'other chat' })
   const sent: ClientMessage[] = []
   reopen('c1', (m) => sent.push(m))
   act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
@@ -1155,11 +1155,11 @@ test('a draft is saved once typing pauses, and a message queued during a turn cl
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(box(), 'later')
     box().dispatchEvent(new Event('input', { bubbles: true }))
   })
-  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  expect(localStorage.getItem('kothar.drafts')).toBeNull()
   act(() => vi.advanceTimersByTime(DRAFT_SAVE_MS))
-  expect(localStorage.getItem('hotrod.drafts')).toContain('later')
+  expect(localStorage.getItem('kothar.drafts')).toContain('later')
   act(() => box().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))
-  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  expect(localStorage.getItem('kothar.drafts')).toBeNull()
   vi.useRealTimers()
 })
 

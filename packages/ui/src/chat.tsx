@@ -31,7 +31,7 @@ import {
   type ToolKind,
   type Upload,
   type WorkFolder,
-} from '@hotrod/core/shared'
+} from '@kotharhq/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
 import { choosePanelTab, modTabId } from './panel-tab.ts'
@@ -99,10 +99,10 @@ const PILL = 'shrink-0 rounded-full px-6 text-xs leading-[1.6]'
 const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
 const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, string>>> = {
   allowed: {
-    edit: 'An edit inside the work folder, so Hotrod allowed it without asking',
-    shell: 'A command in a sandboxed chat, so Hotrod ran it without asking',
+    edit: 'An edit inside the work folder, so Kothar allowed it without asking',
+    shell: 'A command in a sandboxed chat, so Kothar ran it without asking',
   },
-  denied: { edit: 'An edit outside the work folder, so Hotrod denied it without asking' },
+  denied: { edit: 'An edit outside the work folder, so Kothar denied it without asking' },
 }
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
 const PLACEHOLDERS: Record<ChatStatus, string> = {
@@ -132,7 +132,7 @@ const EDITS_ANYWHERE_ALL_HINT =
   'Every chat runs without the work folder’s sandbox: agents may edit files anywhere, asking you first. Turn it ' +
   'off in Settings → Work folder.'
 const NOT_SANDBOXED_HINT =
-  'Hotrod can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (in its Context ' +
+  'Kothar can’t sandbox engines on this system yet, so a chat runs only with Edits anywhere on (in its Context ' +
   'panel, or for every chat in Settings → Work folder), and its agents can write anywhere.'
 const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
@@ -1477,7 +1477,7 @@ export function Chat(props: ChatProps) {
               hide={props.contextOverlay ? props.toggleContext : undefined}
               modUi={props.modUi}
               panelViews={props.panelViews}
-              pickers={window.hotrod}
+              pickers={window.kothar}
             />
           </SidePanel>
         )}

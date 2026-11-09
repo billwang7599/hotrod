@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
-import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { startCore } from '@hotrod/core/main'
+import { startCore } from '@kotharhq/core/main'
+import { userDataDir } from './user-data.ts'
 
 const uiDir = fileURLToPath(new URL('../../ui/dist', import.meta.url))
 const preload = fileURLToPath(new URL('preload.cjs', import.meta.url))
@@ -12,18 +12,18 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const VIBRANCY = 'sidebar'
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
-app.setPath('userData', join(app.getPath('appData'), 'Hotrod Desktop'))
+app.setPath('userData', userDataDir(app.getPath('appData')))
 if (!app.requestSingleInstanceLock()) app.quit()
 else
   start().catch((error: unknown) => {
-    dialog.showErrorBox('Hotrod could not start', errorText(error))
+    dialog.showErrorBox('Kothar could not start', errorText(error))
     app.exit(1)
   })
 
 async function start() {
   await app.whenReady()
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
-  const hotrod = await startCore({ uiDir })
+  const kothar = await startCore({ uiDir })
 
   const window = new BrowserWindow({
     width: 1200,
@@ -31,7 +31,7 @@ async function start() {
     minWidth: 375,
     minHeight: 600,
     useContentSize: true,
-    title: 'Hotrod',
+    title: 'Kothar',
     icon,
     show: false,
     // Only a window created with vibrancy gets a see-through compositor; adding it later paints over stale frames.
@@ -54,7 +54,7 @@ async function start() {
   let forcing = false
   const forceQuit = () => {
     forcing = true
-    void hotrod.close(true)
+    void kothar.close(true)
   }
   const confirmForceQuit = async () => {
     if (confirming || forcing || closed) return
@@ -74,8 +74,8 @@ async function start() {
     if (closed) return
     event.preventDefault()
     if (closing) return void confirmForceQuit()
-    if (hotrod.core.chats().some((c) => c.status !== 'idle')) window.webContents.send('quitting')
-    closing = hotrod.close().finally(() => {
+    if (kothar.core.chats().some((c) => c.status !== 'idle')) window.webContents.send('quitting')
+    closing = kothar.close().finally(() => {
       closed = true
       app.quit()
     })
@@ -143,9 +143,9 @@ async function start() {
     return { action: 'deny' }
   })
   window.webContents.on('will-navigate', (event, url) => {
-    if (new URL(url).origin === hotrod.uiUrl) return
+    if (new URL(url).origin === kothar.uiUrl) return
     event.preventDefault()
     openOutside(url)
   })
-  await window.loadURL(hotrod.openUrl)
+  await window.loadURL(kothar.openUrl)
 }

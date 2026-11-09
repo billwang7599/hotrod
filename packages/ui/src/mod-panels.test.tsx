@@ -4,8 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test } from 'vitest'
-import type { ModView } from '@hotrod/mod-api'
-import type { ClientMessage } from '@hotrod/core/shared'
+import type { ModView } from '@kotharhq/mod-api'
+import type { ClientMessage } from '@kotharhq/core/shared'
 import { ContextPanel } from './context-panel.tsx'
 import { initialState, panelKey, reduce, type ChatView, type State } from './state.ts'
 
@@ -89,7 +89,7 @@ const tab = (name: string) => [...host.querySelectorAll('[role="tab"]')].find((t
 const button = (name: string) =>
   [...host.querySelectorAll('button')].find((b) => b.textContent?.includes(name)) as HTMLButtonElement
 
-test("a mod's panel is a tab beside Hotrod's own, and asks the core for its view when opened", () => {
+test("a mod's panel is a tab beside Kothar's own, and asks the core for its view when opened", () => {
   render()
   expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual([
     'General',
@@ -103,8 +103,8 @@ test("a mod's panel is a tab beside Hotrod's own, and asks the core for its view
   expect(host.querySelector('[role="tabpanel"]')!.textContent).toContain('Loading…')
 })
 
-test('the view is drawn with Hotrod controls, and its actions go back to the mod', () => {
-  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+test('the view is drawn with Kothar controls, and its actions go back to the mod', () => {
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
   render({ [panelKey('space', 'git', 'changes')]: { view } })
   const panel = host.querySelector('[role="tabpanel"]')!
   expect(panel.querySelector('h3')!.textContent).toBe('feat/x')
@@ -123,16 +123,16 @@ test('the view is drawn with Hotrod controls, and its actions go back to the mod
 })
 
 test("a render error shows in the panel; a tab the chat doesn't have falls back to Context", () => {
-  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
   render({ [panelKey('space', 'git', 'changes')]: { error: 'git is missing' } })
   expect(host.querySelector('[role="tabpanel"]')!.textContent).toBe('git is missing')
-  localStorage.setItem('hotrod.panelTab', 'mod:gone/panel')
+  localStorage.setItem('kothar.panelTab', 'mod:gone/panel')
   render()
   expect(tab('Context').getAttribute('aria-selected')).toBe('true')
 })
 
 test("mods' commands are listed in General and run on click", () => {
-  localStorage.setItem('hotrod.panelTab', 'general')
+  localStorage.setItem('kothar.panelTab', 'general')
   render()
   act(() => button('Refresh').click())
   expect(sent).toContainEqual({ type: 'mod.command', chatId: 'space', mod: 'git', command: 'refresh' })
@@ -161,7 +161,7 @@ test("a mod's note keeps the panel it opens", () => {
 })
 
 test('a row can have a status dot and a link of its own, apart from its action', () => {
-  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
   const rows: ModView = {
     type: 'list',
     items: [
@@ -191,7 +191,7 @@ test('a row can have a status dot and a link of its own, apart from its action',
 })
 
 test('followed output shows its last lines and stays at the end as it grows, unless scrolled up', () => {
-  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
   const log = (lines: number): ModView => ({
     type: 'code',
     text: Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join('\n'),

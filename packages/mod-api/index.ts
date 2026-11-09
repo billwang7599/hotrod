@@ -75,7 +75,7 @@ export type ChatDetail = ChatSummary & {
 }
 
 // A git folder in a space's context, checked out in the space's work folder: path and branch of the worktree, and
-// the branch the folder was on when Hotrod checked it out (absent for checkouts made before Hotrod recorded it).
+// the branch the folder was on when Kothar checked it out (absent for checkouts made before Kothar recorded it).
 export type Checkout = { folder: string; path: string; branch: string; from?: string }
 
 // The space a chat belongs to: its work folder (absent until its first message picks one), its folders (git: has a
@@ -157,7 +157,7 @@ export type ModHost = {
   useAccount(engine: string, accountId: string): void
   // Sends the chat's last message again, ahead of anything queued.
   retry(chatId: string): void
-  // Carries on the chat's last turn with a prompt from Hotrod, as a turn of its own: the agent sees the turn so far
+  // Carries on the chat's last turn with a prompt from Kothar, as a turn of its own: the agent sees the turn so far
   // in its memory, the prompt isn't shown or logged as a message, and queued messages run after. The chat must be
   // idle, as it is in onLimitReached.
   continue(chatId: string, text: string): void
@@ -167,7 +167,7 @@ export type ModHost = {
   // Runs a command through the Machine, so it works wherever the core runs. Not sandboxed: it's the mod's own.
   run: ModRun
   // Starts a long-running command through the Machine and returns once it's started, without waiting for it to end.
-  // Unlike run, nothing times it out. Everything a mod started stops when the mod is turned off or Hotrod quits.
+  // Unlike run, nothing times it out. Everything a mod started stops when the mod is turned off or Kothar quits.
   spawn(command: string, args: string[], options?: ModSpawnOptions): Promise<ModProcess>
   storage: ModStorage
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
@@ -222,7 +222,7 @@ export type McpServer = {
 
 export type ModSession = { chat: ChatSummary; workDir: string; sandboxed: boolean; values: ModValues }
 
-// A session about to start. tools: it has the Hotrod MCP server, so the mod's tools are offered to it.
+// A session about to start. tools: it has the Kothar MCP server, so the mod's tools are offered to it.
 export type ModInstructionsFor = { chat: ChatDetail; tools: boolean }
 
 // progress runs from 0 to 1.
@@ -237,8 +237,8 @@ export type ModSetup = {
   ): Promise<void>
 }
 
-// A panel's UI, as data: the mod's core side builds it and the UI draws it with Hotrod's own controls, so a panel looks
-// like the rest of Hotrod in every theme and runs no code in the window. Actions come back to the panel's onAction.
+// A panel's UI, as data: the mod's core side builds it and the UI draws it with Kothar's own controls, so a panel looks
+// like the rest of Kothar in every theme and runs no code in the window. Actions come back to the panel's onAction.
 // hint: an explanation, shown on hover.
 export type ModTone = 'normal' | 'muted' | 'faint' | 'accent' | 'success' | 'warning' | 'error'
 

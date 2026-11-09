@@ -3,7 +3,7 @@ import { useSyncExternalStore } from 'react'
 /** Where file paths can show. Each is off by default and turned on in Settings → Appearance. */
 export type PathPlace = 'header' | 'context'
 
-const KEY = 'hotrod.showPaths'
+const KEY = 'kothar.showPaths'
 const listeners = new Set<() => void>()
 
 function read(): Record<PathPlace, boolean> {

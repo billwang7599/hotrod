@@ -2,10 +2,10 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { createFakeAdapter, type FakeStep } from '@hotrod/core/fake'
-import { startCore } from '@hotrod/core/main'
-import type { SessionOptions } from '@hotrod/core/shared'
-import { sandboxingMachine } from '@hotrod/core/test-machine'
+import { createFakeAdapter, type FakeStep } from '@kotharhq/core/fake'
+import { startCore } from '@kotharhq/core/main'
+import type { SessionOptions } from '@kotharhq/core/shared'
+import { sandboxingMachine } from '@kotharhq/core/test-machine'
 import rotation, { CONTINUE_PROMPT, createAccountRotation, resetText, UNKNOWN_RESET_MS } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -37,8 +37,8 @@ async function start(names: string[], before: FakeStep[] = []) {
     return [...before, { type: 'limit.reached', message: 'Out of usage', ...(resetsAt && { resetsAt }) }, ...replied]
   }
   const mod = createAccountRotation(() => clock.now)
-  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-rotation-')))
-  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
+  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-rotation-')))
+  const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
   const base = createFakeAdapter(script, 0)
   // What each session was prompted with.
   const prompts: string[] = []
@@ -49,12 +49,12 @@ async function start(names: string[], before: FakeStep[] = []) {
       return { ...session, prompt: (text, images) => (prompts.push(text), session.prompt(text, images)) }
     },
   }
-  const hotrod = await startCore({ env, adapters: [fake], mods: [mod], machine: sandboxingMachine })
+  const kothar = await startCore({ env, adapters: [fake], mods: [mod], machine: sandboxingMachine })
   cleanups.push(async () => {
-    await hotrod.close(true)
+    await kothar.close(true)
     rmSync(garage, { recursive: true, force: true })
   })
-  const { core } = hotrod
+  const { core } = kothar
   const handle = (message: Parameters<typeof core.handle>[0]) => core.handle(message, () => {})
   for (const name of names) handle({ type: 'account.addApiKey', engine: 'fake', name, key: `sk-${name}` })
   handle({ type: 'mod.setEnabled', modId: 'account-rotation', enabled: true })

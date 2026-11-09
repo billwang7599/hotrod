@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test } from 'vitest'
-import type { ClientMessage } from '@hotrod/core/shared'
+import type { ClientMessage } from '@kotharhq/core/shared'
 import { ChatNav } from './sidebar.tsx'
 import type { ChatView } from './state.ts'
 

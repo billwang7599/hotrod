@@ -63,7 +63,7 @@ function fakePage({ dark = true, desktop = false, vibrancy = false } = {}) {
     setItem: (k: string, v: string) => store.set(k, v),
   })
   vi.stubGlobal('matchMedia', () => media)
-  vi.stubGlobal('window', desktop ? { hotrod: bridge } : {})
+  vi.stubGlobal('window', desktop ? { kothar: bridge } : {})
   return {
     props,
     attrs,

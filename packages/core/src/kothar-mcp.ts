@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@hotrod/mod-api'
+import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kotharhq/mod-api'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
@@ -184,7 +184,7 @@ const TOOLS: Record<string, Tool> = {
 
 export const CORE_TOOL_NAMES = Object.keys(TOOLS)
 
-export function openHotrodMcp(hub: Hub) {
+export function openKotharMcp(hub: Hub) {
   const callers = new Map<string, string>()
 
   const offers = (caller: ChatState, tool: Tool) => {
@@ -196,7 +196,7 @@ export function openHotrodMcp(hub: Hub) {
   const modToolsFor = (caller: ChatState) => hub.modTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
 
   const serverFor = (callerId: string) => {
-    const server = new McpServer({ name: 'hotrod', version: '0.0.0' })
+    const server = new McpServer({ name: 'kothar', version: '0.0.0' })
     const caller = hub.chats().find((chat) => chat.id === callerId)
     if (!caller) return server
     const answer = async (run: (caller: ChatState, chats: ChatState[]) => unknown) => {

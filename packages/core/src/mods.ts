@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Mod, ModValues } from '@hotrod/mod-api'
+import type { Mod, ModValues } from '@kotharhq/mod-api'
 import { settingProblem } from './shared.ts'
 
 const MISSING_PACKAGE = /^Cannot find (?:package|module) '((?:@[^/']+\/)?[^/'.:][^/':]*)(?:\/[^']*)?'/
@@ -11,7 +11,7 @@ function loadErrorOf(error: unknown) {
   const notFound = ['MODULE_NOT_FOUND', 'ERR_MODULE_NOT_FOUND'].includes(String((error as NodeJS.ErrnoException).code))
   const missing = notFound && MISSING_PACKAGE.exec(error.message)
   if (!missing) return error.message
-  return `${missing[1]} isn't installed. Run npm install in the Hotrod folder, then restart Hotrod.`
+  return `${missing[1]} isn't installed. Run npm install in the Kothar folder, then restart Kothar.`
 }
 
 export async function loadMods(dir: string) {

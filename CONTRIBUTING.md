@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping with Hotrod.
+Thanks for helping with Kothar.
 
 ## Licence of contributions
 

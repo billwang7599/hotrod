@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
-import { startCore } from './main.ts'
+import { defaultGarage, envVar, startCore } from './main.ts'
 import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './shared.ts'
 
 const port = 4451
@@ -20,7 +20,7 @@ afterEach(async () => {
 })
 
 function tempDir() {
-  const dir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const dir = mkdtempSync(join(tmpdir(), 'kothar-test-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -36,66 +36,94 @@ function firstMessage(origin: string, token: string) {
   })
 }
 
+it('a fresh install gets the Kothar garage', () => {
+  expect(defaultGarage('/Users/u', () => false)).toBe('/Users/u/Library/Application Support/Kothar')
+})
+
+it('a garage from when Kothar was Hotrod stays in use where it is, unless a Kothar one exists', () => {
+  const old = '/Users/u/Library/Application Support/Hotrod'
+  const kothar = '/Users/u/Library/Application Support/Kothar'
+  expect(defaultGarage('/Users/u', (path) => path === old)).toBe(old)
+  expect(defaultGarage('/Users/u', (path) => path === old || path === kothar)).toBe(kothar)
+})
+
+it('reads each KOTHAR_ variable, falling back to its HOTROD_ name', () => {
+  expect(envVar({ HOTROD_GARAGE: '/old' }, 'GARAGE')).toBe('/old')
+  expect(envVar({ KOTHAR_GARAGE: '/new', HOTROD_GARAGE: '/old' }, 'GARAGE')).toBe('/new')
+  expect(envVar({}, 'GARAGE')).toBeUndefined()
+})
+
+it('starts from HOTROD_ variables set before the rename', async () => {
+  const garage = tempDir()
+  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_PORT: String(port), HOTROD_TOKEN: 'old-token' }
+  const kothar = await startCore({ env, adapters })
+  cleanups.push(() => kothar.close(true))
+  expect(kothar.garage).toBe(garage)
+  expect(kothar.port).toBe(port)
+  expect(kothar.token).toBe('old-token')
+  expect(kothar.core.engines().find((e) => e.id === 'fake')?.enabled).toBe(true)
+})
+
 it('starts the core from the environment and stops it', async () => {
   const garage = tempDir()
   const env = {
-    HOTROD_ENGINE: 'fake',
-    HOTROD_GARAGE: garage,
-    HOTROD_PORT: String(port),
-    HOTROD_UI_ORIGIN: 'http://ui.test',
+    KOTHAR_ENGINE: 'fake',
+    KOTHAR_GARAGE: garage,
+    KOTHAR_PORT: String(port),
+    KOTHAR_UI_ORIGIN: 'http://ui.test',
   }
-  const hotrod = await startCore({ env, adapters })
-  expect(hotrod.port).toBe(port)
-  expect(await firstMessage('http://ui.test', hotrod.token)).toMatchObject({
+  const kothar = await startCore({ env, adapters })
+  expect(kothar.port).toBe(port)
+  expect(await firstMessage('http://ui.test', kothar.token)).toMatchObject({
     type: 'snapshot',
     engines: [
       { id: 'fake', enabled: true, installed: true, signedIn: true },
       { id: 'broken', enabled: false, installed: false, signedIn: false, detail: 'no binary' },
     ],
   })
-  expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
+  expect(await firstMessage('http://localhost:4318', kothar.token)).toBe(403)
   expect(await firstMessage('http://ui.test', 'wrong')).toBe(BAD_TOKEN_CLOSE_CODE)
 
-  hotrod.core.handle({ type: 'chat.create', name: 'App', folders: [tempDir()] }, () => {})
-  expect(hotrod.core.chats()).toHaveLength(2)
+  kothar.core.handle({ type: 'chat.create', name: 'App', folders: [tempDir()] }, () => {})
+  expect(kothar.core.chats()).toHaveLength(2)
 
-  await hotrod.close()
+  await kothar.close()
   const again = await startCore({ env, adapters })
   await again.close()
-  expect(again.token).not.toBe(hotrod.token)
+  expect(again.token).not.toBe(kothar.token)
   expect(again.token.length).toBeGreaterThanOrEqual(32)
 })
 
-it('turns no engine on without HOTROD_ENGINE', async () => {
-  const hotrod = await startCore({ env: { HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port) }, adapters })
-  cleanups.push(() => hotrod.close())
-  expect(hotrod.core.engines().map((e) => e.enabled)).toEqual([false, false])
+it('turns no engine on without KOTHAR_ENGINE', async () => {
+  const kothar = await startCore({ env: { KOTHAR_GARAGE: tempDir(), KOTHAR_PORT: String(port) }, adapters })
+  cleanups.push(() => kothar.close())
+  expect(kothar.core.engines().map((e) => e.enabled)).toEqual([false, false])
 })
 
-it('takes its token from HOTROD_TOKEN and hands the UI a link that carries it', async () => {
-  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port), HOTROD_TOKEN: 'dev-token' }
-  const hotrod = await startCore({ env, adapters })
-  cleanups.push(() => hotrod.close())
-  expect(hotrod.token).toBe('dev-token')
-  expect(hotrod.openUrl).toBe('http://localhost:4318/#token=dev-token')
+it('takes its token from KOTHAR_TOKEN and hands the UI a link that carries it', async () => {
+  const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: tempDir(), KOTHAR_PORT: String(port), KOTHAR_TOKEN: 'dev-token' }
+  const kothar = await startCore({ env, adapters })
+  cleanups.push(() => kothar.close())
+  expect(kothar.token).toBe('dev-token')
+  expect(kothar.openUrl).toBe('http://localhost:4318/#token=dev-token')
   expect(await firstMessage('http://localhost:4318', 'dev-token')).toMatchObject({ type: 'snapshot' })
 })
 
 it('accepts only its own origin when it serves the UI', async () => {
-  const hotrod = await startCore({
-    env: { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: tempDir(), HOTROD_PORT: String(port) },
+  const kothar = await startCore({
+    env: { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: tempDir(), KOTHAR_PORT: String(port) },
     uiDir: tempDir(),
     adapters,
   })
-  cleanups.push(() => hotrod.close())
-  expect(hotrod.uiUrl).toBe(`http://127.0.0.1:${port}`)
-  expect(hotrod.openUrl).toBe(`http://127.0.0.1:${port}/#token=${hotrod.token}`)
-  expect(await firstMessage(hotrod.uiUrl, hotrod.token)).toMatchObject({ type: 'snapshot' })
-  expect(await firstMessage('http://localhost:4318', hotrod.token)).toBe(403)
+  cleanups.push(() => kothar.close())
+  expect(kothar.uiUrl).toBe(`http://127.0.0.1:${port}`)
+  expect(kothar.openUrl).toBe(`http://127.0.0.1:${port}/#token=${kothar.token}`)
+  expect(await firstMessage(kothar.uiUrl, kothar.token)).toMatchObject({ type: 'snapshot' })
+  expect(await firstMessage('http://localhost:4318', kothar.token)).toBe(403)
 })
 
 it('rejects an unknown engine', async () => {
-  await expect(startCore({ env: { HOTROD_ENGINE: 'nope', HOTROD_GARAGE: tempDir() } })).rejects.toThrow(
+  await expect(startCore({ env: { KOTHAR_ENGINE: 'nope', KOTHAR_GARAGE: tempDir() } })).rejects.toThrow(
     /Unknown engine "nope"/,
   )
 })
@@ -117,15 +145,15 @@ async function runCore(engine: string) {
       },
     }
     const env = {
-      HOTROD_ENGINE: 'node',
-      HOTROD_GARAGE: ${JSON.stringify(garage)},
-      HOTROD_WORK: ${JSON.stringify(join(garage, 'work'))},
-      HOTROD_PORT: '4551',
+      KOTHAR_ENGINE: 'node',
+      KOTHAR_GARAGE: ${JSON.stringify(garage)},
+      KOTHAR_WORK: ${JSON.stringify(join(garage, 'work'))},
+      KOTHAR_PORT: '4551',
     }
-    const hotrod = await startCore({ env, adapters: [engine] })
-    closeOnSignals(hotrod.close)
-    hotrod.core.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true }, () => {})
-    hotrod.core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})`
+    const kothar = await startCore({ env, adapters: [engine] })
+    closeOnSignals(kothar.close)
+    kothar.core.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true }, () => {})
+    kothar.core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})`
   const core = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'inherit'] })
   cleanups.push(() => void core.kill('SIGKILL'))
   const exited = new Promise<number | null>((resolve) => core.on('exit', resolve))

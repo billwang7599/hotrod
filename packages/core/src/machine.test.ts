@@ -35,25 +35,25 @@ afterEach(() => {
 describe('localMachine', () => {
   it('keeps login-overriding keys out of the engine env, but lets options.env set them', async () => {
     for (const key of STRIPPED_ENV_KEYS) process.env[key] = 'leaked'
-    process.env.HOTROD_TEST_KEPT = 'kept'
+    process.env.KOTHAR_TEST_KEPT = 'kept'
     try {
       const print = `console.log(JSON.stringify(process.env))`
       const { stdout } = await fast.run(node, ['-e', print], { cwd })
       const env = JSON.parse(stdout)
       for (const key of STRIPPED_ENV_KEYS) expect(env[key]).toBeUndefined()
-      expect(env.HOTROD_TEST_KEPT).toBe('kept')
+      expect(env.KOTHAR_TEST_KEPT).toBe('kept')
 
       const key = STRIPPED_ENV_KEYS[0]
       const explicit = await fast.run(node, ['-e', print], { cwd, env: { [key]: 'chosen' } })
       expect(JSON.parse(explicit.stdout)[key]).toBe('chosen')
     } finally {
       for (const key of STRIPPED_ENV_KEYS) delete process.env[key]
-      delete process.env.HOTROD_TEST_KEPT
+      delete process.env.KOTHAR_TEST_KEPT
     }
   })
 
   it("keeps the core's UI token from engines, so an agent can't approve its own tool calls", () => {
-    expect(STRIPPED_ENV_KEYS).toContain('HOTROD_TOKEN')
+    expect(STRIPPED_ENV_KEYS).toContain('KOTHAR_TOKEN')
   })
 
   it('hands only the tail of stderr to exit listeners', async () => {
@@ -176,7 +176,7 @@ describe('localMachine', () => {
   })
 
   it('reports a missing command without rejecting', async () => {
-    const result = await fast.run('hotrod-no-such-command', [], { cwd })
+    const result = await fast.run('kothar-no-such-command', [], { cwd })
     expect(result.code).toBeNull()
     expect(result.stderr).toMatch(/ENOENT/)
   })
@@ -221,7 +221,7 @@ describe('localMachine', () => {
 })
 
 describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
-  const root = mkdtempSync(join(tmpdir(), 'hotrod-sandbox-'))
+  const root = mkdtempSync(join(tmpdir(), 'kothar-sandbox-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
   let dirs = 0
   const newDir = () => {
@@ -334,7 +334,7 @@ describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
     const sandbox = { writable: [], tmpDir: join(newDir(), '.tmp') }
     const heredoc = await fast.run('/bin/zsh', ['-c', 'cat <<EOF\nhere\nEOF'], { cwd, sandbox })
     expect(heredoc).toMatchObject({ code: 0, stdout: 'here\n' })
-    const mktemp = await fast.run('/usr/bin/mktemp', ['-t', 'hotrod'], { cwd, sandbox })
+    const mktemp = await fast.run('/usr/bin/mktemp', ['-t', 'kothar'], { cwd, sandbox })
     expect(mktemp.stderr).toBe('')
     rmSync(mktemp.stdout.trim(), { force: true })
   })

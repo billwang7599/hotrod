@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 
 /** Chats whose subagents are folded away in the sidebar. Unfolded by default, kept in localStorage. */
-const KEY = 'hotrod.foldedChats'
+const KEY = 'kothar.foldedChats'
 const listeners = new Set<() => void>()
 
 function read(): ReadonlySet<string> {

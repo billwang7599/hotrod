@@ -1,3 +1,5 @@
+// First, so preferences saved before the rename move to their new keys before any module reads them.
+import './renamed-storage.ts'
 import { useCallback, useEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
@@ -23,10 +25,10 @@ import {
 } from './state.ts'
 import './styles.css'
 
-const SELECTED_KEY = 'hotrod.selectedChat'
-const CONTEXT_OPEN_KEY = 'hotrod.contextOpen'
-const SIDEBAR_OPEN_KEY = 'hotrod.sidebarOpen'
-const COLUMN_KEY = 'hotrod.columnWidth'
+const SELECTED_KEY = 'kothar.selectedChat'
+const CONTEXT_OPEN_KEY = 'kothar.contextOpen'
+const SIDEBAR_OPEN_KEY = 'kothar.sidebarOpen'
+const COLUMN_KEY = 'kothar.columnWidth'
 const HINT_DELAY_MS = 400
 
 type Overlay = 'sidebar' | 'context' | null
@@ -38,7 +40,7 @@ const subscribeResize = (listener: () => void) => {
 
 declare global {
   interface Window {
-    hotrod?: {
+    kothar?: {
       pickFolder(title?: string): Promise<string | null>
       pickFiles(title?: string): Promise<string[]>
       pathForFile(file: File): string
@@ -138,13 +140,13 @@ function App() {
 
   const connected = state.connected
   const newChatFromFolder = useCallback(async () => {
-    if (!connected || !window.hotrod) return
-    const picked = await window.hotrod.pickFolder()
+    if (!connected || !window.kothar) return
+    const picked = await window.kothar.pickFolder()
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
-  useEffect(() => window.hotrod?.onNewChatFromFolder(() => void newChatFromFolder()), [newChatFromFolder])
+  useEffect(() => window.kothar?.onNewChatFromFolder(() => void newChatFromFolder()), [newChatFromFolder])
   const [quitting, setQuitting] = useState(false)
-  useEffect(() => window.hotrod?.onQuitting(() => setQuitting(true)), [])
+  useEffect(() => window.kothar?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
 
   return (
@@ -173,7 +175,7 @@ function App() {
                     {!sidebarDocks && (
                       <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
                     )}
-                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Hotrod</span>
+                    <span className="flex-1 font-bold tracking-[0.02em] text-accent">Kothar</span>
                     <Hint text={`New ${CHAT_NOUN.one}`}>
                       <Button
                         variant="ghost"
@@ -215,7 +217,7 @@ function App() {
               <Banner
                 tone="warning"
                 action={
-                  <Button variant="danger" size="small" onClick={() => void window.hotrod?.forceQuit()}>
+                  <Button variant="danger" size="small" onClick={() => void window.kothar?.forceQuit()}>
                     Force quit
                   </Button>
                 }
@@ -324,7 +326,7 @@ function App() {
             connected={connected}
             send={send}
             toasts={state.toasts}
-            pickFolder={window.hotrod?.pickFolder}
+            pickFolder={window.kothar?.pickFolder}
             close={firstRun ? undefined : () => setChangingWorkFolder(false)}
           />
           <ConfirmDialog />

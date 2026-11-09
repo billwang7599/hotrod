@@ -68,20 +68,20 @@ function shownStore(key: string, fallback: boolean) {
   }
 }
 
-const steps = shownStore('hotrod.showSteps', false)
+const steps = shownStore('kothar.showSteps', false)
 export const showStepsByDefault = steps.byDefault
 export const showStepsIn = steps.setIn
 export const useStepsDefault = steps.useDefault
 export const useStepsShown = steps.useShown
 
-const reports = shownStore('hotrod.showReports', true)
+const reports = shownStore('kothar.showReports', true)
 export const showReportsByDefault = reports.byDefault
 export const showReportsIn = reports.setIn
 export const useReportsDefault = reports.useDefault
 export const useReportsShown = reports.useShown
 
 // Each card's own choice, keyed by `<chat id>/<item index>`; the store's default is unused.
-const reportCards = shownStore('hotrod.reportCards', true)
+const reportCards = shownStore('kothar.reportCards', true)
 export const reportCardKey = (chatId: string, at: number) => `${chatId}/${at}`
 export const openReportCard = reportCards.setIn
 export const useReportCardChoice = reportCards.useChoice

@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
-import type { ChatDetail, Checkout, Mod, ModHost, ModListItem, ModTone, ModValues, ModView } from '@hotrod/mod-api'
+import type { ChatDetail, Checkout, Mod, ModHost, ModListItem, ModTone, ModValues, ModView } from '@kotharhq/mod-api'
 import { cleanupCheckout } from './cleanup.ts'
 
 // The Changes tab shows each git folder of a space as its agents left it, and a note follows a turn that

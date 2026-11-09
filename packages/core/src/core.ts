@@ -24,9 +24,9 @@ import type {
   PermissionVerdict,
   SpaceDetail,
   TurnSummary,
-} from '@hotrod/mod-api'
+} from '@kotharhq/mod-api'
 import { openAccounts } from './accounts.ts'
-import { CORE_TOOL_NAMES, openHotrodMcp, SUBAGENTS_MOD, summaryOf } from './hotrod-mcp.ts'
+import { CORE_TOOL_NAMES, openKotharMcp, SUBAGENTS_MOD, summaryOf } from './kothar-mcp.ts'
 import {
   MEMORY_INSTRUCTIONS,
   continuationPrompt,
@@ -334,7 +334,7 @@ export function openCore(options: {
   const checkWorkFolder = (path: string) => {
     const reachesGarage = within(garage, path) || (within(path, garage) && path !== defaultWorkFolder)
     if (reachesGarage || [homedir(), realpathSync(homedir())].includes(path)) {
-      throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Hotrod's`)
+      throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Kothar's`)
     }
   }
   const setWorkFolder = (rawPath: unknown) => {
@@ -389,12 +389,12 @@ export function openCore(options: {
     const servers = mods
       .filter((mod) => isOn(mod) && (!mod.setup || setups.get(mod.id)?.status === 'ready'))
       .flatMap((mod) => mod.mcpServers?.({ ...session, values: modValues(mod) }) ?? [])
-    const names = ['hotrod', ...servers.map((server) => server.name)]
+    const names = ['kothar', ...servers.map((server) => server.name)]
     const twin = names.find((name, i) => names.indexOf(name) !== i)
     if (twin !== undefined) throw new Error(`Two MCP servers are named "${twin}"`)
     return servers
   }
-  const takesMcp = (engine: string) => adapterFor(engine)?.hotrodMcp === true && mcpUrl !== undefined
+  const takesMcp = (engine: string) => adapterFor(engine)?.kotharMcp === true && mcpUrl !== undefined
   const chosenWorkFolder = () => {
     if (!settings.workFolder) throw new Error('Choose a work folder first, in Settings → Work folder')
     return settings.workFolder
@@ -891,7 +891,7 @@ export function openCore(options: {
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     const lastType = entries.at(-1)?.type
     if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'subagent.report') {
-      append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Hotrod quit during this turn' })
+      append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
     }
     return chat
   }
@@ -911,8 +911,8 @@ export function openCore(options: {
     if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
   }
-  // Nothing runs yet, so a subagent that has worked and is still here (Hotrod quit or crashed mid-task, or an older
-  // Hotrod kept it) goes now.
+  // Nothing runs yet, so a subagent that has worked and is still here (Kothar quit or crashed mid-task, or an older
+  // Kothar kept it) goes now.
   for (const chat of chats.values()) {
     if (!chat.info.subagent || !chat.entries.length) continue
     chats.delete(chat.info.id)
@@ -1153,7 +1153,7 @@ export function openCore(options: {
       worktree = saved
     } else {
       const slug = space.info.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, BRANCH_SLUG_MAX_CHARS)
-      const branch = freeName(`hotrod/${slug.replace(/^-|-$/g, '') || 'space'}`, (b) => branches.includes(b))
+      const branch = freeName(`kothar/${slug.replace(/^-|-$/g, '') || 'space'}`, (b) => branches.includes(b))
       const taken = Object.values(space.info.worktrees ?? {}).map((w) => w.path)
       const path = freeName(join(workDir, basename(folder)), (p) => taken.includes(p) || existsSync(p))
       const from = await git(folder, 'rev-parse', '--abbrev-ref', 'HEAD').catch(() => '')
@@ -1202,7 +1202,7 @@ export function openCore(options: {
   const commandPlaceOf = async (chat: Chat) => {
     const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
-      throw new Error("Hotrod can't sandbox commands on this system yet. Turn on Edits anywhere for this chat first.")
+      throw new Error("Kothar can't sandbox commands on this system yet. Turn on Edits anywhere for this chat first.")
     }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
@@ -1231,7 +1231,7 @@ export function openCore(options: {
   const spawnFor =
     (mod: Mod): ModHost['spawn'] =>
     async (command, args, options = {}) => {
-      if (quitting) throw new Error('Hotrod is quitting')
+      if (quitting) throw new Error('Kothar is quitting')
       if (!isOn(mod)) throw new Error(`${mod.name} is off`)
       const chat = options.chat === undefined ? undefined : chatFor(options.chat)
       const place = chat ? await commandPlaceOf(chat) : undefined
@@ -1253,7 +1253,7 @@ export function openCore(options: {
       }
     }
 
-  // Only a folder Hotrod made for this space, whatever chat.json says.
+  // Only a folder Kothar made for this space, whatever chat.json says.
   const ownWorkDirOf = ({ info }: Chat) =>
     info.workDir && basename(info.workDir) === info.id ? info.workDir : undefined
 
@@ -1302,7 +1302,7 @@ export function openCore(options: {
     }
   }
 
-  // A continuation is a prompt from Hotrod, not the user: it isn't logged, and the turn it starts carries on the last.
+  // A continuation is a prompt from Kothar, not the user: it isn't logged, and the turn it starts carries on the last.
   const send = (
     chat: Chat,
     text: string,
@@ -1310,7 +1310,7 @@ export function openCore(options: {
     reports: Report[] = [],
     continuation?: string,
   ) => {
-    if (quitting) throw new Error('Hotrod is quitting')
+    if (quitting) throw new Error('Kothar is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
     const run = models.runOf(chat.info)
@@ -1320,7 +1320,7 @@ export function openCore(options: {
     const adapter = adapterFor(chat.info.engine)!
     const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
-      throw new Error("Hotrod can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
+      throw new Error("Kothar can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
     }
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
@@ -1409,7 +1409,7 @@ export function openCore(options: {
           // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
           if (within(realPath(resolve(cwd, request.path)), workDir)) return { allow: true }
           if (!jail) return undefined
-          const message = `Hotrod lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
+          const message = `Kothar lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
           return { allow: false, message }
         }
         const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
@@ -1496,9 +1496,9 @@ export function openCore(options: {
 
       try {
         chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
-        const hotrodMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
+        const kotharMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
         const { model, thinking } = run ?? {}
-        const mcpServers = adapter.hotrodMcp ? modServers(chat, workDir, jail !== undefined) : []
+        const mcpServers = adapter.kotharMcp ? modServers(chat, workDir, jail !== undefined) : []
         const images = imagesFor(adapter, attachments)
         const options = {
           cwd,
@@ -1506,7 +1506,7 @@ export function openCore(options: {
           ...(extraDirs.length && { extraDirs }),
           ...(readFiles.length && { readFiles }),
           ...accounts.sessionFor(adapter.id),
-          ...(hotrodMcp && { hotrodMcp }),
+          ...(kotharMcp && { kotharMcp }),
           ...(mcpServers.length && { mcpServers }),
           ...(model && { model }),
           ...(thinking && { thinking }),
@@ -1600,7 +1600,7 @@ export function openCore(options: {
   }
 
   const enqueue = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
-    if (quitting) throw new Error('Hotrod is quitting')
+    if (quitting) throw new Error('Kothar is quitting')
     checkActive(chat)
     if (chat.status === 'idle') return sendQueue(chat, message)
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
@@ -1653,7 +1653,7 @@ export function openCore(options: {
     }
   }
 
-  const mcp = openHotrodMcp({
+  const mcp = openKotharMcp({
     chats: () => shownChats().map(state),
     seesAll: (chatId) => modChats.some((chat) => chat.id === chatId && chat.seesAll),
     createChat,

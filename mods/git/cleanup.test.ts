@@ -3,11 +3,11 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { Checkout, ModHost } from '@hotrod/mod-api'
-import { createFakeAdapter, type FakeStep } from '@hotrod/core/fake'
-import { startCore } from '@hotrod/core/main'
-import type { Machine, SessionOptions } from '@hotrod/core/shared'
-import { sandboxingMachine } from '@hotrod/core/test-machine'
+import type { Checkout, ModHost } from '@kotharhq/mod-api'
+import { createFakeAdapter, type FakeStep } from '@kotharhq/core/fake'
+import { startCore } from '@kotharhq/core/main'
+import type { Machine, SessionOptions } from '@kotharhq/core/shared'
+import { sandboxingMachine } from '@kotharhq/core/test-machine'
 import { cleanupCheckout } from './cleanup.ts'
 import { createGitMod } from './index.ts'
 
@@ -35,11 +35,11 @@ function fakeRun(answers: Record<string, Answer>) {
   return { run, calls, removals: () => calls.filter((c) => /worktree remove|branch -D/.test(c)) }
 }
 
-const checkout: Checkout = { folder: '/repo', path: '/work/s1/repo', branch: 'hotrod/space', from: 'main' }
+const checkout: Checkout = { folder: '/repo', path: '/work/s1/repo', branch: 'kothar/space', from: 'main' }
 const clean = {
   'git symbolic-ref --quiet --short HEAD': 'feat/x',
   'git status --porcelain': '',
-  'git merge-base --is-ancestor hotrod/space feat/x': '',
+  'git merge-base --is-ancestor kothar/space feat/x': '',
 }
 
 describe('cleaning up a checkout', () => {
@@ -53,14 +53,14 @@ describe('cleaning up a checkout', () => {
     expect(fake.removals()).toEqual([
       '/repo: git worktree remove /work/s1/repo',
       '/repo: git branch -D feat/x',
-      '/repo: git branch -D hotrod/space',
+      '/repo: git branch -D kothar/space',
     ])
   })
 
-  it('keeps the branch Hotrod made when it has work the merged branch lacks', async () => {
+  it('keeps the branch Kothar made when it has work the merged branch lacks', async () => {
     const fake = fakeRun({
       ...clean,
-      'git merge-base --is-ancestor hotrod/space feat/x': { code: 1 },
+      'git merge-base --is-ancestor kothar/space feat/x': { code: 1 },
       'gh pr view feat/x --json number,state': '{"number":12,"state":"MERGED"}',
     })
     await cleanupCheckout(fake.run, checkout, '/work/s1')
@@ -132,7 +132,7 @@ describe('cleaning up a checkout', () => {
 })
 
 function tempDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-git-cleanup-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-git-cleanup-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -177,10 +177,10 @@ describe('after a turn, with real git', () => {
           ? Promise.resolve({ code: null, stdout: '', stderr: 'spawn gh ENOENT' })
           : sandboxingMachine.run(command, args, options),
     }
-    const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
-    const hotrod = await startCore({ env, adapters: [createFakeAdapter(script, 0)], mods: [createGitMod()], machine })
-    cleanups.push(() => hotrod.close(true))
-    const { core } = hotrod
+    const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
+    const kothar = await startCore({ env, adapters: [createFakeAdapter(script, 0)], mods: [createGitMod()], machine })
+    cleanups.push(() => kothar.close(true))
+    const { core } = kothar
     const handle = (m: Parameters<typeof core.handle>[0]) => core.handle(m, () => {})
     handle({ type: 'mod.setEnabled', modId: 'git', enabled: true })
     if (!cleanup) handle({ type: 'mod.setValue', modId: 'git', key: 'cleanup', value: false })

@@ -1,5 +1,5 @@
 /** Unsent composer text per chat id, kept across chat switches and reloads. Attachments aren't kept. */
-const KEY = 'hotrod.drafts'
+const KEY = 'kothar.drafts'
 /** How long typing pauses before the draft is written, so a keystroke never waits on localStorage. */
 export const DRAFT_SAVE_MS = 300
 

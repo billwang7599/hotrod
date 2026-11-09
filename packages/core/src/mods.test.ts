@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 function modsDir(files: Record<string, string>) {
-  const dir = mkdtempSync(join(tmpdir(), 'hotrod-mods-'))
+  const dir = mkdtempSync(join(tmpdir(), 'kothar-mods-'))
   dirs.push(dir)
   for (const [id, source] of Object.entries(files)) {
     mkdirSync(join(dir, id))
@@ -27,7 +27,7 @@ it("loads each folder's index.ts in name order, listing a broken mod under its f
   const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
   const dir = modsDir({
     beta: declare('beta'),
-    alpha: `import type { Mod } from '@hotrod/mod-api'\nconst mod: Mod = ${declare('alpha').slice(15)}\nexport default mod`,
+    alpha: `import type { Mod } from '@kotharhq/mod-api'\nconst mod: Mod = ${declare('alpha').slice(15)}\nexport default mod`,
     throws: `throw new Error('boom')`,
     'no-default': `export const mod = 1`,
     renamed: declare('other'),
@@ -55,16 +55,16 @@ it("loads each folder's index.ts in name order, listing a broken mod under its f
 it('says which package a mod is missing and how to install it', async () => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
   const dir = modsDir({
-    imports: `import '@hotrod-test/absent-package'\n${declare('imports')}`,
+    imports: `import '@kothar-test/absent-package'\n${declare('imports')}`,
     resolves: `import { createRequire } from 'node:module'\ncreateRequire(import.meta.url).resolve('absent-package/package.json')\n${declare('resolves')}`,
   })
-  const install = 'Run npm install in the Hotrod folder, then restart Hotrod.'
+  const install = 'Run npm install in the Kothar folder, then restart Kothar.'
   expect((await loadMods(dir)).brokenMods).toEqual([
-    { id: 'imports', loadError: `@hotrod-test/absent-package isn't installed. ${install}` },
+    { id: 'imports', loadError: `@kothar-test/absent-package isn't installed. ${install}` },
     { id: 'resolves', loadError: `absent-package isn't installed. ${install}` },
   ])
 })
 
 it('finds no mods in a missing folder', async () => {
-  expect(await loadMods(join(tmpdir(), 'hotrod-no-such-mods'))).toEqual({ mods: [], brokenMods: [] })
+  expect(await loadMods(join(tmpdir(), 'kothar-no-such-mods'))).toEqual({ mods: [], brokenMods: [] })
 })

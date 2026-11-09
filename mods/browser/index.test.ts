@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { crc32 } from 'node:zlib'
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest'
-import type { ModRun, ModSession } from '@hotrod/mod-api'
-import { startCore } from '@hotrod/core/main'
-import type { Adapter, SessionOptions } from '@hotrod/core/shared'
-import { sandboxingMachine } from '@hotrod/core/test-machine'
+import type { ModRun, ModSession } from '@kotharhq/mod-api'
+import { startCore } from '@kotharhq/core/main'
+import type { Adapter, SessionOptions } from '@kotharhq/core/shared'
+import { sandboxingMachine } from '@kotharhq/core/test-machine'
 import browser, { EXTENSION_URL } from './index.ts'
 
 const dirs: string[] = []
@@ -19,7 +19,7 @@ const tempDir = (prefix: string) => {
 }
 let browsers = ''
 beforeEach(() => {
-  browsers = tempDir('hotrod-browsers-')
+  browsers = tempDir('kothar-browsers-')
   process.env.PLAYWRIGHT_BROWSERS_PATH = browsers
 })
 const cleanups: (() => Promise<void>)[] = []
@@ -52,7 +52,7 @@ it("runs Playwright MCP headless on Playwright's Chromium, with the space's own 
   expect(env).toEqual({
     ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: tmpdir(),
-    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'hotrod-browser-registry'),
+    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
     PLAYWRIGHT_BROWSERS_PATH: browsers,
   })
 })
@@ -68,7 +68,7 @@ it("shows a window, asks before each action, keeps a subagent's profile in memor
 
 const chrome = { ...defaults, browser: 'chrome' }
 
-it("connects to your running Chrome through the Playwright Extension, with its token, and nothing of Hotrod's Chromium", () => {
+it("connects to your running Chrome through the Playwright Extension, with its token, and nothing of Kothar's Chromium", () => {
   const { args, env, allowTools } = serverFor({ values: { ...chrome, extensionToken: ' abc123 ' } })
   expect(allowTools).toBe(true)
   expect(args).toContain('--extension')
@@ -78,7 +78,7 @@ it("connects to your running Chrome through the Playwright Extension, with its t
   expect(env).toEqual({
     ELECTRON_RUN_AS_NODE: '1',
     TMPDIR: tmpdir(),
-    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'hotrod-browser-registry'),
+    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
     PLAYWRIGHT_MCP_EXTENSION_TOKEN: 'abc123',
   })
   expect(serverFor({ values: chrome }).env).not.toHaveProperty('PLAYWRIGHT_MCP_EXTENSION_TOKEN')
@@ -124,7 +124,7 @@ it('is ready with your Chrome once Chrome has the Playwright Extension', async (
 
 it("finds the extension in Chrome's last used profile that has it, as Playwright does", async () => {
   if (process.platform === 'win32') return
-  const home = tempDir('hotrod-chrome-home-')
+  const home = tempDir('kothar-chrome-home-')
   const dataDir =
     process.platform === 'darwin'
       ? join(home, 'Library', 'Application Support', 'Google', 'Chrome')
@@ -249,11 +249,11 @@ function fakeInstall() {
 }
 
 it('offers the browser once it is installed, and only to engines that take MCP servers', async () => {
-  const garage = tempDir('hotrod-browser-garage-')
+  const garage = tempDir('kothar-browser-garage-')
   const sessions: SessionOptions[] = []
-  const engine = (id: string, hotrodMcp: boolean): Adapter => ({
+  const engine = (id: string, kotharMcp: boolean): Adapter => ({
     id,
-    hotrodMcp,
+    kotharMcp,
     detect: async () => ({ installed: true, signedIn: true }),
     start(_machine, options, emit) {
       sessions.push(options)
@@ -268,24 +268,24 @@ it('offers the browser once it is installed, and only to engines that take MCP s
       }
     },
   })
-  const env = { HOTROD_ENGINE: 'mcp', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
+  const env = { KOTHAR_ENGINE: 'mcp', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
   const adapters = [engine('mcp', true), engine('plain', false)]
-  const hotrod = await startCore({ env, adapters, mods: [browser], machine: sandboxingMachine })
-  cleanups.push(() => hotrod.close(true))
-  const handle = (message: Parameters<typeof hotrod.core.handle>[0]) => hotrod.core.handle(message, () => {})
-  const statusOf = () => hotrod.core.mods().find((mod) => mod.id === 'browser')!.setup!.status
+  const kothar = await startCore({ env, adapters, mods: [browser], machine: sandboxingMachine })
+  cleanups.push(() => kothar.close(true))
+  const handle = (message: Parameters<typeof kothar.core.handle>[0]) => kothar.core.handle(message, () => {})
+  const statusOf = () => kothar.core.mods().find((mod) => mod.id === 'browser')!.setup!.status
   const until = async (check: () => boolean) => {
     for (let i = 0; i < 400 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 10))
     expect(check()).toBe(true)
   }
   const turn = (engine: string) => {
     handle({ type: 'chat.create', name: engine, engine })
-    const { id } = hotrod.core.chats().at(-1)!
+    const { id } = kothar.core.chats().at(-1)!
     handle({ type: 'chat.send', chatId: id, text: 'Open the page' })
-    return { chat: hotrod.core.chats().find((chat) => chat.id === id)!, options: sessions.at(-1)! }
+    return { chat: kothar.core.chats().find((chat) => chat.id === id)!, options: sessions.at(-1)! }
   }
 
-  expect(hotrod.core.mods().find((mod) => mod.id === 'browser')?.enabled).toBe(false)
+  expect(kothar.core.mods().find((mod) => mod.id === 'browser')?.enabled).toBe(false)
   handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true })
   await until(() => statusOf() === 'missing')
   expect(turn('mcp').options.mcpServers).toBeUndefined()

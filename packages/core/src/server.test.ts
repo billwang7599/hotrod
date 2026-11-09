@@ -10,13 +10,13 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Mod } from '@hotrod/mod-api'
+import type { Mod } from '@kotharhq/mod-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { SUBAGENT_INSTRUCTIONS, SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { SUBAGENT_INSTRUCTIONS, SUBAGENTS_MOD } from './kothar-mcp.ts'
 import { MEMORY_INSTRUCTIONS, MESSAGE_MAX_CHARS, ZOOM_INSTRUCTIONS } from './memory.ts'
 import { startServer } from './server.ts'
 import {
@@ -38,8 +38,8 @@ afterEach(async () => {
 })
 
 async function start(port = 0) {
-  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const project = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const garage = mkdtempSync(join(tmpdir(), 'kothar-test-'))
+  const project = mkdtempSync(join(tmpdir(), 'kothar-test-'))
   const core = openCore({
     garage,
     adapters: [createFakeAdapter(undefined, 0)],
@@ -98,7 +98,7 @@ it('rejects with a readable error when the port is taken, leaving nothing uncaug
   process.on('uncaughtException', onUncaught)
   cleanups.push(() => void process.off('uncaughtException', onUncaught))
 
-  await expect(start(port)).rejects.toThrow(`Port ${port} is in use. Is Hotrod already running?`)
+  await expect(start(port)).rejects.toThrow(`Port ${port} is in use. Is Kothar already running?`)
   await new Promise((resolve) => setTimeout(resolve, 20))
   expect(uncaught).toEqual([])
 })
@@ -164,10 +164,10 @@ it('answers bad messages with an error', async () => {
 })
 
 it('serves the UI folder when given one', async () => {
-  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
-  const uiDir = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const garage = mkdtempSync(join(tmpdir(), 'kothar-test-'))
+  const uiDir = mkdtempSync(join(tmpdir(), 'kothar-test-'))
   mkdirSync(join(uiDir, 'assets'))
-  writeFileSync(join(uiDir, 'index.html'), '<html>hotrod</html>')
+  writeFileSync(join(uiDir, 'index.html'), '<html>kothar</html>')
   writeFileSync(join(uiDir, 'assets', 'app.js'), 'console.log(1)')
   writeFileSync(join(garage, 'secret.txt'), 'secret')
   const core = openCore({
@@ -193,17 +193,17 @@ it('serves the UI folder when given one', async () => {
 
   const index = await fetch(`${base}/`)
   expect(index.headers.get('content-type')).toContain('text/html')
-  expect(await index.text()).toBe('<html>hotrod</html>')
+  expect(await index.text()).toBe('<html>kothar</html>')
   const script = await fetch(`${base}/assets/app.js`)
   expect(script.headers.get('content-type')).toContain('text/javascript')
   expect(await script.text()).toBe('console.log(1)')
-  expect(await (await fetch(`${base}/projects/x`)).text()).toBe('<html>hotrod</html>')
+  expect(await (await fetch(`${base}/projects/x`)).text()).toBe('<html>kothar</html>')
   const escaped = await fetch(`${base}/..%2f${basename(garage)}%2fsecret.txt`)
   expect(await escaped.text()).not.toContain('secret')
 })
 
 it("serves a chat's attachments with the token, images and PDFs inline and anything else as a download", async () => {
-  const garage = mkdtempSync(join(tmpdir(), 'hotrod-test-'))
+  const garage = mkdtempSync(join(tmpdir(), 'kothar-test-'))
   const core = openCore({
     garage,
     adapters: [createFakeAdapter([], 0)],
@@ -316,8 +316,8 @@ const mainMod: Mod = {
   ],
 }
 
-async function startHeld({ hotrodMcp = true, mods = [mainMod] } = {}) {
-  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
+async function startHeld({ kotharMcp = true, mods = [mainMod] } = {}) {
+  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-test-')))
   const sessions: {
     options: SessionOptions
     prompt?: string
@@ -326,7 +326,7 @@ async function startHeld({ hotrodMcp = true, mods = [mainMod] } = {}) {
   }[] = []
   const held: Adapter = {
     id: 'held',
-    hotrodMcp,
+    kotharMcp,
     detect: async () => ({ installed: true, signedIn: true, ...heldOffers }),
     start(_machine, options, emit: (event: EngineEvent) => void) {
       const end = (reply?: string, error?: string) => {
@@ -396,11 +396,11 @@ async function startHeld({ hotrodMcp = true, mods = [mainMod] } = {}) {
   return { core, garage, messages, sessions, sessionOf, sessionsOf, mcpUrl, post, tool, json, send }
 }
 
-it("gives a main chat's session the Hotrod MCP server, only while the session lives", async () => {
+it("gives a main chat's session the Kothar MCP server, only while the session lives", async () => {
   const { core, mcpUrl, post, json, send } = await startHeld()
   const session = send('main', 'hi')
-  const bearer = session.options.hotrodMcp?.token ?? ''
-  expect(session.options.hotrodMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
+  const bearer = session.options.kotharMcp?.token ?? ''
+  expect(session.options.kotharMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
   expect(await json(bearer, 'list_chats')).toEqual([])
   expect((await post('wrong', 'list_chats')).status).toBe(401)
   expect((await post('', 'list_chats')).status).toBe(401)
@@ -409,12 +409,12 @@ it("gives a main chat's session the Hotrod MCP server, only while the session li
   expect((await post(bearer, 'list_chats')).status).toBe(401)
   core.handle({ type: 'chat.create', name: 'Side' }, () => {})
   const named = core.chats().find((c) => c.id !== 'main')!
-  expect(send(named.id, 'hi').options.hotrodMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
+  expect(send(named.id, 'hi').options.kotharMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
 })
 
 it("runs a mod's tool, whose host makes a top-level chat and starts it, shown like ones the user made", async () => {
   const { core, garage, messages, sessions, tool, json, send } = await startHeld()
-  const bearer = send('main', 'hi').options.hotrodMcp!.token
+  const bearer = send('main', 'hi').options.kotharMcp!.token
   const folder = join(garage, 'made', 'app')
   mkdirSync(folder, { recursive: true })
 
@@ -451,7 +451,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   const { core, garage, sessions, post, tool, json, send } = await startHeld()
   const handle = handleOn(core)
   handle({ type: 'mod.setEnabled', modId: SUBAGENTS_MOD.id, enabled: false })
-  const workshop = send('main', 'hi').options.hotrodMcp!.token
+  const workshop = send('main', 'hi').options.kotharMcp!.token
   expect((await (await post(workshop, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_subagent not found',
   )
@@ -459,7 +459,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   const subchat = core.chats().find((c) => c.id !== 'main')!
   const offered = send(subchat.id, 'hi').options
   expect(offered.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
-  const before = offered.hotrodMcp!.token
+  const before = offered.kotharMcp!.token
   expect((await (await post(before, 'spawn_subagent', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_subagent not found',
   )
@@ -468,7 +468,7 @@ it('lets every user chat spawn subagents while the mod is on, up to the limit of
   handle({ type: 'chat.interrupt', chatId: subchat.id, force: true })
   const leading = send(subchat.id, 'again').options
   expect(leading.instructions).toContain(SUBAGENT_INSTRUCTIONS)
-  const lead = leading.hotrodMcp!.token
+  const lead = leading.kotharMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Read the tests' })
   expect(sessions.at(-1)?.options.instructions).not.toContain(SUBAGENT_INSTRUCTIONS)
   expect(chatIn(core, chatId)).toMatchObject({
@@ -516,7 +516,7 @@ it("starts a subagent on the Subagents list, else the Chat list, or its role's l
   handle({ type: 'models.setList', role: 'chat', models: [row(large, 'high')] })
   handle({ type: 'models.setList', role: 'planning', models: [row(small, 'low')] })
   handle({ type: 'chat.setModel', chatId: 'main', engine: 'held', model: small, thinking: 'low' })
-  const token = send('main', 'Plan it').options.hotrodMcp!.token
+  const token = send('main', 'Plan it').options.kotharMcp!.token
 
   // The Subagents list is empty, so a subagent runs what Chat does, whatever its parent picked.
   const helper = (await json(token, 'spawn_subagent', { task: 'Go' })).chatId
@@ -545,7 +545,7 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   const { core, garage, sessionOf, sessionsOf, json, tool, send } = await startHeld()
   subagentsOn(core, -1)
   const parent = send('main', 'Plan it')
-  const token = parent.options.hotrodMcp!.token
+  const token = parent.options.kotharMcp!.token
   const { chatId } = await json(token, 'spawn_subagent', { task: 'Search the docs' })
   expect(existsSync(join(garage, 'chats', chatId))).toBe(true)
 
@@ -570,7 +570,7 @@ it("wakes the parent with a subagent's final reply, queued while the parent is b
   ])
   const lead = sessionOf('main')
 
-  const stopped = (await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
+  const stopped = (await json(lead.options.kotharMcp!.token, 'spawn_subagent', { task: 'Look again' })).chatId
   lead.end('Thanks')
   sessionOf(stopped).end(undefined, 'Interrupted')
   const failed = `Report from subagent "Look again" (${stopped}):\n\n(No reply)\n\n(The turn ended early: Interrupted)`
@@ -597,7 +597,7 @@ it("sends a limited turn again whole, a lead's reports included, and keeps a sub
   const { core, sessionOf, sessionsOf, json, send } = await startHeld({ mods: [mainMod, retrier] })
   subagentsOn(core, -1)
   const lead = send('main', 'Plan it')
-  const { chatId } = await json(lead.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Search' })
+  const { chatId } = await json(lead.options.kotharMcp!.token, 'spawn_subagent', { task: 'Search' })
   const limit = (chat: string) => {
     sessionOf(chat).emit({ type: 'limit.reached', message: 'Out of usage' })
     sessionOf(chat).end(undefined, 'Out of usage')
@@ -638,7 +638,7 @@ it("gives a subagent its parent's items plus its own while it works", async () =
   const subchat = core.chats().find((c) => c.id !== 'main')!
   writeFileSync(join(garage, 'AGENTS.md'), 'WORKSHOP')
   writeFileSync(join(garage, 'chats', subchat.id, 'AGENTS.md'), 'PARENT')
-  const lead = send(subchat.id, 'hi').options.hotrodMcp!.token
+  const lead = send(subchat.id, 'hi').options.kotharMcp!.token
   const { chatId } = await json(lead, 'spawn_subagent', { task: 'Go' })
   writeFileSync(join(garage, 'chats', chatId, 'AGENTS.md'), 'OWN')
 
@@ -661,16 +661,16 @@ it("gives a subagent its parent's items plus its own while it works", async () =
 
 it('lets every chat zoom its own memory, and cuts a long message only where zoom can bring it back', async () => {
   const long = 'x'.repeat(MESSAGE_MAX_CHARS + 10)
-  for (const hotrodMcp of [true, false]) {
-    const { send, tool } = await startHeld({ hotrodMcp })
+  for (const kotharMcp of [true, false]) {
+    const { send, tool } = await startHeld({ kotharMcp })
     send('main', long).end('ok')
     const next = send('main', 'next')
-    if (hotrodMcp) {
+    if (kotharMcp) {
       expect(next.options.instructions.split('\n\n')).toContain(ZOOM_INSTRUCTIONS)
       expect(next.prompt).toContain(`cut at ${MESSAGE_MAX_CHARS} of ${long.length} chars; zoom(0) for the rest`)
-      expect((await tool(next.options.hotrodMcp!.token, 'zoom', { id: 0 })).text).toMatch(new RegExp(`\\n\\n${long}$`))
+      expect((await tool(next.options.kotharMcp!.token, 'zoom', { id: 0 })).text).toMatch(new RegExp(`\\n\\n${long}$`))
     } else {
-      expect(next.options.hotrodMcp).toBeUndefined()
+      expect(next.options.kotharMcp).toBeUndefined()
       expect(next.options.instructions).not.toContain(ZOOM_INSTRUCTIONS)
       expect(next.prompt).toContain(`\n${long}\n`)
     }
@@ -681,7 +681,7 @@ it("gives a subagent its parent's memory frozen at launch, with read-only zoom a
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   subagentsOn(core, -1)
   const parent = send('main', 'Plan the release')
-  const { chatId } = await json(parent.options.hotrodMcp!.token, 'spawn_subagent', { task: 'Check the changelog' })
+  const { chatId } = await json(parent.options.kotharMcp!.token, 'spawn_subagent', { task: 'Check the changelog' })
   const frozen = '<message id="0" kind="user">\nPlan the release\n</message>'
   const first = sessionOf(chatId)
   expect(first.options.instructions).toContain(`Your parent chat's memory when it started you`)
@@ -689,7 +689,7 @@ it("gives a subagent its parent's memory frozen at launch, with read-only zoom a
   expect(first.prompt).toBe('Check the changelog')
   expect(chatIn(core, chatId).parentMessages).toBe(1)
   expect(JSON.parse(readFileSync(join(garage, 'chats', chatId, 'chat.json'), 'utf8')).parentMessages).toBe(1)
-  const token = first.options.hotrodMcp!.token
+  const token = first.options.kotharMcp!.token
   expect((await tool(token, 'zoom', { id: 0, parent: true })).text).toMatch(/\n\nPlan the release$/)
   expect((await tool(token, 'date', { id: 0, parent: true })).isError).toBe(false)
 

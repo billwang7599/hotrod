@@ -48,36 +48,36 @@ describe('claudeCode adapter', () => {
     ])
   })
 
-  it("connects Hotrod's MCP server with the token in the env, and runs its tools without asking", () => {
+  it("connects Kothar's MCP server with the token in the env, and runs its tools without asking", () => {
     const fake = fakeMachine()
-    const token = 'hotrod-token-5678'
-    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token }
-    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', hotrodMcp }, () => {})
+    const token = 'kothar-token-5678'
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token }
+    claudeCode.start(fake.machine, { cwd: '/tmp/project', instructions: '', kotharMcp }, () => {})
     const args = fake.spawned[0]!.args
     expect(JSON.parse(args[args.indexOf('--mcp-config') + 1]!)).toEqual({
       mcpServers: {
-        hotrod: { type: 'http', url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' } },
+        kothar: { type: 'http', url: kotharMcp.url, headers: { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' } },
       },
     })
-    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__hotrod__*')
+    expect(args[args.indexOf('--allowedTools') + 1]).toBe('mcp__kothar__*')
     expect(args.join(' ')).not.toContain(token)
-    expect(fake.spawned[0]?.env).toEqual({ HOTROD_MCP_TOKEN: token })
+    expect(fake.spawned[0]?.env).toEqual({ KOTHAR_MCP_TOKEN: token })
   })
 
-  it("connects each mod's MCP server next to Hotrod's, running without asking the tools of those that allow it", () => {
-    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+  it("connects each mod's MCP server next to Kothar's, running without asking the tools of those that allow it", () => {
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
     const mcpServers = [
       { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' }, allowTools: true },
       { name: 'asks', command: 'asks-mcp' },
     ]
-    const args = startSession('', { hotrodMcp, mcpServers, readFiles: ['/tmp/a.png'] }).fake.spawned[0]!.args
+    const args = startSession('', { kotharMcp, mcpServers, readFiles: ['/tmp/a.png'] }).fake.spawned[0]!.args
     expect(JSON.parse(args[args.indexOf('--mcp-config') + 1]!).mcpServers).toEqual({
-      hotrod: { type: 'http', url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' } },
+      kothar: { type: 'http', url: kotharMcp.url, headers: { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' } },
       browser: { type: 'stdio', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' } },
       asks: { type: 'stdio', command: 'asks-mcp', args: [], env: {} },
     })
     expect(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 4)).toEqual([
-      'mcp__hotrod__*',
+      'mcp__kothar__*',
       'mcp__browser__*',
       'Read(//tmp/a.png)',
     ])
@@ -117,15 +117,15 @@ describe('claudeCode adapter', () => {
     expect(startSession().fake.spawned[0]?.args).not.toContain('--add-dir')
   })
 
-  it('lets Claude Code read the files it is given without asking, next to the Hotrod tools', () => {
+  it('lets Claude Code read the files it is given without asking, next to the Kothar tools', () => {
     const readFiles = ['/tmp/a b/shot [1], (2).png', '/tmp/doc.pdf']
     const rules = ['Read(//tmp/a b/shot \\[1\\], (2).png)', 'Read(//tmp/doc.pdf)']
     const allowed = (args: string[]) => args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 4)
     const args = startSession('Be brief.', { readFiles }).fake.spawned[0]!.args
     expect(allowed(args)).toEqual([...rules, '--append-system-prompt'])
-    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
-    const both = startSession('', { readFiles, hotrodMcp }).fake.spawned[0]!.args
-    expect(allowed(both)).toEqual(['mcp__hotrod__*', ...rules])
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const both = startSession('', { readFiles, kotharMcp }).fake.spawned[0]!.args
+    expect(allowed(both)).toEqual(['mcp__kothar__*', ...rules])
     expect(both.filter((arg) => arg === '--allowedTools')).toHaveLength(1)
     expect(startSession('', { readFiles: [] }).fake.spawned[0]?.args).not.toContain('--allowedTools')
   })
@@ -445,7 +445,7 @@ describe('claudeCode adapter', () => {
     line({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'a' }] } })
     line({ type: 'command_lifecycle', command_uuid: first.uuid, state: 'queued' })
     line({ type: 'command_lifecycle', command_uuid: first.uuid, state: 'started' })
-    // The replay of a message already landed, and of one Hotrod never steered, change nothing.
+    // The replay of a message already landed, and of one Kothar never steered, change nothing.
     line({ type: 'user', isReplay: true, uuid: first.uuid, message: { role: 'user', content: 'Use y instead' } })
     line({ type: 'user', isReplay: true, uuid: 'not-ours', message: { role: 'user', content: 'Fix it' } })
     line({ type: 'user', isReplay: true, uuid: second.uuid, message: { role: 'user', content: 'And z' } })
@@ -514,7 +514,7 @@ describe('claudeCode adapter', () => {
       ['Read', { file_path: '/b.ts' }],
       ['Grep', { pattern: 'foo', path: '/src' }],
       ['WebFetch', { url: 'https://x.dev', prompt: 'p' }],
-      ['WebSearch', { query: 'hotrod' }],
+      ['WebSearch', { query: 'kothar' }],
       ['mcp__x__y', { a: 1, b: 'two  words\nmore' }],
       ['Bash', {}],
     ]
@@ -527,7 +527,7 @@ describe('claudeCode adapter', () => {
       '/b.ts',
       'foo',
       'https://x.dev',
-      'hotrod',
+      'kothar',
       '{"a":1,"b":"two words\\nmore"}',
       '{}',
     ])

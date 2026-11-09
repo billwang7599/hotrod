@@ -1,5 +1,5 @@
-import type { ModView } from '@hotrod/mod-api'
-import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@hotrod/core/shared'
+import type { ModView } from '@kotharhq/mod-api'
+import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kotharhq/core/shared'
 import type {
   Account,
   Answers,
@@ -22,7 +22,7 @@ import type {
   Question,
   ToolKind,
   WorkFolder,
-} from '@hotrod/core/shared'
+} from '@kotharhq/core/shared'
 
 export type Permission = {
   requestId: string

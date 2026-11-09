@@ -12,10 +12,16 @@ test('the dev server connects to the default core port', () => {
   expect(coreUrl({ DEV: true }, { protocol: 'http:', host: 'localhost:4318' }, 't')).toBe('ws://127.0.0.1:4317/?token=t')
 })
 
-test('VITE_HOTROD_CORE_URL wins in dev and in a build', () => {
-  const env = { VITE_HOTROD_CORE_URL: 'ws://127.0.0.1:4461' }
+test('VITE_KOTHAR_CORE_URL wins in dev and in a build', () => {
+  const env = { VITE_KOTHAR_CORE_URL: 'ws://127.0.0.1:4461' }
   expect(coreUrl({ ...env, DEV: true }, page, 't')).toBe('ws://127.0.0.1:4461/?token=t')
   expect(coreUrl({ ...env, DEV: false }, page, 't')).toBe('ws://127.0.0.1:4461/?token=t')
+})
+
+test('VITE_HOTROD_CORE_URL, its name from before the rename, still works', () => {
+  const old = { DEV: true, VITE_HOTROD_CORE_URL: 'ws://127.0.0.1:4462' }
+  expect(coreUrl(old, page, 't')).toBe('ws://127.0.0.1:4462/?token=t')
+  expect(coreUrl({ ...old, VITE_KOTHAR_CORE_URL: 'ws://127.0.0.1:4461' }, page, 't')).toBe('ws://127.0.0.1:4461/?token=t')
 })
 
 test('the token is escaped in the URL', () => {

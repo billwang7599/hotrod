@@ -5,8 +5,8 @@ import { PANEL_PX } from './state.ts'
 export type Panel = keyof typeof PANEL_PX
 
 export const PANEL_LIMITS: Record<Panel, { key: string; min: number; max: number; default: number }> = {
-  sidebar: { key: 'hotrod.sidebarWidth', min: 180, max: 420, default: PANEL_PX.sidebar },
-  context: { key: 'hotrod.contextWidth', min: 260, max: 560, default: PANEL_PX.context },
+  sidebar: { key: 'kothar.sidebarWidth', min: 180, max: 420, default: PANEL_PX.sidebar },
+  context: { key: 'kothar.contextWidth', min: 260, max: 560, default: PANEL_PX.context },
 }
 export const RESIZE_STEP_PX = 16
 

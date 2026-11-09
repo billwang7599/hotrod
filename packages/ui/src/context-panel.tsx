@@ -14,7 +14,7 @@ import {
   type PermissionSwitch,
   type WorkFolder,
   type Worktree,
-} from '@hotrod/core/shared'
+} from '@kotharhq/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
@@ -55,7 +55,7 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     label: 'Run commands without asking',
     about:
       'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
-      'anywhere on, or on a system Hotrod can’t sandbox, every command asks.',
+      'anywhere on, or on a system Kothar can’t sandbox, every command asks.',
   },
   askNetworkCommands: {
     label: 'Ask before commands that publish or reach the network',
@@ -82,7 +82,7 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
-const COLLAPSED_KEY = 'hotrod.contextCollapsed'
+const COLLAPSED_KEY = 'kothar.contextCollapsed'
 const PREVIEW = 'max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
 type ItemProps = {
@@ -464,7 +464,7 @@ function Permissions({ chat, above, workFolder, disabled, send }: {
   )
 }
 
-// Hotrod's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
+// Kothar's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
@@ -532,7 +532,7 @@ type ContextPanelProps = {
   hide?: () => void
   modUi?: State['modUi']
   panelViews?: State['panelViews']
-  /** The desktop app's pickers (`window.hotrod`); a browser tab has none and types paths instead. */
+  /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
   pickers?: Pickers
 }
 

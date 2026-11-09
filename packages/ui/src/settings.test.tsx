@@ -13,8 +13,8 @@ import {
   type ModInfo,
   type SetupState,
   type WorkFolder,
-} from '@hotrod/core/shared'
-import type { ModSetting } from '@hotrod/mod-api'
+} from '@kotharhq/core/shared'
+import type { ModSetting } from '@kotharhq/mod-api'
 import { PERMISSIONS } from './context-panel.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 
@@ -238,7 +238,7 @@ test('turning on a mod that is not set up asks to install it, shows the progress
 })
 
 test("a mod that didn't load is listed off, its switch disabled and the reason under it", () => {
-  const loadError = "@playwright/mcp isn't installed. Run npm install in the Hotrod folder, then restart Hotrod."
+  const loadError = "@playwright/mcp isn't installed. Run npm install in the Kothar folder, then restart Kothar."
   const broken: ModInfo = { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError }
   const sent = renderMods([broken], 'mods')
   const toggle = dialog().querySelector('[aria-label="browser"]') as HTMLButtonElement

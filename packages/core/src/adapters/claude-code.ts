@@ -143,7 +143,7 @@ export const claudeCode: Adapter = {
   id: 'claude-code',
   name: 'Claude Code',
   imageInput: true,
-  hotrodMcp: true,
+  kotharMcp: true,
   steering: true,
 
   async detect(machine) {
@@ -216,7 +216,7 @@ export const claudeCode: Adapter = {
   },
 
   start(machine, options, emit) {
-    const { cwd, instructions, accountDir, apiKey, hotrodMcp, mcpServers = [], extraDirs = [], readFiles = [] } =
+    const { cwd, instructions, accountDir, apiKey, kotharMcp, mcpServers = [], extraDirs = [], readFiles = [] } =
       options
     const { model, thinking, sandbox } = options
     const args = [
@@ -229,7 +229,7 @@ export const claudeCode: Adapter = {
       ...CLEAN_ARGS,
       // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
       '--thinking-display', 'summarized',
-      // Claude Code's own subagents run out of sight, where the user can't open or stop them; Hotrod's
+      // Claude Code's own subagents run out of sight, where the user can't open or stop them; Kothar's
       // spawn_subagent replaces them. `Task` is the tool's name before Claude Code 2.1.
       '--disallowedTools', 'Agent', 'Task',
       // Echoes a steered message, with its uuid, once a turn takes it in.
@@ -241,18 +241,18 @@ export const claudeCode: Adapter = {
     const jail = sandbox && jailed(sandbox, accountDir)
     const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
     const servers: Record<string, object> = {}
-    if (hotrodMcp) {
+    if (kotharMcp) {
       // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
-      const headers = { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }
-      servers.hotrod = { type: 'http', url: hotrodMcp.url, headers }
-      env.HOTROD_MCP_TOKEN = hotrodMcp.token
+      const headers = { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' }
+      servers.kothar = { type: 'http', url: kotharMcp.url, headers }
+      env.KOTHAR_MCP_TOKEN = kotharMcp.token
     }
     for (const server of mcpServers) {
       servers[server.name] = { type: 'stdio', command: server.command, args: server.args ?? [], env: server.env ?? {} }
     }
     if (Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: servers }))
     const allowed = [
-      ...(hotrodMcp ? ['mcp__hotrod__*'] : []),
+      ...(kotharMcp ? ['mcp__kothar__*'] : []),
       ...mcpServers.flatMap((server) => (server.allowTools ? [`mcp__${server.name}__*`] : [])),
       // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
       ...readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`),
@@ -277,7 +277,7 @@ export const claudeCode: Adapter = {
     let closed = false
     let interruptCount = 0
     let limited = false
-    // Steered messages written mid-turn and not yet taken in: Hotrod's id by the uuid Claude Code knows, oldest first.
+    // Steered messages written mid-turn and not yet taken in: Kothar's id by the uuid Claude Code knows, oldest first.
     const steers = new Map<string, string>()
     let cancelCount = 0
     const land = (uuid: unknown) => {
@@ -286,7 +286,7 @@ export const claudeCode: Adapter = {
       steers.delete(uuid as string)
       emit({ type: 'steer.landed', id })
     }
-    // A turn that ends with steers still waiting would run them as a turn of their own; Hotrod queues them instead.
+    // A turn that ends with steers still waiting would run them as a turn of their own; Kothar queues them instead.
     const returnSteers = () => {
       for (const [uuid, id] of steers) {
         const request = { subtype: 'cancel_async_message', message_uuid: uuid }

@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react'
-import { isUnread, type ClientMessage } from '@hotrod/core/shared'
+import { isUnread, type ClientMessage } from '@kotharhq/core/shared'
 import type { ChatView } from './state.ts'
 
 // The user is looking at this window: it's focused and not hidden. The open chat counts as seen only then.
