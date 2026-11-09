@@ -1225,8 +1225,8 @@ describe('commands', () => {
     await until(() => settled(t.core, 'sub'))
   })
 
-  it('asks before every command while a chat runs without the sandbox', async () => {
-    const t = setup(commandScript('ls'))
+  it('asks before every command but plain reads while a chat runs without the sandbox', async () => {
+    const t = setup(commandScript('npm test'))
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: true })
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: false })
@@ -1234,13 +1234,83 @@ describe('commands', () => {
     expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
 
     t.core.close()
-    const { adapter, calls } = recording(createFakeAdapter(commandScript('ls'), 0))
+    const { adapter, calls } = recording(createFakeAdapter(commandScript('npm test'), 0))
     const machine = { ...localMachine, canSandbox: false }
     const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
     const unsandboxed = { ...t, core, calls, handle: (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {}) }
     expect(await turn(unsandboxed)).toBe('waiting')
+  })
+
+  const readScript = (...steps: { kind: 'read' | 'search'; path?: string }[]): FakeStep[] => [
+    ...steps.flatMap(({ kind, path }, i): FakeStep[] => {
+      const name = kind === 'read' ? 'Read' : 'Grep'
+      const call = { toolId: `r${i}`, name, kind, summary: path ?? '', input: { file_path: path } }
+      return [{ type: 'tool.started', ...call }, { type: 'permission', ...call, ...(path && { path }), output: 'read' }]
+    }),
+    { type: 'text.completed', text: 'Done' },
+  ]
+
+  it('reads and searches anywhere without asking by default, sandboxed or not, and asks once the switch is off', async () => {
+    const outside = tempDir()
+    const t = setup(readScript({ kind: 'read', path: join(outside, 'a.ts') }, { kind: 'search', path: outside }, { kind: 'search' }))
+    const space = createChat(t, { name: 'Space' })
+    expect(await turn(t, space.id)).toBe('idle')
+    expect(resolved(t, space.id).map((e) => [e.allow, e.auto])).toEqual([[true, true], [true, true], [true, true]])
+
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'editAnywhere', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+
+    t.handle({ type: 'permission.setDefault', name: 'autoRead', enabled: false })
+    expect(JSON.parse(readFileSync(join(t.garage, 'settings.json'), 'utf8')).autoRead).toBe(false)
+    expect(await turn(t, space.id)).toBe('waiting')
+    t.handle({ type: 'chat.setPermission', chatId: space.id, name: 'autoRead', enabled: true })
+    expect(await turn(t, space.id)).toBe('idle')
+  })
+
+  it('still asks before reading a login or key, or searching a folder that holds one', async () => {
+    for (const step of [
+      { kind: 'read' as const, path: join(homedir(), '.ssh', 'id_rsa') },
+      { kind: 'read' as const, path: '.env' },
+      { kind: 'search' as const, path: homedir() },
+      { kind: 'search' as const, path: join(tempDir(), '.env*') },
+    ]) {
+      const t = setup(readScript(step))
+      expect(await turn(t), step.path).toBe('waiting')
+      expect(resolved(t)).toEqual([])
+    }
+    const t = setup(readScript({ kind: 'read', path: 'x' }))
+    const accounts = join(t.garage, 'accounts', 'fake.json')
+    t.core.close()
+    const again = setup(readScript({ kind: 'read', path: accounts }), t.garage)
+    expect(await turn(again)).toBe('waiting')
+  })
+
+  it('runs plain read commands without asking even without the sandbox, and asks for the rest', async () => {
+    const t = setup(commandScript('ls -la', 'git log --oneline | head', 'cat ~/.ssh/id_rsa'))
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
+    expect(await turn(t)).toBe('waiting')
+    expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
+    expect(resolved(t).map((e) => [e.allow, e.auto])).toEqual([[true, true], [true, true]])
+
+    for (const command of ['ls > x', 'git branch -D x', 'echo $(rm -rf ~)', 'npm test']) {
+      const each = setup(commandScript(command))
+      each.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
+      expect(await turn(each), command).toBe('waiting')
+    }
+
+    const off = setup(commandScript('ls'))
+    off.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
+    off.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRead', enabled: false })
+    expect(await turn(off)).toBe('waiting')
+  })
+
+  it('asks before a sandboxed command that names a login or key, even while commands run without asking', async () => {
+    const t = setup(commandScript('python leak.py ~/.aws/credentials'))
+    expect(await turn(t)).toBe('waiting')
+    const fine = setup(commandScript('npm test'))
+    expect(await turn(fine)).toBe('idle')
   })
 
   it('asks when the engine gives no command, and refuses an unknown switch', async () => {

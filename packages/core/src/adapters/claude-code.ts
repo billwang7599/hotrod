@@ -114,6 +114,17 @@ const isoOf = (epoch: unknown) => {
   return new Date(seconds < 1e12 ? seconds * 1000 : seconds).toISOString()
 }
 
+// The file a permission request touches: the edited or read file, or for a search, its folder joined with its file
+// filter, so a policy can tell a search of `.env*` files from a search of the project.
+const pathOf = (kind: ToolKind, input: Record<string, unknown> | undefined): unknown => {
+  if (kind === 'edit') return input?.file_path ?? input?.notebook_path
+  if (kind === 'read') return input?.file_path
+  if (kind !== 'search') return undefined
+  const folder = typeof input?.path === 'string' ? input.path : undefined
+  const glob = typeof input?.glob === 'string' ? input.glob : undefined
+  return glob ? join(folder ?? '.', glob) : folder
+}
+
 const kindOf = (name: string): ToolKind => (name.startsWith('mcp__') ? 'mcp' : (KINDS[name] ?? 'other'))
 
 const questionsOf = (input: any): Question[] =>
@@ -370,7 +381,7 @@ export const claudeCode: Adapter = {
             return
           }
           const kind = kindOf(request.tool_name)
-          const path = kind === 'edit' ? (request.input?.file_path ?? request.input?.notebook_path) : undefined
+          const path = pathOf(kind, request.input)
           const command = kind === 'shell' ? request.input?.command : undefined
           emit({
             type: 'permission.requested',

@@ -162,7 +162,13 @@ export type EngineAccounts = {
   login?: { name: string; url?: string; error?: string }
 }
 
-export const PERMISSION_DEFAULTS = { editAnywhere: false, autoRunCommands: true, askNetworkCommands: true, autoFetch: true }
+export const PERMISSION_DEFAULTS = {
+  editAnywhere: false,
+  autoRunCommands: true,
+  askNetworkCommands: true,
+  autoFetch: true,
+  autoRead: true,
+}
 
 export type PermissionSwitch = keyof typeof PERMISSION_DEFAULTS
 

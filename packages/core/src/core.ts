@@ -96,6 +96,7 @@ import {
 import { openModels, type ModelSettings } from './models.ts'
 import { searchChats } from './search.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
+import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -1644,8 +1645,20 @@ export function openCore(options: {
         const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
         // Fetching writes nothing, so it needs no sandbox.
         if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
-        if (request.kind !== 'shell' || request.command === undefined || !jail || !on('autoRunCommands')) return
+        // Reading writes nothing either, but logins and keys still ask.
+        const reading = { cwd, home: homedir(), secrets: secretPathsOf(homedir(), garage) }
+        if (request.kind === 'read' || request.kind === 'search') {
+          if (!on('autoRead')) return
+          if (request.kind === 'read') {
+            return request.path !== undefined && !isSecret(request.path, reading) ? { allow: true } : undefined
+          }
+          return searchReachesSecret(request.path ?? cwd, reading) ? undefined : { allow: true }
+        }
+        if (request.kind !== 'shell' || request.command === undefined) return
+        if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
+        if (!jail || !on('autoRunCommands')) return
         if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
+        if (mentionsSecret(request.command, reading)) return
         return { allow: true }
       }
 
