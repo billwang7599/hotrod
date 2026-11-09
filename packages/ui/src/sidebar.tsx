@@ -76,8 +76,8 @@ type RowProps = {
   selected: boolean
   // Shown as the chat's status while a subagent below it waits for approval, since the user answers it here.
   status: ChatStatus
-  // Bold: it, or a subagent its fold hides, finished a turn the user hasn't seen.
-  unread: (chat: ChatView) => boolean
+  // Bold: a space or Home whose own lead finished a turn the user hasn't seen.
+  unread: boolean
   showEngine: boolean
   select: () => void
   menu?: MenuItem[]
@@ -86,10 +86,9 @@ type RowProps = {
 }
 
 function ChatRow(props: RowProps) {
-  const { row, animate, title, selected, status: own, unread: unreadOf, showEngine, select, menu, fold, reorder } = props
+  const { row, animate, title, selected, status: own, unread, showEngine, select, menu, fold, reorder } = props
   const { chat, depth } = row
   const status = fold?.folded ? BUSIEST.find((s) => [own, ...fold.hidden.map((c) => c.status)].includes(s))! : own
-  const unread = unreadOf(chat) || (fold?.folded === true && fold.hidden.some(unreadOf))
   const highlight = selected
     ? 'bg-raised text-text'
     : unread
@@ -303,7 +302,6 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
     ]
   }
   const pinnedRows = groupRows(true)
-  const unreadOf = (chat: ChatView) => showsUnread(chat, looking && chat.id === selectedId)
   const row = (row: TreeRow) => {
     const { chat } = row
     const folder = folderOf(chats, chat) ?? 'Not tied to a folder'
@@ -318,7 +316,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
         title={`${chat.name}: ${folder}`}
         selected={chat.id === selectedId}
         status={asksBelow ? 'waiting' : chat.status}
-        unread={unreadOf}
+        unread={showsUnread(chat, looking && chat.id === selectedId)}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
         menu={chat.mod || chat.subagent ? undefined : chatMenu(chat)}

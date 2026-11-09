@@ -567,7 +567,8 @@ export function openCore(options: {
     unsteer(chat)
     chat.pendingRequests.clear()
     setStatus(chat, 'idle')
-    updateChat(chat, { doneAt: end.at })
+    // Only spaces and Home show unread; a subagent is removed once it reports, so it keeps no read state.
+    if (!chat.info.subagent) updateChat(chat, { doneAt: end.at })
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (quitting) return
     compactor.touch(chat.info.id)

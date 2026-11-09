@@ -1534,6 +1534,23 @@ describe('read state', () => {
     expect(isUnread(chatOf(t.core, chat.id)!)).toBe(true)
   })
 
+  it("keeps no read state for a subagent; only its space's own turn makes the space unread", async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, subagent: true, engine: 'fake', createdAt: at }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+    const t = setup(textScript, first.garage)
+
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'hi' })
+    await until(() => settled(t.core, 'sub') && statusOf(t.core, space.id) === 'idle' && !!chatOf(t.core, space.id)?.doneAt)
+    const subUpdates = t.messages.filter((m) => m.type === 'chat.updated' && m.chat.id === 'sub')
+    expect(subUpdates.some((m) => m.type === 'chat.updated' && m.chat.doneAt !== undefined)).toBe(false)
+    // The report woke the space's lead, whose own turn is what's unread.
+    expect(isUnread(chatOf(t.core, space.id)!)).toBe(true)
+  })
+
   it('keeps read state across a restart', async () => {
     const t = setup(textScript)
     const read = folderChat(t)

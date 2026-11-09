@@ -160,19 +160,19 @@ test('the open chat of a window the user is away from stays unread until they co
   expect(bold()).toEqual([])
 })
 
-test('a folded space is bold while a subagent it hides is unread', async () => {
+test('a finished, unseen subagent is never bold, nor is the space its fold hides it in', async () => {
   const chats = [chat('space'), finished('sub', { parentId: 'space', subagent: true }), chat('other')]
   render(chats, 'other')
-  expect(bold()).toEqual(['sub'])
+  expect(host.querySelector('nav button[data-chat-id="sub"]')).not.toBeNull()
+  expect(bold()).toEqual([])
 
   // Rows leave through an exit animation, so wait for it to finish.
-  const fold = async (folded: boolean) => {
-    act(() => foldChat('space', folded))
-    await act(() => new Promise((done) => setTimeout(done, 50)))
-  }
-  await fold(true)
-  expect(bold()).toEqual(['space'])
+  act(() => foldChat('space', true))
+  await act(() => new Promise((done) => setTimeout(done, 50)))
+  expect(host.querySelector('nav button[data-chat-id="sub"]')).toBeNull()
+  expect(bold()).toEqual([])
 
-  await fold(false)
-  expect(bold()).toEqual(['sub'])
+  // The space goes bold only for its own lead's turn.
+  render([finished('space'), ...chats.slice(1)], 'other')
+  expect(bold()).toEqual(['space'])
 })
