@@ -4,7 +4,9 @@ import type {
   Account,
   Answers,
   Attachment,
-  CatalogEntry,
+  InstalledItem,
+  MarketEntry,
+  MarketKind,
   ChatEntry,
   ChatInfo,
   ChatState,
@@ -86,10 +88,12 @@ export type State = {
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
-  // The marketplace's catalog, absent until asked for and answered; and the last failed install of each theme, counted
-  // so the same error twice still reads as a new answer.
-  catalog?: { entries?: CatalogEntry[]; error?: string }
-  themeFailures: Record<string, { error: string; count: number }>
+  // Everything installed from the marketplace or a folder; absent until the core's snapshot arrives.
+  installed?: InstalledItem[]
+  // The marketplace's catalog, absent until asked for and answered; and the last failed install of each item (by
+  // marketKey), counted so the same error twice still reads as a new answer.
+  catalog?: { entries?: MarketEntry[]; error?: string }
+  marketFailures: Record<string, { error: string; count: number }>
   // The core's latest answer to the search palette.
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
@@ -118,7 +122,7 @@ export const initialState: State = {
   mods: [],
   modelLists: NO_LISTS,
   workFolder: { defaultPath: '', canSandbox: true },
-  themeFailures: {},
+  marketFailures: {},
   panelViews: {},
   toasts: [],
   nextToastId: 1,
@@ -291,6 +295,7 @@ export function reduce(state: State, action: Action): State {
         modelLists: action.modelLists,
         workFolder: action.workFolder,
         themes: action.themes,
+        installed: action.installed,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -376,16 +381,21 @@ export function reduce(state: State, action: Action): State {
       return state
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
-    case 'themes.updated': {
-      const installed = new Set(action.themes.map((theme) => theme.id))
-      const themeFailures = Object.fromEntries(Object.entries(state.themeFailures).filter(([id]) => !installed.has(id)))
-      return { ...state, themes: action.themes, themeFailures }
+    case 'themes.updated':
+      return { ...state, themes: action.themes }
+    case 'market.installed': {
+      const installed = new Set(action.items.map((item) => marketKey(item.kind, item.id)))
+      const marketFailures = Object.fromEntries(
+        Object.entries(state.marketFailures).filter(([key]) => !installed.has(key)),
+      )
+      return { ...state, installed: action.items, marketFailures }
     }
     case 'marketplace.catalog':
       return { ...state, catalog: { entries: action.entries, error: action.error } }
-    case 'theme.installFailed': {
-      const count = (state.themeFailures[action.id]?.count ?? 0) + 1
-      return { ...state, themeFailures: { ...state.themeFailures, [action.id]: { error: action.error, count } } }
+    case 'market.installFailed': {
+      const key = marketKey(action.kind, action.id)
+      const count = (state.marketFailures[key]?.count ?? 0) + 1
+      return { ...state, marketFailures: { ...state.marketFailures, [key]: { error: action.error, count } } }
     }
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
@@ -579,3 +589,6 @@ export function listedAccounts({ active, accounts }: EngineAccounts) {
   if (!own || !twin) return { active, accounts }
   return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
 }
+
+// One key per installable thing: a theme and a mod may share an id.
+export const marketKey = (kind: MarketKind, id: string) => `${kind}:${id}`

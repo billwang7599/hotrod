@@ -11,12 +11,9 @@ Contributions are licensed under the licence of the files they change (inbound =
 
 ## Adding a theme to the marketplace
 
-1. Add `marketplace/themes/<id>.json`. Copy an existing theme for the format: every colour token for `dark` and
-   `light`, each a hex colour (`#rgb`, `#rrggbb` or `#rrggbbaa`). The id is lowercase letters, digits and dashes.
-2. Run `node marketplace/build-index.ts` to update `marketplace/index.json` with the file's checksum and preview.
-3. Run `npm test`. The tests check every file, its checksum, and that body and secondary text stay readable.
-
-To change a theme, edit its file, bump its `version`, and rebuild the index.
+Themes don't live in this repo. Publish yours from a repo of your own and submit it to the catalog: see
+[kothar-marketplace](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod). The theme format and a
+template are in [kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme).
 
 ## Sign-off (DCO)
 

@@ -74,6 +74,7 @@ import {
   type EngineStatus,
   type Machine,
   type ModelRole,
+  type MarketKind,
   type ModInfo,
   type NewChat,
   type PanelTab,
@@ -146,6 +147,7 @@ export function openCore(options: {
   stopGraceMs?: number
   compactDebounceMs?: number
   marketplaceUrl?: string
+  githubToken?: string
   fetch?: Fetch
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
@@ -170,7 +172,12 @@ export function openCore(options: {
     const twin = ids.find((id, i) => ids.indexOf(id) !== i)
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
-  const marketplace = openMarketplace({ garage, url: options.marketplaceUrl, fetch: options.fetch })
+  const marketplace = openMarketplace({
+    garage,
+    url: options.marketplaceUrl,
+    token: options.githubToken,
+    fetch: options.fetch,
+  })
   const settingsFile = join(garage, 'settings.json')
   const settings: PermissionSwitches &
     ModelSettings & {
@@ -219,6 +226,11 @@ export function openCore(options: {
   const engineInfos = () => adapters.map((adapter) => engineInfo(adapter.id))
   const listeners: ((message: CoreMessage) => void)[] = []
   const broadcast = (message: CoreMessage) => listeners.forEach((listener) => listener(message))
+  // Every window hears what's installed now, and the themes it can show.
+  const marketChanged = (kind: MarketKind) => {
+    if (kind === 'theme') broadcast({ type: 'themes.updated', themes: marketplace.themes() })
+    broadcast({ type: 'market.installed', items: marketplace.installed() })
+  }
   // Everything about which engine, model and thinking level runs lives here.
   const models = openModels({ settings, save: saveSettings, engines: engineInfos, defaultEngine, broadcast })
   const offersModel = (engine: string, model?: string) => detected.get(engine)?.models?.some((m) => m.id === model) === true
@@ -1750,7 +1762,8 @@ export function openCore(options: {
     chats: () => shownChats().map(state),
     workFolder,
     setWorkFolder,
-    themes: marketplace.installed,
+    themes: marketplace.themes,
+    installed: marketplace.installed,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -1882,19 +1895,23 @@ export function openCore(options: {
         case 'account.remove':
           return accounts.remove(String(message.engine), String(message.accountId), reply)
         case 'marketplace.list':
-          return void marketplace.catalog().then(
+          return void marketplace.listing().then(
             (entries) => reply({ type: 'marketplace.catalog', entries }),
             (error) => reply({ type: 'marketplace.catalog', error: messageOf(error) }),
           )
         case 'themes.get':
-          return reply({ type: 'themes.updated', themes: marketplace.installed() })
-        case 'theme.install': {
+          return reply({ type: 'themes.updated', themes: marketplace.themes() })
+        case 'market.install': {
+          const { kind } = message
           const id = String(message.id)
-          return void marketplace.install(id).then(
-            () => broadcast({ type: 'themes.updated', themes: marketplace.installed() }),
-            (error) => reply({ type: 'theme.installFailed', id, error: messageOf(error) }),
+          return void marketplace.install(kind, id).then(
+            () => marketChanged(kind),
+            (error) => reply({ type: 'market.installFailed', kind, id, error: messageOf(error) }),
           )
         }
+        case 'market.uninstall':
+          marketplace.uninstall(message.kind, message.id)
+          return marketChanged(message.kind)
         case 'search': {
           const spaces = shownChats().filter((c) => !c.info.subagent)
           const hits = searchChats(
@@ -1903,9 +1920,6 @@ export function openCore(options: {
           )
           return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
         }
-        case 'theme.uninstall':
-          marketplace.uninstall(message.id)
-          return broadcast({ type: 'themes.updated', themes: marketplace.installed() })
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }

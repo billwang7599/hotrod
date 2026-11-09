@@ -18,8 +18,8 @@ import {
 // Vitest loads CSS imports as empty strings, so the stylesheet is read from disk.
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
 const SCHEMES = ['dark', 'light'] as const
-// The marketplace's themes, which every built-in theme test also holds them to.
-const catalogDir = new URL('../../../marketplace/themes/', import.meta.url)
+// Marketplace themes (copies of three from billwang7599/kothar-themes), held to the same tests as the built-in ones.
+const catalogDir = new URL('../../core/src/test-themes/', import.meta.url)
 const CATALOG: Record<string, ThemeFile> = Object.fromEntries(
   readdirSync(catalogDir).map((name) => {
     const theme = checkTheme(JSON.parse(readFileSync(new URL(name, catalogDir), 'utf8')))
@@ -384,17 +384,17 @@ describe('appearance', () => {
   it('shows a card for Default, Glass and each installed theme, and marks the current one', () => {
     fakePage({ dark: true })
     startAppearance()
-    setInstalledThemes([CATALOG['rose-pine']!, nord])
-    chooseAppearance({ theme: 'rose-pine' })
+    setInstalledThemes([CATALOG['tokyo-night']!, nord])
+    chooseAppearance({ theme: 'tokyo-night' })
     const html = renderToStaticMarkup(
       <Tooltip.Provider>
         <Appearance />
       </Tooltip.Provider>,
     )
-    for (const name of ['Default', 'Glass', 'Nord', 'Rosé Pine']) expect(html).toContain(`>${name}<`)
+    for (const name of ['Default', 'Glass', 'Nord', 'Tokyo Night']) expect(html).toContain(`>${name}<`)
     expect(html).not.toContain('>Gruvbox<')
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
-    expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Rosé Pine/)
+    expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Tokyo Night/)
   })
 
   it('builds in only Default and Glass', () => {

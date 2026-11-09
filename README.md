@@ -19,8 +19,12 @@ permission requests, rewrite messages, and run commands, all through Kothar's pu
 
 Kothar ships with two themes, Default and Glass. More themes, such as Nord, Catppuccin and Gruvbox, come from the
 marketplace in Settings. A theme is a small JSON file of colours, checked before it installs, so it can't change
-anything but colours. The catalog lives in [marketplace/](marketplace/). Mods can't be installed from the marketplace
-yet.
+anything but colours.
+
+The marketplace is a catalog of pointers in its own repo,
+[billwang7599/kothar-marketplace](https://github.com/billwang7599/kothar-marketplace). Each entry names its author's own
+repo, and Kothar installs from that repo's latest GitHub release, so authors own and update their work without a PR
+here. Its README says how to publish and submit a theme. Mods can't be installed from the marketplace yet.
 
 ## Status
 

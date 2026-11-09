@@ -58,7 +58,7 @@ type PageProps = {
   market?: Market
 }
 
-const NO_MARKET: Market = { themeFailures: {} }
+const NO_MARKET: Market = { marketFailures: {} }
 
 type Page = {
   id: string
@@ -170,7 +170,7 @@ const PAGES = [
     id: 'marketplace',
     group: 'Options',
     title: 'Marketplace',
-    intro: 'More themes, beyond Default and Glass. Installed themes show in Appearance.',
+    intro: 'Themes from their authors\' own repos, beyond Default and Glass. Installed themes show in Appearance.',
     body: ({ market = NO_MARKET, connected, send }: PageProps) => (
       <MarketplacePage market={market} connected={connected} send={send} />
     ),

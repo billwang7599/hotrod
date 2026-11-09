@@ -1,34 +1,81 @@
 import { useEffect, useState } from 'react'
-import { previewOf, type CatalogEntry, type ClientMessage, type ThemeFile, type ThemePreview } from '@kotharhq/core/shared'
-import { Button, ErrorText, GROUP } from './controls.tsx'
-import type { State } from './state.ts'
+import {
+  previewOf,
+  type ClientMessage,
+  type InstalledItem,
+  type MarketEntry,
+  type MarketKind,
+  type ThemeFile,
+  type ThemePreview,
+} from '@kotharhq/core/shared'
+import { Button, ErrorText, GROUP, Hint } from './controls.tsx'
+import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
-export type Market = Pick<State, 'catalog' | 'themes' | 'themeFailures'>
+export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'>
 
 type Props = { market: Market; connected: boolean; send: (m: ClientMessage) => void }
 
 type Row = {
+  kind: MarketKind
   id: string
   name: string
-  author: string
-  description: string
-  version: string
+  author?: string
+  description?: string
+  repo?: string
+  // The version the author's latest release carries, and why it couldn't be read.
+  latest?: string
+  problem?: string
   preview?: ThemePreview
   listed: boolean
-  installed?: ThemeFile
+  installed?: InstalledItem
+  theme?: ThemeFile
 }
 
-// Catalog entries first, in its order, then installed themes the catalog doesn't list (or can't, while offline).
-function rowsOf({ catalog, themes = [] }: Market): Row[] {
-  const byId = new Map(themes.map((theme) => [theme.id, theme]))
-  const listed = (catalog?.entries ?? []).map((entry: CatalogEntry): Row => ({ ...entry, listed: true, installed: byId.get(entry.id) }))
+// Catalog entries of the kind first, in its order, then what's installed that the catalog doesn't list (or can't, while
+// offline).
+function rowsOf({ catalog, themes = [], installed = [] }: Market, kind: MarketKind): Row[] {
+  const items = new Map(installed.filter((i) => i.kind === kind).map((item) => [item.id, item]))
+  const themeFiles = new Map(themes.map((theme) => [theme.id, theme]))
+  const listed = (catalog?.entries ?? [])
+    .filter((entry) => entry.kind === kind)
+    .map((entry: MarketEntry): Row => {
+      const { id, name, author, description, repo, latest, problem } = entry
+      return {
+        kind,
+        id,
+        name,
+        author,
+        description,
+        repo,
+        ...(latest && { latest: latest.version, preview: latest.preview }),
+        ...(problem && { problem }),
+        listed: true,
+        installed: items.get(id),
+        theme: themeFiles.get(id),
+      }
+    })
   const listedIds = new Set(listed.map((row) => row.id))
-  const extra = themes
-    .filter((theme) => !listedIds.has(theme.id))
-    .map((theme): Row => ({ ...theme, preview: previewOf(theme), listed: false, installed: theme }))
+  const extra = [...items.values()]
+    .filter((item) => !listedIds.has(item.id))
+    .map((item): Row => {
+      const theme = themeFiles.get(item.id)
+      return {
+        kind,
+        id: item.id,
+        name: item.name,
+        ...(theme && { author: theme.author, description: theme.description, preview: previewOf(theme), theme }),
+        ...(item.repo && { repo: item.repo }),
+        listed: false,
+        installed: item,
+      }
+    })
   return [...listed, ...extra]
 }
+
+// An installed item the marketplace has a different version of. Local installs follow their folder, not a release.
+const outdated = (row: Row) =>
+  row.installed !== undefined && row.installed.source !== 'local' && row.latest !== undefined && row.latest !== row.installed.version
 
 function Swatches({ preview, name }: { preview?: ThemePreview; name: string }) {
   if (!preview) return null
@@ -55,37 +102,53 @@ function Swatches({ preview, name }: { preview?: ThemePreview; name: string }) {
   )
 }
 
-export function MarketplacePage({ market, connected, send }: Props) {
-  const { catalog, themes, themeFailures } = market
-  const { theme: inUse } = useAppearance()
-  // Installs sent and not yet answered, with how many failures the theme had when it was sent.
+function Source({ item }: { item: InstalledItem }) {
+  if (item.source === 'local') {
+    return (
+      <Hint text={`Installed from ${item.path ?? 'a folder'}`}>
+        <span className="text-xs text-amber">Local</span>
+      </Hint>
+    )
+  }
+  return <span className="text-xs text-green">Installed {item.version}</span>
+}
+
+// Sends installs and keeps each one's button busy until the core answers: installed at the latest version, or failed.
+function usePending(market: Market) {
+  const { marketFailures, installed, catalog } = market
+  // Installs sent and not yet answered, with how many failures the item had when it was sent.
   const [pending, setPending] = useState<Record<string, number>>({})
+  useEffect(() => {
+    setPending((was) => {
+      const still = Object.entries(was).filter(([key, failures]) => {
+        const [kind, id] = key.split(':') as [MarketKind, string]
+        const row = rowsOf(market, kind).find((r) => r.id === id)
+        const done = row?.installed && !outdated(row)
+        return !done && (marketFailures[key]?.count ?? 0) === failures
+      })
+      return still.length === Object.keys(was).length ? was : Object.fromEntries(still)
+    })
+  }, [installed, marketFailures, catalog])
+  const start = (key: string) => setPending((was) => ({ ...was, [key]: marketFailures[key]?.count ?? 0 }))
+  return { pending, start }
+}
+
+export function MarketplacePage({ market, connected, send }: Props) {
+  const { catalog } = market
+  const { pending, start } = usePending(market)
 
   useEffect(() => {
     if (connected) send({ type: 'marketplace.list' })
   }, [connected, send])
 
-  useEffect(() => {
-    setPending((was) => {
-      const still = Object.entries(was).filter(([id, failures]) => {
-        const row = rowsOf(market).find((r) => r.id === id)
-        const done = row?.installed && (!row.listed || row.installed.version === row.version)
-        return !done && (themeFailures[id]?.count ?? 0) === failures
-      })
-      return still.length === Object.keys(was).length ? was : Object.fromEntries(still)
-    })
-  }, [themes, themeFailures, catalog])
-
-  const install = (id: string) => {
-    setPending((was) => ({ ...was, [id]: themeFailures[id]?.count ?? 0 }))
-    send({ type: 'theme.install', id })
+  const install = (row: Row) => {
+    start(marketKey(row.kind, row.id))
+    send({ type: 'market.install', kind: row.kind, id: row.id })
   }
 
-  const rows = rowsOf(market)
   return (
     <>
-      <div className="pb-8 font-semibold">Themes</div>
-      {catalog === undefined && <p className="text-sm text-muted">Loading the marketplace…</p>}
+      {catalog === undefined && <p className="pb-12 text-sm text-muted">Loading the marketplace…</p>}
       {catalog?.error && (
         <div className="flex flex-wrap items-center gap-x-12 gap-y-6 pb-12">
           <ErrorText>{catalog.error}</ErrorText>
@@ -94,18 +157,44 @@ export function MarketplacePage({ market, connected, send }: Props) {
           </Button>
         </div>
       )}
-      {catalog?.entries?.length === 0 && !rows.length && (
-        <p className="text-sm text-muted">No themes in the marketplace yet.</p>
-      )}
+      <Section
+        title="Themes"
+        rows={rowsOf(market, 'theme')}
+        empty={catalog?.entries ? 'No themes in the marketplace yet.' : undefined}
+        {...{ market, pending, connected, send, install }}
+      />
+    </>
+  )
+}
+
+type SectionProps = {
+  title: string
+  rows: Row[]
+  empty?: string
+  market: Market
+  pending: Record<string, number>
+  connected: boolean
+  send: (m: ClientMessage) => void
+  install: (row: Row) => void
+}
+
+function Section({ title, rows, empty, market, pending, connected, send, install }: SectionProps) {
+  const { theme: inUse } = useAppearance()
+  return (
+    <section className="pb-16">
+      <div className="pb-8 font-semibold">{title}</div>
+      {!rows.length && empty && <p className="text-sm text-muted">{empty}</p>}
       {rows.length > 0 && (
-        <div className={GROUP} aria-label="Marketplace themes" role="list">
+        <div className={GROUP} aria-label={`Marketplace ${title.toLowerCase()}`} role="list">
           {rows.map((row) => {
-            const busy = row.id in pending
-            const outdated = row.listed && row.installed && row.installed.version !== row.version
-            const failure = themeFailures[row.id]
+            const key = marketKey(row.kind, row.id)
+            const busy = key in pending
+            const failure = market.marketFailures[key]
+            const update = outdated(row)
+            const canInstall = row.listed && row.latest !== undefined
             return (
               <div
-                key={row.id}
+                key={key}
                 role="listitem"
                 aria-label={row.name}
                 className="flex flex-wrap items-center gap-x-16 gap-y-8 py-12 not-first:border-t"
@@ -114,16 +203,28 @@ export function MarketplacePage({ market, connected, send }: Props) {
                 <div className="flex min-w-200 flex-1 flex-col gap-2 wrap-anywhere">
                   <span className="flex flex-wrap items-baseline gap-x-8">
                     <span>{row.name}</span>
-                    <span className="text-xs text-faint">by {row.author}</span>
-                    {row.installed && <span className="text-xs text-green">Installed</span>}
+                    {row.author && <span className="text-xs text-faint">by {row.author}</span>}
+                    {row.installed && <Source item={row.installed} />}
+                    {!row.installed && row.latest && <span className="text-xs text-faint">{row.latest}</span>}
                   </span>
-                  <span className="text-sm text-muted">{row.description}</span>
-                  {!row.listed && catalog?.entries && (
+                  {row.description && <span className="text-sm text-muted">{row.description}</span>}
+                  {row.repo && (
+                    <a
+                      className="w-fit text-xs text-faint underline-offset-2 hover:underline"
+                      href={`https://github.com/${row.repo}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {row.repo}
+                    </a>
+                  )}
+                  {!row.listed && row.installed?.source === 'marketplace' && catalog(market) && (
                     <span className="text-sm text-faint">No longer in the marketplace</span>
                   )}
+                  {row.problem && <span className="text-sm text-amber">{row.problem}</span>}
                 </div>
                 <div className="flex items-center gap-6">
-                  {row.installed && (
+                  {row.kind === 'theme' && row.theme && (
                     <Button
                       variant={inUse === row.id ? 'default' : 'primary'}
                       disabled={inUse === row.id}
@@ -132,20 +233,26 @@ export function MarketplacePage({ market, connected, send }: Props) {
                       {inUse === row.id ? 'In use' : 'Use'}
                     </Button>
                   )}
-                  {(!row.installed || outdated) && (
+                  {canInstall && (!row.installed || update) && (
                     <Button
                       variant={row.installed ? 'default' : 'primary'}
                       disabled={!connected || busy}
-                      onClick={() => install(row.id)}
+                      onClick={() => install(row)}
                     >
-                      {busy ? (row.installed ? 'Updating…' : 'Installing…') : row.installed ? 'Update' : 'Install'}
+                      {busy
+                        ? row.installed
+                          ? 'Updating…'
+                          : 'Installing…'
+                        : row.installed
+                          ? `Update to ${row.latest}`
+                          : 'Install'}
                     </Button>
                   )}
                   {row.installed && (
                     <Button
                       variant="ghost"
                       disabled={!connected || busy}
-                      onClick={() => send({ type: 'theme.uninstall', id: row.id })}
+                      onClick={() => send({ type: 'market.uninstall', kind: row.kind, id: row.id })}
                     >
                       Uninstall
                     </Button>
@@ -161,6 +268,8 @@ export function MarketplacePage({ market, connected, send }: Props) {
           })}
         </div>
       )}
-    </>
+    </section>
   )
 }
+
+const catalog = (market: Market) => market.catalog?.entries !== undefined

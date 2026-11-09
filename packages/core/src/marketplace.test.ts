@@ -1,21 +1,31 @@
-import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildIndex } from '../../../marketplace/build-index.ts'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
-import { MARKETPLACE_URL, openMarketplace, type Fetch } from './marketplace.ts'
-import { checkCatalog, checkTheme, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
+import { MARKETPLACE_URL, openMarketplace, sha256, type Fetch } from './marketplace.ts'
+import { checkCatalog, checkTheme, previewOf, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
+import { CATALOG_URL, fakeGitHub } from './test-github.ts'
 
-const CATALOG_DIR = new URL('../../../marketplace/', import.meta.url)
-const URL_BASE = 'https://example.test/marketplace/'
-const INDEX_URL = `${URL_BASE}index.json`
+const themeFile = (id: string): ThemeFile =>
+  checkTheme(JSON.parse(readFileSync(new URL(`test-themes/${id}.json`, import.meta.url), 'utf8')))
+const nord = themeFile('nord')
+const gruvbox = themeFile('gruvbox')
+const REPO = 'someone/themes'
+const bytesOf = (theme: unknown) => `${JSON.stringify(theme, null, 2)}\n`
 
-const nord: ThemeFile = JSON.parse(readFileSync(new URL('themes/nord.json', CATALOG_DIR), 'utf8'))
-const sha = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex')
+const entryOf = (theme: ThemeFile, change: Partial<CatalogEntry> = {}): CatalogEntry => {
+  const { id, name, author, description } = theme
+  return { id, kind: 'theme', name, author, description, repo: REPO, ...change }
+}
+
+// The catalog lists the themes, and REPO's latest release (tag) carries each as <id>.json.
+function served(themes: ThemeFile[], tag = 'v1.0.0', options?: Parameters<typeof fakeGitHub>[2]) {
+  const files = Object.fromEntries(themes.map((theme) => [`${theme.id}.json`, bytesOf(theme)]))
+  return fakeGitHub(themes.map((theme) => entryOf(theme)), { [REPO]: { tag, files } }, options)
+}
 
 let dirs: string[] = []
 let cores: Core[] = []
@@ -32,57 +42,31 @@ function tempGarage() {
   return dir
 }
 
-// A marketplace served from memory: files by path under URL_BASE.
-function fakeFetch(files: Record<string, string>) {
-  const calls: string[] = []
-  const fetch: Fetch = async (url) => {
-    calls.push(url)
-    const path = url.startsWith(URL_BASE) ? url.slice(URL_BASE.length) : undefined
-    const body = path === undefined ? undefined : files[path]
-    return body === undefined ? new Response('missing', { status: 404 }) : new Response(body)
-  }
-  return { fetch: vi.fn(fetch), calls }
-}
+const open = (garage: string, fetch: Fetch, now?: () => number) =>
+  openMarketplace({ garage, url: CATALOG_URL, fetch, ...(now && { now }) })
 
-function entryOf(theme: ThemeFile, bytes: string, change: Partial<CatalogEntry> = {}): CatalogEntry {
-  const { id, name, author, description, version } = theme
-  return { id, kind: 'theme', name, author, description, version, path: `themes/${id}.json`, sha256: sha(bytes), ...change }
-}
-
-function served(themes: ThemeFile[], change: (entry: CatalogEntry) => CatalogEntry = (e) => e) {
-  const files: Record<string, string> = {}
-  const entries = themes.map((theme) => {
-    const bytes = `${JSON.stringify(theme, null, 2)}\n`
-    files[`themes/${theme.id}.json`] = bytes
-    return change(entryOf(theme, bytes))
-  })
-  files['index.json'] = JSON.stringify({ version: 1, entries })
-  return files
-}
-
-describe('the catalog in this repo', () => {
-  it('lists every theme file with its checksum and preview, and is up to date', () => {
-    const index = readFileSync(new URL('index.json', CATALOG_DIR), 'utf8')
-    expect(index).toBe(buildIndex(realpathSync(CATALOG_DIR) + '/'))
-    const entries = checkCatalog(JSON.parse(index))
-    const files = readdirSync(new URL('themes/', CATALOG_DIR))
-    expect(entries.map((e) => e.path).sort()).toEqual(files.map((f) => `themes/${f}`).sort())
-    for (const entry of entries) {
-      const bytes = readFileSync(new URL(entry.path, CATALOG_DIR))
-      expect(sha(bytes), entry.id).toBe(entry.sha256)
-      expect(checkTheme(JSON.parse(bytes.toString('utf8'))).id, entry.id).toBe(entry.id)
-    }
+describe('the catalog', () => {
+  it("lives in the marketplace's own repo", () => {
+    expect(MARKETPLACE_URL).toBe('https://raw.githubusercontent.com/billwang7599/kothar-marketplace/main/catalog.json')
   })
 
-  it('holds the themes that used to be built in', () => {
-    const ids = checkCatalog(JSON.parse(readFileSync(new URL('index.json', CATALOG_DIR), 'utf8'))).map((e) => e.id)
-    expect(ids.sort()).toEqual(
-      ['catppuccin', 'everforest', 'gruvbox', 'kanagawa', 'nord', 'rose-pine', 'solarized', 'tokyo-night'].sort(),
-    )
-  })
-
-  it("points at the catalog on Kothar's main branch", () => {
-    expect(MARKETPLACE_URL).toBe('https://raw.githubusercontent.com/billwang7599/kothar/main/marketplace/index.json')
+  it('holds pointers only: an id, kind, name, author, description and repo', () => {
+    const entry = entryOf(nord)
+    expect(checkCatalog({ version: 2, entries: [entry, { ...entry, kind: 'mod' }] })).toEqual([entry, { ...entry, kind: 'mod' }])
+    const bad: unknown[] = [
+      { version: 1, entries: [] },
+      { version: 2, entries: {} },
+      { version: 2, entries: [{ ...entry, path: 'themes/nord.json' }] },
+      { version: 2, entries: [{ ...entry, sha256: '0'.repeat(64) }] },
+      { version: 2, entries: [{ ...entry, kind: 'plugin' }] },
+      { version: 2, entries: [{ ...entry, repo: 'no-slash' }] },
+      { version: 2, entries: [{ ...entry, repo: 'a/b/c' }] },
+      { version: 2, entries: [{ ...entry, repo: 'a/..' }] },
+      { version: 2, entries: [{ ...entry, repo: 'https://evil.test/x' }] },
+      { version: 2, entries: [{ ...entry, id: '../x' }] },
+      { version: 2, entries: [entry, entry] },
+    ]
+    for (const catalog of bad) expect(() => checkCatalog(catalog), JSON.stringify(catalog).slice(0, 90)).toThrow()
   })
 })
 
@@ -118,87 +102,164 @@ describe('checkTheme', () => {
 })
 
 describe('the marketplace', () => {
-  it('lists the catalog, or says why it could not', async () => {
-    const garage = tempGarage()
-    const { fetch } = fakeFetch(served([nord]))
-    const entries = await openMarketplace({ garage, url: INDEX_URL, fetch }).catalog()
-    expect(entries.map((e) => e.id)).toEqual(['nord'])
+  it("lists each entry with its repo's latest release, asking GitHub once per repo", async () => {
+    const { fetch, calls } = served([nord, gruvbox], 'v2.0.0')
+    const entries = await open(tempGarage(), fetch).listing()
+    expect(entries).toEqual([
+      { ...entryOf(nord), latest: { tag: 'v2.0.0', version: nord.version, preview: previewOf(nord) } },
+      { ...entryOf(gruvbox), latest: { tag: 'v2.0.0', version: gruvbox.version, preview: previewOf(gruvbox) } },
+    ])
+    expect(calls.filter((url) => url.endsWith('/releases/latest'))).toHaveLength(1)
+  })
 
+  it('says which entries it could not read, and lists the rest', async () => {
+    const catalog = [entryOf(nord), entryOf(gruvbox, { repo: 'someone/gone' }), entryOf({ ...nord, id: 'nope', name: 'Nope' })]
+    const { fetch } = fakeGitHub(catalog, { [REPO]: { tag: 'v1', files: { 'nord.json': bytesOf(nord) } } })
+    const entries = await open(tempGarage(), fetch).listing()
+    expect(entries[0]!.latest?.version).toBe(nord.version)
+    expect(entries[1]!.problem).toBe('someone/gone has no published release')
+    expect(entries[2]!.problem).toBe("someone/themes's latest release (v1) has no nope.json")
+  })
+
+  it('leaves mods out until Kothar can install them', async () => {
+    const { fetch } = fakeGitHub([entryOf(nord), entryOf(nord, { kind: 'mod', id: 'a-mod' })], {
+      [REPO]: { tag: 'v1', files: { 'nord.json': bytesOf(nord) } },
+    })
+    expect((await open(tempGarage(), fetch).listing()).map((e) => e.id)).toEqual(['nord'])
+  })
+
+  it('says why the catalog could not be read', async () => {
+    const garage = tempGarage()
     const offline: Fetch = async () => {
       throw new TypeError('fetch failed')
     }
-    await expect(openMarketplace({ garage, url: INDEX_URL, fetch: offline }).catalog()).rejects.toThrow(
-      "Couldn't reach the marketplace: fetch failed",
-    )
-    await expect(openMarketplace({ garage, url: INDEX_URL, fetch: fakeFetch({}).fetch }).catalog()).rejects.toThrow(
-      '404',
-    )
-    const broken = fakeFetch({ 'index.json': JSON.stringify({ entries: [{ id: 'x', kind: 'mod' }] }) })
-    await expect(openMarketplace({ garage, url: INDEX_URL, fetch: broken.fetch }).catalog()).rejects.toThrow(
-      'The marketplace index is broken',
-    )
+    await expect(open(garage, offline).listing()).rejects.toThrow("Couldn't reach the marketplace: fetch failed")
+    await expect(open(garage, fakeGitHub('{', {}).fetch).listing()).rejects.toThrow('The marketplace catalog is broken')
+    const old = fakeGitHub(JSON.stringify({ version: 1, entries: [] }), {})
+    await expect(open(garage, old.fetch).listing()).rejects.toThrow('for another version of Kothar')
   })
 
-  it('installs a theme as a plain file, byte for byte, and uninstalls it', async () => {
+  it("explains GitHub's hourly limit instead of failing quietly", async () => {
+    const entries = await open(tempGarage(), served([nord], 'v1', { rateLimited: true }).fetch).listing()
+    expect(entries[0]!.problem).toMatch(/GitHub's limit of 60 requests an hour is used up; it resets at .+\. Set KOTHAR_GITHUB_TOKEN/)
+  })
+
+  it('sends the GitHub token when there is one', async () => {
+    const { fetch } = served([nord])
+    await openMarketplace({ garage: tempGarage(), url: CATALOG_URL, fetch, token: 'abc' }).listing()
+    const api = fetch.mock.calls.find(([url]) => url.endsWith('/releases/latest'))!
+    expect(api[1]?.headers?.authorization).toBe('Bearer abc')
+  })
+
+  it('asks for a release again only after ten minutes', async () => {
+    let time = 0
+    const { fetch, calls } = served([nord])
+    const market = open(tempGarage(), fetch, () => time)
+    await market.listing()
+    time += 9 * 60_000
+    await market.listing()
+    expect(calls.filter((url) => url.endsWith('/releases/latest'))).toHaveLength(1)
+    time += 2 * 60_000
+    await market.listing()
+    expect(calls.filter((url) => url.endsWith('/releases/latest'))).toHaveLength(2)
+  })
+
+  it("installs a theme into its own folder with a record of where it came from, and uninstalls it", async () => {
     const garage = tempGarage()
-    const files = served([nord])
-    const market = openMarketplace({ garage, url: INDEX_URL, fetch: fakeFetch(files).fetch })
+    const market = open(garage, served([nord], 'v1.2.0').fetch, () => Date.parse('2026-11-09T00:00:00Z'))
     expect(market.installed()).toEqual([])
-    await market.install('nord')
-    expect(readFileSync(join(garage, 'themes', 'nord.json'), 'utf8')).toBe(files['themes/nord.json'])
-    expect(market.installed()).toEqual([nord])
-    market.uninstall('nord')
-    expect(existsSync(join(garage, 'themes', 'nord.json'))).toBe(false)
+    await market.install('theme', 'nord')
+    const dir = join(garage, 'themes', 'nord')
+    expect(readFileSync(join(dir, 'theme.json'), 'utf8')).toBe(bytesOf(nord))
+    expect(JSON.parse(readFileSync(join(dir, 'installed.json'), 'utf8'))).toEqual({
+      source: 'marketplace',
+      repo: REPO,
+      tag: 'v1.2.0',
+      version: nord.version,
+      installedAt: '2026-11-09T00:00:00.000Z',
+      sha256: { 'theme.json': sha256(Buffer.from(bytesOf(nord))) },
+    })
+    expect(market.themes()).toEqual([nord])
+    expect(market.installed()).toEqual([
+      { kind: 'theme', id: 'nord', name: 'Nord', version: nord.version, source: 'marketplace', repo: REPO, tag: 'v1.2.0' },
+    ])
+    market.uninstall('theme', 'nord')
+    expect(existsSync(dir)).toBe(false)
     expect(market.installed()).toEqual([])
   })
 
-  it("refuses a theme whose checksum doesn't match, or that fails the check, and writes nothing", async () => {
+  it('updates to the latest release, replacing the old files', async () => {
     const garage = tempGarage()
-    const wrongSum = served([nord], (e) => ({ ...e, sha256: '0'.repeat(64) }))
-    await expect(
-      openMarketplace({ garage, url: INDEX_URL, fetch: fakeFetch(wrongSum).fetch }).install('nord'),
-    ).rejects.toThrow("didn't match the marketplace's checksum")
+    await open(garage, served([nord], 'v1').fetch).install('theme', 'nord')
+    const newer = { ...nord, version: '2.0.0', dark: { ...nord.dark, accent: '#123456' } }
+    await open(garage, served([newer], 'v2').fetch).install('theme', 'nord')
+    const market = open(garage, served([]).fetch)
+    expect(market.themes()).toEqual([newer])
+    expect(market.installed()[0]).toMatchObject({ version: '2.0.0', tag: 'v2' })
+    expect(readdirSync(join(garage, 'themes'))).toEqual(['nord'])
+  })
 
-    const evil = `${JSON.stringify({ ...nord, dark: { ...nord.dark, bg: '#000;}*{x:y' } })}\n`
-    const files = { 'themes/nord.json': evil, 'index.json': JSON.stringify({ entries: [entryOf(nord, evil)] }) }
-    await expect(openMarketplace({ garage, url: INDEX_URL, fetch: fakeFetch(files).fetch }).install('nord')).rejects.toThrow(
+  it("falls back to GitHub's API when the download link fails", async () => {
+    const garage = tempGarage()
+    const { fetch, calls } = served([nord], 'v1', { downloadsFail: true })
+    await open(garage, fetch).install('theme', 'nord')
+    expect(calls.some((url) => url.includes('/releases/assets/'))).toBe(true)
+    expect(open(garage, fetch).themes()).toEqual([nord])
+  })
+
+  it('refuses a theme that fails the check, names itself otherwise, or is too big, and writes nothing', async () => {
+    const garage = tempGarage()
+    const install = (files: Record<string, string>) =>
+      open(garage, fakeGitHub([entryOf(nord)], { [REPO]: { tag: 'v1', files } }).fetch).install('theme', 'nord')
+    await expect(install({ 'nord.json': bytesOf({ ...nord, dark: { ...nord.dark, bg: '#000;}*{x:y' } }) })).rejects.toThrow(
       "isn't a valid theme",
     )
-
-    const other = { ...nord, id: 'other' }
-    const renamed = `${JSON.stringify(other)}\n`
-    const swapped = { 'themes/nord.json': renamed, 'index.json': JSON.stringify({ entries: [entryOf(nord, renamed)] }) }
-    await expect(
-      openMarketplace({ garage, url: INDEX_URL, fetch: fakeFetch(swapped).fetch }).install('nord'),
-    ).rejects.toThrow('names itself "other"')
+    await expect(install({ 'nord.json': bytesOf({ ...nord, id: 'other' }) })).rejects.toThrow('names itself "other"')
+    await expect(install({ 'nord.json': 'x'.repeat(65 * 1024) })).rejects.toThrow('over 65536 bytes')
+    await expect(install({})).rejects.toThrow('has no nord.json')
     expect(existsSync(join(garage, 'themes'))).toBe(false)
   })
 
-  it('refuses ids that are not safe file names, without fetching', async () => {
-    const garage = tempGarage()
-    const { fetch } = fakeFetch(served([nord]))
-    const market = openMarketplace({ garage, url: INDEX_URL, fetch })
+  it('refuses ids that are not safe file names, and kinds it does not know, without fetching', async () => {
+    const { fetch } = served([nord])
+    const market = open(tempGarage(), fetch)
     for (const id of ['../settings', 'a/b', '', 'NORD']) {
-      await expect(market.install(id), id).rejects.toThrow('Not a marketplace id')
-      expect(() => market.uninstall(id), id).toThrow('Not a marketplace id')
+      await expect(market.install('theme', id), id).rejects.toThrow('Not a marketplace id')
+      expect(() => market.uninstall('theme', id), id).toThrow('Not a marketplace id')
     }
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('skips installed files that fail the check, leaving them on disk', () => {
+  it('still loads themes an older Kothar installed as single files, and moves them on update', async () => {
     const garage = tempGarage()
     mkdirSync(join(garage, 'themes'))
     writeFileSync(join(garage, 'themes', 'nord.json'), JSON.stringify(nord))
     writeFileSync(join(garage, 'themes', 'bad.json'), JSON.stringify({ ...nord, id: 'bad', css: 'x' }))
     writeFileSync(join(garage, 'themes', 'misnamed.json'), JSON.stringify(nord))
     writeFileSync(join(garage, 'themes', 'junk.json'), '{')
-    expect(openMarketplace({ garage }).installed().map((t) => t.id)).toEqual(['nord'])
+    const market = open(garage, served([nord]).fetch)
+    expect(market.themes()).toEqual([nord])
+    expect(market.installed()).toEqual([{ kind: 'theme', id: 'nord', name: 'Nord', version: nord.version, source: 'legacy' }])
     expect(existsSync(join(garage, 'themes', 'bad.json'))).toBe(true)
+
+    await market.install('theme', 'nord')
+    expect(existsSync(join(garage, 'themes', 'nord.json'))).toBe(false)
+    expect(market.installed()[0]!.source).toBe('marketplace')
+  })
+
+  it('skips a theme folder without its record or with a broken theme', () => {
+    const garage = tempGarage()
+    mkdirSync(join(garage, 'themes', 'nord'), { recursive: true })
+    writeFileSync(join(garage, 'themes', 'nord', 'theme.json'), JSON.stringify(nord))
+    mkdirSync(join(garage, 'themes', 'gruvbox'))
+    writeFileSync(join(garage, 'themes', 'gruvbox', 'theme.json'), '{')
+    writeFileSync(join(garage, 'themes', 'gruvbox', 'installed.json'), '{}')
+    expect(openMarketplace({ garage }).installed()).toEqual([])
   })
 })
 
 describe('the core', () => {
-  function open(fetch: Fetch) {
+  function start(fetch: Fetch) {
     const garage = tempGarage()
     const adapter = createFakeAdapter([], 0)
     const core = openCore({
@@ -207,7 +268,7 @@ describe('the core', () => {
       defaultEngine: adapter.id,
       machine: sandboxingMachine,
       mods: [],
-      marketplaceUrl: INDEX_URL,
+      marketplaceUrl: CATALOG_URL,
       fetch,
     })
     cores.push(core)
@@ -220,32 +281,38 @@ describe('the core', () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 10))
 
   it('lists the catalog, installs and uninstalls themes, and tells every window', async () => {
-    const t = open(fakeFetch(served([nord])).fetch)
+    const t = start(served([nord]).fetch)
     t.handle({ type: 'marketplace.list' })
     await settle()
-    expect(t.replies.at(-1)).toMatchObject({ type: 'marketplace.catalog', entries: [{ id: 'nord', kind: 'theme' }] })
+    expect(t.replies.at(-1)).toMatchObject({ type: 'marketplace.catalog', entries: [{ id: 'nord', latest: { tag: 'v1.0.0' } }] })
 
-    t.handle({ type: 'theme.install', id: 'nord' })
+    t.handle({ type: 'market.install', kind: 'theme', id: 'nord' })
     await settle()
-    expect(t.messages.at(-1)).toEqual({ type: 'themes.updated', themes: [nord] })
+    expect(t.messages.slice(-2)).toEqual([
+      { type: 'themes.updated', themes: [nord] },
+      { type: 'market.installed', items: [expect.objectContaining({ id: 'nord', source: 'marketplace' })] },
+    ])
     expect(t.core.themes()).toEqual([nord])
     t.handle({ type: 'themes.get' })
     expect(t.replies.at(-1)).toEqual({ type: 'themes.updated', themes: [nord] })
 
-    t.handle({ type: 'theme.uninstall', id: 'nord' })
-    expect(t.messages.at(-1)).toEqual({ type: 'themes.updated', themes: [] })
+    t.handle({ type: 'market.uninstall', kind: 'theme', id: 'nord' })
+    expect(t.messages.slice(-2)).toEqual([
+      { type: 'themes.updated', themes: [] },
+      { type: 'market.installed', items: [] },
+    ])
   })
 
   it('answers offline and failed installs inline instead of failing', async () => {
-    const t = open(async () => {
+    const t = start(async () => {
       throw new TypeError('fetch failed')
     })
     t.handle({ type: 'marketplace.list' })
-    t.handle({ type: 'theme.install', id: 'nord' })
+    t.handle({ type: 'market.install', kind: 'theme', id: 'nord' })
     await settle()
     expect(t.replies).toEqual([
       { type: 'marketplace.catalog', error: "Couldn't reach the marketplace: fetch failed" },
-      { type: 'theme.installFailed', id: 'nord', error: "Couldn't reach the marketplace: fetch failed" },
+      { type: 'market.installFailed', kind: 'theme', id: 'nord', error: "Couldn't reach the marketplace: fetch failed" },
     ])
     expect(t.messages.some((m) => m.type === 'themes.updated')).toBe(false)
   })

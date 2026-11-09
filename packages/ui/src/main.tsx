@@ -148,8 +148,11 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, themeFailures } = state
-  const market = useMemo(() => ({ catalog, themes, themeFailures }), [catalog, themes, themeFailures])
+  const { catalog, themes, installed, marketFailures } = state
+  const market = useMemo(
+    () => ({ catalog, themes, installed, marketFailures }),
+    [catalog, themes, installed, marketFailures],
+  )
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
     const picked = await window.kothar.pickFolder()

@@ -386,9 +386,10 @@ export type ClientMessage =
   | { type: 'marketplace.list' }
   // Replies with themes.updated.
   | { type: 'themes.get' }
-  // Downloads, checks and saves the theme, then sends everyone themes.updated; replies theme.installFailed if it can't.
-  | { type: 'theme.install'; id: string }
-  | { type: 'theme.uninstall'; id: string }
+  // Installs the catalog entry from its repo's latest release, or updates it, then sends everyone market.installed (and
+  // themes.updated for a theme); replies market.installFailed if it can't.
+  | { type: 'market.install'; kind: MarketKind; id: string }
+  | { type: 'market.uninstall'; kind: MarketKind; id: string }
   // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
   // the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
@@ -418,6 +419,7 @@ export type CoreMessage =
       memory: MemorySettings
       workFolder: WorkFolder
       themes: ThemeFile[]
+      installed: InstalledItem[]
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -439,10 +441,12 @@ export type CoreMessage =
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).
-  | { type: 'marketplace.catalog'; entries?: CatalogEntry[]; error?: string }
+  | { type: 'marketplace.catalog'; entries?: MarketEntry[]; error?: string }
   // Every installed theme.
   | { type: 'themes.updated'; themes: ThemeFile[] }
-  | { type: 'theme.installFailed'; id: string; error: string }
+  // Everything installed from the marketplace or a folder, and where each came from.
+  | { type: 'market.installed'; items: InstalledItem[] }
+  | { type: 'market.installFailed'; kind: MarketKind; id: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
 
@@ -483,18 +487,36 @@ export type ThemeFile = {
 export const PREVIEW_TOKENS = ['accent', 'bg', 'panel', 'text'] as const satisfies readonly ThemeToken[]
 export type ThemePreview = Record<'dark' | 'light', Record<(typeof PREVIEW_TOKENS)[number], string>>
 
-// One entry of the marketplace's index.json. path is relative to the index; sha256 is of the file's exact bytes. Only
-// themes install today; kind leaves room for mods, which need signing and review before Kothar runs outside code.
+export type MarketKind = 'theme' | 'mod'
+
+// One entry of the marketplace's catalog.json: a pointer to the author's own GitHub repo, whose latest release carries
+// what installs (a theme: <id>.json; a mod: manifest.json and main.mjs).
 export type CatalogEntry = {
   id: string
-  kind: 'theme'
+  kind: MarketKind
   name: string
   author: string
   description: string
+  repo: string
+}
+
+// A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem).
+export type MarketEntry = CatalogEntry & {
+  latest?: { tag: string; version: string; preview?: ThemePreview }
+  problem?: string
+}
+
+// Something installed: from the marketplace (repo and tag), from a folder on this computer (path), or by an older Kothar
+// that kept themes as single files (legacy).
+export type InstalledItem = {
+  kind: MarketKind
+  id: string
+  name: string
   version: string
-  path: string
-  sha256: string
-  preview?: ThemePreview
+  source: 'marketplace' | 'local' | 'legacy'
+  repo?: string
+  tag?: string
+  path?: string
 }
 
 export const MAX_THEME_BYTES = 64 * 1024
@@ -503,7 +525,7 @@ const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
 // Lowercase only, so two ids can't name one file on a case-insensitive disk.
 const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
-const SHA256 = /^[0-9a-f]{64}$/
+const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 
 export const isItemId = (id: unknown): id is string => typeof id === 'string' && ITEM_ID.test(id)
 
@@ -567,39 +589,32 @@ export function checkTheme(value: unknown): ThemeFile {
   }
 }
 
-// Throws, saying why, unless value is a marketplace index: { entries: CatalogEntry[] } with unique ids.
+export const isRepo = (repo: unknown): repo is string => typeof repo === 'string' && REPO.test(repo) && !repo.includes('..')
+
+// Throws, saying why, unless value is a marketplace catalog: { version: 2, entries: CatalogEntry[] } with unique ids per
+// kind.
 export function checkCatalog(value: unknown): CatalogEntry[] {
-  const index = onlyKeys(value, 'The marketplace index', ['entries'], ['version'])
-  if (!Array.isArray(index.entries)) throw new Error('The marketplace index entries must be a list')
-  const entries = index.entries.map((raw, i): CatalogEntry => {
-    const required = ['id', 'kind', 'name', 'author', 'description', 'version', 'path', 'sha256']
-    const entry = onlyKeys(raw, `Marketplace entry ${i + 1}`, required, ['preview'])
-    const fields = itemFields(entry, `Marketplace entry ${i + 1}`)
-    if (entry.kind !== 'theme') throw new Error(`Marketplace entry "${fields.id}" is a "${entry.kind}"; only themes install`)
-    if (entry.path !== `themes/${fields.id}.json`) throw new Error(`Marketplace entry "${fields.id}" must live at themes/${fields.id}.json`)
-    if (typeof entry.sha256 !== 'string' || !SHA256.test(entry.sha256)) {
-      throw new Error(`Marketplace entry "${fields.id}" needs a sha256`)
-    }
-    const preview =
-      entry.preview === undefined
-        ? undefined
-        : onlyKeys(entry.preview, `The preview of "${fields.id}"`, ['dark', 'light'])
+  const catalog = onlyKeys(value, 'The marketplace catalog', ['entries'], ['version'])
+  if (catalog.version !== 2) throw new Error('The marketplace catalog is for another version of Kothar')
+  if (!Array.isArray(catalog.entries)) throw new Error('The marketplace catalog entries must be a list')
+  const entries = catalog.entries.map((raw, i): CatalogEntry => {
+    const what = `Marketplace entry ${i + 1}`
+    const entry = onlyKeys(raw, what, ['id', 'kind', 'name', 'author', 'description', 'repo'])
+    if (!isItemId(entry.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
+    if (entry.kind !== 'theme' && entry.kind !== 'mod') throw new Error(`Marketplace entry "${entry.id}" is a "${entry.kind}"`)
+    if (!isRepo(entry.repo)) throw new Error(`Marketplace entry "${entry.id}" repo must be owner/name`)
     return {
-      ...fields,
-      kind: 'theme',
-      path: entry.path,
-      sha256: entry.sha256,
-      ...(preview && {
-        preview: {
-          dark: colors(preview.dark, `The dark preview of "${fields.id}"`, PREVIEW_TOKENS),
-          light: colors(preview.light, `The light preview of "${fields.id}"`, PREVIEW_TOKENS),
-        },
-      }),
+      id: entry.id,
+      kind: entry.kind,
+      name: text(entry.name, `${what} name`, 40),
+      author: text(entry.author, `${what} author`, 60),
+      description: text(entry.description, `${what} description`, 200),
+      repo: entry.repo,
     }
   })
-  const ids = entries.map((entry) => entry.id)
-  const twin = ids.find((id, i) => ids.indexOf(id) !== i)
-  if (twin !== undefined) throw new Error(`Two marketplace entries have the id "${twin}"`)
+  const keys = entries.map((entry) => `${entry.kind} ${entry.id}`)
+  const twin = keys.find((key, i) => keys.indexOf(key) !== i)
+  if (twin !== undefined) throw new Error(`Two marketplace entries are the ${twin.replace(' ', ' "')}"`)
   return entries
 }
 
