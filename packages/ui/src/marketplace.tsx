@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import type { ModUse } from '@kotharhq/mod-api'
 import {
   MOD_USES,
@@ -15,9 +15,16 @@ import { Button, confirm, ErrorText, GROUP, Hint } from './controls.tsx'
 import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
-export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'> & Partial<Pick<State, 'mods'>>
+export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'> &
+  Partial<Pick<State, 'mods' | 'localInstall'>>
 
-type Props = { market: Market; connected: boolean; send: (m: ClientMessage) => void }
+type Props = {
+  market: Market
+  connected: boolean
+  send: (m: ClientMessage) => void
+  // The desktop app's folder picker; a browser tab types a path instead.
+  pickFolder?: (title?: string) => Promise<string | null>
+}
 
 type Row = {
   kind: MarketKind
@@ -176,7 +183,88 @@ export const MOD_WARNING =
 
 const usesText = (uses: readonly ModUse[]) => uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
 
-export function MarketplacePage({ market, connected, send }: Props) {
+const LOCAL_HINT =
+  'Installs a mod (a folder with manifest.json and a built main.mjs) or themes (<id>.json files) from this computer, ' +
+  "without publishing. It's marked Local; Reinstall copies it again after you change it."
+
+// Installs a folder an author is working on. In the desktop app the system picker comes first and typing is the
+// fallback, as in the Context panel; a browser tab can only type.
+function InstallFromFolder({ market, connected, send, pickFolder }: Props) {
+  const [path, setPath] = useState('')
+  const [typing, setTyping] = useState(!pickFolder)
+  const [sent, setSent] = useState<{ path: string; count: number }>()
+  const answer = market.localInstall
+  const waiting = sent !== undefined && (answer?.count ?? 0) === sent.count
+  const shown = sent !== undefined && !waiting && answer?.path === sent.path ? answer : undefined
+  const install = (path: string) => {
+    setSent({ path, count: answer?.count ?? 0 })
+    send({ type: 'market.installLocal', path })
+  }
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!connected || !path.trim()) return
+    install(path.trim())
+  }
+  const pick = async () => {
+    const picked = await pickFolder?.('Install from folder')
+    if (picked) install(picked)
+  }
+  const names = (ids: string[]) =>
+    ids.map((id) => market.installed?.find((item) => item.id === id)?.name ?? id).join(', ')
+  return (
+    <div className="flex flex-col gap-6 pb-16">
+      <div className="flex flex-wrap items-center gap-6">
+        {pickFolder && (
+          <Hint text={LOCAL_HINT} align="start">
+            <Button type="button" disabled={!connected || waiting} onClick={() => void pick()}>
+              Install from folder…
+            </Button>
+          </Hint>
+        )}
+        {pickFolder && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="small"
+            className="text-muted"
+            aria-expanded={typing}
+            disabled={!connected}
+            onClick={() => setTyping(!typing)}
+          >
+            Type a path
+          </Button>
+        )}
+      </div>
+      {typing && (
+        <form className="flex gap-6" onSubmit={submit}>
+          <input
+            className="min-w-0 flex-1 font-mono text-sm"
+            aria-label="Install from a folder by path"
+            placeholder="/path/to/my-mod"
+            value={path}
+            spellCheck={false}
+            disabled={!connected}
+            autoFocus={!!pickFolder}
+            onChange={(e) => setPath(e.target.value)}
+          />
+          <Hint text={LOCAL_HINT} align="end">
+            <Button disabled={!connected || waiting || !path.trim()}>{pickFolder ? 'Install' : 'Install from folder'}</Button>
+          </Hint>
+        </form>
+      )}
+      {waiting && <span className="text-sm text-muted">Installing…</span>}
+      {shown && 'error' in shown && <ErrorText>{shown.error}</ErrorText>}
+      {shown && 'ids' in shown && (
+        <span className="text-sm text-green">
+          Installed {names(shown.ids)} from {shown.path}
+          {shown.kind === 'mod' ? '. Turn it on in Community mods.' : '.'}
+        </span>
+      )}
+    </div>
+  )
+}
+
+export function MarketplacePage({ market, connected, send, pickFolder }: Props) {
   const { catalog } = market
   const { pending, start } = usePending(market)
 
@@ -198,6 +286,7 @@ export function MarketplacePage({ market, connected, send }: Props) {
 
   return (
     <>
+      <InstallFromFolder {...{ market, connected, send, pickFolder }} />
       {catalog === undefined && <p className="pb-12 text-sm text-muted">Loading the marketplace…</p>}
       {catalog?.error && (
         <div className="flex flex-wrap items-center gap-x-12 gap-y-6 pb-12">
@@ -307,6 +396,14 @@ function Section({ title, rows, empty, warning, market, pending, connected, send
                         : row.installed
                           ? `Update to ${row.latest}`
                           : 'Install'}
+                    </Button>
+                  )}
+                  {row.installed?.source === 'local' && row.installed.path && (
+                    <Button
+                      disabled={!connected}
+                      onClick={() => send({ type: 'market.installLocal', path: row.installed!.path! })}
+                    >
+                      Reinstall
                     </Button>
                   )}
                   {row.installed && (

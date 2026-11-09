@@ -403,6 +403,9 @@ export type ClientMessage =
   // themes.updated for a theme); replies market.installFailed if it can't.
   | { type: 'market.install'; kind: MarketKind; id: string }
   | { type: 'market.uninstall'; kind: MarketKind; id: string }
+  // Copies a folder on this computer (a mod or themes) as a local install; replies market.localInstalled or
+  // market.localFailed.
+  | { type: 'market.installLocal'; path: string }
   // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
   // the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
@@ -462,6 +465,8 @@ export type CoreMessage =
   // Everything installed from the marketplace or a folder, and where each came from.
   | { type: 'market.installed'; items: InstalledItem[] }
   | { type: 'market.installFailed'; kind: MarketKind; id: string; error: string }
+  | { type: 'market.localInstalled'; path: string; kind: MarketKind; ids: string[] }
+  | { type: 'market.localFailed'; path: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
 

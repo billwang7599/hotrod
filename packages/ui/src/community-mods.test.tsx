@@ -207,3 +207,58 @@ test('the state adds a newly installed mod and drops an uninstalled one', () => 
   state = reduce(state, { type: 'mod.removed', modId: 'counter' })
   expect(state.mods.map((m) => m.id)).toEqual(['home'])
 })
+
+test('Install from folder: a browser tab types a path; the answer shows inline', () => {
+  const sent = market({ catalog: { entries: [] } })
+  const input = document.querySelector('input[aria-label="Install from a folder by path"]') as HTMLInputElement
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '/Users/me/my-mod')
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  act(() => buttons('Install from folder')[0]!.click())
+  expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/my-mod' })
+  expect(container.textContent).toContain('Installing…')
+
+  const local: InstalledItem = { kind: 'mod', id: 'mine', name: 'Mine', version: '0.1.0', source: 'local', path: '/Users/me/my-mod' }
+  const answered = { path: '/Users/me/my-mod', kind: 'mod' as const, ids: ['mine'], count: 1 }
+  market({ catalog: { entries: [] }, installed: [local], localInstall: answered }, sent)
+  expect(container.textContent).toContain('Installed Mine from /Users/me/my-mod. Turn it on in Community mods.')
+})
+
+test('Install from folder: the desktop picker comes first, and a failure shows why', async () => {
+  const sent: ClientMessage[] = []
+  const pickFolder = vi.fn(async () => '/Users/me/broken')
+  render(<MarketplacePage market={{ marketFailures: {}, themes: [], installed: [], catalog: { entries: [] } }} connected send={(x) => sent.push(x)} pickFolder={pickFolder} />)
+  expect(document.querySelector('input[aria-label="Install from a folder by path"]')).toBeNull()
+  await act(async () => buttons('Install from folder…')[0]!.click())
+  expect(pickFolder).toHaveBeenCalledWith('Install from folder')
+  expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/broken' })
+  const failed = { path: '/Users/me/broken', error: '/Users/me/broken has no main.mjs. Build the mod first.', count: 1 }
+  render(
+    <MarketplacePage
+      market={{ marketFailures: {}, themes: [], installed: [], catalog: { entries: [] }, localInstall: failed }}
+      connected
+      send={(x) => sent.push(x)}
+      pickFolder={pickFolder}
+    />,
+  )
+  expect(container.textContent).toContain('has no main.mjs. Build the mod first.')
+  act(() => buttons('Type a path')[0]!.click())
+  expect(document.querySelector('input[aria-label="Install from a folder by path"]')).toBeTruthy()
+})
+
+test('a local install is marked Local, offers Reinstall from its folder, and never an update', () => {
+  const local: InstalledItem = { kind: 'mod', id: 'counter', name: 'Counter', version: '0.1.0', source: 'local', path: '/Users/me/counter' }
+  const sent = market({ catalog: { entries: [entry] }, installed: [local], mods: [counter({}, { source: 'local', path: '/Users/me/counter' })] })
+  const row = document.querySelector('[role="listitem"][aria-label="Counter"]')!
+  expect(row.textContent).toContain('Local')
+  expect(buttons('Update to 1.0.0')).toHaveLength(0)
+  act(() => buttons('Reinstall')[0]!.click())
+  expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/counter' })
+})
+
+test('the state keeps the last answer to Install from folder, counted', () => {
+  let state = reduce(initialState, { type: 'market.localFailed', path: '/x', error: 'nope' })
+  state = reduce(state, { type: 'market.localInstalled', path: '/x', kind: 'theme', ids: ['nord'] })
+  expect(state.localInstall).toEqual({ path: '/x', kind: 'theme', ids: ['nord'], count: 2 })
+})

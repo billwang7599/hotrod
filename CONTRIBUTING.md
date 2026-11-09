@@ -9,11 +9,12 @@ Contributions are licensed under the licence of the files they change (inbound =
 - `packages/mod-api/`: MIT ([packages/mod-api/LICENSE](packages/mod-api/LICENSE)).
 - Everything else: FSL-1.1-ALv2 ([LICENSE.md](LICENSE.md)).
 
-## Adding a theme to the marketplace
+## Adding a theme or mod to the marketplace
 
-Themes don't live in this repo. Publish yours from a repo of your own and submit it to the catalog: see
+Themes and community mods don't live in this repo. Publish yours from a repo of your own and submit it to the catalog: see
 [kothar-marketplace](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod). The theme format and a
-template are in [kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme).
+template are in [kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme); a mod starts from the
+template [kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod).
 
 ## Sign-off (DCO)
 

@@ -20,6 +20,12 @@ it uses through the mod API (running programs, reading chats, answering permissi
 that list before you install it, refuses to start a mod that does more than it listed, and keeps every community mod
 off until you turn it on. Mods load when Kothar starts, so turning one on takes a restart.
 
+**Writing a mod or theme:** start from the template
+[billwang7599/kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod) (or
+[kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme) for a theme). Try it with **Settings →
+Marketplace → Install from folder…** before you publish, then follow the
+[author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod) to list it.
+
 ## Themes
 
 Kothar ships with two themes, Default and Glass. More themes, such as Nord, Catppuccin and Gruvbox, come from the

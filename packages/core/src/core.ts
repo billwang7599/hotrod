@@ -2007,6 +2007,28 @@ export function openCore(options: {
             (error) => reply({ type: 'market.installFailed', kind, id, error: messageOf(error) }),
           )
         }
+        case 'market.installLocal': {
+          const path = String(message.path ?? '')
+          let result: ReturnType<typeof marketplace.installLocal>
+          try {
+            // A broken manifest is the marketplace's to explain.
+            const id = (() => {
+              try {
+                return (readJson(join(path.trim(), 'manifest.json')) as { id?: unknown }).id
+              } catch {
+                return undefined
+              }
+            })()
+            if (typeof id === 'string' && stockIds.has(id)) throw new Error(`A built-in mod is already called "${id}"`)
+            result = marketplace.installLocal(path)
+          } catch (error) {
+            return reply({ type: 'market.localFailed', path, error: messageOf(error) })
+          }
+          const { kind, ids, added } = result
+          if (kind === 'mod') communityChanged(ids[0]!, added)
+          marketChanged(kind)
+          return reply({ type: 'market.localInstalled', path, kind, ids })
+        }
         case 'market.uninstall':
           if (message.kind === 'mod') uninstallMod(String(message.id))
           else marketplace.uninstall(message.kind, message.id)

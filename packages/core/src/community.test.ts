@@ -327,4 +327,67 @@ describe('the core', () => {
     await expect(tryWith({ 'manifest.json': manifest, 'main.mjs': 'x'.repeat(5 * 1024 * 1024 + 1) })).rejects.toThrow('over')
     expect(existsSync(communityDir(garage))).toBe(false)
   })
+
+  it('installs a mod from a folder on this computer as local, and copies it again on Reinstall', async () => {
+    const t = start()
+    const folder = join(tempGarage(), 'my-mod')
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'manifest.json'), JSON.stringify(manifestOf('mine')))
+    t.handle({ type: 'market.installLocal', path: folder })
+    expect(t.replies.at(-1)).toEqual({ type: 'market.localFailed', path: folder, error: `${folder} has no main.mjs. Build the mod first.` })
+
+    writeFileSync(join(folder, 'main.mjs'), source('mine'))
+    t.handle({ type: 'market.installLocal', path: folder })
+    expect(t.replies.at(-1)).toEqual({ type: 'market.localInstalled', path: folder, kind: 'mod', ids: ['mine'] })
+    const info = t.core.mods().find((m) => m.id === 'mine')!
+    expect(info).toMatchObject({ enabled: false, community: { source: 'local', path: folder, version: '1.0.0' } })
+    expect(t.core.installed()).toEqual([{ kind: 'mod', id: 'mine', name: 'Mod mine', version: '1.0.0', source: 'local', path: folder }])
+
+    writeFileSync(join(folder, 'manifest.json'), JSON.stringify(manifestOf('mine', { version: '1.0.1' })))
+    t.handle({ type: 'market.installLocal', path: folder })
+    expect(t.core.mods().find((m) => m.id === 'mine')!.community?.version).toBe('1.0.1')
+  })
+
+  it('installs themes from a folder, or its themes/ folder', async () => {
+    const t = start()
+    const nord = JSON.parse(readFileSync(new URL('test-themes/nord.json', import.meta.url), 'utf8'))
+    const repo = join(tempGarage(), 'my-themes')
+    mkdirSync(join(repo, 'themes'), { recursive: true })
+    writeFileSync(join(repo, 'themes', 'nord.json'), JSON.stringify(nord))
+    writeFileSync(join(repo, 'package.json'), '{}')
+    t.handle({ type: 'market.installLocal', path: repo })
+    expect(t.replies.at(-1)).toEqual({ type: 'market.localInstalled', path: repo, kind: 'theme', ids: ['nord'] })
+    expect(t.core.themes()).toEqual([nord])
+    expect(t.messages).toContainEqual({ type: 'themes.updated', themes: [nord] })
+    expect(t.core.installed()[0]).toMatchObject({ kind: 'theme', id: 'nord', source: 'local', path: repo })
+  })
+
+  it('says why a folder could not be installed', () => {
+    const t = start()
+    const empty = tempGarage()
+    const bad = join(tempGarage(), 'bad-theme')
+    mkdirSync(bad)
+    writeFileSync(join(bad, 'x.json'), JSON.stringify({ id: 'x', css: 'body{}' }))
+    const broken = join(tempGarage(), 'broken-mod')
+    mkdirSync(broken)
+    writeFileSync(join(broken, 'manifest.json'), '{')
+    const home = join(tempGarage(), 'home-mod')
+    mkdirSync(home)
+    writeFileSync(join(home, 'manifest.json'), JSON.stringify(manifestOf('home')))
+    const cases: [string, string | RegExp][] = [
+      ['relative/path', 'Pick a folder, or type its full path'],
+      [join(empty, 'missing'), `${join(empty, 'missing')} isn't a folder`],
+      [empty, `${empty} has no manifest.json (a mod) or <id>.json theme files`],
+      [bad, /^No theme in .* passed the check\. .*x\.json: The theme has an unknown field "css"$/],
+      [broken, /manifest\.json is broken/],
+      [home, 'A built-in mod is already called "home"'],
+    ]
+    for (const [path, error] of cases) {
+      t.handle({ type: 'market.installLocal', path })
+      const reply = t.replies.at(-1)
+      expect(reply?.type, path).toBe('market.localFailed')
+      if (reply?.type === 'market.localFailed') expect(reply.error, path).toMatch(error)
+    }
+    expect(existsSync(communityDir(t.garage))).toBe(false)
+  })
 })

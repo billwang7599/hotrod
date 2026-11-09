@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { ModManifest, ModUse } from '@kotharhq/mod-api'
 import {
   type CatalogEntry,
@@ -304,9 +304,72 @@ export function openMarketplace(options: {
     rmSync(join(themesDir, `${id}.json`), { force: true })
   }
 
+  // Copies a folder an author is working on, without publishing it: a mod (manifest.json and main.mjs), or themes
+  // (<id>.json files in the folder or its themes/ folder). Installs are marked local, with the folder, so they can be
+  // copied again after a rebuild, and the marketplace never offers to update them.
+  function installLocal(path: unknown): { kind: MarketKind; ids: string[]; added: ModUse[] } {
+    if (typeof path !== 'string' || !isAbsolute(path.trim())) throw new Error('Pick a folder, or type its full path')
+    const folder = path.trim()
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`${folder} isn't a folder`)
+    const installedAt = new Date(now()).toISOString()
+    if (existsSync(join(folder, MANIFEST))) {
+      const bytes = readCapped(join(folder, MANIFEST), MAX_MANIFEST_BYTES)
+      let manifest: ModManifest
+      try {
+        manifest = checkModManifest(JSON.parse(bytes.toString('utf8')))
+      } catch (error) {
+        throw new Error(`${folder}/${MANIFEST} is broken: ${messageOf(error)}`)
+      }
+      if (!existsSync(join(folder, MOD_MAIN))) throw new Error(`${folder} has no ${MOD_MAIN}. Build the mod first.`)
+      const main = readCapped(join(folder, MOD_MAIN), MAX_MOD_BYTES)
+      const before = installedMods(options.garage).find((m) => m.manifest.id === manifest.id)?.manifest.uses
+      writeItem(join(communityDir(options.garage), manifest.id), { [MANIFEST]: bytes, [MOD_MAIN]: main }, {
+        source: 'local',
+        path: folder,
+        version: manifest.version,
+        installedAt,
+        sha256: { [MANIFEST]: sha256(bytes), [MOD_MAIN]: sha256(main) },
+      })
+      return { kind: 'mod', ids: [manifest.id], added: before ? manifest.uses.filter((use) => !before.includes(use)) : [] }
+    }
+    const dirs = [folder, join(folder, 'themes')].filter((dir) => existsSync(dir) && statSync(dir).isDirectory())
+    const files = dirs.flatMap((dir) => readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => join(dir, n)))
+    const problems: string[] = []
+    const themes = files.flatMap((file) => {
+      try {
+        const bytes = readCapped(file, MAX_THEME_BYTES)
+        const theme = checkTheme(JSON.parse(bytes.toString('utf8')))
+        if (file !== join(file, '..', `${theme.id}.json`)) throw new Error(`it must be named ${theme.id}.json`)
+        return [{ bytes, theme }]
+      } catch (error) {
+        problems.push(`${file}: ${messageOf(error)}`)
+        return []
+      }
+    })
+    if (!themes.length) {
+      throw new Error(
+        problems.length
+          ? `No theme in ${folder} passed the check. ${problems[0]}`
+          : `${folder} has no manifest.json (a mod) or <id>.json theme files`,
+      )
+    }
+    for (const { bytes, theme } of themes) {
+      writeItem(join(themesDir, theme.id), { [THEME_FILE]: bytes }, {
+        source: 'local',
+        path: folder,
+        version: theme.version,
+        installedAt,
+        sha256: { [THEME_FILE]: sha256(bytes) },
+      })
+      rmSync(join(themesDir, `${theme.id}.json`), { force: true })
+    }
+    return { kind: 'theme', ids: themes.map(({ theme }) => theme.id), added: [] }
+  }
+
   return {
     url,
     catalog,
+    installLocal,
     listing,
     themes: () => installedThemes().map(({ theme }) => theme),
     installed: (): InstalledItem[] => [
@@ -316,6 +379,11 @@ export function openMarketplace(options: {
     install,
     uninstall,
   }
+}
+
+function readCapped(file: string, max: number) {
+  if (statSync(file).size > max) throw new Error(`${file} is over ${max} bytes`)
+  return readFileSync(file)
 }
 
 function itemOf(kind: MarketKind, about: { id: string; name: string; version: string }, record: InstallRecord): InstalledItem {

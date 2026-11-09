@@ -94,6 +94,8 @@ export type State = {
   // marketKey), counted so the same error twice still reads as a new answer.
   catalog?: { entries?: MarketEntry[]; error?: string }
   marketFailures: Record<string, { error: string; count: number }>
+  // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
+  localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
   // The core's latest answer to the search palette.
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
@@ -397,6 +399,11 @@ export function reduce(state: State, action: Action): State {
     }
     case 'marketplace.catalog':
       return { ...state, catalog: { entries: action.entries, error: action.error } }
+    case 'market.localInstalled':
+    case 'market.localFailed': {
+      const { type: _, ...answer } = action
+      return { ...state, localInstall: { ...answer, count: (state.localInstall?.count ?? 0) + 1 } }
+    }
     case 'market.installFailed': {
       const key = marketKey(action.kind, action.id)
       const count = (state.marketFailures[key]?.count ?? 0) + 1

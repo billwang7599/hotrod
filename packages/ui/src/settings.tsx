@@ -57,6 +57,8 @@ type PageProps = {
   send: (m: ClientMessage) => void
   // Installed themes and the marketplace's catalog.
   market?: Market
+  // The desktop app's folder picker, for Install from folder.
+  pickFolder?: (title?: string) => Promise<string | null>
 }
 
 const NO_MARKET: Market = { marketFailures: {} }
@@ -172,8 +174,8 @@ const PAGES = [
     group: 'Options',
     title: 'Marketplace',
     intro: 'Themes from their authors\' own repos, beyond Default and Glass. Installed themes show in Appearance.',
-    body: ({ market = NO_MARKET, connected, send }: PageProps) => (
-      <MarketplacePage market={market} connected={connected} send={send} />
+    body: ({ market = NO_MARKET, connected, send, pickFolder }: PageProps) => (
+      <MarketplacePage market={market} connected={connected} send={send} pickFolder={pickFolder} />
     ),
   },
   {

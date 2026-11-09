@@ -146,10 +146,10 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, installed, marketFailures, mods } = state
+  const { catalog, themes, installed, marketFailures, mods, localInstall } = state
   const market = useMemo(
-    () => ({ catalog, themes, installed, marketFailures, mods }),
-    [catalog, themes, installed, marketFailures, mods],
+    () => ({ catalog, themes, installed, marketFailures, mods, localInstall }),
+    [catalog, themes, installed, marketFailures, mods, localInstall],
   )
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
@@ -256,6 +256,7 @@ function App() {
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
+              pickFolder={window.kothar?.pickFolder}
               connected={connected}
               send={send}
               page={settingsPage}
