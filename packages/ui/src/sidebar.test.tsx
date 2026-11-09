@@ -90,28 +90,32 @@ test('with Home off, only the spaces show', () => {
   expect(names(container)).toEqual(names(spaces()))
 })
 
-function Footer({ connected }: { connected: boolean }) {
+function Sidebar({ connected }: { connected: boolean }) {
   const [request, setRequest] = useState<NameRequest | null>(null)
   return (
     <>
-      <SidebarFooter
+      <ChatNav
+        chats={[SPACE]}
+        selectedId=""
         connected={connected}
-        keys={{ newSpace: 'Mod+N', settings: 'Mod+,' }}
-        newSpace={() => setRequest({ kind: 'new' })}
-        openSettings={() => {}}
+        send={() => {}}
+        select={() => {}}
+        askName={setRequest}
+        newSpaceKeys="Mod+N"
       />
+      <SidebarFooter settingsKeys="Mod+," openSettings={() => {}} />
       <NameDialog request={request} connected={connected} send={() => {}} close={() => setRequest(null)} />
     </>
   )
 }
 
-function renderFooter(connected = true) {
+function renderSidebar(connected = true) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
         <MotionConfig transition={{ duration: 0 }}>
           <Tooltip.Provider delayDuration={0}>
-            <Footer connected={connected} />
+            <Sidebar connected={connected} />
           </Tooltip.Provider>
         </MotionConfig>
       </LazyMotion>,
@@ -119,15 +123,19 @@ function renderFooter(connected = true) {
   )
 }
 
-const footerButton = (label: string) =>
-  [...container.querySelectorAll('button')].find((b) => b.textContent?.endsWith(label)) as HTMLButtonElement
+const buttonsEnding = (label: string) =>
+  [...container.querySelectorAll('button')].filter((b) => b.textContent?.endsWith(label)) as HTMLButtonElement[]
 
-test('the New space row at the bottom of the sidebar opens the name dialog, and is off while disconnected', () => {
-  renderFooter()
+test('the sidebar has one New space button, under the spaces; it opens the name dialog and is off while disconnected', () => {
+  renderSidebar()
+  const [newSpace, ...more] = buttonsEnding('New space')
+  expect(more).toEqual([])
+  expect(newSpace!.closest('nav')).not.toBeNull()
+  expect(newSpace!.hasAttribute('data-hint')).toBe(true)
   expect(document.querySelector('[role="dialog"]')).toBeNull()
-  act(() => footerButton('New space').click())
+  act(() => newSpace!.click())
   expect(document.querySelector('[role="dialog"]')).not.toBeNull()
-  renderFooter(false)
-  expect(footerButton('New space').disabled).toBe(true)
-  expect(footerButton('Settings').disabled).toBe(false)
+  renderSidebar(false)
+  expect(buttonsEnding('New space')[0]!.disabled).toBe(true)
+  expect(buttonsEnding('Settings')[0]!.disabled).toBe(false)
 })

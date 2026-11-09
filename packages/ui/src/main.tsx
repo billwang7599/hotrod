@@ -212,13 +212,9 @@ function App() {
                     send={send}
                     select={select}
                     askName={setNameRequest}
+                    newSpaceKeys={keys.newSpace}
                   />
-                  <SidebarFooter
-                    connected={connected}
-                    keys={keys}
-                    newSpace={() => setNameRequest({ kind: 'new' })}
-                    openSettings={() => openSettings()}
-                  />
+                  <SidebarFooter settingsKeys={keys.settings} openSettings={() => openSettings()} />
                 </aside>
               </SidePanel>
             )}
