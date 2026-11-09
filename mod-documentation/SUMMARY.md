@@ -4,11 +4,11 @@ The sidebar order of these pages. Each line links a page; indented lines sit und
 
 - [Home](index.md)
 - [Introduction](introduction.md)
-- [Using mods](using-mods.md)
+- [Using extensions](using-mods.md)
 - [Quick start](quick-start.md)
-- [Mod anatomy](anatomy.md)
+- [Extension anatomy](anatomy.md)
 - API reference
-  - [The mod object](reference/mod.md)
+  - [The extension object](reference/mod.md)
   - [Settings and setup](reference/settings.md)
   - [Tools, MCP servers, instructions and memory](reference/agents.md)
   - [Panels and commands](reference/panels.md)

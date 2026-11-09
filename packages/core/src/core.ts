@@ -227,7 +227,7 @@ function openLockedCore(options: {
   for (const found of options.community ?? []) {
     const { manifest, item } = found
     if (builtInIds.has(manifest.id) || community.has(manifest.id)) {
-      console.error(`Skipped the community mod "${manifest.id}": a mod already has that id`)
+      console.error(`Skipped the community extension "${manifest.id}": an extension already has that id`)
       continue
     }
     let { mod, loadError } = found
@@ -282,7 +282,7 @@ function openLockedCore(options: {
     const mod = mods.find((m) => m.id === id)
     if (mod) return mod
     const broken = brokenMods.find((m) => m.id === id)
-    throw new Error(broken ? `The mod ${id} couldn't load: ${broken.loadError}` : `Unknown mod "${id}"`)
+    throw new Error(broken ? `The extension ${id} couldn't load: ${broken.loadError}` : `Unknown extension "${id}"`)
   }
   const communityOn = () => settings.communityMods === true
   // A community mod's own switch: off until the user turns it on, whatever it says.
@@ -1379,7 +1379,7 @@ function openLockedCore(options: {
 
   const setModEnabled = (mod: Mod, enabled: boolean) => {
     if (community.has(mod.id) && !communityOn() && enabled) {
-      throw new Error(`Turn on community mods before turning on ${mod.name}`)
+      throw new Error(`Turn on community extensions before turning on ${mod.name}`)
     }
     const family = (mod.chats ?? []).flatMap(({ id }) => {
       const chat = chats.get(id)
@@ -1417,7 +1417,7 @@ function openLockedCore(options: {
     const running = mods.filter((mod) => community.has(mod.id) && ownSwitch(mod))
     if (!enabled) {
       const busy = running.flatMap((mod) => familyOfMod(mod)).find((chat) => chat.status !== 'idle')
-      if (busy) throw new Error(`Stop "${busy.info.name}" before turning community mods off`)
+      if (busy) throw new Error(`Stop "${busy.info.name}" before turning community extensions off`)
     }
     settings.communityMods = enabled
     saveSettings()
@@ -1468,7 +1468,7 @@ function openLockedCore(options: {
       const more = added.map((use) => MOD_USES[use].toLowerCase()).join('; ')
       broadcast({
         type: 'error',
-        message: `${mod.name} was turned off: its update also ${more}. Turn it on again in Community mods to allow that.`,
+        message: `${mod.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`,
       })
     }
     broadcast({ type: 'mod.updated', mod: modInfo(mod) })
@@ -2395,7 +2395,7 @@ function openLockedCore(options: {
           const { kind } = message
           const id = String(message.id)
           if (kind === 'mod' && builtInIds.has(id)) {
-            return reply({ type: 'market.installFailed', kind, id, error: `A built-in mod is already called "${id}"` })
+            return reply({ type: 'market.installFailed', kind, id, error: `A built-in extension is already called "${id}"` })
           }
           return void marketplace.install(kind, id).then(
             ({ added }) => {
@@ -2417,7 +2417,7 @@ function openLockedCore(options: {
                 return undefined
               }
             })()
-            if (typeof id === 'string' && builtInIds.has(id)) throw new Error(`A built-in mod is already called "${id}"`)
+            if (typeof id === 'string' && builtInIds.has(id)) throw new Error(`A built-in extension is already called "${id}"`)
             result = marketplace.installLocal(path)
           } catch (error) {
             return reply({ type: 'market.localFailed', path, error: messageOf(error) })

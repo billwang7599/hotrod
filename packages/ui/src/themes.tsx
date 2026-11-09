@@ -255,7 +255,7 @@ function Preview({ theme, scheme }: { theme: Theme; scheme: 'dark' | 'light' }) 
   )
 }
 
-// browse: opens the Marketplace on its themes.
+// browse: opens the Marketplace.
 export function Appearance({ browse }: { browse?: () => void } = {}) {
   const { theme: picked, scheme, dark } = useAppearance()
   const shown = dark ? 'dark' : 'light'

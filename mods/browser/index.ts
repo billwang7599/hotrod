@@ -71,7 +71,7 @@ export function createBrowserMod(options: BrowserModOptions = {}) {
   const findExecutable = async () => {
     if (executable) return executable
     const { ready, path } = await checkChromium(host!.run)
-    if (!ready) throw new Error('Kothar’s browser isn’t installed: Settings → Mods → Browser → Install')
+    if (!ready) throw new Error('Kothar’s browser isn’t installed: Settings → Extensions → Browser → Install')
     return (executable = path)
   }
 

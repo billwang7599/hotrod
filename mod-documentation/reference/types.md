@@ -1,11 +1,11 @@
 ---
 title: Types
-description: The data types mods receive - chats, spaces, log entries and engine events.
+description: The data types extensions receive - chats, spaces, log entries and engine events.
 ---
 
 # Types
 
-All of these come from the mod API's types. The full source is
+All of these come from the extension API's types. The full source is
 [`packages/mod-api/index.ts`](https://github.com/billwang7599/kothar/blob/main/packages/mod-api/index.ts).
 
 ## Chats
@@ -26,11 +26,11 @@ All of these come from the mod API's types. The full source is
 |---|---|
 | `status` | `idle`, `running`, `waiting` (on the user) or `stopping`. |
 | `archived` | Whether it's archived. |
-| `mod` | Set on a mod's own chat, such as Home: the mod's id. |
+| `mod` | Set on an extension's own chat, such as Home: the extension's id. |
 | `folders` | The folders in its context. |
 | `files` | The files in its context. |
 | `createdAt` | When it was made (ISO time). |
-| `parentMessages` | Set for a worker: how many of its parent's messages there were when it started, so a memory mod can freeze its view of the parent there. |
+| `parentMessages` | Set for a worker: how many of its parent's messages there were when it started, so a memory extension can freeze its view of the parent there. |
 
 A **space** is a chat with no `parentId` and no `mod`.
 
@@ -53,7 +53,7 @@ A **space** is a chat with no `parentId` and no `mod`.
 |---|---|---|
 | `user.message` | `text`, `attachments?`, `midTurn?` | A message you sent. `midTurn` is set when it was sent while a turn ran and taken in by that turn. |
 | `worker.report` | `text`, `chatId`, `name`, `error?` | A worker's final reply, delivered to its lead. |
-| `permission.resolved` | `requestId`, `allow`, `auto?` | A permission request was answered. `auto` is set when Kothar or a mod answered it. |
+| `permission.resolved` | `requestId`, `allow`, `auto?` | A permission request was answered. `auto` is set when Kothar or an extension answered it. |
 | `question.resolved` | `requestId`, `answers?` | An agent's question was answered, or declined if there are no answers. |
 | `mod.note` | `text`, `mod?`, `panel?` | A note from [`host.note`](host.md#notes). |
 | Any engine event | | Every [engine event](#engine-events) except streamed deltas and steering. Completed text is logged as `text.completed`. |
@@ -74,7 +74,7 @@ the entries a conversation is made of, numbered from 0 in log order. Every memor
 
 ## Engine events
 
-Every engine's events are translated into these, so a mod reads the same stream from every engine. `onEvent` gets all
+Every engine's events are translated into these, so an extension reads the same stream from every engine. `onEvent` gets all
 of them.
 
 | `type` | Fields | What it is |

@@ -713,7 +713,7 @@ export function checkTheme(value: unknown): ThemeFile {
 export function checkModManifest(value: unknown): ModManifest {
   const fields = ['id', 'name', 'version', 'author', 'description', 'api', 'uses']
   const manifest = onlyKeys(value, 'manifest.json', fields)
-  if (manifest.api !== MOD_API_VERSION) throw new Error(`manifest.json is for mod API ${String(manifest.api)}, not ${MOD_API_VERSION}`)
+  if (manifest.api !== MOD_API_VERSION) throw new Error(`manifest.json is for extension API ${String(manifest.api)}, not ${MOD_API_VERSION}`)
   if (!Array.isArray(manifest.uses)) throw new Error('manifest.json uses must be a list')
   const unknown = manifest.uses.find((use) => !isModUse(use))
   if (unknown !== undefined) throw new Error(`manifest.json uses "${String(unknown)}", which Kothar doesn't know`)

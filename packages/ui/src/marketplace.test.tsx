@@ -16,7 +16,7 @@ import {
   type ThemeFile,
 } from '@kothar/core/shared'
 import { ConfirmDialog } from './controls.tsx'
-import { MarketplaceDialog, shownRows, type Market, type MarketKindFilter } from './marketplace.tsx'
+import { MarketplaceDialog, shownRows, type Market } from './marketplace.tsx'
 import { reduce, initialState } from './state.ts'
 import { SettingsDialog } from './settings.tsx'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -83,8 +83,10 @@ function render(node: ReactNode) {
   )
 }
 
-function show(market: Market, sent: ClientMessage[] = [], connected = true, kind?: MarketKindFilter) {
-  render(<MarketplaceDialog open close={() => {}} kind={kind} market={market} connected={connected} send={(m) => sent.push(m)} />)
+// Opens the Marketplace, on All as it always opens, then picks a kind if asked.
+function show(market: Market, sent: ClientMessage[] = [], connected = true, kind?: 'Themes' | 'Extensions') {
+  render(<MarketplaceDialog open close={() => {}} market={market} connected={connected} send={(m) => sent.push(m)} />)
+  if (kind) act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), kind)!.click())
   return sent
 }
 
@@ -180,7 +182,7 @@ test('filters by kind and by what is installed or has an update', () => {
   }
   const old = installedNord({ version: '0.9.0' })
   const market: Market = { catalog: { entries: [...entries, mod] }, themes: [nord], installed: [old], marketFailures: {} }
-  show(market, [], true, 'mod')
+  show(market, [], true, 'Extensions')
   expect(options()).toEqual(['Counter'])
   act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), 'Themes')!.click())
   expect(options()).toEqual(['Nord', 'Gruvbox', 'Catppuccin'])
@@ -318,7 +320,7 @@ test('says when an installed theme left the marketplace', () => {
 })
 
 test('says when the marketplace is empty', () => {
-  show({ catalog: { entries: [] }, themes: [], installed: [], marketFailures: {} }, [], true, 'theme')
+  show({ catalog: { entries: [] }, themes: [], installed: [], marketFailures: {} }, [], true, 'Themes')
   expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No themes in the marketplace yet.')
 })
 
@@ -335,7 +337,7 @@ test('the state keeps the catalog, what is installed and failures, and an instal
   expect(state.marketFailures).toEqual({})
 })
 
-function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: (kind?: MarketKindFilter) => void) {
+function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: () => void) {
   render(
     <SettingsDialog
       open
@@ -357,15 +359,15 @@ function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: (kin
   )
 }
 
-test('Settings has no Marketplace page; Appearance and Community mods open it with Browse', () => {
-  const opened: (MarketKindFilter | undefined)[] = []
-  settingsAt('appearance', (kind) => opened.push(kind))
+test('Settings has no Marketplace page; Appearance and Community hub open it with Browse', () => {
+  let opened = 0
+  settingsAt('appearance', () => opened++)
   const tabs = [...document.querySelectorAll('[role="dialog"] [role="tab"]')].map((tab) => tab.textContent)
   expect(tabs).not.toContain('Marketplace')
   act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
-  settingsAt('community-mods', (kind) => opened.push(kind))
+  settingsAt('community-mods', () => opened++)
   act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
-  expect(opened).toEqual(['theme', 'mod'])
+  expect(opened).toBe(2)
 })
 
 function hexToRgb(hex: string) {
@@ -378,4 +380,19 @@ test("the list and the detail keep their scrollbars inset from the window's edge
   const dialog = document.querySelector('[role="dialog"]')!
   expect(dialog.querySelector('[role="listbox"]')!.classList).toContain('scroll-inset')
   expect(dialog.querySelectorAll('.scroll-inset').length).toBe(2)
+})
+
+test('the Marketplace always opens on All, and picking a kind there lasts only until it closes', () => {
+  const market: Market = { catalog: { entries }, themes: [], installed: [], marketFailures: {} }
+  const pressed = () => document.querySelector('[role="group"][aria-label="Kind"] [aria-pressed="true"]')!.textContent
+  const view = (open: boolean) => (
+    <MarketplaceDialog open={open} close={() => {}} market={market} connected send={() => {}} />
+  )
+  render(view(true))
+  expect(pressed()).toBe('All')
+  act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), 'Themes')!.click())
+  expect(pressed()).toBe('Themes')
+  render(view(false))
+  render(view(true))
+  expect(pressed()).toBe('All')
 })

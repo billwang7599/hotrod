@@ -1,14 +1,14 @@
 ---
 title: The host
-description: Every call a mod can make through host - chats, messages, accounts, programs, storage and more.
+description: Every call an extension can make through host - chats, messages, accounts, programs, storage and more.
 ---
 
 # The host
 
-`host` is how a mod acts on Kothar. Every hook gets it in its context, `{ values, host }`, and a tool gets it in its
-`call`. Each mod has a host of its own.
+`host` is how an extension acts on Kothar. Every hook gets it in its context, `{ values, host }`, and a tool gets it in its
+`call`. Each extension has a host of its own.
 
-A community mod must list the calls it makes in its manifest's `uses`. A call it didn't list throws an error that names
+A community extension must list the calls it makes in its manifest's `uses`. A call it didn't list throws an error that names
 the missing entry.
 
 | Calls | List in `uses` |
@@ -27,7 +27,7 @@ the missing entry.
 
 | Call | Returns |
 |---|---|
-| `chats()` | Every chat you can see: spaces, workers and mod chats, as [`ChatDetail`](types.md#chats)s. |
+| `chats()` | Every chat you can see: spaces, workers and extension chats, as [`ChatDetail`](types.md#chats)s. |
 | `chat(chatId)` | One chat, or `undefined`. |
 | `read(chatId, { last? })` | The chat's log, oldest first, as [`ChatEntry`](types.md#log-entries)s. `last` keeps only the newest entries. |
 | `messages(chatId)` | The chat's log as numbered [memory messages](types.md#memory-messages), oldest first. |
@@ -107,12 +107,12 @@ const reviewer: Mod = {
 export default reviewer
 ```
 
-This mod lists `events` and `sendMessages`. Careful: a mod that sends a message after every turn can loop. Here the
+This extension lists `events` and `sendMessages`. Careful: an extension that sends a message after every turn can loop. Here the
 review turn only sends again if it edited files.
 
 ### Child chats
 
-`createChat` with `parentId` makes a child of that chat, exactly as the built-in Workers mod makes a worker:
+`createChat` with `parentId` makes a child of that chat, exactly as the built-in Workers extension makes a worker:
 
 - It's listed under its parent, and it's view only: you can watch it and stop it, not write to it.
 - It works in its space's work folder and checkouts, so it takes no `folders` or `files` of its own.
@@ -150,7 +150,7 @@ export { research }
 `run(command, args, options?)` runs a command and waits for it to end. It resolves with `{ code, stdout, stderr }`.
 `options` are `{ cwd?, env?, timeoutMs?, onStdout? }`; `onStdout` gets output as it arrives. `cwd` defaults to `/`.
 
-`run` isn't sandboxed: it's the mod's own command, not an agent's.
+`run` isn't sandboxed: it's the extension's own command, not an agent's.
 
 ```ts
 import type { ModHost } from '@kothar/mod-api'
@@ -177,7 +177,7 @@ to end. Nothing times it out. It resolves with a `ModProcess`:
 `options` are `{ cwd?, env?, chat? }`. With `chat`, the command runs as that chat's own commands do: sandboxed to its
 space's work folder and checkouts, unless the chat may edit anywhere. `cwd` then defaults to the space's work folder; without `chat`, it defaults to `/`.
 
-Everything a mod started stops when the mod is turned off or Kothar quits.
+Everything an extension started stops when the extension is turned off or Kothar quits.
 
 ```ts
 import type { ModHost } from '@kothar/mod-api'
@@ -203,7 +203,7 @@ such as when the folder doesn't exist.
 ## Notes
 
 `note(chatId, text, { panel? })` writes a short line into the chat's transcript, for you. Agents don't see it. With
-`panel`, clicking the note opens that panel of your mod's; it must be one of your mod's panel ids.
+`panel`, clicking the note opens that panel of your extension's; it must be one of your extension's panel ids.
 
 ```ts
 import type { ModHost } from '@kothar/mod-api'
@@ -217,7 +217,7 @@ export { tellUser }
 
 ## Errors
 
-`error(text)` shows an error to you, the same way as one from a hook that throws: after the mod's name. Use it for
+`error(text)` shows an error to you, the same way as one from a hook that throws: after the extension's name. Use it for
 background work, where there's no hook to throw from. It needs nothing listed.
 
 ## Model calls
@@ -247,14 +247,14 @@ List `models` in the manifest's `uses`: each call runs on your account.
 
 | Call | What it does |
 |---|---|
-| `spaceValues(chatId)` | The mod's `spaceSettings` for the chat's space (a worker's space), defaults filled in. |
-| `setSpaceValue(chatId, key, value)` | Saves one for the chat's space, checked as Settings checks, and draws the mod's panels again. Throws for an unknown key or a bad value. |
+| `spaceValues(chatId)` | The extension's `spaceSettings` for the chat's space (a worker's space), defaults filled in. |
+| `setSpaceValue(chatId, key, value)` | Saves one for the chat's space, checked as Settings checks, and draws the extension's panels again. Throws for an unknown key or a bad value. |
 
 See [Settings per space](settings.md#settings-per-space).
 
 ## Storage
 
-`storage` keeps plain files of the mod's own, in the garage's `mods/<id>/` folder. Names are relative to that folder and
+`storage` keeps plain files of the extension's own, in the garage's `mods/<id>/` folder. Names are relative to that folder and
 can't leave it; they may include subfolders.
 
 | Member | What it does |
@@ -265,7 +265,7 @@ can't leave it; they may include subfolders.
 | `append(name, text)` | Adds to the end of the file, making it if it's missing. |
 | `remove(name)` | Deletes the file, if it's there. |
 
-`chatStorage(chatId)` is the same, for files of the mod's own that belong to one chat. They live in the chat's folder
+`chatStorage(chatId)` is the same, for files of the extension's own that belong to one chat. They live in the chat's folder
 and go when the chat is deleted. Kothar's own files there are out of reach. It needs `memory` listed.
 
 ```ts
@@ -282,11 +282,11 @@ function bump(host: ModHost, key: string) {
 export { bump }
 ```
 
-The folder stays when the mod is turned off or uninstalled.
+The folder stays when the extension is turned off or uninstalled.
 
 ## refresh
 
-`refresh(chatId?)` draws the mod's panels and commands for that chat again, and re-renders its open panels. Without a
+`refresh(chatId?)` draws the extension's panels and commands for that chat again, and re-renders its open panels. Without a
 chat, it does so for every chat. Call it when what your panels show has changed. See
 [Panels](panels.md#panels).
 
@@ -296,11 +296,11 @@ chat, it does so for every chat. Call it when what your panels show has changed.
 turns amber in the sidebar, and a bar above the composer shows `text` and the buttons. A worker's bar shows in its
 space too, where the user is. Each button is `{ id, label, primary?, hint? }`.
 
-When the user clicks a button, Kothar calls the mod's `onWaitAction(chat, { button }, context)`. When they send the chat
+When the user clicks a button, Kothar calls the extension's `onWaitAction(chat, { button }, context)`. When they send the chat
 a message instead, it calls `onWaitAction(chat, { message }, context)`, and the message still goes to the agent.
 
-The wait stays until the mod calls `endWait(chatId)`, the turn ends, or the mod is turned off. Calling `wait` again
-replaces the mod's wait. `wait` throws if the chat's turn isn't running, so call it from a tool's `run` or a hook
+The wait stays until the extension calls `endWait(chatId)`, the turn ends, or the extension is turned off. Calling `wait` again
+replaces the extension's wait. `wait` throws if the chat's turn isn't running, so call it from a tool's `run` or a hook
 that runs during the turn. The usual shape is a tool that waits on a promise the button resolves:
 
 ```ts
@@ -326,13 +326,13 @@ const mod: Mod = {
 }
 ```
 
-The built-in Browser mod's `ask_user_in_browser` works this way.
+The built-in Browser extension's `ask_user_in_browser` works this way.
 
 ## Processes rows
 
-The Processes tab lists the commands agents start. A mod can add rows of its own for something it runs in a space,
-such as the Browser mod's browser, with `processes(spaceId, context)` on the mod (see
-[The mod object](mod.md#optional-fields)):
+The Processes tab lists the commands agents start. An extension can add rows of its own for something it runs in a space,
+such as the Browser extension's browser, with `processes(spaceId, context)` on the extension (see
+[The extension object](mod.md#optional-fields)):
 
 ```ts
 processes: (spaceId) => [
@@ -347,6 +347,6 @@ onProcessAction(spaceId, key, action) {
 Kothar asks for the rows each time the tab draws. When yours change, call `host.processesChanged(spaceId)` so the tab
 draws again. A row's buttons call your `onProcessAction(spaceId, key, action, context)`.
 
-The other calls are for a mod that draws the tab, as the Processes mod does: `processes(spaceId)` returns every other
-mod's rows, each with its `mod` id; `processAction(spaceId, mod, key, action)` runs a row's button in the mod that owns
-it; and its `onProcessesChanged(spaceId, context)` hook runs when another mod calls `processesChanged`.
+The other calls are for an extension that draws the tab, as the Processes extension does: `processes(spaceId)` returns every other
+extension's rows, each with its `mod` id; `processAction(spaceId, mod, key, action)` runs a row's button in the extension that owns
+it; and its `onProcessesChanged(spaceId, context)` hook runs when another extension calls `processesChanged`.

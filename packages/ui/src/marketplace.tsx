@@ -176,7 +176,7 @@ const REACHING: ModUse[] = ['run', 'setup', 'mcpServers', 'permissions', 'sendMe
 
 // What a community mod says it uses through the mod API, in plain words.
 export function UsesList({ uses }: { uses: readonly ModUse[] }) {
-  if (!uses.length) return <span className="text-sm text-muted">Uses nothing through the mod API</span>
+  if (!uses.length) return <span className="text-sm text-muted">Uses nothing through the extension API</span>
   return (
     <ul className="flex flex-wrap gap-x-12 gap-y-2 text-sm" aria-label="Uses">
       {uses.map((use) => (
@@ -199,8 +199,8 @@ export function modStatus(info: ModInfo | undefined, communityMods: boolean) {
   if (!info?.community) return undefined
   const { version, running } = info.community
   const stays = running ? ' Its code stays loaded until Kothar restarts.' : ''
-  if (!info.enabled) return `Off.${stays || ' Turn it on in Community mods.'}`
-  if (!communityMods) return `Off while community mods are off.${stays}`
+  if (!info.enabled) return `Off.${stays || ' Turn it on in Community hub.'}`
+  if (!communityMods) return `Off while community extensions are off.${stays}`
   if (info.loadError) return undefined
   if (!running) return 'Starts when Kothar restarts.'
   if (running !== version) return `Running ${running}. Restart Kothar to run ${version}.`
@@ -208,13 +208,13 @@ export function modStatus(info: ModInfo | undefined, communityMods: boolean) {
 }
 
 export const MOD_WARNING =
-  'A community mod runs code on your computer with your permissions. Kothar holds it to what it lists, but it could ' +
-  'still read your files or reach the network on its own. Turn on only mods you trust.'
+  'A community extension runs code on your computer with your permissions. Kothar holds it to what it lists, but it could ' +
+  'still read your files or reach the network on its own. Turn on only extensions you trust.'
 
 const usesText = (uses: readonly ModUse[]) => uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
 
 const LOCAL_HINT =
-  'Installs a mod (a folder with manifest.json and a built main.mjs) or themes (<id>.json files) from this computer, ' +
+  'Installs an extension (a folder with manifest.json and a built main.mjs) or themes (<id>.json files) from this computer, ' +
   "without publishing. It's marked Local; Reinstall copies it again after you change it."
 
 // Installs a folder an author is working on. In the desktop app the system picker comes first and typing is the
@@ -270,7 +270,7 @@ function InstallFromFolder({ market, connected, send, pickFolder }: Props) {
           <input
             className="min-w-0 flex-1 font-mono text-sm"
             aria-label="Install from a folder by path"
-            placeholder="/path/to/my-mod"
+            placeholder="/path/to/my-extension"
             value={path}
             spellCheck={false}
             disabled={!connected}
@@ -287,7 +287,7 @@ function InstallFromFolder({ market, connected, send, pickFolder }: Props) {
       {shown && 'ids' in shown && (
         <span className="text-sm text-green">
           Installed {names(shown.ids)} from {shown.path}
-          {shown.kind === 'mod' ? '. Turn it on in Community mods.' : '.'}
+          {shown.kind === 'mod' ? '. Turn it on in Community hub.' : '.'}
         </span>
       )}
     </div>
@@ -300,7 +300,7 @@ type ShowFilter = 'all' | 'installed' | 'updates'
 const KIND_FILTERS: { value: MarketKindFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'theme', label: 'Themes' },
-  { value: 'mod', label: 'Mods' },
+  { value: 'mod', label: 'Extensions' },
 ]
 const SHOW_FILTERS: { value: ShowFilter; label: string }[] = [
   { value: 'all', label: 'Everything' },
@@ -327,17 +327,15 @@ export function shownRows(market: Market, kind: MarketKindFilter, show: ShowFilt
 type DialogProps = Props & {
   open: boolean
   close: () => void
-  // The kinds shown first: themes from Appearance, mods from Community mods.
-  kind?: MarketKindFilter
 }
 
 // The Marketplace: its own window over the app, like Obsidian's community plugin browser. A searchable list on the
-// left, the picked entry on the right.
-export function MarketplaceDialog({ open, close, kind: startKind = 'all', market, connected, send, pickFolder }: DialogProps) {
+// left, the picked entry on the right. It always opens on All, wherever it's opened from.
+export function MarketplaceDialog({ open, close, market, connected, send, pickFolder }: DialogProps) {
   const focus = useReturnFocus()
   const { catalog } = market
   const { pending, start } = usePending(market)
-  const [kind, setKind] = useState<MarketKindFilter>(startKind)
+  const [kind, setKind] = useState<MarketKindFilter>('all')
   const [show, setShow] = useState<ShowFilter>('all')
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string>()
@@ -353,7 +351,7 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
   if (open !== wasOpen) {
     setWasOpen(open)
     if (open) {
-      setKind(startKind)
+      setKind('all')
       setShow('all')
       setQuery('')
       setPicked(undefined)
@@ -373,8 +371,8 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
       const ok = await confirm({
         text: `Install ${row.name}?`,
         body:
-          'It stays off until you turn it on in Community mods.\n\n' +
-          (row.uses?.length ? `It says it:\n${usesText(row.uses)}` : 'It says it uses nothing through the mod API.'),
+          'It stays off until you turn it on in Community hub.\n\n' +
+          (row.uses?.length ? `It says it:\n${usesText(row.uses)}` : 'It says it uses nothing through the extension API.'),
         ok: 'Install',
       })
       if (!ok) return
@@ -417,7 +415,7 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
                   <input
                     type="search"
                     className="h-control min-w-160 flex-1 rounded border bg-panel px-8"
-                    placeholder="Search themes and mods"
+                    placeholder="Search themes and extensions"
                     aria-label="Search the marketplace"
                     value={query}
                     autoFocus
@@ -528,7 +526,7 @@ export function MarketplaceDialog({ open, close, kind: startKind = 'all', market
 const optionId = (row: Row) => `market-${row.kind}-${row.id}`
 
 function emptyText(query: string, kind: MarketKindFilter, show: ShowFilter, listed: boolean) {
-  const what = kind === 'theme' ? 'themes' : kind === 'mod' ? 'mods' : 'themes or mods'
+  const what = kind === 'theme' ? 'themes' : kind === 'mod' ? 'extensions' : 'themes or extensions'
   if (query.trim()) return `Nothing matches “${query.trim()}”.`
   if (show === 'updates') return 'Everything installed is up to date.'
   if (show === 'installed') return `No ${what} installed.`
@@ -563,7 +561,7 @@ function ListRow({ row, selected, busy, pick }: { row: Row; selected: boolean; b
     >
       <span className="flex items-baseline gap-8">
         <span className="min-w-0 truncate">{row.name}</span>
-        <span className="text-xs text-faint">{row.kind === 'theme' ? 'Theme' : 'Mod'}</span>
+        <span className="text-xs text-faint">{row.kind === 'theme' ? 'Theme' : 'Extension'}</span>
         <span className="ml-auto shrink-0">{busy ? <span className="text-xs text-muted">Installing…</span> : <Badge row={row} />}</span>
       </span>
       {row.description && <span className="truncate text-sm text-muted">{row.description}</span>}
@@ -592,7 +590,7 @@ function Detail({ row, busy, market, connected, send, install }: DetailProps) {
       <div className="flex flex-col gap-4">
         <h3 className="flex flex-wrap items-baseline gap-x-10 text-[18px] font-semibold">
           {row.name}
-          <span className="text-sm font-normal text-faint">{row.kind === 'theme' ? 'Theme' : 'Mod'}</span>
+          <span className="text-sm font-normal text-faint">{row.kind === 'theme' ? 'Theme' : 'Extension'}</span>
         </h3>
         <span className="flex flex-wrap items-baseline gap-x-10 text-sm text-muted">
           {row.author && <span>by {row.author}</span>}

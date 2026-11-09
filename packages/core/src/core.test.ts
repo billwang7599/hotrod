@@ -3656,8 +3656,8 @@ describe('mods', () => {
     expect(set('notes', 3)).toThrow('Notes must be text')
     expect(set('nope', 1)).toThrow('Tester has no setting "nope"')
     expect(set('enabled', false)).toThrow('Tester has no setting "enabled"')
-    expect(() => t.handle({ type: 'mod.setEnabled', modId: 'nope', enabled: true })).toThrow('Unknown mod "nope"')
-    expect(() => t.handle({ type: 'mod.setValue', modId: 'nope', key: 'x', value: 1 })).toThrow('Unknown mod "nope"')
+    expect(() => t.handle({ type: 'mod.setEnabled', modId: 'nope', enabled: true })).toThrow('Unknown extension "nope"')
+    expect(() => t.handle({ type: 'mod.setValue', modId: 'nope', key: 'x', value: 1 })).toThrow('Unknown extension "nope"')
     expect(t.core.mods()[0]).toEqual(infoOf(tester, true))
     expect(existsSync(join(t.garage, 'settings.json')) && savedMods(t.garage)).toBeFalsy()
   })
@@ -3894,7 +3894,7 @@ describe('mods', () => {
       await until(() => t.core.mods()[0]?.setup?.status === 'ready')
       expect(checks).toEqual(['check'])
       expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
-      expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown mod "nope"')
+      expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown extension "nope"')
     })
 
     it("gives a setup the mod's values, describes it by them, and checks again when one changes", async () => {

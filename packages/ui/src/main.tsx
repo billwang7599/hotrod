@@ -9,7 +9,7 @@ import { useCore } from './connection.ts'
 import { pruneDrafts } from './drafts.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
-import { MarketplaceDialog, type MarketKindFilter } from './marketplace.tsx'
+import { MarketplaceDialog } from './marketplace.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
@@ -161,8 +161,8 @@ function App() {
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
   const [searching, setSearching] = useState(false)
-  const [marketplace, setMarketplace] = useState<{ open: boolean; kind?: MarketKindFilter }>({ open: false })
-  const openMarketplace = useCallback((kind?: MarketKindFilter) => setMarketplace({ open: true, kind }), [])
+  const [marketplace, setMarketplace] = useState(false)
+  const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
@@ -173,7 +173,7 @@ function App() {
     newSpace: () => connected && setNameRequest({ kind: 'new' }),
     settings: () => openSettings(),
     search: () => setSearching((open) => !open),
-    marketplace: () => (marketplace.open ? setMarketplace({ open: false }) : openMarketplace()),
+    marketplace: () => setMarketplace((open) => !open),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
   }
   useShortcuts(shortcuts)
@@ -244,7 +244,7 @@ function App() {
                 tone="warning"
                 action={<RestartButton restart={state.restart} running={running} connected={connected} send={send} />}
               >
-                Restart Kothar to apply community mod changes: {changesText(state.restart.changes)}.
+                Restart Kothar to apply community extension changes: {changesText(state.restart.changes)}.
               </Banner>
             )}
             {engine?.enabled && (!engine.installed || !signedIn) && (
@@ -337,9 +337,8 @@ function App() {
             </AnimatePresence>
           </div>
           <MarketplaceDialog
-            open={marketplace.open}
-            kind={marketplace.kind}
-            close={() => setMarketplace({ open: false })}
+            open={marketplace}
+            close={() => setMarketplace(false)}
             market={market}
             connected={connected}
             send={send}

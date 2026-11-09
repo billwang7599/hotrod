@@ -1,21 +1,21 @@
 ---
 title: Publishing
-description: Publish a mod from your own GitHub repo, list it in the Marketplace, and ship updates.
+description: Publish an extension from your own GitHub repo, list it in the Marketplace, and ship updates.
 ---
 
 # Publishing
 
-You own your mod. It lives in your own GitHub repo, and Kothar installs it from your latest GitHub release. The
+You own your extension. It lives in your own GitHub repo, and Kothar installs it from your latest GitHub release. The
 Marketplace only holds a pointer to your repo; nothing is ever copied into it.
 
 ## 1. Publish a release
 
-A mod's release must carry two assets:
+An extension's release must carry two assets:
 
 - `manifest.json`
 - `main.mjs`, at most 5 MB
 
-One mod per repo. The [sample mod template](https://github.com/billwang7599/kothar-sample-mod) builds and releases
+One extension per repo. The [sample extension template](https://github.com/billwang7599/kothar-sample-mod) builds and releases
 both for you:
 
 1. Bump `version` in `manifest.json`, such as `1.0.0` to `1.1.0`.
@@ -61,20 +61,20 @@ once:
 
 2. The repo's **Check** workflow validates the entry, checks that your repo exists, and that its latest release has
    valid assets.
-3. A maintainer reviews it. For a mod, that means reading its source and checking that `uses` is honest.
+3. A maintainer reviews it. For an extension, that means reading its source and checking that `uses` is honest.
 
 ## 3. Ship updates
 
 Publish a new release with a higher `version`. You don't need another pull request.
 
 - Kothar users see **Update** on your entry once your latest release's `version` differs from theirs.
-- They update when they choose. Kothar never updates a mod by itself.
+- They update when they choose. Kothar never updates an extension by itself.
 - **See changes** shows them GitHub's comparison between their release's tag and your latest one. Write clear release
   notes; the Marketplace shows the start of them.
-- If an update lists more in `uses` than before, Kothar turns the mod off until each user turns it on again. Add to
+- If an update lists more in `uses` than before, Kothar turns the extension off until each user turns it on again. Add to
   `uses` only when you must.
 
-Later releases aren't reviewed again. Keep your mod honest: people trusted the version that was reviewed.
+Later releases aren't reviewed again. Keep your extension honest: people trusted the version that was reviewed.
 
 ## Renaming or removing
 
@@ -84,10 +84,10 @@ people who have it keep it until they uninstall it.
 ## What review promises
 
 - **Themes** are data. Kothar checks every theme file itself, so a theme can never do more than change colours.
-- **Mods** are code that runs with the user's permissions. Kothar enforces `uses` for the mod API, but can't sandbox
-  the mod. Review covers the first release only.
+- **Extensions** are code that runs with the user's permissions. Kothar enforces `uses` for the extension API, but can't sandbox
+  the extension. Review covers the first release only.
 
-To report a harmful mod or theme, open an issue on
+To report a harmful extension or theme, open an issue on
 [kothar-marketplace](https://github.com/billwang7599/kothar-marketplace/issues).
 
 ## Rate limits

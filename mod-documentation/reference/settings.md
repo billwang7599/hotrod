@@ -1,14 +1,14 @@
 ---
 title: Settings and setup
-description: Give a mod settings the user can change, and a setup step that installs what it needs.
+description: Give an extension settings the user can change, and a setup step that installs what it needs.
 ---
 
 # Settings and setup
 
 ## Settings
 
-`settings` lists the mod's settings. While the mod is on, Kothar shows them on the mod's own page in Settings, under
-**Mods**, and saves what the user picks. Every hook gets the current values as `values`, keyed by each setting's `key`.
+`settings` lists the extension's settings. While the extension is on, Kothar shows them on the extension's own page in Settings, under
+**Extensions**, and saves what the user picks. Every hook gets the current values as `values`, keyed by each setting's `key`.
 
 ```ts
 import type { Mod } from '@kothar/mod-api'
@@ -57,7 +57,7 @@ How values behave:
 
 - A saved value that's no longer valid, such as an option you removed, reads as the default.
 - A blank `text` value reads as the default.
-- `enabled` isn't allowed as a key. Kothar uses it for the mod's own switch.
+- `enabled` isn't allowed as a key. Kothar uses it for the extension's own switch.
 - Values are typed `string | number | boolean`, so convert them where you use them, as `String(values.rules)` does above.
 - A change applies at each chat's next message. Hooks always get the current values.
 
@@ -71,8 +71,8 @@ List `settings` in the manifest's `uses`.
 - **Read** them with `host.spaceValues(chatId)`, which fills in the defaults. Pass any chat; a worker's id gives its
   space's values.
 - **Change** them with `host.setSpaceValue(chatId, key, value)`, which checks the value as Settings does and draws the
-  mod's panels again, or let the user change them with a `switch` or `picker` in a [panel](panels.md#switches-and-pickers).
-- They aren't shown in Settings. A mod that has them shows them in a panel.
+  extension's panels again, or let the user change them with a `switch` or `picker` in a [panel](panels.md#switches-and-pickers).
+- They aren't shown in Settings. An extension that has them shows them in a panel.
 - They're saved in the space's `chat.json` (`modValues`), so they go when the space is deleted.
 
 ```ts
@@ -118,7 +118,7 @@ const tidy: Mod = {
 
 ## Migrating saved settings
 
-When you rename a setting's key or change what its values mean, give the mod a `settingsVersion` (1 or more) and a
+When you rename a setting's key or change what its values mean, give the extension a `settingsVersion` (1 or more) and a
 `migrateSettings` function. Raise the version each time the saved shape changes again.
 
 ```ts
@@ -131,19 +131,19 @@ migrateSettings(saved, from, { spaceId }) {
 },
 ```
 
-- It runs **once, when Kothar starts**, before the mod is used, if the saved version is older than `settingsVersion`.
+- It runs **once, when Kothar starts**, before the extension is used, if the saved version is older than `settingsVersion`.
 - It's called with the **saved values as stored**, with no defaults filled in: once for the global values (if any were
   saved), and once per space that has saved `spaceSettings`, with `spaceId` set.
 - What it returns replaces the saved values, and the new version is saved.
-- If it throws, nothing is saved, the error shows on the mod's page in Settings, and it runs again at the next start.
+- If it throws, nothing is saved, the error shows on the extension's page in Settings, and it runs again at the next start.
 - A value it leaves invalid still reads as the default.
 
 `settingsVersion` and `migrateSettings` need `settings` in the manifest's `uses`.
 
 ## Setup
 
-A `setup` checks for something the mod needs, such as a program, and installs it if it's missing. Kothar shows the
-setup on the mod's page in Settings: the description, whether it's ready, an **Install** button when it isn't, and a
+A `setup` checks for something the extension needs, such as a program, and installs it if it's missing. Kothar shows the
+setup on the extension's page in Settings: the description, whether it's ready, an **Install** button when it isn't, and a
 progress bar while it installs.
 
 ```ts
@@ -174,13 +174,13 @@ export default formatter
 
 | Field | What it is |
 |---|---|
-| `description` | Text, or a function of the mod's values that returns text. |
+| `description` | Text, or a function of the extension's values that returns text. |
 | `check(run, values)` | Returns `{ ready, message? }`. A throw counts as not ready, with the error shown. |
 | `install(run, report, values)` | Installs. Call `report({ text?, progress? })` as it goes; `progress` runs from 0 to 1. A throw shows as the install's error. |
 
 How setup behaves:
 
-- Kothar checks again after an install, and whenever one of the mod's settings changes. So a setup can depend on the
+- Kothar checks again after an install, and whenever one of the extension's settings changes. So a setup can depend on the
   settings.
 - `run` here works like [`host.run`](host.md#run): it runs a command and resolves with `{ code, stdout, stderr }`.
 - The user can cancel an install. After that, the next `run` call rejects with "Cancelled".

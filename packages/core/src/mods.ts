@@ -31,7 +31,7 @@ export async function loadMods(dir: string) {
       if (mod.settings?.some((s) => s.key === 'enabled')) throw new Error('"enabled" is not a setting key')
       mods.push(mod)
     } catch (error) {
-      console.error(`Skipped the mod in ${join(dir, id)}: ${error instanceof Error ? error.message : error}`)
+      console.error(`Skipped the extension in ${join(dir, id)}: ${error instanceof Error ? error.message : error}`)
       brokenMods.push({ id, loadError: loadErrorOf(error) })
     }
   }
@@ -158,7 +158,7 @@ export async function loadCommunityMods(garage: string, isOn: (id: string) => bo
       }
       loaded.push({ ...install, mod })
     } catch (error) {
-      console.error(`Skipped the community mod in ${dir}: ${error instanceof Error ? error.message : error}`)
+      console.error(`Skipped the community extension in ${dir}: ${error instanceof Error ? error.message : error}`)
       loaded.push({ ...install, loadError: loadErrorOf(error, true) })
     }
   }

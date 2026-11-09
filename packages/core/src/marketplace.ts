@@ -329,7 +329,7 @@ export function openMarketplace(options: {
       } catch (error) {
         throw new Error(`${folder}/${MANIFEST} is broken: ${messageOf(error)}`)
       }
-      if (!existsSync(join(folder, MOD_MAIN))) throw new Error(`${folder} has no ${MOD_MAIN}. Build the mod first.`)
+      if (!existsSync(join(folder, MOD_MAIN))) throw new Error(`${folder} has no ${MOD_MAIN}. Build the extension first.`)
       const main = readCapped(join(folder, MOD_MAIN), MAX_MOD_BYTES)
       const before = installedMods(options.garage).find((m) => m.manifest.id === manifest.id)?.manifest.uses
       writeItem(join(communityDir(options.garage), manifest.id), { [MANIFEST]: bytes, [MOD_MAIN]: main }, {
@@ -359,7 +359,7 @@ export function openMarketplace(options: {
       throw new Error(
         problems.length
           ? `No theme in ${folder} passed the check. ${problems[0]}`
-          : `${folder} has no manifest.json (a mod) or <id>.json theme files`,
+          : `${folder} has no manifest.json (an extension) or <id>.json theme files`,
       )
     }
     for (const { bytes, theme } of themes) {

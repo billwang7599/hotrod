@@ -1,11 +1,11 @@
 ---
 title: Examples
-description: How three built-in mods - Home, Processes and Account rotation - plus Browser use the mod API.
+description: How three built-in extensions - Home, Processes and Account rotation - plus Browser use the extension API.
 ---
 
 # Examples
 
-Kothar's built-in mods use only the public mod API, the same one community mods use. So they're good patterns to copy.
+Kothar's built-in extensions use only the public extension API, the same one community extensions use. So they're good patterns to copy.
 Their full source is in the Kothar repo's
 [`mods/` folder](https://github.com/billwang7599/kothar/tree/main/mods).
 
@@ -13,7 +13,7 @@ Their full source is in the Kothar repo's
 
 [Source](https://github.com/billwang7599/kothar/blob/main/mods/home/index.ts)
 
-Home is your personal assistant, pinned beside your spaces. The whole mod is two fields:
+Home is your personal assistant, pinned beside your spaces. The whole extension is two fields:
 
 - **`chats`** declares one chat, with id `main`, role instructions, and `seesAll: true`, so it can list, read and
   message every space.
@@ -59,7 +59,7 @@ const home: Mod = {
 export default home
 ```
 
-**The pattern:** a mod chat is a role (its instructions) plus tools only that chat is offered.
+**The pattern:** an extension chat is a role (its instructions) plus tools only that chat is offered.
 
 ## Processes: tools, a live panel and cleanup
 
@@ -80,7 +80,7 @@ Processes lets agents run dev servers and watchers that outlive a turn. It uses 
 - **`host.storage.dir`** holds each process's log file.
 - **`onChatArchived`** and **`onChatRemoved`** stop a space's processes when it's archived or deleted.
 
-**The pattern:** keep state in the mod (a map by space id), let tools and the panel read the same state, and call
+**The pattern:** keep state in the extension (a map by space id), let tools and the panel read the same state, and call
 `refresh` when it changes.
 
 ## Account rotation: one hook
@@ -121,18 +121,18 @@ export default rotate
 
 Its manifest would list `events`, `accounts` and `sendMessages`.
 
-**The pattern:** one hook, a few host calls, and a note so you know what the mod did.
+**The pattern:** one hook, a few host calls, and a note so you know what the extension did.
 
 ## Browser: a background process, and handing it to the user
 
 [Source](https://github.com/billwang7599/kothar/blob/main/mods/browser/index.ts)
 
-Browser gives agents Playwright's MCP server, attached to one headless Chromium per space that the mod itself runs.
+Browser gives agents Playwright's MCP server, attached to one headless Chromium per space that the extension itself runs.
 Parts worth copying:
 
 - **`onStart` and `onStop`** start and stop a small local HTTP endpoint. `mcpServers` gives Playwright MCP that
   address as `--cdp-endpoint`, and the browser launches (with `host.spawn`) only when an agent first browses. It
-  stays between messages, so tabs and logins do, and stops when the space has been idle a while, the mod is turned
+  stays between messages, so tabs and logins do, and stops when the space has been idle a while, the extension is turned
   off, or Kothar quits.
 - **A tool that waits for the user.** `ask_user_in_browser` relaunches the space's profile in a window with the same
   tabs and cookies, then calls [`host.wait`](reference/host.md#waiting-for-the-user) with **Open browser** and
@@ -141,5 +141,5 @@ Parts worth copying:
   **Open** (take it over at any time) and **Stop**, and `host.processesChanged` redraws the tab when it changes.
 - **`setup`** checks for Playwright's Chromium and installs it, reporting download progress with `report`.
 
-**The pattern:** keep what the agent needs running in the mod, not in the session, so it outlives each turn; let the
+**The pattern:** keep what the agent needs running in the extension, not in the session, so it outlives each turn; let the
 user see it in Processes, and hand it to them with a wait when the agent can't go on alone.

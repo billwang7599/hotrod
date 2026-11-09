@@ -1,17 +1,17 @@
 ---
 title: Quick start
-description: Build your first Kothar mod from the Hello example, install it from a folder and try it.
+description: Build your first Kothar extension from the Hello example, install it from a folder and try it.
 ---
 
 # Quick start
 
-This page takes you from nothing to your own mod running in Kothar. It starts from **Hello**, the example mod in the
+This page takes you from nothing to your own extension running in Kothar. It starts from **Hello**, the example extension in the
 [kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod) repo. You'll need Node.js 22 or later, Git and
 Kothar.
 
 ## What Hello does
 
-Hello is small, but it shows the main parts of a mod:
+Hello is small, but it shows the main parts of an extension:
 
 - **A Hello tab** in the right sidebar. It counts your messages and the agent's replies in the chat, shows the time
   since your last message, and has a **Say hello** button.
@@ -37,11 +37,11 @@ It never runs programs, reaches the network or sends messages, so it doesn't lis
 
 ## 1. Try Hello first
 
-To see a finished mod before you build one, install Hello itself:
+To see a finished extension before you build one, install Hello itself:
 
-1. Open **Settings → Community mods** and turn on the **Community mods** switch. Confirm the warning.
+1. Open **Settings → Community hub** and turn on the **Community extensions** switch. Confirm the warning.
 2. Click **Browse…** to open the Marketplace window, find **Hello** and click **Install**.
-3. Back in **Settings → Community mods**, turn on Hello's switch, confirm, and click **Restart**.
+3. Back in **Settings → Community hub**, turn on Hello's switch, confirm, and click **Restart**.
 4. Open any space. A **Hello** tab appears in the right sidebar.
 
 If Hello isn't in the Marketplace yet, clone the repo and use **Install from folder…** instead, as in step 5 below.
@@ -61,14 +61,14 @@ What's inside:
 
 | File | What it is |
 |---|---|
-| `src/index.ts` | The mod: one object, the default export. |
-| `manifest.json` | The mod's id, name, version, author, description, API version and `uses`. |
-| `types/mod-api.ts` | Kothar's mod API types, copied in. `npm run update-types` fetches the latest. |
-| `scripts/check.mjs` | Checks the built mod the way Kothar will. |
+| `src/index.ts` | The extension: one object, the default export. |
+| `manifest.json` | The extension's id, name, version, author, description, API version and `uses`. |
+| `types/mod-api.ts` | Kothar's extension API types, copied in. `npm run update-types` fetches the latest. |
+| `scripts/check.mjs` | Checks the built extension the way Kothar will. |
 | `.github/workflows/` | Checks every push, and publishes a release when you push a version tag. |
 
-The mod API isn't on npm, so the types are copied into the repo. They're types only, so none of it ends up in your
-built mod. In the template you import them from `'../types/mod-api.ts'`; these pages write `'@kothar/mod-api'` for
+The extension API isn't on npm, so the types are copied into the repo. They're types only, so none of it ends up in your
+built extension. In the template you import them from `'../types/mod-api.ts'`; these pages write `'@kothar/mod-api'` for
 short.
 
 ## 3. Read the code
@@ -170,7 +170,7 @@ export { hooks }
 
 1. Pick an id: lowercase letters, digits and dashes, such as `my-mod`. Put it in both `manifest.json` and
    `src/index.ts`; the two must match. Change `name`, `description` and `author` too.
-2. Change what the mod does. For instance, change the greeting's default, or add a row to the tab.
+2. Change what the extension does. For instance, change the greeting's default, or add a row to the tab.
 3. Keep `uses` honest. If you add a call such as `host.send`, add `sendMessages`; if you drop the tool, remove `tools`.
    [The manifest and uses](reference/manifest.md) says what each field and host call needs.
 
@@ -187,24 +187,24 @@ build bundles any npm packages you use into it.
 
 ## 5. Install it in Kothar
 
-1. Open **Settings → Community mods** and click **Browse…** to open the Marketplace window.
-2. In the Marketplace window, click **Install from folder…** and pick your mod's folder.
+1. Open **Settings → Community hub** and click **Browse…** to open the Marketplace window.
+2. In the Marketplace window, click **Install from folder…** and pick your extension's folder.
 3. It installs as **Local**, turned off.
-4. In **Settings → Community mods**, turn on the **Community mods** switch if it's off, then your mod's own switch.
+4. In **Settings → Community hub**, turn on the **Community extensions** switch if it's off, then your extension's own switch.
 5. Click **Restart**.
 
 ## 6. Try it
 
 - Open a space. Your tab appears in the right sidebar; click **Say hello**.
 - In the space's **General** tab, run **Say hello**.
-- Change the greeting on your mod's page in Settings, under **Mods**, and say hello again.
+- Change the greeting on your extension's page in Settings, under **Extensions**, and say hello again.
 - Ask the agent: "Call hello_stats and tell me what it says."
 
-To change the mod, edit `src/index.ts`, run `npm run build`, press **Reinstall** on its entry in the Marketplace
+To change the extension, edit `src/index.ts`, run `npm run build`, press **Reinstall** on its entry in the Marketplace
 window, and restart Kothar.
 
 ## Next
 
-- [Mod anatomy](anatomy.md) explains each part of a mod.
-- The [API reference](reference/mod.md) lists everything a mod can do.
+- [Extension anatomy](anatomy.md) explains each part of an extension.
+- The [API reference](reference/mod.md) lists everything an extension can do.
 - [Publishing](publishing.md) shows how to share it.

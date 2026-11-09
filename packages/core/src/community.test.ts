@@ -227,7 +227,7 @@ describe('the core', () => {
       type: 'market.installFailed',
       kind: 'mod',
       id: 'home',
-      error: 'A built-in mod is already called "home"',
+      error: 'A built-in extension is already called "home"',
     })
   })
 
@@ -294,7 +294,7 @@ describe('the core', () => {
     expect(info).toMatchObject({ enabled: false, community: { version: '2.0.0', running: '1.0.0', uses: ['run', 'commands'] } })
     expect(t.messages).toContainEqual({
       type: 'error',
-      message: 'Mod counter was turned off: its update also runs programs on your computer. Turn it on again in Community mods to allow that.',
+      message: 'Mod counter was turned off: its update also runs programs on your computer. Turn it on again in Community hub to allow that.',
     })
     // Its old code is still loaded.
     expect(t.core.restart().changes).toEqual([{ id: 'counter', name: 'Mod counter', change: 'stop' }])
@@ -335,7 +335,7 @@ describe('the core', () => {
     install(garage, 'other')
     const u = start({ garage, community: await loadCommunityMods(garage, () => false) })
     expect(() => u.handle({ type: 'mod.setEnabled', modId: 'other', enabled: true })).toThrow(
-      'Turn on community mods before turning on Mod other',
+      'Turn on community extensions before turning on Mod other',
     )
 
     t.handle({ type: 'communityMods.setEnabled', enabled: true })
@@ -425,7 +425,7 @@ describe('the core', () => {
     mkdirSync(folder)
     writeFileSync(join(folder, 'manifest.json'), JSON.stringify(manifestOf('mine')))
     t.handle({ type: 'market.installLocal', path: folder })
-    expect(t.replies.at(-1)).toEqual({ type: 'market.localFailed', path: folder, error: `${folder} has no main.mjs. Build the mod first.` })
+    expect(t.replies.at(-1)).toEqual({ type: 'market.localFailed', path: folder, error: `${folder} has no main.mjs. Build the extension first.` })
 
     writeFileSync(join(folder, 'main.mjs'), source('mine'))
     t.handle({ type: 'market.installLocal', path: folder })
@@ -468,10 +468,10 @@ describe('the core', () => {
     const cases: [string, string | RegExp][] = [
       ['relative/path', 'Pick a folder, or type its full path'],
       [join(empty, 'missing'), `${join(empty, 'missing')} isn't a folder`],
-      [empty, `${empty} has no manifest.json (a mod) or <id>.json theme files`],
+      [empty, `${empty} has no manifest.json (an extension) or <id>.json theme files`],
       [bad, /^No theme in .* passed the check\. .*x\.json: The theme has an unknown field "css"$/],
       [broken, /manifest\.json is broken/],
-      [home, 'A built-in mod is already called "home"'],
+      [home, 'A built-in extension is already called "home"'],
     ]
     for (const [path, error] of cases) {
       t.handle({ type: 'market.installLocal', path })

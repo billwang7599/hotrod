@@ -58,7 +58,7 @@ A `ModPanel` has:
 
 | Field | What it is |
 |---|---|
-| `id` | The panel's id, unique within the mod. |
+| `id` | The panel's id, unique within the extension. |
 | `title` | The tab's label. |
 | `shown(chat, context)` | Optional. Whether this chat gets the tab. Without it, every chat does. |
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
@@ -68,7 +68,7 @@ When the panel redraws:
 
 - When the user opens the tab.
 - After each `onAction` finishes. Kothar waits for its promise, then calls `render` again.
-- When the mod calls [`host.refresh(chatId)`](host.md#refresh). Call it when what the panel shows changes on its own,
+- When the extension calls [`host.refresh(chatId)`](host.md#refresh). Call it when what the panel shows changes on its own,
   such as when a process prints output. `refresh` also asks `shown` again, so a tab can appear or disappear.
 
 List `panels` in the manifest's `uses`.
@@ -106,8 +106,8 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |
 | `divider` | none | A line. |
 | `empty` | `text` | A quiet placeholder, such as "No processes". |
-| `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the mod's boolean `spaceSettings`. See below. |
-| `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the mod's select `spaceSettings`. See below. |
+| `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the extension's boolean `spaceSettings`. See below. |
+| `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the extension's select `spaceSettings`. See below. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
 
@@ -120,7 +120,7 @@ scrolled to the end as lines arrive, unless the user scrolls up.
 
 ### Switches and pickers
 
-A `switch` or `picker` shows one of the mod's [settings per space](settings.md#settings-per-space) for the panel's space
+A `switch` or `picker` shows one of the extension's [settings per space](settings.md#settings-per-space) for the panel's space
 (a worker's panel shows its space's). Name the setting's `key` in `setting`; `label` defaults to the setting's label.
 
 - Kothar fills in the current value and a picker's options. You don't set them.
@@ -201,7 +201,7 @@ export default summarize
 
 | Field | What it is |
 |---|---|
-| `id` | Unique within the mod. |
+| `id` | Unique within the extension. |
 | `label` | The button's text. |
 | `hint` | Optional. Shown on hover. |
 | `shown(chat, context)` | Optional. Whether this chat gets the command. Asked again on [`host.refresh`](host.md#refresh). |

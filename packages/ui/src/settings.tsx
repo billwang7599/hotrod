@@ -42,7 +42,7 @@ import {
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { MOD_WARNING, modStatus, UsesList, type Market, type MarketKindFilter } from './marketplace.tsx'
+import { MOD_WARNING, modStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
@@ -66,7 +66,7 @@ type PageProps = {
   restart?: RestartState
   running?: number
   // Opens the Marketplace window over Settings, showing one kind first.
-  openMarketplace?: (kind?: MarketKindFilter) => void
+  openMarketplace?: () => void
 }
 
 const NO_RESTART: RestartState = { changes: [], canRestart: false }
@@ -79,7 +79,7 @@ type Page = {
   body: (props: PageProps) => ReactNode
 }
 
-const NAV_GROUPS = ['Options', 'Mods'] as const
+const NAV_GROUPS = ['Options', 'Extensions'] as const
 
 const WORK_FOLDER_TITLE = 'Choose a work folder'
 const WORK_FOLDER_HINT =
@@ -187,7 +187,7 @@ const PAGES = [
     title: 'Appearance',
     body: ({ openMarketplace }: PageProps) => (
       <>
-        <Appearance browse={openMarketplace && (() => openMarketplace('theme'))} />
+        <Appearance browse={openMarketplace} />
         <ShownPaths />
         <ShownSteps />
         <ShownReports />
@@ -250,16 +250,16 @@ const PAGES = [
   },
   {
     id: 'mods',
-    group: 'Mods',
-    title: 'Built-in mods',
-    intro: 'Mods that ship with Kothar. One with settings or a setup gets its own page while it is on.',
+    group: 'Extensions',
+    title: 'Built-in extensions',
+    intro: 'Extensions that ship with Kothar. One with settings or a setup gets its own page while it is on.',
     body: (props: PageProps) => <ModsPage {...props} />,
   },
   {
     id: 'community-mods',
-    group: 'Mods',
-    title: 'Community mods',
-    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
+    group: 'Extensions',
+    title: 'Community hub',
+    intro: 'Extensions installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
     body: (props: PageProps) => <CommunityModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
@@ -267,15 +267,15 @@ const PAGES = [
 export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
 export const COMMUNITY_RISKS =
-  'Community mods are code from other people, and they run inside Kothar with your permissions.\n\n' +
+  'Community extensions are code from other people, and they run inside Kothar with your permissions.\n\n' +
   '• They can read your files and settings, and reach the network.\n' +
   "• Kothar doesn't review them.\n" +
-  '• An update can change what a mod does.\n\n' +
-  'Each mod still stays off until you turn it on.'
+  '• An update can change what an extension does.\n\n' +
+  'Each extension still stays off until you turn it on.'
 
 export async function setCommunityMods(enabled: boolean, send: (m: ClientMessage) => void) {
   if (enabled) {
-    const ok = await confirm({ text: 'Turn on community mods?', body: COMMUNITY_RISKS, ok: 'Turn on community mods' })
+    const ok = await confirm({ text: 'Turn on community extensions?', body: COMMUNITY_RISKS, ok: 'Turn on community extensions' })
     if (!ok) return
   }
   send({ type: 'communityMods.setEnabled', enabled })
@@ -306,17 +306,17 @@ function CommunityModsPage(props: PageProps) {
       <RestartNotice restart={restart} running={running} connected={connected} send={send} />
       <div className={`${GROUP} mb-12`}>
         <SettingRow
-          name="Community mods"
+          name="Community extensions"
           description={
             communityMods ? (
-              'On. A mod below runs while its own switch is on.'
+              'On. An extension below runs while its own switch is on.'
             ) : (
-              <span className="text-amber">Off. No community mod runs, whatever its own switch says.</span>
+              <span className="text-amber">Off. No community extension runs, whatever its own switch says.</span>
             )
           }
         >
           <Switch
-            label="Community mods"
+            label="Community extensions"
             checked={communityMods}
             disabled={!connected}
             onChange={(on) => void setCommunityMods(on, send)}
@@ -325,9 +325,9 @@ function CommunityModsPage(props: PageProps) {
       </div>
       <div className="flex items-start gap-16 pb-12">
         <p className="flex-1 text-sm text-amber">{MOD_WARNING}</p>
-        {openMarketplace && <Button onClick={() => openMarketplace('mod')}>Browse…</Button>}
+        {openMarketplace && <Button onClick={() => openMarketplace()}>Browse…</Button>}
       </div>
-      {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
+      {!community.length && <p className="text-muted">No community extensions installed. Find them in the Marketplace.</p>}
       {community.length > 0 && (
         <div className={`${GROUP} transition-opacity ${communityMods ? '' : 'opacity-60'}`} aria-disabled={!communityMods}>
           {community.map((m) => {
@@ -554,7 +554,7 @@ const modPages = (mods: ModInfo[], communityMods: boolean): Page[] =>
     .filter((mod) => mod.enabled && (!mod.community || communityMods) && (mod.settings.length || mod.setup))
     .map((mod) => ({
       id: `mod:${mod.id}`,
-      group: 'Mods',
+      group: 'Extensions',
       title: mod.name,
       body: ({ connected, send }: PageProps) => (
         <div className={GROUP}>

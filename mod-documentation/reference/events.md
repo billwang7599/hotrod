@@ -5,7 +5,7 @@ description: React to chats and turns, answer permission requests, and rewrite m
 
 # Events and hooks
 
-Hooks let a mod react as chats run. They all run in Kothar's core. Each gets the mod's [context](../anatomy.md#the-context),
+Hooks let an extension react as chats run. They all run in Kothar's core. Each gets the extension's [context](../anatomy.md#the-context),
 `{ values, host }`, as its last argument.
 
 Every hook on this page except `onPermissionRequested` and the transforms needs `events` in the manifest's `uses`.
@@ -14,8 +14,8 @@ Every hook on this page except `onPermissionRequested` and the transforms needs 
 
 | Hook | Called when |
 |---|---|
-| `onStart(context)` | Kothar is ready for model calls (engines found, a work folder chosen), or the mod was turned on after that. Start background work here, such as summarizing chats. |
-| `onStop(context)` | The mod was turned off, or Kothar is quitting. Stop background work here. It isn't called for a mod that never started. |
+| `onStart(context)` | Kothar is ready for model calls (engines found, a work folder chosen), or the extension was turned on after that. Start background work here, such as summarizing chats. |
+| `onStop(context)` | The extension was turned off, or Kothar is quitting. Stop background work here. It isn't called for an extension that never started. |
 
 ```ts
 import type { Mod } from '@kothar/mod-api'
@@ -45,7 +45,7 @@ Background work has no hook to throw from, so report failures with [`host.error`
 
 | Hook | Called when |
 |---|---|
-| `onChatCreated(chat, context)` | A chat is made: a space, a worker or a mod's chat. |
+| `onChatCreated(chat, context)` | A chat is made: a space, a worker or an extension's chat. |
 | `onChatArchived(chat, archived, context)` | A chat is archived (`archived` is `true`) or brought back (`false`). |
 | `onChatRemoved(chat, context)` | A chat is deleted. By now it's gone from Kothar, with its log and folder. |
 | `onStatusChanged(chat, status, context)` | A chat's status changes: `idle`, `running`, `waiting` (on the user, such as a permission request) or `stopping`. |
@@ -119,7 +119,7 @@ Kothar stops the turn before calling it, so the chat is idle. `limit` has:
 | `resetsAt` | When the limit lifts (ISO time), if the engine said. |
 | `output` | `true` if the agent had already written, thought or called a tool since the chat's last message. Sending that message again would redo work, so [`host.continue`](host.md#sending-messages) fits better than `host.retry`. |
 
-The built-in Account rotation mod uses it. See [Examples](../examples.md).
+The built-in Account rotation extension uses it. See [Examples](../examples.md).
 
 ## Every event
 
@@ -150,7 +150,7 @@ Events are the same for every engine. See [Engine events](types.md#engine-events
 
 ## onPermissionRequested
 
-A policy for permission requests. Kothar asks the mod about each request it would otherwise ask you about, or would
+A policy for permission requests. Kothar asks the extension about each request it would otherwise ask you about, or would
 allow on its own. Return a verdict to answer it, or nothing to leave it.
 
 ```ts
@@ -176,8 +176,8 @@ export default noForcePush
 - The `request` has the tool's `name`, its `kind` (`shell`, `edit`, `read`, `search`, `fetch`, `mcp` or `other`), a
   `summary`, its raw `input`, and `path` (edits) or `command` (shell) when there is one.
 - A verdict is `{ allow: boolean, message? }`. `message` is shown to the agent when the request is denied.
-- Mods are asked in load order. The first verdict wins.
-- Kothar waits for a promise before asking the next mod. Don't keep it waiting long: the agent is stopped until then.
+- Extensions are asked in load order. The first verdict wins.
+- Kothar waits for a promise before asking the next extension. Don't keep it waiting long: the agent is stopped until then.
 - Kothar's own denials, such as edits outside the work folder in a sandbox, always stand.
 - pi never asks before running a tool, so pi sessions have no permission requests.
 
@@ -211,7 +211,7 @@ export default britishSpelling
 ```
 
 - Both must return text, synchronously.
-- Mods chain in load order: each gets the text the last one returned.
+- Extensions chain in load order: each gets the text the last one returned.
 - If a transform throws, or returns something that isn't text, Kothar shows the error and keeps the text as it was.
 
 List `transforms` in the manifest's `uses`.

@@ -103,25 +103,25 @@ const answer = async (ok: boolean) => {
 }
 const modSwitch = (name = 'Counter') => document.querySelector(`[role="switch"][aria-label="${name}"]`) as HTMLButtonElement
 
-test('Community mods lists only community mods, with the warning, what each uses and where it came from', () => {
+test('Community hub lists only community mods, with the warning, what each uses and where it came from', () => {
   settings([builtIn, counter()])
   const dialog = document.querySelector('[role="dialog"]')!
   const tabs = [...dialog.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
-  expect(tabs.indexOf('Community mods')).toBe(tabs.indexOf('Built-in mods') + 1)
+  expect(tabs.indexOf('Community hub')).toBe(tabs.indexOf('Built-in extensions') + 1)
   const text = dialog.textContent!
   expect(text).toContain('runs code on your computer with your permissions')
   expect(text).toContain('Counter')
   expect(text).toContain('1.0.0 by Someone')
   expect(text).toContain('Runs programs on your computer')
   expect(text).toContain('Adds panels')
-  expect(text).toContain('Off. Turn it on in Community mods.')
+  expect(text).toContain('Off. Turn it on in Community hub.')
   expect(text).not.toContain('Your assistant.')
   expect(dialog.querySelector('a[href="https://github.com/someone/counter"]')).toBeTruthy()
 })
 
 test('says when no community mods are installed', () => {
   settings([builtIn])
-  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No community mods installed.')
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain('No community extensions installed.')
 })
 
 test('turning a mod on asks first, naming its repo and what it uses, and says it starts on a restart', async () => {
@@ -145,31 +145,31 @@ test('turning a mod on asks first, naming its repo and what it uses, and says it
 test('the master switch is off by default: mods are greyed out and can only be turned off', () => {
   settings([counter(), counter({ id: 'notes', name: 'Notes', enabled: true })], [], {})
   const text = document.querySelector('[role="dialog"]')!.textContent!
-  expect(text).toContain('Off. No community mod runs, whatever its own switch says.')
-  expect(modSwitch('Community mods').getAttribute('aria-checked')).toBe('false')
+  expect(text).toContain('Off. No community extension runs, whatever its own switch says.')
+  expect(modSwitch('Community extensions').getAttribute('aria-checked')).toBe('false')
   expect(document.querySelector('[aria-disabled="true"]')?.className).toContain('opacity-60')
   expect(modSwitch().disabled).toBe(true)
   // One that's on can still be turned off.
   expect(modSwitch('Notes').disabled).toBe(false)
-  expect(text).toContain('Off while community mods are off.')
+  expect(text).toContain('Off while community extensions are off.')
 })
 
 test('turning community mods on warns about the risks first; turning them off asks nothing', async () => {
   const sent = settings([counter()], [], { communityMods: false })
-  await act(async () => modSwitch('Community mods').click())
-  expect(confirmText()).toContain('Turn on community mods?')
+  await act(async () => modSwitch('Community extensions').click())
+  expect(confirmText()).toContain('Turn on community extensions?')
   expect(confirmText()).toContain('They can read your files and settings, and reach the network.')
   expect(confirmText()).toContain("Kothar doesn't review them.")
-  expect(confirmText()).toContain('An update can change what a mod does.')
-  expect(buttons('Turn on community mods')).toHaveLength(1)
+  expect(confirmText()).toContain('An update can change what an extension does.')
+  expect(buttons('Turn on community extensions')).toHaveLength(1)
   await answer(false)
   expect(sent).toEqual([])
-  await act(async () => modSwitch('Community mods').click())
+  await act(async () => modSwitch('Community extensions').click())
   await answer(true)
   expect(sent).toEqual([{ type: 'communityMods.setEnabled', enabled: true }])
 
   settings([counter()], sent, { communityMods: true })
-  await act(async () => modSwitch('Community mods').click())
+  await act(async () => modSwitch('Community extensions').click())
   expect(confirmText()).toBe('')
   expect(sent.at(-1)).toEqual({ type: 'communityMods.setEnabled', enabled: false })
 })
@@ -270,10 +270,10 @@ test('the Marketplace lists mods with what they use and the warning, and asks be
   const row = detail('Counter')
   expect(row.textContent).toContain('Runs programs on your computer')
   expect(row.textContent).toContain('1.0.0')
-  expect(row.textContent).toContain('A community mod runs code on your computer')
+  expect(row.textContent).toContain('A community extension runs code on your computer')
   await act(async () => buttons('Install')[0]!.click())
   expect(confirmText()).toContain('Install Counter?')
-  expect(confirmText()).toContain('It stays off until you turn it on in Community mods.')
+  expect(confirmText()).toContain('It stays off until you turn it on in Community hub.')
   expect(confirmText()).toContain('• Adds panels')
   await answer(true)
   expect(sent.at(-1)).toEqual({ type: 'market.install', kind: 'mod', id: 'counter' })
@@ -282,7 +282,7 @@ test('the Marketplace lists mods with what they use and the warning, and asks be
 test('the Marketplace says an installed mod is off, and offers its update', () => {
   market({ catalog: { entries: [entry] }, installed: [installed], mods: [counter()] })
   const row = detail('Counter')
-  expect(row.textContent).toContain('Off. Turn it on in Community mods.')
+  expect(row.textContent).toContain('Off. Turn it on in Community hub.')
   market({
     catalog: { entries: [{ ...entry, latest: { ...entry.latest!, version: '2.0.0' } }] },
     installed: [installed],
@@ -314,7 +314,7 @@ test('Install from folder: a browser tab types a path; the answer shows inline',
   const local: InstalledItem = { kind: 'mod', id: 'mine', name: 'Mine', version: '0.1.0', source: 'local', path: '/Users/me/my-mod' }
   const answered = { path: '/Users/me/my-mod', kind: 'mod' as const, ids: ['mine'], count: 1 }
   market({ catalog: { entries: [] }, installed: [local], localInstall: answered }, sent)
-  expect(document.body.textContent).toContain('Installed Mine from /Users/me/my-mod. Turn it on in Community mods.')
+  expect(document.body.textContent).toContain('Installed Mine from /Users/me/my-mod. Turn it on in Community hub.')
 })
 
 test('Install from folder: the desktop picker comes first, and a failure shows why', async () => {
@@ -325,7 +325,7 @@ test('Install from folder: the desktop picker comes first, and a failure shows w
   await act(async () => buttons('Install from folder…')[0]!.click())
   expect(pickFolder).toHaveBeenCalledWith('Install from folder')
   expect(sent.at(-1)).toEqual({ type: 'market.installLocal', path: '/Users/me/broken' })
-  const failed = { path: '/Users/me/broken', error: '/Users/me/broken has no main.mjs. Build the mod first.', count: 1 }
+  const failed = { path: '/Users/me/broken', error: '/Users/me/broken has no main.mjs. Build the extension first.', count: 1 }
   render(
     <MarketplaceDialog
       open
@@ -336,7 +336,7 @@ test('Install from folder: the desktop picker comes first, and a failure shows w
       pickFolder={pickFolder}
     />,
   )
-  expect(document.body.textContent).toContain('has no main.mjs. Build the mod first.')
+  expect(document.body.textContent).toContain('has no main.mjs. Build the extension first.')
   act(() => buttons('Type a path')[0]!.click())
   expect(document.querySelector('input[aria-label="Install from a folder by path"]')).toBeTruthy()
 })
