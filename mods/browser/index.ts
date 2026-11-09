@@ -66,6 +66,11 @@ type ChromeCheck = { chrome: boolean; executable: string | null; profile: string
 
 const ANSI = /\x1b\[[0-9;]*m/g
 
+export const BROWSER_INSTRUCTIONS =
+  'Browser (the browser_* tools): read a page from its snapshot, the one each action returns or browser_snapshot, ' +
+  'and take a screenshot only when how it looks matters. Fill a form with one browser_fill_form call, not a call ' +
+  'per field. Close the tabs you opened when you are done with them.'
+
 const usesChrome = (values: ModValues) => values.browser === 'chrome'
 const usesLogins = (values: ModValues) => values.browser === 'logins'
 
@@ -191,6 +196,10 @@ const browser: Mod = {
       throw new Error(error ?? `Playwright's installer exited with code ${code}`)
     },
   },
+
+  // Sessions that take MCP servers get the browser, so they get this too. Snapshots are text and cheaper than
+  // screenshots; each action already returns one.
+  instructions: ({ tools }) => (tools ? BROWSER_INSTRUCTIONS : undefined),
 
   mcpServers({ chat, workDir, sandboxed, values }) {
     const dir = join(workDir, '.browser')

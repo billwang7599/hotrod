@@ -9,7 +9,7 @@ import type { ModRun, ModSession } from '@kotharhq/mod-api'
 import { startCore } from '@kotharhq/core/main'
 import type { Adapter, SessionOptions } from '@kotharhq/core/shared'
 import { sandboxingMachine } from '@kotharhq/core/test-machine'
-import browser, { EXTENSION_URL } from './index.ts'
+import browser, { BROWSER_INSTRUCTIONS, EXTENSION_URL } from './index.ts'
 
 const dirs: string[] = []
 const tempDir = (prefix: string) => {
@@ -87,6 +87,16 @@ it("connects to your running Chrome through the Playwright Extension, with its t
 it("gives a subagent the same Chrome as its space, since the extension takes a connection per session", () => {
   const subagent = { ...space, id: 'def', parentId: 'abc', subagent: true }
   expect(serverFor({ chat: subagent, values: chrome }).args).toEqual(serverFor({ values: chrome }).args)
+})
+
+it('tells agents that get the browser to read snapshots before screenshots, batch form fills and close their tabs', () => {
+  const chat = { ...space, status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const context = { values: defaults, host: {} as never }
+  const text = browser.instructions!({ chat, tools: true }, context)
+  expect(text).toBe(BROWSER_INSTRUCTIONS)
+  for (const word of ['snapshot', 'screenshot', 'browser_fill_form', 'Close']) expect(text).toContain(word)
+  // An engine without MCP servers has no browser to be told about.
+  expect(browser.instructions!({ chat, tools: false }, context)).toBeUndefined()
 })
 
 const logins = { ...defaults, browser: 'logins' }
