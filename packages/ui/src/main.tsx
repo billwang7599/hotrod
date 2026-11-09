@@ -7,13 +7,12 @@ import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { pruneDrafts } from './drafts.ts'
-import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
+import { Button, CHAT_NOUN, ConfirmDialog, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
-import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
+import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
-import { Keys } from './shortcuts-page.tsx'
 import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { useLooking, useMarkRead } from './unread.ts'
@@ -27,7 +26,6 @@ import {
   storedColumn,
   storedFlag,
 } from './state.ts'
-import { KotharMark } from './mark.tsx'
 import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'
@@ -199,33 +197,6 @@ function App() {
               <SidePanel key="sidebar" side="left" overlay={!sidebarDocks}>
                 <aside className="relative flex shrink-0 flex-col border-r bg-panel" style={{ width: widths.sidebar }}>
                   <ResizeHandle panel="sidebar" />
-                  <div className={`flex h-44 items-center gap-6 pr-8 ${sidebarDocks ? 'pl-16' : 'pl-12'}`}>
-                    {!sidebarDocks && (
-                      <PanelToggle side="left" label="Sidebar" noun="sidebar" open toggle={toggleSidebar} />
-                    )}
-                    <span className="flex flex-1 items-center gap-6 font-bold tracking-[0.02em] text-accent">
-                      <KotharMark className="size-16 shrink-0" />
-                      Kothar
-                    </span>
-                    <Hint
-                      text={
-                        <span className="flex items-center gap-8">
-                          New {CHAT_NOUN.one}
-                          {keys.newSpace && <Keys binding={keys.newSpace} />}
-                        </span>
-                      }
-                    >
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`New ${CHAT_NOUN.one}`}
-                        disabled={!connected}
-                        onClick={() => setNameRequest({ kind: 'new' })}
-                      >
-                        +
-                      </Button>
-                    </Hint>
-                  </div>
                   <ChatNav
                     chats={state.chats}
                     selectedId={state.selectedId}
@@ -235,19 +206,12 @@ function App() {
                     select={select}
                     askName={setNameRequest}
                   />
-                  <div className="px-8 pb-10">
-                    <Hint text={keys.settings && <Keys binding={keys.settings} />} side="right">
-                      <Button
-                        variant="ghost"
-                        size="none"
-                        className="flex h-control w-full items-center gap-8 px-8"
-                        onClick={() => openSettings()}
-                      >
-                        <span aria-hidden="true">⚙</span>
-                        Settings
-                      </Button>
-                    </Hint>
-                  </div>
+                  <SidebarFooter
+                    connected={connected}
+                    keys={keys}
+                    newSpace={() => setNameRequest({ kind: 'new' })}
+                    openSettings={() => openSettings()}
+                  />
                 </aside>
               </SidePanel>
             )}

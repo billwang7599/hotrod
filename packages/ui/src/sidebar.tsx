@@ -5,6 +5,8 @@ import type { ChatStatus, ClientMessage } from '@kotharhq/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
 import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
+import { Keys } from './shortcuts-page.tsx'
+import type { Binding } from './shortcuts.ts'
 import { showsUnread } from './unread.ts'
 
 const CHAT_BUSY = `Stop this ${CHAT_NOUN.one} and the ones below it first`
@@ -327,7 +329,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
   }
 
   return (
-    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pb-8">
+    <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-8 pt-10 pb-8">
       <AnimatePresence>{tree.active.slice(0, split).filter(shown).map(row)}</AnimatePresence>
       {pinnedRows.length > 0 && (
         <>
@@ -436,5 +438,37 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
         )}
       </AnimatePresence>
     </Dialog.Root>
+  )
+}
+
+const FOOTER_ROW = 'flex h-control w-full items-center gap-8 px-8'
+
+/** The sidebar's bottom rows: New space and Settings, each with its shortcut on hover. */
+export function SidebarFooter({
+  connected,
+  keys,
+  newSpace,
+  openSettings,
+}: {
+  connected: boolean
+  keys: { newSpace?: Binding | null; settings?: Binding | null }
+  newSpace: () => void
+  openSettings: () => void
+}) {
+  return (
+    <div className="flex flex-col gap-1 px-8 pb-10">
+      <Hint text={keys.newSpace && <Keys binding={keys.newSpace} />} side="right">
+        <Button variant="ghost" size="none" className={FOOTER_ROW} disabled={!connected} onClick={newSpace}>
+          <span aria-hidden="true">+</span>
+          New {CHAT_NOUN.one}
+        </Button>
+      </Hint>
+      <Hint text={keys.settings && <Keys binding={keys.settings} />} side="right">
+        <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={openSettings}>
+          <span aria-hidden="true">⚙</span>
+          Settings
+        </Button>
+      </Hint>
+    </div>
   )
 }

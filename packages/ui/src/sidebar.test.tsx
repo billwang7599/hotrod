@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test } from 'vitest'
-import { ChatNav } from './sidebar.tsx'
+import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import type { ChatView } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -88,4 +88,46 @@ test('with Home off, only the spaces show', () => {
   expect(rowOf('Home')).toBeUndefined()
   expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
   expect(names(container)).toEqual(names(spaces()))
+})
+
+function Footer({ connected }: { connected: boolean }) {
+  const [request, setRequest] = useState<NameRequest | null>(null)
+  return (
+    <>
+      <SidebarFooter
+        connected={connected}
+        keys={{ newSpace: 'Mod+N', settings: 'Mod+,' }}
+        newSpace={() => setRequest({ kind: 'new' })}
+        openSettings={() => {}}
+      />
+      <NameDialog request={request} connected={connected} send={() => {}} close={() => setRequest(null)} />
+    </>
+  )
+}
+
+function renderFooter(connected = true) {
+  act(() =>
+    root.render(
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider delayDuration={0}>
+            <Footer connected={connected} />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
+    ),
+  )
+}
+
+const footerButton = (label: string) =>
+  [...container.querySelectorAll('button')].find((b) => b.textContent?.endsWith(label)) as HTMLButtonElement
+
+test('the New space row at the bottom of the sidebar opens the name dialog, and is off while disconnected', () => {
+  renderFooter()
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
+  act(() => footerButton('New space').click())
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  renderFooter(false)
+  expect(footerButton('New space').disabled).toBe(true)
+  expect(footerButton('Settings').disabled).toBe(false)
 })
