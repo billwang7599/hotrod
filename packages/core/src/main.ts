@@ -42,6 +42,8 @@ export async function startCore(
     home?: string
     // How this host restarts Kothar; see openCore's restart.
     restart?: () => void
+    // Tests pass a stub, so no terminal really opens.
+    openTerminal?: (dir: string, choice?: string) => Promise<void>
   } = {},
 ) {
   const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
@@ -67,6 +69,7 @@ export async function startCore(
     marketplaceUrl,
     githubToken,
     ...(options.restart && { restart: options.restart }),
+    ...(options.openTerminal && { openTerminal: options.openTerminal }),
   })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')

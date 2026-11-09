@@ -106,6 +106,8 @@ export type State = {
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
   panelViews: Record<string, { view?: ModView; error?: string }>
+  // Why Open in Terminal last failed, by terminalKey; a later success clears it.
+  terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
@@ -132,6 +134,7 @@ export const initialState: State = {
   communityMods: false,
   restart: { changes: [], canRestart: false },
   panelViews: {},
+  terminalErrors: {},
   toasts: [],
   nextToastId: 1,
 }
@@ -421,6 +424,11 @@ export function reduce(state: State, action: Action): State {
       const count = (state.marketFailures[key]?.count ?? 0) + 1
       return { ...state, marketFailures: { ...state.marketFailures, [key]: { error: action.error, count } } }
     }
+    case 'terminal.result': {
+      const { [terminalKey(action.chatId, action.path)]: _, ...rest } = state.terminalErrors
+      const terminalErrors = action.error ? { ...rest, [terminalKey(action.chatId, action.path)]: action.error } : rest
+      return { ...state, terminalErrors }
+    }
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
     case 'error':
@@ -469,6 +477,8 @@ export const familyOf = (chats: ChatView[], chatId: string): ChatView[] => [
 ]
 
 /** The chat and the chats above it, nearest first, ending at its space. */
+export const terminalKey = (chatId: string, path: string) => `${chatId}\n${path}`
+
 export function lineOf(chats: ChatView[], chat: ChatView): ChatView[] {
   const parent = chats.find((c) => c.id === chat.parentId)
   return parent ? [chat, ...lineOf(chats, parent)] : [chat]

@@ -420,6 +420,9 @@ export type ClientMessage =
   // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
   // the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
+  // Opens the user's terminal app at one of the chat's folders: a context folder, its space's work folder or a
+  // checkout. Replies terminal.result.
+  | { type: 'terminal.open'; chatId: string; path: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.
@@ -484,6 +487,8 @@ export type CoreMessage =
   | { type: 'market.localFailed'; path: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
+  // The answer to terminal.open: error if no terminal opened.
+  | { type: 'terminal.result'; chatId: string; path: string; error?: string }
 
 // Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
 // strictly so a theme is only ever colours and can never carry CSS.

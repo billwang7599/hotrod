@@ -95,6 +95,7 @@ import {
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
 import { searchChats } from './search.ts'
+import { openTerminal } from './terminal.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -160,6 +161,8 @@ export function openCore(options: {
   // Restarts Kothar (the desktop app relaunches; npm run dev's core starts again in its process). Without it, the user
   // restarts Kothar themselves.
   restart?: () => void
+  // Opens the user's terminal app at a folder; choice is settings.json's terminal. Tests pass a stub.
+  openTerminal?: (dir: string, choice?: string) => Promise<void>
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
@@ -232,6 +235,8 @@ export function openCore(options: {
       workFolder?: string
       // The master switch for community mods; off unless the user turned it on.
       communityMods?: boolean
+      // The terminal Open in Terminal uses: 'auto' or absent for the system's, else one of MAC_TERMINALS by id.
+      terminal?: string
     } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -770,6 +775,36 @@ export function openCore(options: {
     return ask(0)
   }
 
+  // Every folder a chat's Open in Terminal may open: its context folders, its space's work folder, and the checkouts
+  // of its space and the chats above it.
+  const terminalRoots = (chat: Chat) => {
+    return chainOf(chat).flatMap(({ info }) =>
+      info.mod
+        ? []
+        : [
+            ...info.folders,
+            ...(info.workDir ? [info.workDir] : []),
+            ...Object.values(info.worktrees ?? {}).map((w) => w.path),
+          ],
+    )
+  }
+  const realOr = (path: string) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return resolve(path)
+    }
+  }
+  const openTerminalAt = (path: string) =>
+    (options.openTerminal ?? ((dir, choice) => openTerminal(dir, { choice })))(path, settings.terminal)
+  const terminalFor = async (chat: Chat, rawPath: unknown) => {
+    const path = typeof rawPath === 'string' ? rawPath : ''
+    if (!isAbsolute(path) || !terminalRoots(chat).some((root) => realOr(root) === realOr(path))) {
+      throw new Error(`${path || 'That'} isn't one of this chat's folders`)
+    }
+    await openTerminalAt(path)
+  }
+
   const hosts = new Map<string, ModHost>()
   const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
   const hostFor = (mod: Mod): ModHost => {
@@ -841,6 +876,15 @@ export function openCore(options: {
         remove: (name) => rmSync(fileOf(name), { force: true }),
       },
       refresh: (chatId) => refreshMod(mod, chatId),
+      // Only inside a folder some chat could open: a mod can't open a terminal anywhere it likes.
+      async openTerminal(path) {
+        const real = realOr(String(path))
+        const roots = shownChats().flatMap(terminalRoots).map(realOr)
+        if (!isAbsolute(String(path)) || !roots.some((root) => within(real, root))) {
+          throw new Error(`${path} isn't inside a space's folders, work folder or checkouts`)
+        }
+        await openTerminalAt(real)
+      },
     }
     const uses = community.get(mod.id)?.manifest.uses
     const given = uses ? guardHost(host, mod, uses) : host
@@ -2131,6 +2175,14 @@ export function openCore(options: {
             String(message.query ?? ''),
           )
           return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
+        }
+        case 'terminal.open': {
+          const chat = chatFor(message.chatId)
+          const path = String(message.path ?? '')
+          return void terminalFor(chat, message.path).then(
+            () => reply({ type: 'terminal.result', chatId: chat.info.id, path }),
+            (error) => reply({ type: 'terminal.result', chatId: chat.info.id, path, error: messageOf(error) }),
+          )
         }
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)

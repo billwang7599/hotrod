@@ -86,6 +86,7 @@ export const HOST_USES: Partial<Record<keyof ModHost, ModUse>> = {
   useAccount: 'accounts',
   run: 'run',
   spawn: 'run',
+  openTerminal: 'run',
 }
 
 // The Mod fields a mod sets, as uses. Empty lists count as unset.

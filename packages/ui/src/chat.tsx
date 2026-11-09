@@ -930,6 +930,7 @@ type ChatProps = {
   contextItems?: ContextItem[]
   modUi?: State['modUi']
   panelViews?: State['panelViews']
+  terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
   columnPx: number
@@ -1489,6 +1490,7 @@ export function Chat(props: ChatProps) {
               hide={props.contextOverlay ? props.toggleContext : undefined}
               modUi={props.modUi}
               panelViews={props.panelViews}
+              terminalErrors={props.terminalErrors}
               pickers={window.kothar}
             />
           </SidePanel>

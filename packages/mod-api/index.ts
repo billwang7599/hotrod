@@ -170,6 +170,10 @@ export type ModHost = {
   // Unlike run, nothing times it out. Everything a mod started stops when the mod is turned off or Kothar quits.
   spawn(command: string, args: string[], options?: ModSpawnOptions): Promise<ModProcess>
   storage: ModStorage
+  // Opens the user's terminal app (a new window or tab) at a folder on this computer, such as a process's working
+  // folder. The folder must be in some space: one of its folders, its work folder or a checkout, or inside one. Rejects
+  // with a short message for the user when it can't (no such folder, the terminal app is missing).
+  openTerminal(path: string): Promise<void>
   // Draws this mod's panels and commands for the chat again, and its open panels: call it when what they show changed.
   // Without a chat, for every chat.
   refresh(chatId?: string): void
@@ -397,5 +401,5 @@ export type ModUse =
   | 'sendMessages'
   // accounts, useAccount
   | 'accounts'
-  // run, spawn
+  // run, spawn, openTerminal
   | 'run'

@@ -306,6 +306,7 @@ function App() {
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 modUi={state.modUi}
                 panelViews={state.panelViews}
+                terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists}
                 select={select}
