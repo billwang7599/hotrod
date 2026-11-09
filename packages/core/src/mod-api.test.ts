@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
-import type { ClientMessage, CoreMessage, SessionOptions } from './shared.ts'
+import type { ClientMessage, CoreMessage, Machine, Sandbox, SessionOptions } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -28,7 +28,11 @@ async function until(check: () => boolean) {
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
 
 // A core on the fake engine with one mod, `test`, built from `parts`; `script` is what every session plays.
-function start(parts: Partial<Mod>, script: FakeStep[] | ((options: SessionOptions) => FakeStep[]) = replied) {
+function start(
+  parts: Partial<Mod>,
+  script: FakeStep[] | ((options: SessionOptions) => FakeStep[]) = replied,
+  machine: Machine = sandboxingMachine,
+) {
   const garage = tempDir()
   const mod: Mod = { id: 'test', name: 'Test mod', description: '', enabledByDefault: true, ...parts }
   const base = createFakeAdapter(script, 0)
@@ -40,7 +44,7 @@ function start(parts: Partial<Mod>, script: FakeStep[] | ((options: SessionOptio
       return { ...session, prompt: (text, images) => (prompts.push(text), session.prompt(text, images)) }
     },
   }
-  const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxingMachine, mods: [mod] })
+  const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mod] })
   cleanups.push(() => core.close(true))
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
@@ -61,9 +65,9 @@ function start(parts: Partial<Mod>, script: FakeStep[] | ((options: SessionOptio
 }
 
 // A mod that keeps the host it was given, for tests that call the host directly.
-function withHost(parts: Partial<Mod> = {}, script?: FakeStep[]) {
+function withHost(parts: Partial<Mod> = {}, script?: FakeStep[], machine?: Machine) {
   let host: ModHost | undefined
-  const t = start({ ...parts, onChatCreated: (_chat, context) => void (host = context.host) }, script)
+  const t = start({ ...parts, onChatCreated: (_chat, context) => void (host = context.host) }, script, machine)
   return { ...t, host: () => host! }
 }
 
@@ -233,6 +237,44 @@ describe('permission policies', () => {
   })
 })
 
+describe('instructions', () => {
+  it('join every session’s instructions, saying whether the session has the mod’s tools', async () => {
+    const seen: string[] = []
+    const t = start(
+      { instructions: ({ chat, tools }) => `Use the test tools in ${chat.name} (${tools ? 'offered' : 'not offered'})` },
+      (options) => (seen.push(options.instructions), replied),
+    )
+    const id = t.create()
+    await t.send(id)
+    expect(seen.at(-1)).toContain('Use the test tools in Space (not offered)')
+  })
+
+  it('leave out a mod that returns nothing or throws, and show its error', async () => {
+    const seen: string[] = []
+    const t = start(
+      {
+        instructions() {
+          throw new Error('nope')
+        },
+      },
+      (options) => (seen.push(options.instructions), replied),
+    )
+    const id = t.create()
+    await t.send(id)
+    expect(t.chat(id).status).toBe('idle')
+    expect(t.messages).toContainEqual({ type: 'error', message: 'Test mod: nope' })
+  })
+
+  it('come from mods that are on only', async () => {
+    const seen: string[] = []
+    const t = start({ instructions: () => 'From the test mod' }, (options) => (seen.push(options.instructions), replied))
+    t.handle({ type: 'mod.setEnabled', modId: 'test', enabled: false })
+    const id = t.create()
+    await t.send(id)
+    expect(seen.at(-1)).not.toContain('From the test mod')
+  })
+})
+
 describe('transforms', () => {
   it('rewrite a message on its way to the engine, keeping the original in the log', async () => {
     const t = start({ transformMessage: (text, chat) => `${text} (for ${chat.name})` })
@@ -364,6 +406,58 @@ describe('the host', () => {
     t.create()
     const result = await t.host().run('sh', ['-c', 'echo hi; echo oops >&2; exit 3'], { cwd: tempDir() })
     expect(result).toEqual({ code: 3, stdout: 'hi\n', stderr: 'oops\n' })
+  })
+
+  // Processes really run, unsandboxed; the machine notes the sandbox each was given.
+  function recording() {
+    const spawned: { command: string; cwd: string; sandbox?: Sandbox }[] = []
+    const machine: Machine = {
+      ...sandboxingMachine,
+      spawn(command, args, { sandbox, ...rest }) {
+        spawned.push({ command, cwd: rest.cwd, ...(sandbox && { sandbox }) })
+        return sandboxingMachine.spawn(command, args, rest)
+      },
+    }
+    return { machine, spawned }
+  }
+
+  it('spawns a long-running process and hears its output and exit', async () => {
+    const { machine } = recording()
+    const t = withHost({}, undefined, machine)
+    t.create()
+    const proc = await t.host().spawn('sh', ['-c', 'echo hi; echo oops >&2; exit 3'], { cwd: tempDir() })
+    let out = ''
+    proc.onOutput((chunk) => (out += chunk))
+    const exit = await new Promise<[number | null, string]>((resolve) => proc.onExit((...a) => resolve(a)))
+    expect([out, ...exit]).toEqual(['hi\n', 3, 'oops\n'])
+  })
+
+  it('spawns as a chat in its sandbox, in its work folder, unless the chat may edit anywhere', async () => {
+    const { machine, spawned } = recording()
+    const t = withHost({}, undefined, machine)
+    const id = t.create()
+    await t.send(id)
+    const workDir = join(t.garage, 'work', id)
+    const proc = await t.host().spawn('sleep', ['30'], { chat: id })
+    proc.stop()
+    const sandbox = { writable: [workDir], tmpDir: join(workDir, '.tmp') }
+    expect(spawned.at(-1)).toEqual({ command: 'sleep', cwd: workDir, sandbox })
+    t.handle({ type: 'chat.setPermission', chatId: id, name: 'editAnywhere', enabled: true })
+    ;(await t.host().spawn('sleep', ['30'], { chat: id })).stop()
+    expect(spawned.at(-1)).toEqual({ command: 'sleep', cwd: workDir })
+    ;(await t.host().spawn('sleep', ['30'])).stop()
+    expect(spawned.at(-1)).toEqual({ command: 'sleep', cwd: '/' })
+  })
+
+  it('stops what a mod spawned when the mod is turned off, and spawns nothing while it is off', async () => {
+    const { machine } = recording()
+    const t = withHost({}, undefined, machine)
+    t.create()
+    const proc = await t.host().spawn('sleep', ['30'], { cwd: tempDir() })
+    const exited = new Promise<void>((resolve) => proc.onExit(() => resolve()))
+    t.handle({ type: 'mod.setEnabled', modId: 'test', enabled: false })
+    await exited
+    await expect(t.host().spawn('sleep', ['30'])).rejects.toThrow('Test mod is off')
   })
 
   it('is one per mod, so each tool call gets its own mod’s host', () => {

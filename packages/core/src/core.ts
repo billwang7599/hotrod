@@ -806,6 +806,8 @@ export function openCore(options: {
         append(chatFor(chatId), { at, type: 'mod.note', text, ...(panel !== undefined && { mod: mod.id, panel }) })
       },
       run: runFor(),
+      // Lazily: hosts can be made before the spawning code below is set up.
+      spawn: (command, args, options) => spawnFor(mod)(command, args, options),
       storage: {
         dir,
         read(name) {
@@ -1089,6 +1091,7 @@ export function openCore(options: {
     saveMod(mod, { enabled })
     if (enabled) void checkSetup(mod)
     if (!changed) return
+    if (!enabled) stopSpawned(mod)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
@@ -1282,22 +1285,84 @@ export function openCore(options: {
     return made
   }
 
+  // What a sandboxed chat may write in a git folder's repository to use its checkout, and the branches checked out
+  // elsewhere that it may not move.
+  const gitAccess = async (folder: string, workDir: string) => {
+    const gitDir = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    const listed = PROTECT_CHECKED_OUT_BRANCHES ? await git(folder, 'worktree', 'list', '--porcelain') : ''
+    const readOnly = listed.split('\n\n').flatMap((entry) => {
+      const path = entry.match(/^worktree (.+)$/m)?.[1]
+      const ref = entry.match(/^branch (.+)$/m)?.[1]
+      return path && ref && !within(path, workDir) ? [join(gitDir, ref), `${join(gitDir, ref)}.lock`] : []
+    })
+    return { writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
+  }
+
   const checkoutOf = async (space: Chat, folder: string, workDir: string, sandboxed: boolean): Promise<Checkout> => {
     try {
       const worktree = await worktreeOf(space, folder, workDir)
       if (!sandboxed) return { folder, worktree, writable: [], readOnly: [] }
-      const gitDir = await git(folder, 'rev-parse', '--path-format=absolute', '--git-common-dir')
-      const listed = PROTECT_CHECKED_OUT_BRANCHES ? await git(folder, 'worktree', 'list', '--porcelain') : ''
-      const readOnly = listed.split('\n\n').flatMap((entry) => {
-        const path = entry.match(/^worktree (.+)$/m)?.[1]
-        const ref = entry.match(/^branch (.+)$/m)?.[1]
-        return path && ref && !within(path, workDir) ? [join(gitDir, ref), `${join(gitDir, ref)}.lock`] : []
-      })
-      return { folder, worktree, writable: GIT_WRITABLE.map((path) => join(gitDir, path)), readOnly }
+      return { folder, worktree, ...(await gitAccess(folder, workDir)) }
     } catch (error) {
       throw new Error(`Couldn't check out ${folder} in the work folder: ${messageOf(error)}`)
     }
   }
+
+  // Where a command a mod starts for a chat runs, and its sandbox: the chat's own, over the space's work folder and the
+  // checkouts it has now. Nothing is checked out for it.
+  const commandPlaceOf = async (chat: Chat) => {
+    const editAnywhere = editsAnywhere(...switchesOf(chat))
+    if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
+      throw new Error("Hotrod can't sandbox commands on this system yet. Turn on Edits anywhere for this chat first.")
+    }
+    const workDir = workDirOf(chat)
+    mkdirSync(workDir, { recursive: true })
+    const sandbox = editAnywhere ? undefined : sandboxIn(workDir)
+    if (!sandbox) return { workDir }
+    const worktrees = Object.entries(chainOf(chat)[0]!.info.worktrees ?? {})
+    const access = await Promise.all(
+      worktrees
+        .filter(([folder, { path }]) => existsSync(folder) && existsSync(path))
+        .map(([folder]) => gitAccess(folder, workDir).catch(() => ({ writable: [], readOnly: [] }))),
+    )
+    const readOnly = access.flatMap((a) => a.readOnly)
+    const jail = {
+      ...sandbox,
+      writable: [...sandbox.writable, ...access.flatMap((a) => a.writable)],
+      ...(readOnly.length && { readOnly }),
+    }
+    return { workDir, sandbox: jail }
+  }
+
+  // What each mod has running from host.spawn, so turning the mod off stops it.
+  const spawned = new Map<string, Set<{ kill(): void }>>()
+  const stopSpawned = (mod: Mod) => {
+    for (const proc of spawned.get(mod.id) ?? []) proc.kill()
+  }
+  const spawnFor =
+    (mod: Mod): ModHost['spawn'] =>
+    async (command, args, options = {}) => {
+      if (quitting) throw new Error('Hotrod is quitting')
+      if (!isOn(mod)) throw new Error(`${mod.name} is off`)
+      const chat = options.chat === undefined ? undefined : chatFor(options.chat)
+      const place = chat ? await commandPlaceOf(chat) : undefined
+      const cwd = options.cwd ?? place?.workDir ?? '/'
+      const proc = machine.spawn(command, args, {
+        cwd,
+        ...(options.env && { env: options.env }),
+        ...(place?.sandbox && { sandbox: place.sandbox }),
+      })
+      const running = spawned.get(mod.id) ?? new Set()
+      spawned.set(mod.id, running)
+      running.add(proc)
+      proc.onExit(() => running.delete(proc))
+      // Nothing reads its stdin, but some watchers stop when it closes, so it stays open.
+      return {
+        onOutput: (listener) => proc.onStdout(listener),
+        onExit: (listener) => proc.onExit(listener),
+        stop: () => proc.kill(),
+      }
+    }
 
   // Only a folder Hotrod made for this space, whatever chat.json says.
   const ownWorkDirOf = ({ info }: Chat) =>
@@ -1407,6 +1472,18 @@ export function openCore(options: {
       ...(zoomable ? [ZOOM_INSTRUCTIONS] : []),
       ...(parentView ? [`${parentIntro}\n\n${parentView}`] : []),
     ]
+    const forSession = { chat: detailOf(chat), tools: zoomable }
+    const modInstructions = watchersOf('instructions').flatMap((mod) => {
+      try {
+        const text = mod.instructions!(forSession, contextOf(mod))
+        if (text === undefined || text === null) return []
+        if (typeof text !== 'string') throw new Error('instructions must return text')
+        return text.trim() ? [text.trim()] : []
+      } catch (error) {
+        modError(mod, error)
+        return []
+      }
+    })
     const attachmentsDir = attachmentsDirOf(chat)
     const folders = items.flatMap((item) => (item.section === 'folders' ? [item.path] : []))
     const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
@@ -1423,7 +1500,8 @@ export function openCore(options: {
             ]
           : []),
       ]
-      const instructions = [...(role ? [role] : []), ...rules, ...memory, ...contextText].join('\n\n')
+      const parts = [...(role ? [role] : []), ...rules, ...modInstructions, ...memory, ...contextText]
+      const instructions = parts.join('\n\n')
       const extraDirs = [
         ...(cwd === workDir ? [] : [workDir]),
         ...checkouts.slice(1).map((c) => c.worktree.path),
