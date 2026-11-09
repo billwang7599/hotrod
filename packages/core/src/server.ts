@@ -92,6 +92,7 @@ export async function startServer(options: {
       modelLists: core.modelLists(),
       memory: core.memory(),
       workFolder: core.workFolder(),
+      themes: core.themes(),
     })
     socket.on('message', (data) => {
       try {

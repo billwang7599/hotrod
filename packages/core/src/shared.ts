@@ -382,6 +382,13 @@ export type ClientMessage =
   | { type: 'account.cancelLogin'; engine: string }
   | { type: 'account.use'; engine: string; accountId: string }
   | { type: 'account.remove'; engine: string; accountId: string }
+  // Replies with marketplace.catalog.
+  | { type: 'marketplace.list' }
+  // Replies with themes.updated.
+  | { type: 'themes.get' }
+  // Downloads, checks and saves the theme, then sends everyone themes.updated; replies theme.installFailed if it can't.
+  | { type: 'theme.install'; id: string }
+  | { type: 'theme.uninstall'; id: string }
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
@@ -396,6 +403,7 @@ export type CoreMessage =
       modelLists: ModelLists
       memory: MemorySettings
       workFolder: WorkFolder
+      themes: ThemeFile[]
     }
   | { type: 'engine.updated'; engine: EngineInfo }
   | { type: 'accounts.updated'; accounts: EngineAccounts }
@@ -416,4 +424,171 @@ export type CoreMessage =
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
+  // The marketplace's entries, or why they couldn't be fetched (offline, say).
+  | { type: 'marketplace.catalog'; entries?: CatalogEntry[]; error?: string }
+  // Every installed theme.
+  | { type: 'themes.updated'; themes: ThemeFile[] }
+  | { type: 'theme.installFailed'; id: string; error: string }
   | { type: 'error'; message: string }
+
+// Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
+// strictly so a theme is only ever colours and can never carry CSS.
+export const THEME_TOKENS = [
+  'bg',
+  'panel',
+  'raised',
+  'hover',
+  'border',
+  'text',
+  'muted',
+  'faint',
+  'accent',
+  'on-accent',
+  'green',
+  'amber',
+  'red',
+] as const
+
+export type ThemeToken = (typeof THEME_TOKENS)[number]
+export type ThemePalette = Record<ThemeToken, string>
+
+// variants: what the theme calls its dark and light palettes, such as Mocha and Latte.
+export type ThemeFile = {
+  id: string
+  name: string
+  version: string
+  author: string
+  description: string
+  variants?: { dark: string; light: string }
+  dark: ThemePalette
+  light: ThemePalette
+}
+
+// The colours a catalog entry shows before it's installed.
+export const PREVIEW_TOKENS = ['accent', 'bg', 'panel', 'text'] as const satisfies readonly ThemeToken[]
+export type ThemePreview = Record<'dark' | 'light', Record<(typeof PREVIEW_TOKENS)[number], string>>
+
+// One entry of the marketplace's index.json. path is relative to the index; sha256 is of the file's exact bytes. Only
+// themes install today; kind leaves room for mods, which need signing and review before Kothar runs outside code.
+export type CatalogEntry = {
+  id: string
+  kind: 'theme'
+  name: string
+  author: string
+  description: string
+  version: string
+  path: string
+  sha256: string
+  preview?: ThemePreview
+}
+
+export const MAX_THEME_BYTES = 64 * 1024
+
+const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
+// Lowercase only, so two ids can't name one file on a case-insensitive disk.
+const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
+const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
+const SHA256 = /^[0-9a-f]{64}$/
+
+export const isItemId = (id: unknown): id is string => typeof id === 'string' && ITEM_ID.test(id)
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+
+function onlyKeys(value: unknown, what: string, required: readonly string[], optional: readonly string[] = []) {
+  if (!isRecord(value)) throw new Error(`${what} must be an object`)
+  const extra = Object.keys(value).find((key) => !required.includes(key) && !optional.includes(key))
+  if (extra !== undefined) throw new Error(`${what} has an unknown field "${extra}"`)
+  const missing = required.find((key) => !Object.hasOwn(value, key))
+  if (missing !== undefined) throw new Error(`${what} is missing "${missing}"`)
+  return value
+}
+
+function text(value: unknown, what: string, max: number) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
+    throw new Error(`${what} must be text of 1 to ${max} characters`)
+  }
+  return value
+}
+
+function colors<K extends string>(value: unknown, what: string, tokens: readonly K[]) {
+  const palette = onlyKeys(value, what, tokens)
+  for (const token of tokens) {
+    const color = palette[token]
+    if (typeof color !== 'string' || !HEX_COLOR.test(color)) throw new Error(`${what} ${token} must be a hex colour`)
+  }
+  return palette as Record<K, string>
+}
+
+function itemFields(value: Record<string, unknown>, what: string) {
+  if (!isItemId(value.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
+  if (typeof value.version !== 'string' || !VERSION.test(value.version)) {
+    throw new Error(`${what} version must look like 1.2.3`)
+  }
+  return {
+    id: value.id,
+    name: text(value.name, `${what} name`, 40),
+    version: value.version,
+    author: text(value.author, `${what} author`, 60),
+    description: text(value.description, `${what} description`, 200),
+  }
+}
+
+// Throws, saying why, unless value is a theme file with exactly the known fields.
+export function checkTheme(value: unknown): ThemeFile {
+  const fields = ['id', 'name', 'version', 'author', 'description', 'dark', 'light']
+  const theme = onlyKeys(value, 'The theme', fields, ['variants'])
+  const variants =
+    theme.variants === undefined
+      ? undefined
+      : onlyKeys(theme.variants, 'The theme variants', ['dark', 'light'])
+  return {
+    ...itemFields(theme, 'The theme'),
+    ...(variants && {
+      variants: { dark: text(variants.dark, 'The dark variant', 30), light: text(variants.light, 'The light variant', 30) },
+    }),
+    dark: colors(theme.dark, 'The dark palette', THEME_TOKENS),
+    light: colors(theme.light, 'The light palette', THEME_TOKENS),
+  }
+}
+
+// Throws, saying why, unless value is a marketplace index: { entries: CatalogEntry[] } with unique ids.
+export function checkCatalog(value: unknown): CatalogEntry[] {
+  const index = onlyKeys(value, 'The marketplace index', ['entries'], ['version'])
+  if (!Array.isArray(index.entries)) throw new Error('The marketplace index entries must be a list')
+  const entries = index.entries.map((raw, i): CatalogEntry => {
+    const required = ['id', 'kind', 'name', 'author', 'description', 'version', 'path', 'sha256']
+    const entry = onlyKeys(raw, `Marketplace entry ${i + 1}`, required, ['preview'])
+    const fields = itemFields(entry, `Marketplace entry ${i + 1}`)
+    if (entry.kind !== 'theme') throw new Error(`Marketplace entry "${fields.id}" is a "${entry.kind}"; only themes install`)
+    if (entry.path !== `themes/${fields.id}.json`) throw new Error(`Marketplace entry "${fields.id}" must live at themes/${fields.id}.json`)
+    if (typeof entry.sha256 !== 'string' || !SHA256.test(entry.sha256)) {
+      throw new Error(`Marketplace entry "${fields.id}" needs a sha256`)
+    }
+    const preview =
+      entry.preview === undefined
+        ? undefined
+        : onlyKeys(entry.preview, `The preview of "${fields.id}"`, ['dark', 'light'])
+    return {
+      ...fields,
+      kind: 'theme',
+      path: entry.path,
+      sha256: entry.sha256,
+      ...(preview && {
+        preview: {
+          dark: colors(preview.dark, `The dark preview of "${fields.id}"`, PREVIEW_TOKENS),
+          light: colors(preview.light, `The light preview of "${fields.id}"`, PREVIEW_TOKENS),
+        },
+      }),
+    }
+  })
+  const ids = entries.map((entry) => entry.id)
+  const twin = ids.find((id, i) => ids.indexOf(id) !== i)
+  if (twin !== undefined) throw new Error(`Two marketplace entries have the id "${twin}"`)
+  return entries
+}
+
+export const previewOf = (theme: ThemeFile): ThemePreview => ({
+  dark: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.dark[token]])) as ThemePreview['dark'],
+  light: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.light[token]])) as ThemePreview['light'],
+})

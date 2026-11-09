@@ -1,0 +1,41 @@
+{
+  "id": "catppuccin",
+  "name": "Catppuccin",
+  "version": "1.0.0",
+  "author": "Kothar",
+  "description": "The Catppuccin palette, in its Mocha and Latte flavors.",
+  "variants": {
+    "dark": "Mocha",
+    "light": "Latte"
+  },
+  "dark": {
+    "bg": "#1e1e2e",
+    "panel": "#181825",
+    "raised": "#313244",
+    "hover": "#45475a",
+    "border": "#313244",
+    "text": "#cdd6f4",
+    "muted": "#a6adc8",
+    "faint": "#7f849c",
+    "accent": "#cba6f7",
+    "on-accent": "#11111b",
+    "green": "#a6e3a1",
+    "amber": "#f9e2af",
+    "red": "#f38ba8"
+  },
+  "light": {
+    "bg": "#eff1f5",
+    "panel": "#e6e9ef",
+    "raised": "#ccd0da",
+    "hover": "#bcc0cc",
+    "border": "#ccd0da",
+    "text": "#4c4f69",
+    "muted": "#5e6075",
+    "faint": "#646678",
+    "accent": "#8839ef",
+    "on-accent": "#eff1f5",
+    "green": "#40a02b",
+    "amber": "#df8e1d",
+    "red": "#d20f39"
+  }
+}

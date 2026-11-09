@@ -50,7 +50,8 @@ export async function startCore(
 
   const engine = envVar(env, 'ENGINE')
   const defaultEngine = engine ?? adapters[0]?.id ?? ''
-  const core = openCore({ garage, adapters, defaultEngine, machine, mods, brokenMods })
+  const marketplaceUrl = envVar(env, 'MARKETPLACE_URL')
+  const core = openCore({ garage, adapters, defaultEngine, machine, mods, brokenMods, marketplaceUrl })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')
   if (work) core.setWorkFolder(work)

@@ -13,6 +13,13 @@ A mod is written once and works with every engine. It can add panels and command
 permission requests, rewrite messages, and run commands, all through Kothar's public mod API. See
 [docs/mods.md](docs/mods.md).
 
+## Themes
+
+Kothar ships with two themes, Default and Glass. More themes, such as Nord, Catppuccin and Gruvbox, come from the
+marketplace in Settings. A theme is a small JSON file of colours, checked before it installs, so it can't change
+anything but colours. The catalog lives in [marketplace/](marketplace/). Mods can't be installed from the marketplace
+yet.
+
 ## Status
 
 Early development. Nothing to install yet.

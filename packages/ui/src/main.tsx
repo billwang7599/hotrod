@@ -11,7 +11,7 @@ import { Button, CHAT_NOUN, ConfirmDialog, Hint, MOTION, PanelToggle, SidePanel,
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
-import { startAppearance } from './themes.tsx'
+import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { useLooking, useMarkRead } from './unread.ts'
 import {
   dockedPanels,
@@ -84,6 +84,7 @@ function App() {
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
   const [changingWorkFolder, setChangingWorkFolder] = useState(false)
   useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  useEffect(() => state.themes && setInstalledThemes(state.themes), [state.themes])
   const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {
     if (page) setSettingsPage(page)

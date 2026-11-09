@@ -41,6 +41,7 @@ import {
   type Summaries,
 } from './memory.ts'
 import { realPath } from './machine.ts'
+import { type Fetch, openMarketplace } from './marketplace.ts'
 import { valuesOf } from './mods.ts'
 import {
   ASK_FIRST_COMMANDS,
@@ -143,6 +144,8 @@ export function openCore(options: {
   brokenMods?: { id: string; loadError: string }[]
   stopGraceMs?: number
   compactDebounceMs?: number
+  marketplaceUrl?: string
+  fetch?: Fetch
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, compactDebounceMs } = options
   mkdirSync(options.garage, { recursive: true })
@@ -166,6 +169,7 @@ export function openCore(options: {
     const twin = ids.find((id, i) => ids.indexOf(id) !== i)
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
+  const marketplace = openMarketplace({ garage, url: options.marketplaceUrl, fetch: options.fetch })
   const settingsFile = join(garage, 'settings.json')
   const settings: PermissionSwitches &
     ModelSettings & {
@@ -1745,6 +1749,7 @@ export function openCore(options: {
     chats: () => shownChats().map(state),
     workFolder,
     setWorkFolder,
+    themes: marketplace.installed,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
     onMessage: (listener: (message: CoreMessage) => void) => listeners.push(listener),
@@ -1875,6 +1880,23 @@ export function openCore(options: {
           return accounts.use(String(message.engine), String(message.accountId))
         case 'account.remove':
           return accounts.remove(String(message.engine), String(message.accountId), reply)
+        case 'marketplace.list':
+          return void marketplace.catalog().then(
+            (entries) => reply({ type: 'marketplace.catalog', entries }),
+            (error) => reply({ type: 'marketplace.catalog', error: messageOf(error) }),
+          )
+        case 'themes.get':
+          return reply({ type: 'themes.updated', themes: marketplace.installed() })
+        case 'theme.install': {
+          const id = String(message.id)
+          return void marketplace.install(id).then(
+            () => broadcast({ type: 'themes.updated', themes: marketplace.installed() }),
+            (error) => reply({ type: 'theme.installFailed', id, error: messageOf(error) }),
+          )
+        }
+        case 'theme.uninstall':
+          marketplace.uninstall(message.id)
+          return broadcast({ type: 'themes.updated', themes: marketplace.installed() })
         default:
           throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
       }

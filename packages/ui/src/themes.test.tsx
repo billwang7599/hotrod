@@ -1,13 +1,35 @@
 /// <reference types="node" />
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { checkTheme, type ThemeFile } from '@kotharhq/core/shared'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { Tooltip } from 'radix-ui'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { Appearance, chooseAppearance, ELEVATION, startAppearance, THEMES, TOKENS } from './themes.tsx'
+import {
+  Appearance,
+  chooseAppearance,
+  ELEVATION,
+  setInstalledThemes,
+  startAppearance,
+  THEMES,
+  TOKENS,
+  type Theme,
+} from './themes.tsx'
 
 // Vitest loads CSS imports as empty strings, so the stylesheet is read from disk.
 const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8')
 const SCHEMES = ['dark', 'light'] as const
+// The marketplace's themes, which every built-in theme test also holds them to.
+const catalogDir = new URL('../../../marketplace/themes/', import.meta.url)
+const CATALOG: Record<string, ThemeFile> = Object.fromEntries(
+  readdirSync(catalogDir).map((name) => {
+    const theme = checkTheme(JSON.parse(readFileSync(new URL(name, catalogDir), 'utf8')))
+    return [theme.id, theme]
+  }),
+)
+const EVERY: [string, Theme][] = [...Object.entries(THEMES), ...Object.entries(CATALOG)]
+const nord = CATALOG.nord!
+const catppuccin = CATALOG.catppuccin!
+const gruvbox = CATALOG.gruvbox!
 
 function luminance(hex: string) {
   const [r, g, b] = [1, 3, 5].map((i) => {
@@ -61,6 +83,7 @@ function fakePage({ dark = true, desktop = false, vibrancy = false } = {}) {
   vi.stubGlobal('localStorage', {
     getItem: (k: string) => store.get(k) ?? null,
     setItem: (k: string, v: string) => store.set(k, v),
+    removeItem: (k: string) => store.delete(k),
   })
   vi.stubGlobal('matchMedia', () => media)
   vi.stubGlobal('window', desktop ? { kothar: bridge } : {})
@@ -102,7 +125,7 @@ describe('theme table', () => {
   })
 
   it('defines every token in both schemes of every theme', () => {
-    for (const [id, theme] of Object.entries(THEMES))
+    for (const [id, theme] of EVERY)
       for (const scheme of SCHEMES) {
         expect(Object.keys(theme[scheme]).sort(), `${id} ${scheme}`).toEqual([...TOKENS].sort())
         for (const token of TOKENS) expect(theme[scheme][token], `${id} ${scheme} ${token}`).toMatch(/\S/)
@@ -167,9 +190,9 @@ describe('theme table', () => {
   })
 
   it('keeps secondary text readable on light pages and panels', () => {
-    for (const [id, theme] of Object.entries(THEMES)) {
+    for (const [id, theme] of EVERY) {
       const { bg, panel, muted, faint } = theme.light
-      const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop.light : [bg]
+      const backdrop: readonly string[] = theme.backdrop?.light ?? [bg]
       for (const under of backdrop)
         for (const surface of [under, over(bg, under), over(panel, under)])
           for (const [name, color] of [['muted', muted], ['faint', faint]])
@@ -202,10 +225,10 @@ describe('theme table', () => {
   })
 
   it('keeps body text readable on every background', () => {
-    for (const [id, theme] of Object.entries(THEMES))
+    for (const [id, theme] of EVERY)
       for (const scheme of SCHEMES) {
         const { bg, panel, text } = theme[scheme]
-        const backdrop: readonly string[] = 'backdrop' in theme ? theme.backdrop[scheme] : [bg]
+        const backdrop: readonly string[] = theme.backdrop?.[scheme] ?? [bg]
         for (const under of backdrop)
           for (const surface of [under, over(bg, under), over(panel, under)])
             expect(contrast(text, surface), `${id} ${scheme} on ${surface}`).toBeGreaterThanOrEqual(4.5)
@@ -227,34 +250,72 @@ describe('appearance', () => {
     const page = fakePage({ dark: true })
     startAppearance()
     for (const [level, shadow] of Object.entries(ELEVATION.dark)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
-    chooseAppearance({ theme: 'gruvbox', scheme: 'light' })
+    chooseAppearance({ theme: 'glass', scheme: 'light' })
     for (const [level, shadow] of Object.entries(ELEVATION.light)) expect(page.props.get(`--shadow-${level}`)).toBe(shadow)
   })
 
-  it('applies a picked theme at once and keeps it for the next start', () => {
+  it('applies a picked theme at once and keeps it for the next start, before the core connects', () => {
     const page = fakePage({ dark: false })
     startAppearance()
+    setInstalledThemes([nord])
     chooseAppearance({ theme: 'nord' })
-    for (const token of TOKENS) expect(page.props.get(`--${token}`)).toBe(THEMES.nord.light[token])
+    for (const token of TOKENS) expect(page.props.get(`--${token}`)).toBe(nord.light[token])
 
     const store = new Map(page.store)
     const next = fakePage({ dark: false })
     for (const [k, v] of store) next.store.set(k, v)
     startAppearance()
-    expect(next.props.get('--bg')).toBe(THEMES.nord.light.bg)
+    expect(next.props.get('--bg')).toBe(nord.light.bg)
+  })
+
+  it('shows Default in place of a picked theme that is no longer installed, and the theme again once it is', () => {
+    const page = fakePage({ dark: true })
+    startAppearance()
+    setInstalledThemes([nord])
+    chooseAppearance({ theme: 'nord' })
+    setInstalledThemes([])
+    expect(page.props.get('--bg')).toBe(THEMES.default.dark.bg)
+    expect(page.store.has('kothar.themeFile')).toBe(false)
+    setInstalledThemes([nord])
+    expect(page.props.get('--bg')).toBe(nord.dark.bg)
+  })
+
+  it('starts on Default when the saved theme was a built-in that moved to the marketplace, without downloading it', () => {
+    for (const saved of ['tokyoNight', 'gruvbox']) {
+      const page = fakePage({ dark: true })
+      page.store.set('kothar.theme', saved)
+      startAppearance()
+      expect(page.props.get('--bg'), saved).toBe(THEMES.default.dark.bg)
+      setInstalledThemes([])
+      expect(page.props.get('--bg'), saved).toBe(THEMES.default.dark.bg)
+    }
+    const page = fakePage({ dark: true })
+    page.store.set('kothar.theme', 'tokyoNight')
+    startAppearance()
+    setInstalledThemes([CATALOG['tokyo-night']!])
+    expect(page.props.get('--bg')).toBe(CATALOG['tokyo-night']!.dark.bg)
+  })
+
+  it('ignores a cached theme file that fails the check', () => {
+    const page = fakePage({ dark: true })
+    page.store.set('kothar.theme', 'nord')
+    page.store.set('kothar.themeFile', JSON.stringify({ ...nord, dark: { ...nord.dark, bg: 'red;}body{x:y' } }))
+    startAppearance()
+    expect(page.props.get('--bg')).toBe(THEMES.default.dark.bg)
   })
 
   it('follows prefers-color-scheme under System, and ignores it once a scheme is picked', () => {
     const page = fakePage({ dark: true })
     startAppearance()
+    setInstalledThemes([catppuccin])
     chooseAppearance({ theme: 'catppuccin' })
     page.setSystemDark(false)
-    expect(page.props.get('--bg')).toBe(THEMES.catppuccin.light.bg)
+    expect(page.props.get('--bg')).toBe(catppuccin.light.bg)
     expect(page.props.get('color-scheme')).toBe('light')
 
     chooseAppearance({ scheme: 'dark' })
     page.setSystemDark(false)
-    expect(page.props.get('--bg')).toBe(THEMES.catppuccin.dark.bg)
+    expect(page.props.get('--bg')).toBe(catppuccin.dark.bg)
   })
 
   it('blurs Glass panels over a gradient where the window cannot see through: the browser, Windows and Linux', () => {
@@ -295,6 +356,7 @@ describe('appearance', () => {
     expect(mac.props.get('--glass-base')).toBe(THEMES.glass.backdrop.dark.at(-1))
     expect(mac.props.get('--glass-dialog')).toBe(THEMES.glass.dialog.dark)
 
+    setInstalledThemes([gruvbox])
     chooseAppearance({ theme: 'gruvbox' })
     expect(mac.attrs.has('data-glass')).toBe(false)
     expect(mac.props.has('--glass-base')).toBe(false)
@@ -302,14 +364,15 @@ describe('appearance', () => {
     expect(mac.bridge.setAppearance).toHaveBeenLastCalledWith({
       scheme: 'dark',
       vibrancy: false,
-      background: THEMES.gruvbox.dark.bg,
+      background: gruvbox.dark.bg,
     })
   })
 
   it('keeps every other theme in an opaque window, so nothing shows through stale frames', () => {
     const mac = fakePage({ desktop: true, vibrancy: true })
     startAppearance()
-    for (const theme of Object.keys(THEMES) as (keyof typeof THEMES)[])
+    setInstalledThemes(Object.values(CATALOG))
+    for (const [theme] of EVERY)
       for (const scheme of SCHEMES) {
         chooseAppearance({ theme, scheme })
         const { vibrancy, background } = mac.bridge.setAppearance.mock.lastCall?.[0]
@@ -318,18 +381,24 @@ describe('appearance', () => {
       }
   })
 
-  it('shows a card for every theme and marks the current one', () => {
+  it('shows a card for Default, Glass and each installed theme, and marks the current one', () => {
     fakePage({ dark: true })
     startAppearance()
-    chooseAppearance({ theme: 'rosePine' })
+    setInstalledThemes([CATALOG['rose-pine']!, nord])
+    chooseAppearance({ theme: 'rose-pine' })
     const html = renderToStaticMarkup(
       <Tooltip.Provider>
         <Appearance />
       </Tooltip.Provider>,
     )
-    for (const theme of Object.values(THEMES)) expect(html).toContain(`>${theme.name}<`)
+    for (const name of ['Default', 'Glass', 'Nord', 'Rosé Pine']) expect(html).toContain(`>${name}<`)
+    expect(html).not.toContain('>Gruvbox<')
     expect(html.match(/aria-pressed="true"/g)).toHaveLength(1)
     expect(html).toMatch(/aria-pressed="true"[^>]*>(?:(?!<button).)*Rosé Pine/)
+  })
+
+  it('builds in only Default and Glass', () => {
+    expect(Object.keys(THEMES)).toEqual(['default', 'glass'])
   })
 
   it('leaves the color scheme to speak for itself, with no explanation', () => {

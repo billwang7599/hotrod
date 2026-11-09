@@ -1,0 +1,41 @@
+{
+  "id": "kanagawa",
+  "name": "Kanagawa",
+  "version": "1.0.0",
+  "author": "Kothar",
+  "description": "The Kanagawa palette by rebelot, in its Wave and Lotus variants.",
+  "variants": {
+    "dark": "Wave",
+    "light": "Lotus"
+  },
+  "dark": {
+    "bg": "#1f1f28",
+    "panel": "#16161d",
+    "raised": "#2a2a37",
+    "hover": "#363646",
+    "border": "#2a2a37",
+    "text": "#dcd7ba",
+    "muted": "#c8c093",
+    "faint": "#727169",
+    "accent": "#7e9cd8",
+    "on-accent": "#1f1f28",
+    "green": "#98bb6c",
+    "amber": "#e6c384",
+    "red": "#e46876"
+  },
+  "light": {
+    "bg": "#f2ecbc",
+    "panel": "#e5ddb0",
+    "raised": "#e7dba0",
+    "hover": "#e4d794",
+    "border": "#d5cea3",
+    "text": "#4c4c5b",
+    "muted": "#5c5952",
+    "faint": "#5f5f5d",
+    "accent": "#4d699b",
+    "on-accent": "#f2ecbc",
+    "green": "#6f894e",
+    "amber": "#cc6d00",
+    "red": "#c84053"
+  }
+}

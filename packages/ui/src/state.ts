@@ -20,6 +20,7 @@ import type {
   PanelTab,
   QueuedMessage,
   Question,
+  ThemeFile,
   ToolKind,
   WorkFolder,
 } from '@kotharhq/core/shared'
@@ -81,6 +82,8 @@ export type State = {
   mods: ModInfo[]
   modelLists: ModelLists
   workFolder: WorkFolder
+  // Installed marketplace themes; absent until the core's snapshot arrives.
+  themes?: ThemeFile[]
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
@@ -278,6 +281,7 @@ export function reduce(state: State, action: Action): State {
         mods: action.mods,
         modelLists: action.modelLists,
         workFolder: action.workFolder,
+        themes: action.themes,
       })
     case 'engine.updated':
       return { ...state, engines: state.engines.map((e) => (e.id === action.engine.id ? action.engine : e)) }
@@ -363,6 +367,11 @@ export function reduce(state: State, action: Action): State {
       return state
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
+    case 'themes.updated':
+      return { ...state, themes: action.themes }
+    case 'marketplace.catalog':
+    case 'theme.installFailed':
+      return state
     case 'error':
       return {
         ...state,
