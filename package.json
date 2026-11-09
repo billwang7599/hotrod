@@ -1,6 +1,7 @@
 {
   "name": "hotrod",
   "private": true,
+  "license": "FSL-1.1-ALv2",
   "type": "module",
   "workspaces": ["packages/*", "mods/*"],
   "engines": { "node": ">=26" },
