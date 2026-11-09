@@ -12,6 +12,7 @@ import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
+import { SearchPalette } from './search.tsx'
 import { Keys } from './shortcuts-page.tsx'
 import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -154,6 +155,7 @@ function App() {
     const picked = await window.kothar.pickFolder()
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
+  const [searching, setSearching] = useState(false)
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
@@ -163,6 +165,7 @@ function App() {
     ),
     newSpace: () => connected && setNameRequest({ kind: 'new' }),
     settings: () => openSettings(),
+    search: () => setSearching((open) => !open),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
   }
   useShortcuts(shortcuts)
@@ -349,6 +352,16 @@ function App() {
               ))}
             </AnimatePresence>
           </div>
+          <SearchPalette
+            open={searching}
+            close={() => setSearching(false)}
+            chats={state.chats}
+            selectedId={state.selectedId}
+            search={state.search}
+            connected={connected}
+            send={send}
+            select={select}
+          />
           <NameDialog
             request={nameRequest}
             connected={connected}

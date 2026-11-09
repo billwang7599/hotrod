@@ -21,6 +21,7 @@ import type {
   PanelTab,
   QueuedMessage,
   Question,
+  SearchHit,
   ThemeFile,
   ToolKind,
   WorkFolder,
@@ -89,6 +90,8 @@ export type State = {
   // so the same error twice still reads as a new answer.
   catalog?: { entries?: CatalogEntry[]; error?: string }
   themeFailures: Record<string, { error: string; count: number }>
+  // The core's latest answer to the search palette.
+  search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
   modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
@@ -384,6 +387,8 @@ export function reduce(state: State, action: Action): State {
       const count = (state.themeFailures[action.id]?.count ?? 0) + 1
       return { ...state, themeFailures: { ...state.themeFailures, [action.id]: { error: action.error, count } } }
     }
+    case 'search.results':
+      return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
     case 'error':
       return {
         ...state,

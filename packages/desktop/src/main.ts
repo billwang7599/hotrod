@@ -12,6 +12,7 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 const VIBRANCY = 'sidebar'
 // The menu's keys until the UI sends the user's own (the defaults in packages/ui/src/shortcuts.ts).
 const MENU_DEFAULTS: Record<string, string | null> = {
+  search: 'CmdOrCtrl+O',
   newSpace: 'CmdOrCtrl+N',
   newSpaceFromFolder: 'CmdOrCtrl+Shift+O',
   settings: 'CmdOrCtrl+,',
@@ -156,6 +157,8 @@ async function start() {
         {
           label: 'File',
           submenu: [
+            item('search', 'Search…'),
+            { type: 'separator' },
             item('newSpace', 'New space…'),
             item('newSpaceFromFolder', 'New space from folder…'),
             ...(mac ? [] : [settings]),

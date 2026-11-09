@@ -389,6 +389,20 @@ export type ClientMessage =
   // Downloads, checks and saves the theme, then sends everyone themes.updated; replies theme.installFailed if it can't.
   | { type: 'theme.install'; id: string }
   | { type: 'theme.uninstall'; id: string }
+  // Searches the message text of Home (while its mod is on) and every space, not subagents. Replies search.results with
+  // the same id, so a reply to an older query can be told apart.
+  | { type: 'search'; id: number; query: string }
+
+// One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
+// earlier messages in the same chat that match too.
+export type SearchHit = {
+  chatId: string
+  at: string
+  kind: 'user' | 'text' | 'report'
+  snippet: string
+  match: { start: number; length: number }
+  nth: number
+}
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
 
@@ -429,6 +443,7 @@ export type CoreMessage =
   // Every installed theme.
   | { type: 'themes.updated'; themes: ThemeFile[] }
   | { type: 'theme.installFailed'; id: string; error: string }
+  | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
 
 // Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked

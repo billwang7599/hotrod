@@ -39,6 +39,7 @@ const JUMPS: ShortcutAction[] = Array.from({ length: 9 }, (_, i) => ({
 }))
 
 const actions: ShortcutAction[] = [
+  { id: 'search', label: 'Search', defaultKeys: 'Mod+O', menu: true },
   { id: 'previousSpace', label: 'Previous space', defaultKeys: 'Mod+ArrowUp' },
   { id: 'nextSpace', label: 'Next space', defaultKeys: 'Mod+ArrowDown' },
   ...JUMPS,

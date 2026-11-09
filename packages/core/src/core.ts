@@ -87,6 +87,7 @@ import {
   type Worktree,
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
+import { searchChats } from './search.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -1893,6 +1894,14 @@ export function openCore(options: {
             () => broadcast({ type: 'themes.updated', themes: marketplace.installed() }),
             (error) => reply({ type: 'theme.installFailed', id, error: messageOf(error) }),
           )
+        }
+        case 'search': {
+          const spaces = shownChats().filter((c) => !c.info.subagent)
+          const hits = searchChats(
+            spaces.map((c) => ({ id: c.info.id, name: c.info.name, entries: c.entries })),
+            String(message.query ?? ''),
+          )
+          return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
         }
         case 'theme.uninstall':
           marketplace.uninstall(message.id)
