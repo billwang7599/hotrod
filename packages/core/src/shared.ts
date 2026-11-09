@@ -6,7 +6,9 @@ import type {
   EngineEvent,
   McpServer,
   ModAction,
+  ModManifest,
   ModSetting,
+  ModUse,
   ModValues,
   ModView,
 } from '@kotharhq/mod-api'
@@ -257,6 +259,17 @@ export type ModInfo = {
   values: ModValues
   setup?: SetupState
   loadError?: string
+  // A community mod: installed in the garage from the marketplace or a folder, and what it says it uses. running: the
+  // version this run of Kothar loaded, if any; mods load only at startup.
+  community?: {
+    version: string
+    author: string
+    uses: ModUse[]
+    source: 'marketplace' | 'local'
+    repo?: string
+    path?: string
+    running?: string
+  }
 }
 
 export type SetupState = {
@@ -436,7 +449,9 @@ export type CoreMessage =
   | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
+  // A mod that's new to the list (a community mod just installed) is added.
   | { type: 'mod.updated'; mod: ModInfo }
+  | { type: 'mod.removed'; modId: string }
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
@@ -502,7 +517,7 @@ export type CatalogEntry = {
 
 // A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem).
 export type MarketEntry = CatalogEntry & {
-  latest?: { tag: string; version: string; preview?: ThemePreview }
+  latest?: { tag: string; version: string; preview?: ThemePreview; uses?: ModUse[] }
   problem?: string
 }
 
@@ -525,6 +540,37 @@ const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
 // Lowercase only, so two ids can't name one file on a case-insensitive disk.
 const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
+export const MAX_MANIFEST_BYTES = 64 * 1024
+export const MAX_MOD_BYTES = 5 * 1024 * 1024
+export const MOD_API_VERSION = 1
+
+// What a community mod can say it uses, as the user reads it before install. The keys are ModUse, in this order.
+export const MOD_USES: Record<ModUse, string> = {
+  run: 'Runs programs on your computer',
+  setup: 'Installs software it needs',
+  mcpServers: 'Starts MCP servers for agents',
+  permissions: 'Approves or denies agents\' requests for you',
+  sendMessages: 'Sends messages and starts chats as you',
+  accounts: 'Sees and switches your engine accounts',
+  readChats: 'Reads your chats',
+  transforms: 'Rewrites your messages or agents\' replies',
+  instructions: 'Adds to every agent\'s instructions',
+  tools: 'Gives agents tools',
+  events: 'Watches chats as they run',
+  chats: 'Adds chats of its own',
+  panels: 'Adds panels',
+  commands: 'Adds commands',
+  settings: 'Has settings',
+}
+
+export const isModUse = (use: unknown): use is ModUse => typeof use === 'string' && Object.hasOwn(MOD_USES, use)
+
+// In MOD_USES order, so lists read the same everywhere.
+export const sortUses = (uses: Iterable<ModUse>) => {
+  const set = new Set(uses)
+  return (Object.keys(MOD_USES) as ModUse[]).filter((use) => set.has(use))
+}
+
 const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
 
 export const isItemId = (id: unknown): id is string => typeof id === 'string' && ITEM_ID.test(id)
@@ -587,6 +633,17 @@ export function checkTheme(value: unknown): ThemeFile {
     dark: colors(theme.dark, 'The dark palette', THEME_TOKENS),
     light: colors(theme.light, 'The light palette', THEME_TOKENS),
   }
+}
+
+// Throws, saying why, unless value is a community mod's manifest.json with exactly the known fields.
+export function checkModManifest(value: unknown): ModManifest {
+  const fields = ['id', 'name', 'version', 'author', 'description', 'api', 'uses']
+  const manifest = onlyKeys(value, 'manifest.json', fields)
+  if (manifest.api !== MOD_API_VERSION) throw new Error(`manifest.json is for mod API ${String(manifest.api)}, not ${MOD_API_VERSION}`)
+  if (!Array.isArray(manifest.uses)) throw new Error('manifest.json uses must be a list')
+  const unknown = manifest.uses.find((use) => !isModUse(use))
+  if (unknown !== undefined) throw new Error(`manifest.json uses "${String(unknown)}", which Kothar doesn't know`)
+  return { ...itemFields(manifest, 'manifest.json'), api: MOD_API_VERSION, uses: sortUses(manifest.uses as ModUse[]) }
 }
 
 export const isRepo = (repo: unknown): repo is string => typeof repo === 'string' && REPO.test(repo) && !repo.includes('..')

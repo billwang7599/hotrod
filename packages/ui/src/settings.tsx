@@ -4,6 +4,7 @@ import { AlertDialog, Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
+  MOD_USES,
   PERMISSION_SWITCHES,
   levelsOf,
   settingProblem,
@@ -40,7 +41,7 @@ import {
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { MarketplacePage, type Market } from './marketplace.tsx'
+import { MarketplacePage, MOD_WARNING, modStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 
@@ -236,11 +237,94 @@ const PAGES = [
     intro: 'Mods that ship with Kothar. One with settings or a setup gets its own page while it is on.',
     body: (props: PageProps) => <ModsPage {...props} />,
   },
+  {
+    id: 'community-mods',
+    group: 'Mods',
+    title: 'Community mods',
+    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and runs from the next start.',
+    body: (props: PageProps) => <CommunityModsPage {...props} />,
+  },
 ] as const satisfies readonly Page[]
 
 export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
 
-function ModsPage({ mods, connected, send }: PageProps) {
+function CommunityModsPage({ mods, connected, send }: PageProps) {
+  const community = mods.filter((m) => m.community)
+  const turn = async (m: ModInfo, enabled: boolean) => {
+    if (enabled) {
+      const uses = m.community!.uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+      const ok = await confirm(
+        `Turn on ${m.name}? It runs code on your computer with your permissions.` +
+          (uses ? `\n\nIt says it:\n${uses}` : '') +
+          '\n\nIt starts the next time Kothar starts.',
+      )
+      if (!ok) return
+    }
+    send({ type: 'mod.setEnabled', modId: m.id, enabled })
+  }
+  return (
+    <>
+      <p className="pb-12 text-sm text-amber">{MOD_WARNING}</p>
+      {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
+      {community.length > 0 && (
+        <div className={GROUP}>
+          {community.map((m) => {
+            const { version, author, uses, source, repo, path } = m.community!
+            const status = modStatus(m)
+            return (
+              <SettingRow
+                key={m.id}
+                name={
+                  <span className="flex flex-wrap items-baseline gap-x-8">
+                    <span>{m.name}</span>
+                    <span className="text-xs text-faint">
+                      {version} by {author}
+                    </span>
+                    {source === 'local' && (
+                      <Hint text={`Installed from ${path ?? 'a folder'}`}>
+                        <span className="text-xs text-amber">Local</span>
+                      </Hint>
+                    )}
+                  </span>
+                }
+                description={
+                  <span className="flex flex-col gap-4">
+                    <span>{m.description}</span>
+                    <UsesList uses={uses} />
+                    {repo && (
+                      <a
+                        className="w-fit text-xs text-faint underline-offset-2 hover:underline"
+                        href={`https://github.com/${repo}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {repo}
+                      </a>
+                    )}
+                    {status && <span className="text-faint">{status}</span>}
+                  </span>
+                }
+                below={m.loadError && <ErrorText>Couldn't load: {m.loadError}</ErrorText>}
+              >
+                <Button
+                  variant="ghost"
+                  disabled={!connected}
+                  onClick={() => send({ type: 'market.uninstall', kind: 'mod', id: m.id })}
+                >
+                  Uninstall
+                </Button>
+                <Switch label={m.name} checked={m.enabled} disabled={!connected} onChange={(on) => void turn(m, on)} />
+              </SettingRow>
+            )
+          })}
+        </div>
+      )}
+    </>
+  )
+}
+
+function ModsPage({ mods: all, connected, send }: PageProps) {
+  const mods = all.filter((m) => !m.community)
   const [setupFor, setSetupFor] = useState<string>()
   const [setupShown, setSetupShown] = useState(false)
   const mod = mods.find((m) => m.id === setupFor && m.enabled)
@@ -407,6 +491,9 @@ const modPages = (mods: ModInfo[]): Page[] =>
       title: mod.name,
       body: ({ connected, send }: PageProps) => (
         <div className={GROUP}>
+          {mod.community && (
+            <SettingRow name="Uses" description={<UsesList uses={mod.community.uses} />} />
+          )}
           {mod.setup && <ModSetupRow mod={mod} connected={connected} send={send} />}
           {mod.settings.map((setting) => (
             <ModSettingRow

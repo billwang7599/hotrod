@@ -121,11 +121,16 @@ describe('the marketplace', () => {
     expect(entries[2]!.problem).toBe("someone/themes's latest release (v1) has no nope.json")
   })
 
-  it('leaves mods out until Kothar can install them', async () => {
-    const { fetch } = fakeGitHub([entryOf(nord), entryOf(nord, { kind: 'mod', id: 'a-mod' })], {
+  it('lists mods beside themes, with what their latest release says they use', async () => {
+    const manifest = { id: 'a-mod', name: 'A mod', version: '0.2.0', author: 'Me', description: 'D', api: 1, uses: ['panels', 'run'] }
+    const { fetch } = fakeGitHub([entryOf(nord), entryOf(nord, { kind: 'mod', id: 'a-mod', repo: 'me/a-mod' })], {
       [REPO]: { tag: 'v1', files: { 'nord.json': bytesOf(nord) } },
+      'me/a-mod': { tag: 'v0.2.0', files: { 'manifest.json': JSON.stringify(manifest), 'main.mjs': 'export default {}' } },
     })
-    expect((await open(tempGarage(), fetch).listing()).map((e) => e.id)).toEqual(['nord'])
+    const entries = await open(tempGarage(), fetch).listing()
+    expect(entries[1]).toMatchObject({ id: 'a-mod', latest: { tag: 'v0.2.0', version: '0.2.0', uses: ['run', 'panels'] } })
+    // main.mjs is only downloaded on install.
+    expect(fetch.mock.calls.some(([url]) => url.endsWith('/main.mjs'))).toBe(false)
   })
 
   it('says why the catalog could not be read', async () => {

@@ -373,8 +373,13 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
-    case 'mod.updated':
-      return { ...state, mods: state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) }
+    case 'mod.updated': {
+      const known = state.mods.some((m) => m.id === action.mod.id)
+      const mods = known ? state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) : [...state.mods, action.mod]
+      return { ...state, mods }
+    }
+    case 'mod.removed':
+      return { ...state, mods: state.mods.filter((m) => m.id !== action.modId) }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
     case 'memory.updated':

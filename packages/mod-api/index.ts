@@ -350,3 +350,47 @@ export type Mod = {
   // A turn ran into its account's usage limit. The core stops the turn first, so the chat is idle here.
   onLimitReached?(limit: LimitReached, context: ModContext): void
 }
+
+// A community mod ships as two assets of a GitHub release in its own repo: manifest.json, which is this, and main.mjs,
+// one ES module (bundled, imports only node: built-ins) whose default export is the Mod. See
+// https://github.com/billwang7599/kothar-sample-mod.
+export type ModManifest = {
+  // The Mod's id, and its folder's name: lowercase letters, digits and dashes.
+  id: string
+  name: string
+  // 1.2.3. The Marketplace offers an update when the latest release's version differs from the installed one.
+  version: string
+  author: string
+  description: string
+  // The mod API version the mod is written for.
+  api: 1
+  // Everything the mod does through the mod API. Kothar shows the list before install, and won't start a mod that does
+  // more: a Mod field or a host call it didn't list.
+  uses: ModUse[]
+}
+
+export type ModUse =
+  // Mod fields.
+  | 'tools'
+  | 'mcpServers'
+  | 'instructions'
+  // onPermissionRequested
+  | 'permissions'
+  // transformMessage, transformOutput
+  | 'transforms'
+  // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
+  // onChatArchived, onLimitReached
+  | 'events'
+  | 'panels'
+  | 'commands'
+  | 'settings'
+  | 'chats'
+  | 'setup'
+  // Host calls: chats, chat, read, space.
+  | 'readChats'
+  // send, createChat, retry, continue, interrupt
+  | 'sendMessages'
+  // accounts, useAccount
+  | 'accounts'
+  // run, spawn
+  | 'run'

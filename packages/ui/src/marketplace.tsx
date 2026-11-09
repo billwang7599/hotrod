@@ -1,18 +1,21 @@
 import { useEffect, useState } from 'react'
+import type { ModUse } from '@kotharhq/mod-api'
 import {
+  MOD_USES,
   previewOf,
   type ClientMessage,
   type InstalledItem,
   type MarketEntry,
   type MarketKind,
+  type ModInfo,
   type ThemeFile,
   type ThemePreview,
 } from '@kotharhq/core/shared'
-import { Button, ErrorText, GROUP, Hint } from './controls.tsx'
+import { Button, confirm, ErrorText, GROUP, Hint } from './controls.tsx'
 import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
-export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'>
+export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'> & Partial<Pick<State, 'mods'>>
 
 type Props = { market: Market; connected: boolean; send: (m: ClientMessage) => void }
 
@@ -27,6 +30,7 @@ type Row = {
   latest?: string
   problem?: string
   preview?: ThemePreview
+  uses?: ModUse[]
   listed: boolean
   installed?: InstalledItem
   theme?: ThemeFile
@@ -48,7 +52,7 @@ function rowsOf({ catalog, themes = [], installed = [] }: Market, kind: MarketKi
         author,
         description,
         repo,
-        ...(latest && { latest: latest.version, preview: latest.preview }),
+        ...(latest && { latest: latest.version, preview: latest.preview, uses: latest.uses }),
         ...(problem && { problem }),
         listed: true,
         installed: items.get(id),
@@ -133,6 +137,45 @@ function usePending(market: Market) {
   return { pending, start }
 }
 
+// Uses that reach beyond Kothar itself: shown in amber.
+const REACHING: ModUse[] = ['run', 'setup', 'mcpServers', 'permissions', 'sendMessages', 'accounts']
+
+// What a community mod says it uses through the mod API, in plain words.
+export function UsesList({ uses }: { uses: readonly ModUse[] }) {
+  if (!uses.length) return <span className="text-sm text-muted">Uses nothing through the mod API</span>
+  return (
+    <ul className="flex flex-wrap gap-x-12 gap-y-2 text-sm" aria-label="Uses">
+      {uses.map((use) => (
+        <li key={use} className={REACHING.includes(use) ? 'text-amber' : 'text-muted'}>
+          {MOD_USES[use]}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// Whether an installed mod is on and running, as one quiet line.
+export function ModStatus({ info }: { info?: ModInfo }) {
+  const status = modStatus(info)
+  return status ? <span className="text-sm text-faint">{status}</span> : null
+}
+
+export function modStatus(info?: ModInfo) {
+  if (!info?.community) return undefined
+  const { version, running } = info.community
+  if (!info.enabled) return running ? 'Off. Its code stays loaded until Kothar restarts.' : 'Off. Turn it on in Community mods.'
+  if (info.loadError) return undefined
+  if (!running) return 'On from the next start of Kothar.'
+  if (running !== version) return `Running ${running}. Restart Kothar to run ${version}.`
+  return undefined
+}
+
+export const MOD_WARNING =
+  'A community mod runs code on your computer with your permissions. Kothar holds it to what it lists, but it could ' +
+  'still read your files or reach the network on its own. Turn on only mods you trust.'
+
+const usesText = (uses: readonly ModUse[]) => uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+
 export function MarketplacePage({ market, connected, send }: Props) {
   const { catalog } = market
   const { pending, start } = usePending(market)
@@ -141,7 +184,14 @@ export function MarketplacePage({ market, connected, send }: Props) {
     if (connected) send({ type: 'marketplace.list' })
   }, [connected, send])
 
-  const install = (row: Row) => {
+  const install = async (row: Row) => {
+    if (row.kind === 'mod' && !row.installed) {
+      const ok = await confirm(
+        `Install ${row.name}? It stays off until you turn it on in Community mods.\n\n` +
+          (row.uses?.length ? `It says it:\n${usesText(row.uses)}` : 'It says it uses nothing through the mod API.'),
+      )
+      if (!ok) return
+    }
     start(marketKey(row.kind, row.id))
     send({ type: 'market.install', kind: row.kind, id: row.id })
   }
@@ -163,6 +213,13 @@ export function MarketplacePage({ market, connected, send }: Props) {
         empty={catalog?.entries ? 'No themes in the marketplace yet.' : undefined}
         {...{ market, pending, connected, send, install }}
       />
+      <Section
+        title="Mods"
+        rows={rowsOf(market, 'mod')}
+        empty={catalog?.entries ? 'No mods in the marketplace yet.' : undefined}
+        warning={MOD_WARNING}
+        {...{ market, pending, connected, send, install }}
+      />
     </>
   )
 }
@@ -171,6 +228,7 @@ type SectionProps = {
   title: string
   rows: Row[]
   empty?: string
+  warning?: string
   market: Market
   pending: Record<string, number>
   connected: boolean
@@ -178,11 +236,12 @@ type SectionProps = {
   install: (row: Row) => void
 }
 
-function Section({ title, rows, empty, market, pending, connected, send, install }: SectionProps) {
+function Section({ title, rows, empty, warning, market, pending, connected, send, install }: SectionProps) {
   const { theme: inUse } = useAppearance()
   return (
     <section className="pb-16">
       <div className="pb-8 font-semibold">{title}</div>
+      {warning && <p className="pb-8 text-sm text-amber">{warning}</p>}
       {!rows.length && empty && <p className="text-sm text-muted">{empty}</p>}
       {rows.length > 0 && (
         <div className={GROUP} aria-label={`Marketplace ${title.toLowerCase()}`} role="list">
@@ -221,6 +280,8 @@ function Section({ title, rows, empty, market, pending, connected, send, install
                   {!row.listed && row.installed?.source === 'marketplace' && catalog(market) && (
                     <span className="text-sm text-faint">No longer in the marketplace</span>
                   )}
+                  {row.kind === 'mod' && row.uses && <UsesList uses={row.uses} />}
+                  {row.kind === 'mod' && row.installed && <ModStatus info={market.mods?.find((m) => m.id === row.id)} />}
                   {row.problem && <span className="text-sm text-amber">{row.problem}</span>}
                 </div>
                 <div className="flex items-center gap-6">
@@ -237,7 +298,7 @@ function Section({ title, rows, empty, market, pending, connected, send, install
                     <Button
                       variant={row.installed ? 'default' : 'primary'}
                       disabled={!connected || busy}
-                      onClick={() => install(row)}
+                      onClick={() => void install(row)}
                     >
                       {busy
                         ? row.installed

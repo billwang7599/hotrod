@@ -146,10 +146,10 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, installed, marketFailures } = state
+  const { catalog, themes, installed, marketFailures, mods } = state
   const market = useMemo(
-    () => ({ catalog, themes, installed, marketFailures }),
-    [catalog, themes, installed, marketFailures],
+    () => ({ catalog, themes, installed, marketFailures, mods }),
+    [catalog, themes, installed, marketFailures, mods],
   )
   const newChatFromFolder = useCallback(async () => {
     if (!connected || !window.kothar) return
