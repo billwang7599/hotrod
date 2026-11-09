@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ClientMessage } from '@hotrod/core/shared'
+import type { ClientMessage } from '@kotharhq/core/shared'
 import { Chat } from './chat.tsx'
 import type { ChatView, Item } from './state.ts'
 
@@ -105,7 +105,7 @@ test('typing in a long chat re-renders none of the transcript', () => {
   parses.count = 0
   typeEach('hello there')
   expect(parses.count).toBe(0)
-  expect(localStorage.getItem('hotrod.drafts')).toBeNull()
+  expect(localStorage.getItem('kothar.drafts')).toBeNull()
   const box = container.querySelector('textarea')!
   expect(box.value).toBe('hello there')
   act(() => box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })))

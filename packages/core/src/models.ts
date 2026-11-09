@@ -18,7 +18,7 @@ import {
 // Model choice, in one place. Settings keep one priority list per role, each an ordered list of {engine, model,
 // thinking} rows that can mix engines; this module reads and writes them and decides what every chat, subagent and
 // summary runs on. Adapters only say what they offer (EngineStatus) and run what they're handed (SessionOptions). The
-// Hotrod MCP server and the UI never choose: they name a role at most, and the UI shows the Run the core sends.
+// Kothar MCP server and the UI never choose: they name a role at most, and the UI shows the Run the core sends.
 
 export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5']
 
@@ -26,7 +26,7 @@ type Chooses = Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>
 
 export type ModelSettings = {
   engines: Record<string, boolean>
-  // Older Hotrods saved one set of lists per engine, plus a default thinking level per engine (`defaultThinking`);
+  // Older Kothars saved one set of lists per engine, plus a default thinking level per engine (`defaultThinking`);
   // opening migrates them (migrateModels).
   models?: Partial<ModelLists>
   defaultThinking?: Record<string, string>
@@ -42,7 +42,7 @@ export function openModels({
 }: {
   settings: ModelSettings
   save: () => void
-  // Every engine Hotrod has an adapter for, in adapter order.
+  // Every engine Kothar has an adapter for, in adapter order.
   engines: () => EngineInfo[]
   defaultEngine: string
   broadcast: (message: CoreMessage) => void

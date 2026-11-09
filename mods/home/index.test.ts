@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import { startCore } from '@hotrod/core/main'
-import type { Adapter, SessionOptions } from '@hotrod/core/shared'
-import { sandboxingMachine } from '@hotrod/core/test-machine'
+import { startCore } from '@kotharhq/core/main'
+import type { Adapter, SessionOptions } from '@kotharhq/core/shared'
+import { sandboxingMachine } from '@kotharhq/core/test-machine'
 import home from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -15,11 +15,11 @@ afterEach(async () => {
 const homeChat = home.chats![0]!
 
 async function start() {
-  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-home-')))
+  const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-home-')))
   const sessions: { options: SessionOptions; prompt?: string }[] = []
   const held: Adapter = {
     id: 'held',
-    hotrodMcp: true,
+    kotharMcp: true,
     detect: async () => ({ installed: true, signedIn: true }),
     start(_machine, options, emit) {
       const session: (typeof sessions)[number] = { options }
@@ -35,19 +35,19 @@ async function start() {
       }
     },
   }
-  const env = { HOTROD_ENGINE: 'held', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
-  const hotrod = await startCore({ env, adapters: [held], mods: [home], machine: sandboxingMachine })
+  const env = { KOTHAR_ENGINE: 'held', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
+  const kothar = await startCore({ env, adapters: [held], mods: [home], machine: sandboxingMachine })
   cleanups.push(async () => {
-    await hotrod.close(true)
+    await kothar.close(true)
     rmSync(garage, { recursive: true, force: true })
   })
-  const handle = (message: Parameters<typeof hotrod.core.handle>[0]) => hotrod.core.handle(message, () => {})
+  const handle = (message: Parameters<typeof kothar.core.handle>[0]) => kothar.core.handle(message, () => {})
   const send = (chatId: string, text: string) => {
     handle({ type: 'chat.send', chatId, text })
     return sessions.at(-1)!
   }
   const rpc = async (token: string, method: string, params: object) => {
-    const response = await fetch(`http://127.0.0.1:${hotrod.port}/mcp`, {
+    const response = await fetch(`http://127.0.0.1:${kothar.port}/mcp`, {
       method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
@@ -64,7 +64,7 @@ async function start() {
   }
   const names = async (token: string) =>
     (await rpc(token, 'tools/list', {})).tools.map((t: { name: string }) => t.name).sort()
-  return { core: hotrod.core, garage, sessions, handle, send, tool, names }
+  return { core: kothar.core, garage, sessions, handle, send, tool, names }
 }
 
 it('runs Home in the scratch folder with its instructions, and makes top-level spaces with create_chat', async () => {
@@ -73,7 +73,7 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   const session = send(homeChat.id, 'Set up the app')
   expect(session.options.cwd).toBe(join(garage, 'work', 'home'))
   expect(session.options.instructions.startsWith(homeChat.instructions)).toBe(true)
-  const token = session.options.hotrodMcp!.token
+  const token = session.options.kotharMcp!.token
   expect(await names(token)).toEqual([
     'create_chat',
     'date',
@@ -104,7 +104,7 @@ it('runs Home in the scratch folder with its instructions, and makes top-level s
   const options = { cwd: join(garage, 'work', chatId), extraDirs: [realpathSync(folder)] }
   expect(sessions.at(-1)).toMatchObject({ prompt: 'Look around', options })
   expect(JSON.parse((await tool(token, 'list_chats')).text).map((c: { id: string }) => c.id)).toEqual([chatId])
-  expect(await names(sessions.at(-1)!.options.hotrodMcp!.token)).toEqual([
+  expect(await names(sessions.at(-1)!.options.kotharMcp!.token)).toEqual([
     'date',
     'list_chats',
     'read_chat',

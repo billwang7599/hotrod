@@ -13,6 +13,8 @@ export const STRIPPED_ENV_KEYS = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_BASE_URL',
   'OPENAI_API_KEY',
+  'KOTHAR_TOKEN',
+  // Its name from when Kothar was Hotrod.
   'HOTROD_TOKEN',
 ] as const
 
@@ -73,7 +75,7 @@ const tempEnv = (tmpDir: string): Record<string, string> => ({
 
 function sandboxed(command: string, args: string[], sandbox: Sandbox, platform: NodeJS.Platform) {
   if (platform !== 'darwin') {
-    throw new Error(`Hotrod can't sandbox engines on ${platform} yet, so it won't start one that should be sandboxed`)
+    throw new Error(`Kothar can't sandbox engines on ${platform} yet, so it won't start one that should be sandboxed`)
   }
   const { tmpDir } = sandbox
   if (tmpDir) mkdirSync(tmpDir, { recursive: true })

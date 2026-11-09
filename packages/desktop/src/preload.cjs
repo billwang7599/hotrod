@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
-contextBridge.exposeInMainWorld('hotrod', {
+contextBridge.exposeInMainWorld('kothar', {
   pickFolder: (/** @type {string | undefined} */ title) => ipcRenderer.invoke('pick-folder', title),
   pickFiles: (/** @type {string | undefined} */ title) => ipcRenderer.invoke('pick-files', title),
   // File.path is gone since Electron 32; a dropped file's real path comes from webUtils, here in the preload.

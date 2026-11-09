@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ChatDetail, Mod, ModContext, ModHost, ModView, PermissionVerdict } from '@hotrod/mod-api'
+import type { ChatDetail, Mod, ModContext, ModHost, ModView, PermissionVerdict } from '@kotharhq/mod-api'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
@@ -15,7 +15,7 @@ afterEach(async () => {
 })
 
 function tempDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-modapi-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-modapi-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -368,7 +368,7 @@ describe('the host', () => {
     const space = t.host().space(id)!
     expect(space.workDir).toBe(join(t.garage, 'work', id))
     expect(space.checkouts).toEqual([
-      { folder: repo, path: join(t.garage, 'work', id, realpathSync(repo).split('/').at(-1)!), branch: 'hotrod/repo', from: 'trunk' },
+      { folder: repo, path: join(t.garage, 'work', id, realpathSync(repo).split('/').at(-1)!), branch: 'kothar/repo', from: 'trunk' },
     ])
   })
 

@@ -9,9 +9,9 @@ import type {
   ModSetting,
   ModValues,
   ModView,
-} from '@hotrod/mod-api'
+} from '@kotharhq/mod-api'
 
-export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@hotrod/mod-api'
+export type { Answers, ChatEntry, ChatStatus, EngineEvent, Question, ToolKind } from '@kotharhq/mod-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -91,7 +91,7 @@ export type SessionOptions = {
   instructions: string
   accountDir?: string
   apiKey?: string
-  hotrodMcp?: { url: string; token: string }
+  kotharMcp?: { url: string; token: string }
   mcpServers?: McpServer[]
   extraDirs?: string[]
   readFiles?: string[]
@@ -139,7 +139,7 @@ export interface Adapter {
   start(machine: Machine, options: SessionOptions, emit: (event: EngineEvent) => void): Session
   complete?(machine: Machine, options: CompleteOptions): Promise<string>
   imageInput?: boolean
-  hotrodMcp?: boolean
+  kotharMcp?: boolean
   // Its sessions have steer, so the UI can say Enter steers.
   steering?: boolean
   accounts?: {
@@ -309,7 +309,7 @@ export const MAX_ATTACHMENT_BYTES = 20_000_000
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type { Attachment } from '@hotrod/mod-api'
+export type { Attachment } from '@kotharhq/mod-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 

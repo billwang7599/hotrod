@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo, ThinkingLevel } from '@hotrod/core/shared'
-import type { Account, EngineAccounts } from '@hotrod/core/shared'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo, ThinkingLevel } from '@kotharhq/core/shared'
+import type { Account, EngineAccounts } from '@kotharhq/core/shared'
 import {
   accountLabel,
   chatTree,

@@ -405,8 +405,8 @@ const SCHEMES = { system: 'System', light: 'Light', dark: 'Dark' } as const
 type Scheme = keyof typeof SCHEMES
 type Appearance = { theme: ThemeId; scheme: Scheme; dark: boolean }
 
-const THEME_KEY = 'hotrod.theme'
-const SCHEME_KEY = 'hotrod.scheme'
+const THEME_KEY = 'kothar.theme'
+const SCHEME_KEY = 'kothar.scheme'
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 
 let current: Appearance = { theme: 'default', scheme: 'system', dark: true }
@@ -423,7 +423,7 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   const scheme = current.dark ? 'dark' : 'light'
   const stops = theme.backdrop?.[scheme]
   const base = stops?.at(-1)
-  const vibrancy = !!base && !!window.hotrod?.vibrancy
+  const vibrancy = !!base && !!window.kothar?.vibrancy
   const palette = { ...theme[scheme], ...(vibrancy && theme.vibrancy?.[scheme]) }
   const root = document.documentElement
   for (const token of TOKENS) root.style.setProperty(`--${token}`, palette[token])
@@ -436,7 +436,7 @@ function update(change: Partial<Omit<Appearance, 'dark'>>) {
   for (const [name, value] of Object.entries({ '--glass-base': base, '--glass-dialog': theme.dialog?.[scheme] }))
     if (vibrancy && value) root.style.setProperty(name, value)
     else root.style.removeProperty(name)
-  window.hotrod?.setAppearance({
+  window.kothar?.setAppearance({
     scheme: current.scheme,
     vibrancy,
     background: vibrancy ? '#00000000' : (base ?? theme[scheme].bg),

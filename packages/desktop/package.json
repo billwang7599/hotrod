@@ -1,12 +1,12 @@
 {
-  "name": "@hotrod/desktop",
-  "productName": "Hotrod",
+  "name": "@kotharhq/desktop",
+  "productName": "Kothar",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "main": "src/main.ts",
   "dependencies": {
-    "@hotrod/core": "*"
+    "@kotharhq/core": "*"
   },
   "devDependencies": {
     "electron": "^45.2.3"

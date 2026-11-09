@@ -1,10 +1,10 @@
 {
-  "name": "@hotrod/mod-home",
+  "name": "@kotharhq/mod-home",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "devDependencies": {
-    "@hotrod/core": "*",
-    "@hotrod/mod-api": "*"
+    "@kotharhq/core": "*",
+    "@kotharhq/mod-api": "*"
   }
 }

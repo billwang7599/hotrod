@@ -20,7 +20,7 @@ const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   search: ['pattern'],
 }
 
-// The thinking levels pi takes, passed as --thinking as they are. pi also has `minimal`, which Hotrod doesn't offer;
+// The thinking levels pi takes, passed as --thinking as they are. pi also has `minimal`, which Kothar doesn't offer;
 // read back from pi, it counts as low.
 const THINKING: ThinkingLevel[] = ['off', 'low', 'medium', 'high', 'xhigh', 'max']
 const levelFrom = (native: unknown) => (native === 'minimal' ? 'low' : THINKING.find((level) => level === native))
@@ -53,11 +53,11 @@ const LIMIT_ERROR = /usage limit|rate[_ ]limit|\b429\b|too many requests|quota|r
 
 // pi reads MCP servers only from <agent dir>/mcp.json, so each session gets its own agent dir with only pi's login
 // and model lists linked in. The launched process makes it, so it is on the machine that runs pi.
-const LAUNCH = `dir=$(mktemp -d "\${TMPDIR:-/tmp}/hotrod-pi.XXXXXX") || exit
+const LAUNCH = `dir=$(mktemp -d "\${TMPDIR:-/tmp}/kothar-pi.XXXXXX") || exit
 trap 'rm -rf "$dir"' EXIT
 trap 'exit 143' HUP INT TERM
-for file in auth.json models.json models-store.json; do ln -s "$HOTROD_PI_LOGIN/$file" "$dir/$file"; done
-printf %s "$HOTROD_PI_MCP" > "$dir/mcp.json"
+for file in auth.json models.json models-store.json; do ln -s "$KOTHAR_PI_LOGIN/$file" "$dir/$file"; done
+printf %s "$KOTHAR_PI_MCP" > "$dir/mcp.json"
 PI_CODING_AGENT_DIR=$dir pi "$@"`
 
 // pi's default 60 s would end a tool call that waits on the user.
@@ -86,7 +86,7 @@ export const pi: Adapter = {
   id: 'pi',
   name: 'pi',
   imageInput: true,
-  hotrodMcp: true,
+  kotharMcp: true,
   steering: true,
 
   async detect(machine) {
@@ -135,7 +135,7 @@ export const pi: Adapter = {
     return stdout
   },
 
-  start(machine, { cwd, instructions, hotrodMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
+  start(machine, { cwd, instructions, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
     const args = [...RPC_ARGS, '-e', 'builtin:mcp']
     if (model) args.push('--model', model)
     if (thinking) args.push('--thinking', thinking)
@@ -144,16 +144,16 @@ export const pi: Adapter = {
     if (systemPrompt.length) args.push('--append-system-prompt', systemPrompt.join('\n\n'))
     const direct = { exposure: 'direct', timeout: MCP_CALL_TIMEOUT_S }
     const servers: Record<string, object> = {}
-    if (hotrodMcp) {
-      servers.hotrod = { url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }, ...direct }
+    if (kotharMcp) {
+      servers.kothar = { url: kotharMcp.url, headers: { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' }, ...direct }
     }
     for (const server of mcpServers) {
       servers[server.name] = { command: server.command, args: server.args ?? [], env: server.env ?? {}, ...direct }
     }
     const env = {
-      HOTROD_PI_LOGIN: stateDir(),
-      HOTROD_PI_MCP: JSON.stringify({ mcpServers: servers }),
-      ...(hotrodMcp && { HOTROD_MCP_TOKEN: hotrodMcp.token }),
+      KOTHAR_PI_LOGIN: stateDir(),
+      KOTHAR_PI_MCP: JSON.stringify({ mcpServers: servers }),
+      ...(kotharMcp && { KOTHAR_MCP_TOKEN: kotharMcp.token }),
     }
     const proc = machine.spawn('/bin/sh', ['-c', LAUNCH, 'pi', ...args], {
       cwd,
@@ -269,7 +269,7 @@ export const pi: Adapter = {
         send({ type: 'steer', id: `steer-${id}`, message: text, ...(attached.length && { images: attached }) })
       },
       interrupt() {
-        // Otherwise pi runs waiting steers after the abort; they go back to Hotrod's queue at the turn's end.
+        // Otherwise pi runs waiting steers after the abort; they go back to Kothar's queue at the turn's end.
         if (steers.length) send({ type: 'clear_queue' })
         send({ type: 'abort' })
       },

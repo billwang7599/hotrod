@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ChatSummary, Mod, ModHost, ModView } from '@hotrod/mod-api'
-import { createFakeAdapter } from '@hotrod/core/fake'
-import { startCore } from '@hotrod/core/main'
-import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@hotrod/core/shared'
-import { sandboxingMachine as localMachine } from '@hotrod/core/test-machine'
+import type { ChatSummary, Mod, ModHost, ModView } from '@kotharhq/mod-api'
+import { createFakeAdapter } from '@kotharhq/core/fake'
+import { startCore } from '@kotharhq/core/main'
+import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kotharhq/core/shared'
+import { sandboxingMachine as localMachine } from '@kotharhq/core/test-machine'
 import { createProcessesMod, duration, plain, portOf } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -15,7 +15,7 @@ afterEach(async () => {
 })
 
 function tempDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-processes-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -65,15 +65,15 @@ async function start(options: { logMaxBytes?: number } = {}) {
   const made = createProcessesMod({ settleMs: 300, stopWaitMs: 3000, refreshMs: 50, ...options })
   let host: ModHost | undefined
   const mod: Mod = { ...made.mod, onChatCreated: (_chat, context) => void (host = context.host) }
-  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: work, HOTROD_PORT: '0' }
-  const hotrod = await startCore({ env, adapters: [createFakeAdapter([], 0)], mods: [mod], machine })
+  const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: work, KOTHAR_PORT: '0' }
+  const kothar = await startCore({ env, adapters: [createFakeAdapter([], 0)], mods: [mod], machine })
   let closed = false
   const close = async () => {
-    if (!closed) await hotrod.close(true)
+    if (!closed) await kothar.close(true)
     closed = true
   }
   cleanups.push(close)
-  const { core } = hotrod
+  const { core } = kothar
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const replies: CoreMessage[] = []
@@ -247,7 +247,7 @@ describe('stopping', () => {
     await until(() => !alive(pid))
   })
 
-  it('happens when Hotrod quits', async () => {
+  it('happens when Kothar quits', async () => {
     const t = await start()
     const pid = await running(t)
     await t.close()

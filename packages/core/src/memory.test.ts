@@ -32,7 +32,7 @@ import type { ChatEntry, CompletionRequest } from './shared.ts'
 
 let dir: string
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'hotrod-memory-'))
+  dir = mkdtempSync(join(tmpdir(), 'kothar-memory-'))
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
 

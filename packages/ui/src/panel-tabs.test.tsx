@@ -137,7 +137,7 @@ test("tabs that don't fit go into the More menu, in order", () => {
 })
 
 test('the open tab stays in the row even when later tabs fold away', () => {
-  localStorage.setItem('hotrod.panelTab', 'mod:git/changes')
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
   room = 200
   render()
   expect(tabs()).toEqual(['General', 'Changes'])

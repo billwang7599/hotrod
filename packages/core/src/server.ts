@@ -106,7 +106,7 @@ export async function startServer(options: {
     // ws re-emits the http server's errors on wss, where they'd go uncaught without a listener.
     wss.once('error', (error) => {
       if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') return reject(error)
-      reject(new Error(`Port ${port} is in use. Is Hotrod already running? Set HOTROD_PORT to use another port.`))
+      reject(new Error(`Port ${port} is in use. Is Kothar already running? Set KOTHAR_PORT to use another port.`))
     })
     http.listen(port, '127.0.0.1', resolve)
   })

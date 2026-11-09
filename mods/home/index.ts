@@ -1,14 +1,14 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import type { Mod } from '@hotrod/mod-api'
+import type { Mod } from '@kotharhq/mod-api'
 
 const HOME_ID = 'main'
 
 const INSTRUCTIONS =
-  "You are the user's personal assistant in Hotrod, running in its main chat, Home. Answer general questions, help " +
+  "You are the user's personal assistant in Kothar, running in its main chat, Home. Answer general questions, help " +
   'with personal tasks and use your MCP tools. You may work in any directory the user names in this chat. No ' +
   'folder stays attached to Home; each message starts in a scratch folder. For ongoing ' +
-  'work in a folder, offer to make a space for it: a chat with that folder, made with the hotrod create_chat tool. ' +
+  'work in a folder, offer to make a space for it: a chat with that folder, made with the kothar create_chat tool. ' +
   'list_chats, read_chat and send_message reach every space.'
 
 type NewSpace = { name: string; prompt?: string; folders?: string[]; files?: string[]; engine?: string }
@@ -27,7 +27,7 @@ const home: Mod = {
       description:
         'Make a space: a named chat whose folders (absolute paths of existing folders) and files go into its ' +
         'context. It works in its own folder in the work folder, where each git folder is checked out on a new ' +
-        'branch, hotrod/<name>. Give a prompt to start it. Returns its id.',
+        'branch, kothar/<name>. Give a prompt to start it. Returns its id.',
       inputSchema: {
         type: 'object',
         properties: {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog, DropdownMenu } from 'radix-ui'
-import type { ChatStatus, ClientMessage } from '@hotrod/core/shared'
+import type { ChatStatus, ClientMessage } from '@kotharhq/core/shared'
 import { Button, CHAT_NOUN, Chevron, confirm, Hint, MOTION, NAV_LABEL, useReturnFocus, useSettled } from './controls.tsx'
 import { foldChat, useFoldedChats } from './folded.ts'
 import { chatTree, familyOf, folderOf, subagentRequests, type ChatView, type TreeRow } from './state.ts'
@@ -270,7 +270,7 @@ export function ChatNav({ chats, selectedId, looking = true, connected, send, se
       const below = family.length > 1 ? ' and everything below it' : ''
       const work = chat.workDir ? ` Its work folder goes too (${chat.workDir}); its git branches stay.` : ''
       const text =
-        `Delete “${chat.name}”${below}? Messages are deleted from Hotrod; your folders and files stay on disk.` + work
+        `Delete “${chat.name}”${below}? Messages are deleted from Kothar; your folders and files stay on disk.` + work
       if (await confirm(text)) send({ type: 'chat.delete', chatId: chat.id })
     }
     const group = spacesIn(!!chat.pinned)

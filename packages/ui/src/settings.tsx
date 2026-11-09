@@ -21,8 +21,8 @@ import {
   type ThinkingLevel,
   type ModInfo,
   type WorkFolder,
-} from '@hotrod/core/shared'
-import type { ModSetting } from '@hotrod/mod-api'
+} from '@kotharhq/core/shared'
+import type { ModSetting } from '@kotharhq/mod-api'
 import { PERMISSIONS, SECTIONS } from './context-panel.tsx'
 import {
   Button,
@@ -83,7 +83,7 @@ const PAGES = [
     id: 'engines',
     group: 'Options',
     title: 'Engines',
-    intro: 'Hotrod only starts the engines you turn on here.',
+    intro: 'Kothar only starts the engines you turn on here.',
     body: ({ engines, connected, send }: PageProps) => (
       <div className={GROUP}>
         {engines.map((engine) => {
@@ -211,7 +211,7 @@ const PAGES = [
     id: 'mods',
     group: 'Mods',
     title: 'Built-in mods',
-    intro: 'Mods that ship with Hotrod. One with settings or a setup gets its own page while it is on.',
+    intro: 'Mods that ship with Kothar. One with settings or a setup gets its own page while it is on.',
     body: (props: PageProps) => <ModsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
@@ -616,7 +616,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
     const question =
       account.kind === 'apiKey'
         ? `Remove ${account.name} and delete its saved API key?`
-        : `Sign out of ${account.name} and remove it from Hotrod?`
+        : `Sign out of ${account.name} and remove it from Kothar?`
     if (!(await confirm(question))) return
     send({ type: 'account.remove', engine: id, accountId: account.id })
   }

@@ -1,5 +1,5 @@
 {
-  "name": "@hotrod/ui",
+  "name": "@kotharhq/ui",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
@@ -8,8 +8,8 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@hotrod/core": "*",
-    "@hotrod/mod-api": "*",
+    "@kotharhq/core": "*",
+    "@kotharhq/mod-api": "*",
     "motion": "^14.10.1",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",

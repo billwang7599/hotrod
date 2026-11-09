@@ -51,37 +51,37 @@ describe('pi adapter', () => {
     ])
   })
 
-  it('takes the Hotrod MCP server and mod servers', () => {
-    expect(pi.hotrodMcp).toBe(true)
+  it('takes the Kothar MCP server and mod servers', () => {
+    expect(pi.kotharMcp).toBe(true)
   })
 
-  it("gives pi exactly Hotrod's server and the mods' servers, direct, with the token only in its env", () => {
+  it("gives pi exactly Kothar's server and the mods' servers, direct, with the token only in its env", () => {
     const token = 'secret-token'
-    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token }
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token }
     const mcpServers = [
       { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { TMPDIR: '/t' }, allowTools: true },
       { name: 'bare', command: 'tool' },
     ]
-    const spawned = startSession('', { hotrodMcp, mcpServers }).fake.spawned[0]!
-    const config = JSON.parse(spawned.env?.HOTROD_PI_MCP ?? '')
+    const spawned = startSession('', { kotharMcp, mcpServers }).fake.spawned[0]!
+    const config = JSON.parse(spawned.env?.KOTHAR_PI_MCP ?? '')
     const direct = { exposure: 'direct', timeout: expect.any(Number) }
     expect(config).toEqual({
       mcpServers: {
-        hotrod: { url: hotrodMcp.url, headers: { Authorization: 'Bearer ${HOTROD_MCP_TOKEN}' }, ...direct },
+        kothar: { url: kotharMcp.url, headers: { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' }, ...direct },
         browser: { command: '/bin/node', args: ['cli.js', '--headless'], env: { TMPDIR: '/t' }, ...direct },
         bare: { command: 'tool', args: [], env: {}, ...direct },
       },
     })
-    expect(config.mcpServers.hotrod.timeout).toBeGreaterThanOrEqual(60 * 60)
-    expect(spawned.env?.HOTROD_MCP_TOKEN).toBe(token)
+    expect(config.mcpServers.kothar.timeout).toBeGreaterThanOrEqual(60 * 60)
+    expect(spawned.env?.KOTHAR_MCP_TOKEN).toBe(token)
     expect(spawned.args.join(' ')).not.toContain(token)
-    expect(spawned.env?.HOTROD_PI_MCP).not.toContain(token)
+    expect(spawned.env?.KOTHAR_PI_MCP).not.toContain(token)
   })
 
   it('gives pi no MCP servers but the ones it is handed', () => {
     const spawned = startSession().fake.spawned[0]!
-    expect(JSON.parse(spawned.env?.HOTROD_PI_MCP ?? '')).toEqual({ mcpServers: {} })
-    expect(spawned.env?.HOTROD_MCP_TOKEN).toBeUndefined()
+    expect(JSON.parse(spawned.env?.KOTHAR_PI_MCP ?? '')).toEqual({ mcpServers: {} })
+    expect(spawned.env?.KOTHAR_MCP_TOKEN).toBeUndefined()
   })
 
   it('appends instructions to the system prompt when given', () => {
@@ -524,7 +524,7 @@ describe("pi's own agent folder", () => {
   })
 
   it('makes one per session from the mcp.json and links to the login, and removes it when pi exits', async () => {
-    root = mkdtempSync(join(tmpdir(), 'hotrod-pi-test-'))
+    root = mkdtempSync(join(tmpdir(), 'kothar-pi-test-'))
     const bin = join(root, 'bin')
     const login = join(root, 'login')
     const project = join(root, 'project')
@@ -539,9 +539,9 @@ describe("pi's own agent folder", () => {
     chmodSync(join(bin, 'pi'), 0o755)
     process.env.PATH = `${bin}:${process.env.PATH}`
     process.env.PI_CODING_AGENT_DIR = login
-    const hotrodMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
     const ended = new Promise<EngineEvent>((resolve) =>
-      pi.start(localMachine, { cwd: project, instructions: '', hotrodMcp }, (e) => e.type === 'session.ended' && resolve(e)),
+      pi.start(localMachine, { cwd: project, instructions: '', kotharMcp }, (e) => e.type === 'session.ended' && resolve(e)),
     )
     expect(await ended).toEqual({ type: 'session.ended' })
     const read = (name: string) => readFileSync(join(project, name), 'utf8')
@@ -554,7 +554,7 @@ describe("pi's own agent folder", () => {
     expect(read('links').split('\n').filter(Boolean)).toEqual(
       ['auth.json', 'models.json', 'models-store.json'].map((file) => join(login, file)),
     )
-    expect(Object.keys(JSON.parse(read('mcp.json')).mcpServers)).toEqual(['hotrod'])
+    expect(Object.keys(JSON.parse(read('mcp.json')).mcpServers)).toEqual(['kothar'])
     expect(read('args').trim()).toMatch(/^--mode rpc .*-e builtin:mcp$/)
     expect(existsSync(read('dir').trim())).toBe(false)
     expect(readFileSync(join(login, 'mcp.json'), 'utf8')).toBe('{}')

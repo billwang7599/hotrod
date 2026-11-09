@@ -1,5 +1,5 @@
 {
-  "name": "@hotrod/mod-browser",
+  "name": "@kotharhq/mod-browser",
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
@@ -7,7 +7,7 @@
     "@playwright/mcp": "0.0.84"
   },
   "devDependencies": {
-    "@hotrod/core": "*",
-    "@hotrod/mod-api": "*"
+    "@kotharhq/core": "*",
+    "@kotharhq/mod-api": "*"
   }
 }

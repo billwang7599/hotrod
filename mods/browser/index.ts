@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { Mod, ModRun, ModValues } from '@hotrod/mod-api'
+import type { Mod, ModRun, ModValues } from '@kotharhq/mod-api'
 
 const require = createRequire(import.meta.url)
 const MCP_DIR = dirname(require.resolve('@playwright/mcp/package.json'))
@@ -76,7 +76,7 @@ const browser: Mod = {
   id: 'browser',
   name: 'Browser',
   description:
-    "Agents browse the web with Playwright. By default it's a Chromium of Hotrod's own, never your Chrome or its " +
+    "Agents browse the web with Playwright. By default it's a Chromium of Kothar's own, never your Chrome or its " +
     'logins, and each space keeps its own browser profile, so a login there stays.',
   enabledByDefault: false,
   settings: [
@@ -89,7 +89,7 @@ const browser: Mod = {
         'in a tab group of its own.',
       type: 'select',
       options: [
-        { value: 'chromium', label: "Hotrod's Chromium" },
+        { value: 'chromium', label: "Kothar's Chromium" },
         { value: 'chrome', label: 'Your Chrome' },
       ],
       default: 'chromium',
@@ -108,7 +108,7 @@ const browser: Mod = {
       key: 'background',
       label: 'Keep the browser in the background',
       description:
-        "Hotrod's Chromium only. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
+        "Kothar's Chromium only. It runs headless, so no window ever shows or takes focus. Off, it opens a " +
         'visible window, which may take focus while the agent works.',
       type: 'boolean',
       default: true,
@@ -168,7 +168,7 @@ const browser: Mod = {
       // Playwright puts sockets here, and the work folder's temp path can pass a socket path's 104 bytes.
       TMPDIR: tmpdir(),
       // Its list of running browsers is otherwise in ~/Library/Caches, which the sandbox keeps read-only.
-      PWTEST_SERVER_REGISTRY: join(tmpdir(), 'hotrod-browser-registry'),
+      PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
     }
     if (usesChrome(values)) {
       // The extension takes a connection per session, each in a tab group of its own, so subagents share Chrome too.
@@ -180,7 +180,7 @@ const browser: Mod = {
       if (values.background) args.push('--headless')
       // A space's subagents run beside it, and Chromium locks a profile to one browser at a time.
       args.push(...(chat.subagent ? ['--isolated'] : ['--user-data-dir', join(dir, 'profile')]))
-      // Chromium can't start its own sandbox inside Hotrod's.
+      // Chromium can't start its own sandbox inside Kothar's.
       if (sandboxed) args.push('--no-sandbox')
       if (process.env.PLAYWRIGHT_BROWSERS_PATH) env.PLAYWRIGHT_BROWSERS_PATH = process.env.PLAYWRIGHT_BROWSERS_PATH
     }

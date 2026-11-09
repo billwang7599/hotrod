@@ -106,7 +106,7 @@ test('the folded state is kept after a reload', async () => {
   const chats = [chat('space'), sub('a')]
   render(chats, 'other')
   await click(toggle('Hide subagents'))
-  expect(JSON.parse(localStorage.getItem('hotrod.foldedChats')!)).toEqual(['space'])
+  expect(JSON.parse(localStorage.getItem('kothar.foldedChats')!)).toEqual(['space'])
 
   act(() => root.unmount())
   root = createRoot(host)

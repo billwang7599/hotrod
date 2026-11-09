@@ -1,11 +1,11 @@
 import { appendFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@hotrod/mod-api'
+import type { ChatSummary, Mod, ModHost, ModListItem, ModProcess, ModTone, ModView, SpaceDetail } from '@kotharhq/mod-api'
 
 // Long-running commands (dev servers, watchers) that a space's agents start with start_process. An engine's own
 // background shell dies with its session, which ends with every turn; these belong to the space instead, so they keep
 // running between messages, outlive the subagent that started them, and stop when someone stops them, the space goes,
-// the mod is turned off or Hotrod quits. Each one runs through the Machine (host.spawn), sandboxed as the space's own
+// the mod is turned off or Kothar quits. Each one runs through the Machine (host.spawn), sandboxed as the space's own
 // commands are, with its output in a plain log file in the mod's storage. The Processes tab shows them to the user,
 // once a space has one.
 
@@ -440,7 +440,7 @@ export function createProcessesMod(
     description:
       'Lets agents run dev servers, watchers and other long-running commands that keep going between messages. ' +
       'They belong to the space, not the chat that started them, and stop when you or an agent stops them, the ' +
-      'space is deleted or archived, or Hotrod quits.',
+      'space is deleted or archived, or Kothar quits.',
     enabledByDefault: true,
     instructions: ({ tools }) =>
       tools

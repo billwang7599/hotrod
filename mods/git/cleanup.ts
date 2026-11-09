@@ -1,4 +1,4 @@
-import type { Checkout, ModHost } from '@hotrod/mod-api'
+import type { Checkout, ModHost } from '@kotharhq/mod-api'
 
 // Removing a space's checkout once its work is merged. The checkout's folder is the user's own checkout and is never
 // touched; a checkout with any uncommitted or untracked file stays. The core makes a fresh checkout at the space's
@@ -66,7 +66,7 @@ export async function cleanupCheckout(
   if (path === folder || !workDir || !within(path, workDir)) {
     return { removed: false, why: 'not a checkout of the space' }
   }
-  // What the agent has checked out now, which may be a branch of its own rather than the one Hotrod made.
+  // What the agent has checked out now, which may be a branch of its own rather than the one Kothar made.
   const branch = await tryGit(run, path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
   if (!branch) return { removed: false, why: 'no branch checked out' }
   const status = await tryGit(run, path, ['status', '--porcelain'])
@@ -74,7 +74,7 @@ export async function cleanupCheckout(
   if (status) return { removed: false, why: 'uncommitted changes' }
   const reason = await mergedReason(run, path, branch)
   if (!reason) return { removed: false, why: 'not merged' }
-  // The branch Hotrod made goes too when it holds nothing the merged branch doesn't.
+  // The branch Kothar made goes too when it holds nothing the merged branch doesn't.
   const made = checkout.branch !== branch && (await isAncestor(run, path, checkout.branch, branch))
   if (!stillIdle()) return { removed: false, why: 'in use by a running chat' }
   // Without --force, git itself refuses a worktree that changed since the status above.

@@ -38,7 +38,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
 })
 
 const HOME = chat({ id: 'main', name: 'Home', mod: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
-const SPACE = chat({ id: 's1', name: 'Hotrod' })
+const SPACE = chat({ id: 's1', name: 'Kothar' })
 const SUBAGENT = chat({ id: 'w1', name: 'Worker', parentId: 's1', subagent: true })
 
 function render(chats: ChatView[], selected: string[] = []) {
@@ -71,13 +71,13 @@ test('Home sits above the spaces, outside their section, and still selects; Home
   const selected: string[] = []
   render([SPACE, SUBAGENT, HOME], selected)
   expect(container.querySelector('#spaces-label')?.textContent).toBe('spaces')
-  expect(names(spaces())).toEqual(['Hotrod', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
   const home = rowOf('Home')
   expect(spaces().contains(home)).toBe(false)
   expect(home.compareDocumentPosition(spaces()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   expect(home.querySelector('svg')).not.toBeNull()
   expect(container.querySelector('[aria-label="More for Home"]')).toBeNull()
-  expect(container.querySelector('[aria-label="More for Hotrod"]')).not.toBeNull()
+  expect(container.querySelector('[aria-label="More for Kothar"]')).not.toBeNull()
   expect(container.querySelector('[aria-label="More for Worker"]')).toBeNull()
   act(() => home.click())
   expect(selected).toEqual(['main'])
@@ -86,6 +86,6 @@ test('Home sits above the spaces, outside their section, and still selects; Home
 test('with Home off, only the spaces show', () => {
   render([SPACE, SUBAGENT])
   expect(rowOf('Home')).toBeUndefined()
-  expect(names(spaces())).toEqual(['Hotrod', 'Workersubagent'])
+  expect(names(spaces())).toEqual(['Kothar', 'Workersubagent'])
   expect(names(container)).toEqual(names(spaces()))
 })

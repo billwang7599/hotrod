@@ -13,12 +13,12 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@hotrod/mod-api'
+import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@kotharhq/mod-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
-import { SUBAGENTS_MOD } from './hotrod-mcp.ts'
+import { SUBAGENTS_MOD } from './kothar-mcp.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import {
@@ -115,7 +115,7 @@ let dirs: string[] = []
 let cores: Core[] = []
 
 function tempDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-test-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-test-')))
   dirs.push(dir)
   return dir
 }
@@ -441,7 +441,7 @@ describe('chats', () => {
     expect(reopened.calls).toHaveLength(1)
   })
 
-  it("deletes a chat's Hotrod data but never its folders, and not while it runs", async () => {
+  it("deletes a chat's Kothar data but never its folders, and not while it runs", async () => {
     const t = setup(permissionScript)
     const dir = tempDir()
     writeFileSync(join(dir, 'keep.txt'), 'mine')
@@ -625,7 +625,7 @@ describe('worktrees', () => {
     const chat = createChat(t, { name: 'Fix the Login!', folders: [repo] })
     const dir = join(t.garage, 'work', chat.id)
     const tree = join(dir, basename(repo))
-    const branch = 'hotrod/fix-the-login'
+    const branch = 'kothar/fix-the-login'
 
     const options = await sessionOf(t, chat.id)
     expect(options).toMatchObject({ cwd: tree, extraDirs: [dir] })
@@ -639,7 +639,7 @@ describe('worktrees', () => {
     expect(options?.instructions).toContain(`${CHECKOUT_RULES}\n- ${repo}: ${tree} (branch ${branch})`)
 
     await sessionOf(t, chat.id)
-    expect(branchesOf(repo)).toEqual(['hotrod/fix-the-login', 'main'])
+    expect(branchesOf(repo)).toEqual(['kothar/fix-the-login', 'main'])
     rmSync(tree, { recursive: true })
     expect((await sessionOf(t, chat.id))?.cwd).toBe(tree)
     expect(git(tree, 'branch', '--show-current')).toBe(branch)
@@ -663,7 +663,7 @@ describe('worktrees', () => {
     async () => {
       const t = setup(textScript)
       // Outside the per-user temp folder, which a sandbox leaves writable.
-      const repo = gitRepo(realpathSync(mkdtempSync('/tmp/hotrod-test-')))
+      const repo = gitRepo(realpathSync(mkdtempSync('/tmp/kothar-test-')))
       dirs.push(repo)
       const chat = createChat(t, { name: 'App', folders: [repo] })
       const options = (await sessionOf(t, chat.id))!
@@ -671,7 +671,7 @@ describe('worktrees', () => {
         localMachine.run('/bin/sh', ['-c', command], { cwd: options.cwd, sandbox: options.sandbox })
       const identity = '-c user.name=Agent -c user.email=agent@example.com'
       expect(await run(`echo change > README.md && git ${identity} commit -qam work`)).toMatchObject({ code: 0 })
-      expect(git(repo, 'log', '-1', '--format=%s', 'hotrod/app')).toBe('work')
+      expect(git(repo, 'log', '-1', '--format=%s', 'kothar/app')).toBe('work')
       for (const escape of [
         `git update-ref refs/heads/main HEAD`,
         `git -C ${JSON.stringify(repo)} checkout -q -b other`,
@@ -696,8 +696,8 @@ describe('worktrees', () => {
     await sessionOf(t, second.id)
     const dir = join(t.garage, 'work', second.id)
     expect(chatOf(t.core, second.id)?.worktrees).toEqual({
-      [repo]: { path: join(dir, basename(repo)), branch: 'hotrod/app-2', from: 'main' },
-      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'hotrod/app', from: 'main' },
+      [repo]: { path: join(dir, basename(repo)), branch: 'kothar/app-2', from: 'main' },
+      [twin]: { path: join(dir, `${basename(repo)}-2`), branch: 'kothar/app', from: 'main' },
     })
   })
 
@@ -748,7 +748,7 @@ describe('worktrees', () => {
     t.handle({ type: 'chat.delete', chatId: chat.id })
     await until(() => !existsSync(dir))
     expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(dir)
-    expect(branchesOf(repo)).toEqual(['hotrod/app', 'main'])
+    expect(branchesOf(repo)).toEqual(['kothar/app', 'main'])
   })
 
   describe('cleanup', () => {
@@ -812,7 +812,7 @@ describe('worktrees', () => {
       await quiet()
       const dir = join(t.garage, 'work', chat.id)
 
-      const own = branchIn(remote, join(dir, basename(repo)), 'hotrod/app')
+      const own = branchIn(remote, join(dir, basename(repo)), 'kothar/app')
       const merged = branchIn(remote, join(dir, 'merged'), 'merged')
       const dirty = branchIn(remote, join(dir, 'dirty'), 'dirty')
       writeFileSync(join(dirty, 'notes.txt'), 'not committed\n')
@@ -825,7 +825,7 @@ describe('worktrees', () => {
       await quiet()
       expect(existsSync(merged)).toBe(false)
       expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(merged)
-      expect(branchesOf(repo)).toEqual(['dirty', 'hotrod/app', 'local', 'main', 'outside', 'unmerged'])
+      expect(branchesOf(repo)).toEqual(['dirty', 'kothar/app', 'local', 'main', 'outside', 'unmerged'])
       for (const kept of [own, dirty, unmerged, local, outside]) expect(existsSync(kept), kept).toBe(true)
       expect(git(repo, 'branch', '-r')).not.toContain('origin/merged')
     })
@@ -944,7 +944,7 @@ describe('edits', () => {
     const t = await run(garage, [join(outside, 'a.ts'), join(home, '..', 'b.ts'), join(home, 'link', 'c.ts')])
     expect(statusOf(t.core, 'main')).toBe('idle')
     expect(resolved(t).map((e) => [e.allow, e.auto])).toEqual([[false, true], [false, true], [false, true]])
-    for (const output of outputs(t)) expect(output).toContain(`Hotrod lets this chat edit only inside ${home}`)
+    for (const output of outputs(t)) expect(output).toContain(`Kothar lets this chat edit only inside ${home}`)
   })
 
   it('with edits anywhere on, runs a chat unsandboxed from its next message, where an edit outside asks', async () => {
@@ -1305,7 +1305,7 @@ describe('chat', () => {
     expect(entriesOf(reopened.core, chat.id)).toHaveLength(4)
   })
 
-  it('closes a turn that was cut off when Hotrod quit', () => {
+  it('closes a turn that was cut off when Kothar quit', () => {
     const t = setup(textScript)
     const chat = folderChat(t)
     const log = join(t.garage, 'chats', chat.id, 'log.jsonl')
@@ -1572,7 +1572,7 @@ describe('read state', () => {
     const chat = folderChat(t)
     await finish(t, chat.id)
     t.core.close()
-    // An older Hotrod wrote neither time.
+    // An older Kothar wrote neither time.
     const file = join(t.garage, 'chats', chat.id, 'chat.json')
     const { doneAt: _done, readAt: _read, ...old } = JSON.parse(readFileSync(file, 'utf8'))
     writeFileSync(file, JSON.stringify(old))
@@ -2046,7 +2046,7 @@ describe('queue', () => {
     expect(t.messages).toHaveLength(count)
   })
 
-  it('sends nothing queued while Hotrod quits', async () => {
+  it('sends nothing queued while Kothar quits', async () => {
     const t = setup(permissionScript)
     const chat = folderChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'one' })
@@ -2739,7 +2739,7 @@ describe('engine failures', () => {
   it('records an engine process that fails to spawn', async () => {
     const t = setup(
       stubAdapter((machine, options, emit) => {
-        const proc = machine.spawn('hotrod-test-missing-engine', [], { cwd: options.cwd })
+        const proc = machine.spawn('kothar-test-missing-engine', [], { cwd: options.cwd })
         proc.onExit((code, stderr) => emit({ type: 'session.ended', error: stderr || `exited with code ${code}` }))
         return {
           prompt(text) {
@@ -3294,7 +3294,7 @@ describe('models', () => {
     writeFileSync(join(garage, 'settings.json'), JSON.stringify(old))
     const t = open(garage, [beta, alpha], 'alpha')
     // The default engine's rows come first; a row without a level takes its engine's old default, and one that isn't
-    // a level Hotrod knows (pi's minimal) is filled in from the engine once it's detected.
+    // a level Kothar knows (pi's minimal) is filled in from the engine once it's detected.
     const migrated = {
       chat: [row(older, 'high', 'alpha'), row(newest, 'high', 'alpha'), row(newest, undefined, 'beta'), row('x', undefined, 'gone')],
       planning: [row(older, 'low', 'beta')],
@@ -3580,7 +3580,7 @@ describe('mods', () => {
         return [{ name: 'web', command: 'web-mcp', args: [session.workDir], allowTools: !session.values.ask }]
       },
     }
-    const takesMcp: Adapter = { ...createFakeAdapter(textScript, 0), hotrodMcp: true }
+    const takesMcp: Adapter = { ...createFakeAdapter(textScript, 0), kotharMcp: true }
     const turn = async (t: ReturnType<typeof setup>, chatId: string) => {
       t.handle({ type: 'chat.send', chatId, text: 'Hi' })
       await until(() => statusOf(t.core, chatId) === 'idle')
@@ -3611,11 +3611,11 @@ describe('mods', () => {
       expect(sessions).toEqual([])
     })
 
-    it("ends the turn when two servers share a name, Hotrod's included", async () => {
+    it("ends the turn when two servers share a name, Kothar's included", async () => {
       const named = (id: string, name: string): Mod => ({ ...web, id, mcpServers: () => [{ name, command: name }] })
       for (const [name, mods] of [
         ['web', [web, named('again', 'web')]],
-        ['hotrod', [named('hotrod', 'hotrod')]],
+        ['kothar', [named('kothar', 'kothar')]],
       ] as const) {
         const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [...mods])
         const chat = createChat(t)
@@ -3671,7 +3671,7 @@ describe('mods', () => {
           })
         },
       }
-      const { adapter, calls } = recording({ ...createFakeAdapter(textScript, 0), hotrodMcp: true })
+      const { adapter, calls } = recording({ ...createFakeAdapter(textScript, 0), kotharMcp: true })
       const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [tool], machine)
       const setupOf = () => t.core.mods()[0]!.setup!
       const turn = async () => {
@@ -3986,7 +3986,7 @@ describe('usage limits', () => {
     expect(entries.flatMap((e) => (e.type === 'user.message' ? [e.text] : []))).toEqual(['Go', 'And then this'])
     // The partial reply is kept, then the continued turn's, then the queued message's.
     expect(entries.flatMap((e) => (e.type === 'text.completed' ? [e.text] : []))).toEqual(['Work', 'Hello', 'Hello'])
-    expect(t.calls[1]!.prompt).toMatch(/Work[\s\S]*From Hotrod:\n\nCarry on$/)
+    expect(t.calls[1]!.prompt).toMatch(/Work[\s\S]*From Kothar:\n\nCarry on$/)
     expect(t.calls[1]!.prompt).not.toContain('New message from the user')
     expect(t.calls[2]!.prompt).toContain('New message from the user:\n\nAnd then this')
   })

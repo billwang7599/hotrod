@@ -4,8 +4,8 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ModHost, ModTool, ModValues } from '@hotrod/mod-api'
-import { openHotrodMcp, SUBAGENT_NAME_MAX_CHARS } from './hotrod-mcp.ts'
+import type { ModHost, ModTool, ModValues } from '@kotharhq/mod-api'
+import { openKotharMcp, SUBAGENT_NAME_MAX_CHARS } from './kothar-mcp.ts'
 import { messagesOf, openSummaries, zoom } from './memory.ts'
 import type { ChatEntry, ChatState, NewChat } from './shared.ts'
 
@@ -37,7 +37,7 @@ const said = (...texts: string[]): ChatEntry[] =>
   texts.map((text, i) => (i % 2 ? { at, type: 'text.completed', text } : { at, type: 'user.message', text }))
 
 async function start(subagents = { enabled: false, limit: 4 }) {
-  const dir = mkdtempSync(join(tmpdir(), 'hotrod-mcp-'))
+  const dir = mkdtempSync(join(tmpdir(), 'kothar-mcp-'))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   const chats: ChatState[] = [
     chat('main', { entries: said('hello', 'hi there') }),
@@ -57,7 +57,7 @@ async function start(subagents = { enabled: false, limit: 4 }) {
     createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
     send: (chatId, text) => void calls.push(['send', chatId, text]),
   } as Partial<ModHost> as ModHost
-  const mcp = openHotrodMcp({
+  const mcp = openKotharMcp({
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
     modTools: () => modTools.map((entry) => ({ ...entry, host })),
@@ -112,7 +112,7 @@ async function start(subagents = { enabled: false, limit: 4 }) {
   return { mcp, chats, calls, modTools, rpc, tool, json, grant, names, subagents }
 }
 
-describe('Hotrod MCP server', () => {
+describe('Kothar MCP server', () => {
   it('turns away requests without a live token', async () => {
     const { mcp, rpc, grant } = await start()
     expect((await rpc('', 'tools/list')).status).toBe(401)

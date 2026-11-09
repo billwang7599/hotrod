@@ -3,11 +3,11 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ModView } from '@hotrod/mod-api'
-import { createFakeAdapter, type FakeStep } from '@hotrod/core/fake'
-import { startCore } from '@hotrod/core/main'
-import type { ClientMessage, CoreMessage, Machine, SessionOptions } from '@hotrod/core/shared'
-import { sandboxingMachine } from '@hotrod/core/test-machine'
+import type { ModView } from '@kotharhq/mod-api'
+import { createFakeAdapter, type FakeStep } from '@kotharhq/core/fake'
+import { startCore } from '@kotharhq/core/main'
+import type { ClientMessage, CoreMessage, Machine, SessionOptions } from '@kotharhq/core/shared'
+import { sandboxingMachine } from '@kotharhq/core/test-machine'
 import { checksOf, createGitMod, noteText, parseNumstat, PR_TTL_MS, repoState } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -16,7 +16,7 @@ afterEach(async () => {
 })
 
 function tempDir() {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'hotrod-git-')))
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-git-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
@@ -59,10 +59,10 @@ async function start(work: (cwd: string) => void = () => {}, gh: Gh = noGh, cloc
     return [{ type: 'text.completed', text: 'Done' }]
   }
   const mod = createGitMod({ now: () => clock.now })
-  const env = { HOTROD_ENGINE: 'fake', HOTROD_GARAGE: garage, HOTROD_WORK: join(garage, 'work'), HOTROD_PORT: '0' }
-  const hotrod = await startCore({ env, adapters: [createFakeAdapter(script, 0)], mods: [mod], machine })
-  cleanups.push(() => hotrod.close(true))
-  const { core } = hotrod
+  const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
+  const kothar = await startCore({ env, adapters: [createFakeAdapter(script, 0)], mods: [mod], machine })
+  cleanups.push(() => kothar.close(true))
+  const { core } = kothar
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const replies: CoreMessage[] = []
