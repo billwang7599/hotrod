@@ -24,6 +24,7 @@ after it cover each group in detail.
 | `settings` | Settings on the extension's own page in Settings | [Settings and setup](settings.md) |
 | `spaceSettings` | Settings kept per space, shown in the extension's panels | [Settings and setup](settings.md#settings-per-space) |
 | `settingsVersion`, `migrateSettings` | Updating saved settings once when their shape changes | [Settings and setup](settings.md#migrating-saved-settings) |
+| `settingsView`, `onSettingsChanged` | A readout and buttons of the extension's own on its Settings page, and a hook for a changed setting | [Settings and setup](settings.md#a-view-of-its-own) |
 | `setup` | A check and an install step for something the extension needs | [Settings and setup](settings.md#setup) |
 | `tools` | Tools agents can call | [Tools, MCP servers, instructions and memory](agents.md#tools) |
 | `mcpServers` | MCP servers for each session | [Tools, MCP servers, instructions and memory](agents.md#mcp-servers) |

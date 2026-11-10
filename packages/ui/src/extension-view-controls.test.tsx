@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { ExtensionView } from '@kothar/extension-api'
 import { Tooltip } from 'radix-ui'
 import { ExtensionViewer } from './extension-view.tsx'
+import { ConfirmDialog } from './controls.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -57,4 +58,40 @@ test('a picker shows the picked option, and without a way to save, its controls 
   expect(trigger.disabled).toBe(true)
   show({ type: 'switch', setting: 'auto', label: 'Auto', value: false })
   expect((host.querySelector('button[role="switch"]') as HTMLButtonElement).disabled).toBe(true)
+})
+
+test('a button with confirm acts only once the user confirms', async () => {
+  const acted: unknown[] = []
+  const view: ExtensionView = {
+    type: 'button',
+    label: 'Delete summaries',
+    action: { name: 'delete', value: 'tree' },
+    confirm: { text: 'Delete them?', body: 'They are rebuilt with model calls.', ok: 'Delete summaries', danger: true },
+  }
+  act(() =>
+    root.render(
+      <Tooltip.Provider>
+        <ExtensionViewer view={view} act={(action) => acted.push(action)} />
+        <ConfirmDialog />
+      </Tooltip.Provider>,
+    ),
+  )
+  const answer = async (ok: boolean) => {
+    const dialog = document.querySelector('[role="alertdialog"]')!
+    expect(dialog.textContent).toContain('They are rebuilt with model calls.')
+    const button = [...dialog.querySelectorAll('button')].find((b) => b.textContent === (ok ? 'Delete summaries' : 'Cancel'))!
+    await act(async () => button.click())
+  }
+  await act(async () => (host.querySelector('button') as HTMLButtonElement).click())
+  expect(acted).toEqual([])
+  await answer(false)
+  expect(acted).toEqual([])
+  await act(async () => (host.querySelector('button') as HTMLButtonElement).click())
+  await answer(true)
+  expect(acted).toEqual([{ name: 'delete', value: 'tree' }])
+})
+
+test('text with copy gets a copy button for its text', () => {
+  show({ type: 'text', text: '/garage/chats', mono: true, copy: true })
+  expect(host.querySelector('button[aria-label="Copy /garage/chats"]')).not.toBeNull()
 })

@@ -386,7 +386,8 @@ export type ExtensionView =
   | { type: 'stack'; children: ExtensionView[]; gap?: 'tight' | 'normal' | 'loose' }
   | { type: 'row'; children: ExtensionView[]; justify?: 'start' | 'between' | 'end' }
   | { type: 'heading'; text: string; hint?: string }
-  | { type: 'text'; text: string; tone?: ExtensionTone; mono?: boolean; small?: boolean; hint?: string }
+  // copy: a button beside it that copies the text, such as a path.
+  | { type: 'text'; text: string; tone?: ExtensionTone; mono?: boolean; small?: boolean; hint?: string; copy?: boolean }
   | { type: 'badge'; text: string; tone?: ExtensionTone; hint?: string }
   // A live time since this moment (epoch ms), ticked by the UI as ExtensionListItem.since is.
   | { type: 'elapsed'; since: number; tone?: ExtensionTone; mono?: boolean; small?: boolean; hint?: string }
@@ -397,6 +398,9 @@ export type ExtensionView =
       variant?: 'normal' | 'primary' | 'ghost'
       disabled?: boolean
       hint?: string
+      // Asks first, in Kothar's own dialog: text is the question, body what follows it (such as what's lost), ok the
+      // confirming button's label. The action is sent only if the user confirms. danger colours the button red.
+      confirm?: { text: string; body?: string; ok?: string; danger?: boolean }
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ExtensionListItem[]; empty?: string; label?: string }
@@ -433,6 +437,16 @@ export type ExtensionPanel = {
   onAction?(action: ExtensionAction, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// Part of the extension's page in Settings, drawn below its settings: a readout or actions that aren't settings, such
+// as how much disk its files take and a button to delete them. Built of the same views as a panel (no switches or
+// pickers: those are for space settings). Unlike settings, it's shown while the extension is off too, for a built-in
+// extension. render is called whenever the page opens, a setting changes, after an action, and on host.refresh()
+// without a chat; keep it quick and synchronous.
+export type ExtensionSettingsView = {
+  render(context: ExtensionContext): ExtensionView
+  onAction?(action: ExtensionAction, context: ExtensionContext): void | Promise<void>
+}
+
 // An action listed in the chat's General tab.
 export type ExtensionCommand = {
   id: string
@@ -458,8 +472,12 @@ export type Extension = {
   // garage holds an older version (none saved counts as 0), migrateSettings runs once at load, before the extension is
   // used: on the global values and on each space's, as saved (no defaults filled in). What it returns replaces them
   // and the new version is saved. If it throws, the error shows, nothing is saved, and it runs again next launch.
+  settingsView?: ExtensionSettingsView
   settingsVersion?: number
   migrateSettings?(saved: Record<string, unknown>, from: number, where: { spaceId?: string }): Record<string, unknown>
+  // One of the extension's global settings changed in Settings, while it's on (and, with an onStart, once that has
+  // run: until then onStart reads the values itself). context.values has the new values.
+  onSettingsChanged?(changed: { key: string; value: unknown; previous: unknown }, context: ExtensionContext): void | Promise<void>
   chats?: ExtensionChat[]
   tools?: ExtensionTool[]
   mcpServers?(session: ExtensionSession): McpServer[]
@@ -546,6 +564,7 @@ export type ExtensionUse =
   // processAction, processesChanged
   | 'panels'
   | 'commands'
+  // settings, spaceSettings, migrateSettings, settingsView, onSettingsChanged, and host.spaceValues, setSpaceValue
   | 'settings'
   | 'chats'
   | 'setup'

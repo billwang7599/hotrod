@@ -1,6 +1,6 @@
 import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
-import { Button, Chevron, Hint, Select, Switch } from './controls.tsx'
+import { Button, Chevron, confirm, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
 
 /**
@@ -246,8 +246,8 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           <h3 className="font-semibold">{node.text}</h3>
         </Hinted>
       )
-    case 'text':
-      return (
+    case 'text': {
+      const text = (
         <Hinted hint={node.hint}>
           <span
             className={`min-w-0 wrap-anywhere ${TONES[node.tone ?? 'normal']} ${node.mono ? 'font-mono text-xs' : ''} ${node.small ? 'text-sm' : ''}`}
@@ -256,6 +256,14 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           </span>
         </Hinted>
       )
+      if (!node.copy) return text
+      return (
+        <div className="flex min-w-0 items-center gap-4">
+          {text}
+          <CopyButton text={node.text} label={`Copy ${node.text}`} />
+        </div>
+      )
+    }
     case 'badge':
       return <Badges badges={[node]} />
     case 'elapsed':
@@ -273,7 +281,9 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           variant={node.variant === 'primary' ? 'primary' : node.variant === 'ghost' ? 'ghost' : 'default'}
           size="small"
           disabled={node.disabled}
-          onClick={() => act(node.action)}
+          onClick={async () => {
+            if (!node.confirm || (await confirm(node.confirm))) act(node.action)
+          }}
         >
           {node.label}
         </Button>

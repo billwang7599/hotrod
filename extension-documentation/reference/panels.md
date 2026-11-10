@@ -97,10 +97,10 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `row` | `children`, `justify?: 'start' \| 'between' \| 'end'` | Children side by side. |
 | `card` | `title`, `children`, `badges?`, `open?` | A titled card that folds. `open` says how it starts. |
 | `heading` | `text`, `hint?` | A section heading. |
-| `text` | `text`, `tone?`, `mono?`, `small?`, `hint?` | A line of text. |
+| `text` | `text`, `tone?`, `mono?`, `small?`, `hint?`, `copy?` | A line of text. With `copy`, a button beside it copies the text, such as a path. |
 | `badge` | `text`, `tone?`, `hint?` | A small label. |
 | `elapsed` | `since` (epoch ms), `tone?`, `mono?`, `small?`, `hint?` | A live time since that moment, such as an uptime. Kothar ticks it, so you needn't redraw. |
-| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?` | A button. |
+| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?`, `confirm?` | A button. With `confirm: { text, body?, ok?, danger? }`, Kothar asks first in its own dialog and sends the action only if the user confirms. |
 | `link` | `text`, `url` | A link that opens in the browser. |
 | `list` | `items`, `empty?`, `label?` | A list of rows. `empty` is shown when there are none. |
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |

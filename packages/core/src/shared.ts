@@ -288,6 +288,8 @@ export type ExtensionInfo = {
   settings: ExtensionSetting[]
   values: ExtensionValues
   setup?: SetupState
+  // The extension's own part of its Settings page (Extension.settingsView), as drawn now, or why it couldn't be.
+  settingsView?: { view?: ExtensionView; error?: string }
   loadError?: string
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
   // the version this run of Kothar loaded, if any; extensions load only at startup.
@@ -431,6 +433,9 @@ export type ClientMessage =
   | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
+  // Draws the extension's settings view again (the page opened), answered with extension.updated.
+  | { type: 'extension.settingsView.get'; extensionId: string }
+  | { type: 'extension.settingsView.action'; extensionId: string; action: ExtensionAction }
   // The master switch for community extensions (off by default): while it's off, none loads, whatever its own switch
   // says.
   | { type: 'communityExtensions.setEnabled'; enabled: boolean }

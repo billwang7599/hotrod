@@ -308,7 +308,17 @@ function openLockedCore(options: {
     // A community extension shows its own switch; the master switch is beside it in the UI.
     const enabled = community.has(id) ? ownSwitch(extension) : isOn(extension)
     const settingsError = settingsErrors.get(id)
-    const info = { id, name, description, enabled, settings: declared, values, ...(settingsError && { loadError: settingsError }) }
+    const view = settingsViewOf(extension)
+    const info = {
+      id,
+      name,
+      description,
+      enabled,
+      settings: declared,
+      values,
+      ...(view && { settingsView: view }),
+      ...(settingsError && { loadError: settingsError }),
+    }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
     const { source, repo, path } = from?.item ?? {}
@@ -325,6 +335,33 @@ function openLockedCore(options: {
       ...(from.loadError && { loadError: from.loadError }),
     }
     return { ...info, ...(setup && { setup }), ...communityFields }
+  }
+  // An extension's settings view, drawn now: a built-in extension's even while it's off, a community one's only while
+  // it runs.
+  const settingsViewOf = (extension: Extension): ExtensionInfo['settingsView'] => {
+    if (!extension.settingsView || (community.has(extension.id) && !isOn(extension))) return undefined
+    try {
+      const view = extension.settingsView.render(contextOf(extension))
+      if (view instanceof Promise) throw new Error('A settings view renders synchronously')
+      return { view }
+    } catch (error) {
+      return { error: messageOf(error) }
+    }
+  }
+  const settingsViewChanged = (extension: Extension) => {
+    if (extension.settingsView) broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
+  }
+  const settingsViewAction = async (extension: Extension, action: ExtensionAction) => {
+    if (!extension.settingsView || (community.has(extension.id) && !isOn(extension))) {
+      throw new Error(`${extension.name} has no settings view`)
+    }
+    if (typeof action?.name !== 'string') throw new Error('A settings action needs a name')
+    try {
+      await extension.settingsView.onAction?.(action, contextOf(extension))
+    } catch (error) {
+      extensionError(extension, error)
+    }
+    settingsViewChanged(extension)
   }
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
@@ -442,8 +479,15 @@ function openLockedCore(options: {
     if (!setting) throw new Error(`${extension.name} has no setting "${key}"`)
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
+    const previous = extensionValues(extension)[key]
     saveExtension(extension, { [key]: value })
     if (isOn(extension)) void checkSetup(extension)
+    // An extension with background work hears of it only once that work has started; onStart reads the values itself.
+    const running = isOn(extension) && (!extension.onStart || startedExtensions.has(extension.id))
+    if (running && previous !== value && extension.onSettingsChanged) {
+      callExtension(extension, () => extension.onSettingsChanged!({ key, value, previous }, contextOf(extension)))
+      settingsViewChanged(extension)
+    }
   }
   // A space's own values for an extension's spaceSettings: the space a worker is in, else the chat itself.
   const spaceChat = (chat: Chat) => chainOf(chat)[0]!
@@ -1138,6 +1182,7 @@ function openLockedCore(options: {
     void renderPanel(chat, extension, panel)
   }
   const refreshExtension = (extension: Extension, chatId?: string) => {
+    if (chatId === undefined) settingsViewChanged(extension)
     if (!isOn(extension)) return
     const targets = chatId === undefined ? shownChats() : [chatFor(chatId)]
     for (const chat of targets) {
@@ -2370,6 +2415,10 @@ function openLockedCore(options: {
           return setExtensionValue(extensionFor(String(message.extensionId)), String(message.key), message.value)
         case 'extension.install':
           return install(extensionFor(String(message.extensionId)))
+        case 'extension.settingsView.get':
+          return settingsViewChanged(extensionFor(String(message.extensionId)))
+        case 'extension.settingsView.action':
+          return settingsViewAction(extensionFor(String(message.extensionId)), message.action)
         case 'extension.cancelInstall':
           return installs.get(extensionFor(String(message.extensionId)).id)?.abort()
         case 'communityExtensions.setEnabled':

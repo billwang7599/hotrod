@@ -1,5 +1,6 @@
 import type { ChatSummary, MemoryMessage, Extension, ExtensionContext, ExtensionHost, ExtensionValues } from '@kothar/extension-api'
 import { openRollingCompactor, readRolling, ROLLING_INSTRUCTIONS, ROLLING_ZOOM_INSTRUCTIONS, rollingView } from './rolling.ts'
+import { chatsFolderOf, deleteSummaries, storageView } from './storage.ts'
 import {
   dateOf,
   MEMORY_INSTRUCTIONS,
@@ -28,6 +29,8 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
   let host: ExtensionHost | undefined
   let values: ExtensionValues = {}
   let compactors: { tree: ReturnType<typeof openCompactor>; rolling: ReturnType<typeof openRollingCompactor> } | undefined
+  // Whether the extension runs now (between onStart and onStop): its mode's files are in use.
+  let running = false
 
   const remember = (context: ExtensionContext) => {
     host = context.host
@@ -52,9 +55,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
   const touch = (chatId: string) => compactors?.[modeOf(values)].touch(chatId)
 
   const failing = (reason: string) => host?.error(`summaries are failing: ${reason}. Retrying.`)
-  const start = (context: ExtensionContext) => {
-    const host = remember(context)
-    if (compactors) return
+  const compactorFor = <M extends MemoryMode>(host: ExtensionHost, mode: M): NonNullable<typeof compactors>[M] => {
     const shared = {
       complete: (request: Parameters<ExtensionHost['complete']>[0]) => host.complete(request),
       onFailure: failing,
@@ -62,27 +63,50 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
       ...(options.retryBaseMs !== undefined && { retryBaseMs: options.retryBaseMs }),
       ...(options.minChars !== undefined && { minChars: options.minChars }),
     }
-    compactors = {
-      tree: openCompactor({
+    if (mode === 'tree') {
+      return openCompactor({
         ...shared,
         chat(chatId) {
           const messages = messagesOf(host, chatId)
           return messages && { messages, summaries: treeOf(host, chatId) }
         },
-      }),
-      rolling: openRollingCompactor({
-        ...shared,
-        chat(chatId) {
-          const messages = messagesOf(host, chatId)
-          return messages && { messages, storage: host.chatStorage(chatId) }
-        },
-      }),
+      }) as NonNullable<typeof compactors>[M]
     }
-    // The backlog: every chat, the most recently active last, so it's summarized first.
+    return openRollingCompactor({
+      ...shared,
+      chat(chatId) {
+        const messages = messagesOf(host, chatId)
+        return messages && { messages, storage: host.chatStorage(chatId) }
+      },
+    }) as NonNullable<typeof compactors>[M]
+  }
+  // A fresh compactor for the mode, so nothing it had queued is written.
+  const reopen = (host: ExtensionHost, mode: MemoryMode) => {
+    if (!compactors) return
+    compactors[mode].close()
+    if (mode === 'tree') compactors.tree = compactorFor(host, 'tree')
+    else compactors.rolling = compactorFor(host, 'rolling')
+  }
+  // The backlog: every chat, the most recently active last, so it's summarized first.
+  const catchUp = (host: ExtensionHost) => {
     const lastAt = (chatId: string) => host.read(chatId, { last: 1 })[0]?.at ?? ''
     const byActivity = host.chats().map((chat) => ({ id: chat.id, at: lastAt(chat.id) }))
     byActivity.sort((a, b) => a.at.localeCompare(b.at))
     for (const { id } of byActivity) touch(id)
+  }
+  const start = (context: ExtensionContext) => {
+    const host = remember(context)
+    running = true
+    if (compactors) return
+    compactors = { tree: compactorFor(host, 'tree'), rolling: compactorFor(host, 'rolling') }
+    catchUp(host)
+  }
+  // Deletes one mode's files from every chat folder, unless the mode is in use, and forgets what was read of them.
+  const deleteMode = (host: ExtensionHost, mode: MemoryMode) => {
+    if (running && modeOf(values) === mode) throw new Error("Memory uses these summaries now, so they can't be deleted")
+    reopen(host, mode)
+    if (mode === 'tree') trees.clear()
+    return deleteSummaries(chatsFolderOf(host), mode)
   }
 
   // The messages zoom and date read: the caller's own, or a worker's parent's as they were at its launch.
@@ -179,8 +203,28 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
         ].join('\n\n')
       },
     },
+    settingsView: {
+      render(context) {
+        remember(context)
+        return storageView(chatsFolderOf(context.host), running ? modeOf(context.values) : undefined)
+      },
+      onAction(action, context) {
+        const host = remember(context)
+        if (action.name !== 'delete' || (action.value !== 'tree' && action.value !== 'rolling')) return
+        deleteMode(host, action.value)
+      },
+    },
     onStart: start,
+    // A new mode, or Memory on again (onStart), catches up every chat's backlog at once, not at each one's next turn.
+    // The old mode's queue is dropped: its summaries aren't used now.
+    onSettingsChanged({ key, previous }, context) {
+      const host = remember(context)
+      if (key !== 'mode' || !compactors) return
+      reopen(host, previous === 'tree' ? 'tree' : 'rolling')
+      catchUp(host)
+    },
     onStop() {
+      running = false
       compactors?.tree.close()
       compactors?.rolling.close()
       compactors = undefined

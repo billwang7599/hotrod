@@ -46,6 +46,7 @@ import { EXTENSION_WARNING, extensionStatus, UsesList, type Market } from './mar
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
+import { ExtensionViewer } from './extension-view.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -549,9 +550,35 @@ function ExtensionSetupRow({ extension, connected, send }: SetupProps) {
   )
 }
 
+// The extension's own part of its page (Extension.settingsView), drawn by the core. Opening the page asks for a fresh
+// one, as what it shows (such as disk use) may have changed since.
+function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
+  const { id } = extension
+  useEffect(() => {
+    if (connected) send({ type: 'extension.settingsView.get', extensionId: id })
+  }, [connected, id, send])
+  const shown = extension.settingsView
+  if (!shown) return null
+  return (
+    <div className="flex flex-col py-12 not-first:border-t">
+      <ExtensionViewer
+        view={shown.view}
+        error={shown.error}
+        act={(action) => connected && send({ type: 'extension.settingsView.action', extensionId: id, action })}
+      />
+    </div>
+  )
+}
+
+// A built-in extension with a settings view keeps its page while off, showing only that view.
 const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolean): Page[] =>
   extensions
-    .filter((extension) => extension.enabled && (!extension.community || communityExtensions) && (extension.settings.length || extension.setup))
+    .filter(
+      (extension) =>
+        (extension.enabled || (extension.settingsView && !extension.community)) &&
+        (!extension.community || communityExtensions) &&
+        (extension.settings.length || extension.setup || extension.settingsView),
+    )
     .map((extension) => ({
       id: `extension:${extension.id}`,
       group: 'Extensions',
@@ -561,8 +588,8 @@ const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolea
           {extension.community && (
             <SettingRow name="Uses" description={<UsesList uses={extension.community.uses} />} />
           )}
-          {extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
-          {extension.settings.map((setting) => (
+          {extension.enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
+          {extension.enabled && extension.settings.map((setting) => (
             <ExtensionSettingRow
               key={setting.key}
               setting={setting}
@@ -571,6 +598,7 @@ const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolea
               save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
             />
           ))}
+          {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
         </div>
       ),
     }))

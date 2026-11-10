@@ -64,6 +64,49 @@ How values behave:
 
 List `settings` in the manifest's `uses`.
 
+### When a setting changes
+
+`onSettingsChanged({ key, value, previous }, context)` is called when the user changes one of the extension's
+`settings`, while the extension is on. An extension with `onStart` hears of changes only once `onStart` has run; until
+then `onStart` reads the values itself. `context.values` has the new values. Use it for work that can't wait for the
+next hook to read the value, such as Memory starting to summarize every chat in a newly picked mode.
+
+### A view of its own
+
+`settingsView` adds a part of the extension's own to its page in Settings, below its settings: a readout or buttons
+that aren't settings, such as where its files are, how much disk they take, and a button to delete them. It's built of
+the same [views](panels.md#views) as a panel, except switches and pickers.
+
+```ts
+settingsView: {
+  render({ host }) {
+    return {
+      type: 'stack',
+      children: [
+        { type: 'text', text: host.storage.dir, mono: true, copy: true },
+        {
+          type: 'button',
+          label: 'Clear cache',
+          action: { name: 'clear' },
+          confirm: { text: 'Clear the cache?', body: 'It fills again as you work.', ok: 'Clear', danger: true },
+        },
+      ],
+    }
+  },
+  onAction(action, { host }) {
+    if (action.name === 'clear') host.storage.remove('cache.json')
+  },
+},
+```
+
+- `render(context)` returns the view. It's synchronous, so keep it quick. Kothar draws it again when the page opens,
+  when a setting changes, after an action, and when you call `host.refresh()` without a chat.
+- `onAction(action, context)` gets the actions of its buttons and list rows. Throw to show an error.
+- A built-in extension's view shows while the extension is off too, with its page showing only the view, so the user
+  can clean up after it. A community extension's shows only while it runs.
+
+`settingsView` and `onSettingsChanged` need `settings` listed in the manifest's `uses`.
+
 ## Settings per space
 
 `spaceSettings` lists settings kept for each space instead of once for all of Kothar. They take the same types as

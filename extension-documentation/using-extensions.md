@@ -32,6 +32,27 @@ The built-in extensions today:
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 
+### Where Memory keeps its summaries, and cleaning up
+
+Memory writes its summaries into each chat's own folder, beside the chat's log, in Kothar's data folder:
+
+| Mode (Settings → Extensions → Memory → Older messages) | File |
+|---|---|
+| Rolling summary (the default) | `<data folder>/chats/<chat id>/rolling.json` |
+| Summary tree | `<data folder>/chats/<chat id>/summaries.jsonl` |
+
+On a Mac the data folder is `~/Library/Application Support/Kothar/`. Memory's page in Settings shows the real path, with
+a copy button, and how much disk each mode's summaries take.
+
+- **Switching modes deletes nothing.** Kothar summarizes every chat in the new mode right away, reusing what that mode
+  had already written, so switching back and forth costs little.
+- **Turning Memory off deletes nothing.** Chats then see only their latest messages. Turned on again, Memory carries on
+  where it stopped.
+- **Deleting a chat deletes its summaries** with it.
+- **Delete summaries**, on Memory's page, deletes one mode's files from every chat, workers' and Home's included. It
+  works only for a mode that isn't in use, or for either while Memory is off, and asks first. Chat logs stay. If you
+  switch back to that mode later, Kothar writes the summaries again with model calls on your own logins.
+
 ## Community extensions
 
 ### Turn community extensions on

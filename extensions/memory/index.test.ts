@@ -310,3 +310,106 @@ describe('Rolling summary mode (the default)', () => {
     expect(next.options.instructions).not.toContain(MEMORY_INSTRUCTIONS)
   })
 })
+
+describe('Storage: where summaries live, and cleaning them up', () => {
+  const oldChat = (garage: string, chatId: string, count: number) => {
+    writeLog(garage, chatId, count)
+    writeFileSync(join(garage, 'chats', chatId, 'chat.json'), JSON.stringify({ id: chatId, name: chatId, folders: [], files: [], engine: 'held', archived: false, createdAt: at }))
+  }
+  const rollingFile = (garage: string, chatId: string) => join(garage, 'chats', chatId, ROLLING_FILE)
+  const memoryInfo = (t: Awaited<ReturnType<typeof start>>) => {
+    t.handle({ type: 'extension.settingsView.get', extensionId: 'memory' })
+    const updates = t.messages.filter((m) => m.type === 'extension.updated' && m.extension.id === 'memory')
+    const last = updates.at(-1) as Extract<CoreMessage, { type: 'extension.updated' }>
+    return last.extension
+  }
+  const texts = (view: unknown): string[] => JSON.stringify(view).match(/"text":"[^"]*"/g)!.map((t) => t.slice(8, -1))
+  const deleteButton = (view: unknown, mode: string) => {
+    const find = (node: any): any =>
+      node?.type === 'button' && node.action?.value === mode ? node : (node?.children ?? []).map(find).find(Boolean)
+    return find(view)
+  }
+
+  it('catches up every chat on a mode switch at once, without waiting for a turn, and drops the old queue', async () => {
+    const garage = tempGarage()
+    oldChat(garage, 'aaaa0001', 40)
+    oldChat(garage, 'aaaa0002', 40)
+    const t = await start({ garage, mode: 'rolling' })
+    await until(() => existsSync(rollingFile(garage, 'aaaa0001')) && existsSync(rollingFile(garage, 'aaaa0002')))
+    expect(existsSync(summariesFile(garage, 'aaaa0001'))).toBe(false)
+
+    t.handle({ type: 'extension.setValue', extensionId: 'memory', key: 'mode', value: 'tree' })
+    await until(() => summarized(garage, 'aaaa0001', 40) && summarized(garage, 'aaaa0002', 40))
+    expect(t.sessions).toHaveLength(0)
+  })
+
+  it('shows the chats folder, each mode file and its disk use, with only the mode not in use deletable', async () => {
+    const garage = tempGarage()
+    oldChat(garage, 'aaaa0001', 40)
+    mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
+    writeFileSync(join(garage, 'chats', 'main', 'summaries.jsonl'), 'x'.repeat(1500))
+    const t = await start({ garage, mode: 'rolling' })
+    await until(() => existsSync(rollingFile(garage, 'aaaa0001')))
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    const { view, error } = memoryInfo(t).settingsView!
+    expect(error).toBeUndefined()
+    const shown = texts(view)
+    expect(shown).toContain(join(garage, 'chats'))
+    expect(shown).toContain(join('<id>', 'summaries.jsonl'))
+    expect(shown).toContain(join('<id>', ROLLING_FILE))
+    expect(shown).toContain('1.5 KB in 1 chat')
+    expect(shown).toContain('In use')
+    expect(deleteButton(view, 'rolling').disabled).toBe(true)
+    expect(deleteButton(view, 'tree').disabled).toBe(false)
+    expect(deleteButton(view, 'tree').confirm.body).toContain('model calls on your logins')
+  })
+
+  it("deletes only the unused mode's files, refuses the mode in use, and never touches logs", async () => {
+    const garage = tempGarage()
+    oldChat(garage, 'aaaa0001', 40)
+    const t = await start({ garage, mode: 'rolling' })
+    await until(() => existsSync(rollingFile(garage, 'aaaa0001')))
+    t.handle({ type: 'extension.setValue', extensionId: 'memory', key: 'mode', value: 'tree' })
+    await until(() => summarized(garage, 'aaaa0001', 40))
+    const log = readFileSync(join(garage, 'chats', 'aaaa0001', 'log.jsonl'), 'utf8')
+
+    await t.core.handle({ type: 'extension.settingsView.action', extensionId: 'memory', action: { name: 'delete', value: 'tree' } }, () => {})
+    expect(t.messages.some((m) => m.type === 'error' && m.message.includes("can't be deleted"))).toBe(true)
+    expect(existsSync(summariesFile(garage, 'aaaa0001'))).toBe(true)
+
+    await t.core.handle({ type: 'extension.settingsView.action', extensionId: 'memory', action: { name: 'delete', value: 'rolling' } }, () => {})
+    expect(existsSync(rollingFile(garage, 'aaaa0001'))).toBe(false)
+    expect(existsSync(summariesFile(garage, 'aaaa0001'))).toBe(true)
+    expect(readFileSync(join(garage, 'chats', 'aaaa0001', 'log.jsonl'), 'utf8')).toBe(log)
+    expect(texts(memoryInfo(t).settingsView!.view)).toContain('No files')
+  })
+
+  it('with Memory off, deletes either mode and forgets the summaries it had read', async () => {
+    const garage = tempGarage()
+    oldChat(garage, 'aaaa0001', 40)
+    let hold = false
+    const t = await start({
+      garage,
+      mode: 'tree',
+      complete: async (_machine, request) => {
+        if (hold) return new Promise<string>(() => {})
+        const keys = [...request.prompt.matchAll(/<item key="([^"]+)"/g)].map(([, key]) => key)
+        return JSON.stringify({ summaries: keys.map((key) => ({ key, text: `summary of ${key}` })) })
+      },
+    })
+    await until(() => summarized(garage, 'aaaa0001', 40))
+    const before = t.send('aaaa0001', 'next')
+    expect(before.prompt).toContain('summary of 1+1')
+    before.end('fine')
+
+    t.handle({ type: 'extension.setEnabled', extensionId: 'memory', enabled: false })
+    expect(deleteButton(memoryInfo(t).settingsView!.view, 'tree').disabled).toBe(false)
+    await t.core.handle({ type: 'extension.settingsView.action', extensionId: 'memory', action: { name: 'delete', value: 'tree' } }, () => {})
+    expect(existsSync(summariesFile(garage, 'aaaa0001'))).toBe(false)
+
+    hold = true
+    t.handle({ type: 'extension.setEnabled', extensionId: 'memory', enabled: true })
+    const after = t.send('aaaa0001', 'again')
+    expect(after.prompt).not.toContain('summary of')
+  })
+})

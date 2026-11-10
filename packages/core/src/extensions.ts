@@ -69,6 +69,8 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
   ['migrateSettings', 'settings'],
+  ['settingsView', 'settings'],
+  ['onSettingsChanged', 'settings'],
   ['chats', 'chats'],
   ['setup', 'setup'],
   ['memory', 'memory'],
