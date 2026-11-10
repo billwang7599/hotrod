@@ -34,6 +34,7 @@ The built-in extensions today:
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
 | Artifacts | Yes | HTML that agents make for you, such as pages, mockups, small apps, charts and diagrams, kept per space with every version and shown sandboxed in a popup over the chat (⌘⇧A). |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
+| Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
 
 ### Where Memory keeps its summaries, and cleaning up
 
