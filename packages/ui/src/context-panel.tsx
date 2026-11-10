@@ -65,6 +65,13 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
       `Agents also run commands that publish or reach the network (${ASK_FIRST_COMMANDS.join(', ')}) without ` +
       'asking you first. Only matters while Run commands without asking is on; off, those commands ask.',
   },
+  autoEnvCommands: {
+    label: 'Let commands use .env files without asking',
+    about:
+      '.env files often hold keys and passwords. On: sandboxed commands that read or edit a project’s .env files, ' +
+      'and reads of them, run without asking you first. SSH keys, other logins and Kothar’s saved accounts still ' +
+      'ask. Only matters while Run commands without asking is on.',
+  },
   autoFetch: {
     label: 'Fetch web pages without asking',
     about: 'Agents read web pages and search the web without asking you first.',
@@ -74,7 +81,8 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     about:
       'Agents read and search files outside the work folder, and run commands that only read (ls, cat, grep, ' +
       'git status, git log…), without asking, sandboxed or not. Logins and keys still ask: ~/.ssh, ~/.aws, ' +
-      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files and Kothar’s saved accounts.',
+      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files (unless Let commands use .env files without asking lets ' +
+      'them through) and Kothar’s saved accounts.',
   },
 }
 const PERMISSIONS_HINT =

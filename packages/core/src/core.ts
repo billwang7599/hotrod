@@ -2156,18 +2156,21 @@ function openLockedCore(options: {
         if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
         // Reading writes nothing either, but logins and keys still ask.
         const reading = { cwd, home: homedir(), secrets: secretPathsOf(homedir(), garage) }
+        // .env files are let through only where commands run without asking: sandboxed, both switches on.
+        const envFiles = !!jail && on('autoRunCommands') && on('autoEnvCommands')
+        const sandboxedReading = { ...reading, envFiles }
         if (request.kind === 'read' || request.kind === 'search') {
           if (!on('autoRead')) return
           if (request.kind === 'read') {
-            return request.path !== undefined && !isSecret(request.path, reading) ? { allow: true } : undefined
+            return request.path !== undefined && !isSecret(request.path, sandboxedReading) ? { allow: true } : undefined
           }
-          return searchReachesSecret(request.path ?? cwd, reading) ? undefined : { allow: true }
+          return searchReachesSecret(request.path ?? cwd, sandboxedReading) ? undefined : { allow: true }
         }
         if (request.kind !== 'shell' || request.command === undefined) return
         if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
         if (!jail || !on('autoRunCommands')) return
         if (!on('autoNetworkCommands') && ASKS_FIRST.test(request.command)) return
-        if (mentionsSecret(request.command, reading)) return
+        if (mentionsSecret(request.command, sandboxedReading)) return
         return { allow: true }
       }
 

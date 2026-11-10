@@ -132,6 +132,8 @@ test('Settings → Work folder sets the default of each permission every chat fo
   expect(PERMISSIONS.autoNetworkCommands.label).toBe('Run network commands without asking')
   expect(PERMISSION_DEFAULTS.autoFetch).toBe(true)
   expect(PERMISSION_DEFAULTS.autoNetworkCommands).toBe(false)
+  expect(PERMISSIONS.autoEnvCommands.label).toBe('Let commands use .env files without asking')
+  expect(PERMISSION_DEFAULTS.autoEnvCommands).toBe(false)
   for (const name of PERMISSION_SWITCHES) {
     const toggle = () =>
       dialog().querySelector(`[aria-label="${PERMISSIONS[name].label}"]`) as HTMLButtonElement

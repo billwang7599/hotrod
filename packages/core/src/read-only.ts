@@ -22,8 +22,10 @@ const HOME_SECRETS = [
   '.claude/.credentials.json',
   '.pi/agent/auth.json',
 ]
-// Files with these names ask wherever they are.
-const SECRET_NAME = /^(?:\.env(?:\..+)?|id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|\.credentials\.json)$/
+// Files with these names ask wherever they are. .env files are kept apart: the "Let commands use .env files without
+// asking" switch (ReadContext.envFiles) lets them through, never keys.
+const KEY_NAME = /^(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|\.credentials\.json)$/
+const ENV_NAME = /^\.env(?:\..+)?$/
 const NOT_SECRET_NAME = /^\.env\.(?:example|sample|template|dist)$/
 
 export type ReadContext = {
@@ -32,6 +34,8 @@ export type ReadContext = {
   home: string
   // Absolute paths that ask: a home secret, the garage's accounts folder.
   secrets: string[]
+  // True: .env files don't count as secrets (the autoEnvCommands switch). Keys, home secrets and accounts still do.
+  envFiles?: boolean
 }
 
 export const secretPathsOf = (home: string, garage: string) => [
@@ -51,7 +55,8 @@ const realOf = (path: string): string => {
   }
 }
 
-const secretName = (name: string) => SECRET_NAME.test(name) && !NOT_SECRET_NAME.test(name)
+const envName = (name: string) => ENV_NAME.test(name) && !NOT_SECRET_NAME.test(name)
+const secretName = (name: string, context: ReadContext) => KEY_NAME.test(name) || (!context.envFiles && envName(name))
 
 // True if reading this file could read a login or key.
 export const isSecret = (path: string, context: ReadContext) => {
@@ -59,7 +64,7 @@ export const isSecret = (path: string, context: ReadContext) => {
   const paths = [absolute, realOf(absolute)]
   const secrets = context.secrets.flatMap((secret) => [secret, realOf(secret)])
   return paths.some(
-    (p) => secrets.some((secret) => within(p, secret)) || p.split(sep).some((segment) => secretName(segment)),
+    (p) => secrets.some((secret) => within(p, secret)) || p.split(sep).some((segment) => secretName(segment, context)),
   )
 }
 
@@ -69,7 +74,9 @@ export const searchReachesSecret = (path: string, context: ReadContext): boolean
   const segments = path.split('/')
   const wild = segments.findIndex((segment) => /[*?[{]/.test(segment))
   if (wild >= 0) {
-    if (segments.slice(wild).some((segment) => segment.startsWith('.') || secretName(segment))) return true
+    // A dot wildcard could match a key too, unless it can only match .env files and those are let through.
+    const dotted = (segment: string) => segment.startsWith('.') && !(context.envFiles && segment.startsWith('.env'))
+    if (segments.slice(wild).some((segment) => dotted(segment) || secretName(segment, context))) return true
     return searchReachesSecret(segments.slice(0, wild).join('/') || (path.startsWith('/') ? '/' : '.'), context)
   }
   if (isSecret(path, context)) return true
@@ -80,13 +87,20 @@ export const searchReachesSecret = (path: string, context: ReadContext): boolean
 
 export const expandHome = (path: string, home: string) => path.replace(/^~(?=$|\/)/, home)
 
-// A rough check for commands Kothar runs without parsing (sandboxed auto-run): does the text name a secret?
-export const mentionsSecret = (command: string, context: ReadContext) => {
+// Rough checks for commands Kothar runs without parsing (sandboxed auto-run): does the text name a secret? A key, home
+// secret or saved account always counts; a .env file counts unless context.envFiles lets it through.
+export const mentionsKey = (command: string, context: ReadContext) => {
   const names = HOME_SECRETS.map((path) => path.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&'))
   const home = new RegExp(`(?:~|\\$HOME|\\$\\{HOME\\}|${escape(context.home)})/(?:${names.join('|')})(?=$|[/\\s'"])`)
-  const named = /(?:^|[\s'"=/])(?:\.env(?!\.(?:example|sample|template|dist)\b)(?:\.[\w-]+)?|id_(?:rsa|dsa|ecdsa|ed25519))(?=$|[\s'"/;|&)])/
+  const named = /(?:^|[\s'"=/])(?:id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?|\.credentials\.json)(?=$|[\s'"/;|&)])/
   return home.test(command) || named.test(command) || context.secrets.some((secret) => command.includes(secret))
 }
+
+export const mentionsEnvFile = (command: string) =>
+  /(?:^|[\s'"=/])\.env(?!\.(?:example|sample|template|dist)\b)(?:\.[\w-]+)?(?=$|[\s'"/;|&)])/.test(command)
+
+export const mentionsSecret = (command: string, context: ReadContext) =>
+  mentionsKey(command, context) || (!context.envFiles && mentionsEnvFile(command))
 
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

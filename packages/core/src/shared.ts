@@ -205,6 +205,7 @@ export const PERMISSION_DEFAULTS = {
   editAnywhere: false,
   autoRunCommands: true,
   autoNetworkCommands: false,
+  autoEnvCommands: false,
   autoFetch: true,
   autoRead: true,
 }

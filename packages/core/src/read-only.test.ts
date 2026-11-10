@@ -203,4 +203,27 @@ describe('secret paths', () => {
     expect(mentionsSecret('node -e "console.log(process.env.HOME)"', context)).toBe(false)
     expect(mentionsSecret('cp .env.example .env.sample', context)).toBe(false)
   })
+
+  it('lets .env files through once envFiles is set, but never keys, home secrets or saved accounts', () => {
+    const env = { ...context, envFiles: true }
+    const script = "sed -i '' -E 's#^PORT=.*#PORT=8799#' .env; grep -E 'DATABASE_URL|^PORT' .env.local"
+    expect(mentionsSecret(script, context)).toBe(true)
+    expect(mentionsSecret(script, env)).toBe(false)
+    expect(isSecret('.env', env)).toBe(false)
+    expect(searchReachesSecret(join(project, '.env*'), env)).toBe(false)
+    expect(searchReachesSecret(join(project, '**', '.*'), env)).toBe(true)
+    for (const command of [
+      'cat .env ~/.ssh/config',
+      'python read.py id_rsa',
+      'cp id_ed25519_sk /tmp',
+      'cat .credentials.json',
+      'cat $HOME/.aws/credentials .env',
+      `cp ${garage}/accounts/x.json .env`,
+    ]) {
+      expect(mentionsSecret(command, env), command).toBe(true)
+    }
+    for (const path of [join(home, '.ssh', 'config'), join(project, 'id_rsa'), '.credentials.json', join(garage, 'accounts')]) {
+      expect(isSecret(path, env), path).toBe(true)
+    }
+  })
 })
