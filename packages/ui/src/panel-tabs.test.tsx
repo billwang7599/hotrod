@@ -42,11 +42,11 @@ const space: ChatView = {
   draft: '',
   queue: [],
 }
-const modUi: State['modUi'] = {
+const extensionUi: State['extensionUi'] = {
   chatId: 'space',
   panels: [
-    { mod: 'git', id: 'changes', title: 'Changes' },
-    { mod: 'processes', id: 'processes', title: 'Processes' },
+    { extension: 'git', id: 'changes', title: 'Changes' },
+    { extension: 'processes', id: 'processes', title: 'Processes' },
   ],
   commands: [],
 }
@@ -102,7 +102,7 @@ function render() {
               readOnly={false}
               connected
               send={() => {}}
-              modUi={modUi}
+              extensionUi={extensionUi}
             />
           </Tooltip.Provider>
         </MotionConfig>
@@ -137,10 +137,16 @@ test("tabs that don't fit go into the More menu, in order", () => {
 })
 
 test('the open tab stays in the row even when later tabs fold away', () => {
-  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
+  localStorage.setItem('kothar.panelTab', 'extension:git/changes')
   room = 200
   render()
   expect(tabs()).toEqual(['General', 'Changes'])
+  expect(tab('Changes').getAttribute('aria-selected')).toBe('true')
+})
+
+test('a tab saved when extensions were mods opens as the same tab', () => {
+  localStorage.setItem('kothar.panelTab', 'mod:git/changes')
+  render()
   expect(tab('Changes').getAttribute('aria-selected')).toBe('true')
 })
 

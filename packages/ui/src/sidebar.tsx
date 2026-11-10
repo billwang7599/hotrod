@@ -14,7 +14,8 @@ const DOTS: Record<ChatStatus, string> = {
   idle: 'bg-faint',
   running: 'bg-green animate-blink',
   waiting: 'bg-amber',
-  stopping: 'bg-amber',
+  // Amber means only "waiting on you": a chat on its way to idle blinks grey.
+  stopping: 'bg-muted animate-blink',
 }
 /** A folded row shows the busiest status among the workers it hides. */
 const BUSIEST: ChatStatus[] = ['waiting', 'stopping', 'running', 'idle']
@@ -118,7 +119,7 @@ function ChatRow(props: RowProps) {
         onKeyDown={reorder?.key}
       >
         <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} data-status={status} />
-        {chat.mod === 'home' && <HouseIcon />}
+        {chat.extension === 'home' && <HouseIcon />}
         <span className={`min-w-0 flex-1 truncate ${unread ? 'font-semibold' : ''}`} data-unread={unread || undefined}>
           {chat.name}
         </span>
@@ -189,8 +190,8 @@ export function ChatNav({
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
-  // Mod chats (Home) sort first; they sit above the spaces, apart from them.
-  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.mod)
+  // Extension chats (Home) sort first; they sit above the spaces, apart from them.
+  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.extension)
   const split = firstSpace < 0 ? tree.active.length : firstSpace
   const folded = useFoldedChats()
   // A row is hidden while a chat above it is folded, unless it's the chat being viewed.
@@ -223,11 +224,12 @@ export function ChatNav({
     const group = spacesIn(!!chat.pinned)
     const index = group.findIndex((c) => c.id === chat.id) + by
     if (index < 0 || index >= group.length) return
+    // oxlint-disable-next-line react/purity -- step runs only from key and menu handlers, never during render
     if (keyboard) refocus.current = { id: chat.id, until: Date.now() + REFOCUS_MS }
     move(chat, !!chat.pinned, index)
   }
   const reorder = (row: TreeRow): Reorder | undefined => {
-    if (!connected || row.chat.archived || row.chat.mod) return undefined
+    if (!connected || row.chat.archived || row.chat.extension) return undefined
     const space = rootOf(row.chat)
     const target = (e: DragEvent) => {
       const box = e.currentTarget.getBoundingClientRect()
@@ -332,7 +334,7 @@ export function ChatNav({
         unread={showsUnread(chat, looking && chat.id === selectedId)}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.mod || chat.worker ? undefined : chatMenu(chat)}
+        menu={chat.extension || chat.worker ? undefined : chatMenu(chat)}
         fold={below.length ? { folded: isFolded, hidden: below, toggle: () => foldChat(chat.id, !isFolded) } : undefined}
         reorder={reorder(row)}
       />
@@ -359,14 +361,19 @@ export function ChatNav({
         <AnimatePresence>{groupRows(false).filter(shown).map(row)}</AnimatePresence>
       </div>
       <Hint text={newSpaceKeys && <Keys binding={newSpaceKeys} />} side="right">
+        {/* As wide and tall as a space row, its label under the space names: the + sits where a row's dot does
+            (pl-7 plus the button's 1px border makes the rows' pl-8). */}
         <Button
           variant="ghost"
-          size="small"
-          className="mt-2 self-end"
+          size="none"
+          className="flex h-control w-full shrink-0 items-center gap-8 pr-8 pl-7 text-left"
           disabled={!connected}
           onClick={() => askName({ kind: 'new' })}
         >
-          + New {CHAT_NOUN.one}
+          <span aria-hidden="true" className="flex w-7 shrink-0 justify-center">
+            +
+          </span>
+          New {CHAT_NOUN.one}
         </Button>
       </Hint>
 

@@ -25,7 +25,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
   ...change,
 })
 
-const HOME = chat({ id: 'main', name: 'Home', mod: 'home', doneAt: '2026-03-01T00:00:00Z' })
+const HOME = chat({ id: 'main', name: 'Home', extension: 'home', doneAt: '2026-03-01T00:00:00Z' })
 const WEB = chat({ id: 'web', name: 'Website', doneAt: '2026-03-03T00:00:00Z' })
 const API = chat({ id: 'api', name: 'API server', readAt: '2026-03-02T00:00:00Z' })
 const SUB = chat({ id: 'sub', name: 'Website worker', parentId: 'web', worker: true, doneAt: '2026-03-04T00:00:00Z' })
@@ -37,6 +37,7 @@ const hit = (chatId: string, nth = 0): SearchHit => ({
   snippet: 'the web deploy is done',
   match: { start: 4, length: 3 },
   nth,
+  entry: nth,
 })
 
 test('with no query it lists recent chats, the open one last, and never workers', () => {
@@ -147,7 +148,7 @@ test('typing searches the core once, after a pause, and shows its hits with the 
   key('ArrowDown')
   key('Enter')
   expect(selected).toEqual(['api'])
-  expect(takeReveal('api')).toEqual({ chatId: 'api', query: 'web', nth: 2 })
+  expect(takeReveal('api')).toEqual({ chatId: 'api', query: 'web', nth: 2, entry: 2 })
   expect(takeReveal('api')).toBeNull()
 })
 

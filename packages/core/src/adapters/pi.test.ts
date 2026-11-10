@@ -51,11 +51,11 @@ describe('pi adapter', () => {
     ])
   })
 
-  it('takes the Kothar MCP server and mod servers', () => {
+  it('takes the Kothar MCP server and extension servers', () => {
     expect(pi.kotharMcp).toBe(true)
   })
 
-  it("gives pi exactly Kothar's server and the mods' servers, direct, with the token only in its env", () => {
+  it("gives pi exactly Kothar's server and the extensions' servers, direct, with the token only in its env", () => {
     const token = 'secret-token'
     const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token }
     const mcpServers = [

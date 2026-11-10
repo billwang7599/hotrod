@@ -1,0 +1,13 @@
+{
+  "name": "@kothar/extension-browser",
+  "private": true,
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "dependencies": {
+    "@playwright/mcp": "0.0.84"
+  },
+  "devDependencies": {
+    "@kothar/core": "*",
+    "@kothar/extension-api": "*"
+  }
+}

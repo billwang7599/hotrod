@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMemoryMod } from '../../mods/memory/index.ts'
+import { createMemoryExtension } from '../../extensions/memory/index.ts'
 import { createFakeAdapter, FAKE_MODELS, type FakeStep } from '../../packages/core/src/adapters/fake.ts'
 import { sandboxingMachine } from '../../packages/core/src/adapters/test-machine.ts'
 import { openCore } from '../../packages/core/src/core.ts'
@@ -17,9 +17,9 @@ import type { SyntheticTurn } from './synthetic.ts'
 export type Strategy = 'tree' | 'rolling' | 'window' | 'native'
 export const STRATEGIES: Strategy[] = ['tree', 'rolling', 'window', 'native']
 export const LABELS: Record<Strategy, string> = {
-  tree: 'Memory mod: summary tree',
-  rolling: 'Memory mod: rolling summary',
-  window: 'Memory mod off: window',
+  tree: 'Memory extension: summary tree',
+  rolling: 'Memory extension: rolling summary',
+  window: 'Memory extension off: window',
   native: 'Native session (modelled)',
 }
 
@@ -95,7 +95,7 @@ const viewOf = (prompt: string) => {
   return end < start ? '' : prompt.slice(start, end)
 }
 
-// Runs the chat through the core under one memory: the Memory mod in a mode, or no memory mod (the window).
+// Runs the chat through the core under one memory: the Memory extension in a mode, or no memory extension (the window).
 export async function runStrategy(strategy: Exclude<Strategy, 'native'>, chat: SyntheticTurn[]): Promise<StrategyResult> {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-bench-')))
   const summary = { calls: 0, inputTokens: 0, outputTokens: 0 }
@@ -114,13 +114,13 @@ export async function runStrategy(strategy: Exclude<Strategy, 'native'>, chat: S
       return { ...session, prompt: (text, images) => ((record.prompt = text), session.prompt(text, images)) }
     },
   }
-  const memory = createMemoryMod({ debounceMs: 0 })
+  const memory = createMemoryExtension({ debounceMs: 0 })
   const core = openCore({
     garage,
     adapters: [adapter],
     defaultEngine: 'fake',
     machine: sandboxingMachine,
-    mods: strategy === 'window' ? [] : [memory],
+    extensions: strategy === 'window' ? [] : [memory],
   })
   try {
     // Seeds as for an engine that takes the Kothar MCP server (Claude Code, pi); nothing serves it, as no tool is called.
@@ -128,7 +128,7 @@ export async function runStrategy(strategy: Exclude<Strategy, 'native'>, chat: S
     const handle = (message: Parameters<typeof core.handle>[0]) => core.handle(message, () => {})
     handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
     handle({ type: 'workFolder.set', path: join(garage, 'work') })
-    if (strategy === 'tree' || strategy === 'rolling') handle({ type: 'mod.setValue', modId: 'memory', key: 'mode', value: strategy })
+    if (strategy === 'tree' || strategy === 'rolling') handle({ type: 'extension.setValue', extensionId: 'memory', key: 'mode', value: strategy })
     await core.refreshEngines()
     handle({ type: 'chat.create', name: 'Bench' })
     const chatId = core.chats().find((c) => c.name === 'Bench')!.id

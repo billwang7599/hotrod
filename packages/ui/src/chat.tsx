@@ -28,13 +28,14 @@ import {
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
+  type Setup,
   type ToolKind,
   type Upload,
   type WorkFolder,
 } from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { choosePanelTab, modTabId } from './panel-tab.ts'
+import { choosePanelTab, extensionTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
 import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
@@ -86,7 +87,7 @@ import {
   waitsBelow,
   workerRequests,
 } from './state.ts'
-import { revealIn, takeReveal } from './search.tsx'
+import { localNth, revealIn, takeReveal, type Reveal } from './search.tsx'
 
 const MANAGE_ACCOUNTS = '__manage'
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
@@ -148,6 +149,8 @@ const DOT_STAGGER_MS = 200
 export const JUMP_BELOW_PX = 240
 /** Within this of the bottom, the view follows new output down. */
 export const FOLLOW_PX = 16
+// Scrolled this close to the top, the view asks for the page of history before what it has.
+export const OLDER_PX = 600
 
 function Dots({ label, className = '' }: { label: string; className?: string }) {
   return (
@@ -249,6 +252,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
   useEffect(() => {
     if (!open || kind !== 'file') return
     const abort = new AbortController()
+    // oxlint-disable-next-line react/set-state-in-effect -- shows loading while a fresh fetch starts
     setText(undefined)
     void (async () => {
       try {
@@ -674,8 +678,8 @@ type ItemProps = {
   // Opens a chat that still exists, for a worker's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
-  // Opens a mod's panel in the right sidebar, for a mod's note.
-  openPanel?: (mod: string, panel: string) => void
+  // Opens an extension's panel in the right sidebar, for an extension's note.
+  openPanel?: (extension: string, panel: string) => void
   // The item's index in the chat, for choices kept per item (a report card's fold).
   at?: number
 }
@@ -787,12 +791,12 @@ function ItemView(props: ItemProps) {
         <ErrorText>{item.text}</ErrorText>
       )
     case 'note': {
-      const { mod, panel } = item
-      if (!mod || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
+      const { extension, panel } = item
+      if (!extension || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
       return (
         <button
           className="w-fit text-left text-sm text-muted underline decoration-faint underline-offset-2 hover:text-text"
-          onClick={() => openPanel(mod, panel)}
+          onClick={() => openPanel(extension, panel)}
         >
           {item.text}
         </button>
@@ -929,11 +933,12 @@ type ChatProps = {
   contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
-  modUi?: State['modUi']
+  extensionUi?: State['extensionUi']
   panelViews?: State['panelViews']
   terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
+  setups?: Setup[]
   columnPx: number
   setColumnPx: (px: number) => void
   notify: (message: string) => void
@@ -991,21 +996,71 @@ export function Chat(props: ChatProps) {
     if (atBottom) jumping.current = false
     if (!jumping.current) following.current = atBottom
     measure()
+    nearTop()
   }
   const userScrolls = () => {
     jumping.current = false
   }
 
+  // Older history: asked for once per page (by where the loaded part starts). The view stays on the first message
+  // loaded (a turn's start, whose row a page in front never regroups) while the loading row and then the page go in
+  // above it.
+  const from = chat.from ?? 0
+  const [askedBefore, setAskedBefore] = useState<number>()
+  const anchor = useRef<{ node: HTMLElement; top: number } | null>(null)
+  const loadingOlder = askedBefore === from && from > 0
+  const loadOlder = (to?: number) => {
+    const list = listRef.current
+    if (from === 0 || askedBefore === from || !connected) return
+    const node =
+      list?.querySelector<HTMLElement>('[data-item-kind="user"],[data-item-kind="report"]') ??
+      list?.querySelector<HTMLElement>('[data-item-kind]')
+    anchor.current = node ? { node, top: node.offsetTop } : null
+    setAskedBefore(from)
+    send({ type: 'chat.history', chatId: chat.id, before: from, ...(to !== undefined && { to }) })
+  }
+  // For effects that run on fewer changes than these do (declared first, so it's current when they run).
+  const latest = useRef({ loadOlder, entries: chat.entries })
+  useLayoutEffect(() => {
+    latest.current = { loadOlder, entries: chat.entries }
+  })
+  const nearTop = () => {
+    const list = listRef.current
+    if (list && list.scrollTop < OLDER_PX && !following.current) loadOlder()
+  }
+
+  // The loading row or an older page went in front: scroll by what it added above that row.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const kept = anchor.current
+    if (!list || !kept?.node.isConnected) return
+    list.scrollTop += kept.node.offsetTop - kept.top
+    kept.top = kept.node.offsetTop
+    if (!loadingOlder) anchor.current = null
+  }, [from, loadingOlder])
+
   useLayoutEffect(follow, [chat.items, chat.status, chat.draft, requests.length])
 
-  // Opened from a message match in the search palette: show that message instead of the bottom.
+  // Opened from a message match in the search palette: show that message instead of the bottom, loading the history
+  // back to it first if it's older than what's loaded.
+  const revealing = useRef<Reveal | null>(null)
   useLayoutEffect(() => {
-    const reveal = takeReveal(chat.id)
+    const reveal = revealing.current ?? takeReveal(chat.id)
+    revealing.current = null
     const list = listRef.current
-    if (!reveal || !list || !revealIn(list, reveal)) return
+    if (!reveal || !list) return
+    if (reveal.entry !== undefined && reveal.entry < from) {
+      revealing.current = reveal
+      following.current = false
+      return latest.current.loadOlder(reveal.entry)
+    }
+    const { entries } = latest.current
+    const nth = reveal.entry === undefined || !entries ? reveal.nth : localNth(entries, from, reveal)
+    if (!revealIn(list, { ...reveal, nth })) return
     following.current = false
     measure()
-  }, [])
+    // The view is keyed by chat id (main.tsx); it runs again when an older page it asked for lands.
+  }, [chat.id, from])
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -1013,6 +1068,8 @@ export function Chat(props: ChatProps) {
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) if (entry.target === list) setPaneColumnPx(entry.contentRect.width)
       follow()
+      // A page too short to scroll can't be scrolled up to load more.
+      if (list.scrollHeight <= list.clientHeight) latest.current.loadOlder()
     })
     observer.observe(list)
     observer.observe(contentRef.current)
@@ -1110,20 +1167,24 @@ export function Chat(props: ChatProps) {
   const unarchive = () => send({ type: 'chat.archive', chatId: chat.id, archived: false })
   // A chat's nth reply keeps one name from draft to finished item, so its reveal carries over. Texts already there when
   // the chat was opened show whole; ones that arrive while it's open type out.
+  // Older pages count down from the first loaded, so the numbers of what was already there don't change.
+  const shift = chat.shift ?? 0
+  const older = chat.items.slice(0, shift)
   const replyNumbers = new Map<Item, number>()
   const thoughtNumbers = new Map<Item, number>()
+  let replies = -older.filter((i) => i.kind === 'text').length
+  let thoughts = -older.filter((i) => i.kind === 'thinking').length
   for (const i of chat.items) {
-    if (i.kind === 'text') replyNumbers.set(i, replyNumbers.size)
-    else if (i.kind === 'thinking') thoughtNumbers.set(i, thoughtNumbers.size)
+    if (i.kind === 'text') replyNumbers.set(i, replies++)
+    else if (i.kind === 'thinking') thoughtNumbers.set(i, thoughts++)
   }
-  const draftKey = `${chat.id}:text:${replyNumbers.size}`
+  const draftKey = `${chat.id}:text:${replies}`
   const opened = useRef({ chatId: '', texts: 0, thoughts: 0, draftKey: '' })
   if (opened.current.chatId !== chat.id) {
-    const [texts, thoughts] = [replyNumbers.size, thoughtNumbers.size]
-    opened.current = { chatId: chat.id, texts, thoughts, draftKey: chat.draft ? draftKey : '' }
+    opened.current = { chatId: chat.id, texts: replies, thoughts, draftKey: chat.draft ? draftKey : '' }
   }
   // A finished turn drops its thinking, so the next turn's thoughts count from zero again.
-  opened.current.thoughts = Math.min(opened.current.thoughts, thoughtNumbers.size)
+  opened.current.thoughts = Math.min(opened.current.thoughts, thoughts)
   const revealOf: RevealOf = (item) => {
     const reply = replyNumbers.get(item)
     if (reply !== undefined)
@@ -1144,8 +1205,8 @@ export function Chat(props: ChatProps) {
       const select = props.select
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
     },
-    openPanel: (mod: string, panel: string) => {
-      choosePanelTab(modTabId(mod, panel))
+    openPanel: (extension: string, panel: string) => {
+      choosePanelTab(extensionTabId(extension, panel))
       if (!props.contextOpen) props.toggleContext()
     },
   }
@@ -1190,12 +1251,13 @@ export function Chat(props: ChatProps) {
             noun="sidebar"
             open={props.sidebarOpen}
             toggle={props.toggleSidebar}
+            action="toggleSidebar"
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
-            <Hint text={!chat.mod && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
+            <Hint text={!chat.extension && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
               <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
             </Hint>
-            {!chat.mod && paths.header && (
+            {!chat.extension && paths.header && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>
@@ -1237,6 +1299,7 @@ export function Chat(props: ChatProps) {
             noun="context"
             open={props.contextOpen}
             toggle={props.toggleContext}
+            action="toggleContextPanel"
           />
         </header>
         <div
@@ -1263,14 +1326,21 @@ export function Chat(props: ChatProps) {
                     </span>
                   </div>
                 )}
+                {loadingOlder && (
+                  <div className="flex justify-center text-sm text-muted" data-loading-older>
+                    <Dots label="Loading earlier messages" />
+                  </div>
+                )}
                 {foldSteps(chat.items, stepsShown).map((row) => {
                   const kind = 'item' in row ? row.item.kind : 'steps'
+                  // Keyed from the first item loaded, so a page added in front leaves the rows already shown alone.
+                  const at = row.at - shift
                   return (
                     <m.div
-                      key={kind === 'steps' ? `steps-${row.at}` : row.at}
+                      key={kind === 'steps' ? `steps-${at}` : at}
                       data-item-kind={kind}
                       className={`group/item flex flex-col rounded transition-colors duration-700 data-revealed:bg-accent/10 ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
-                      initial={kind !== 'text' && enter}
+                      initial={kind !== 'text' && at >= 0 && enter}
                       animate={MOTION.rise.animate}
                     >
                       {'steps' in row ? (
@@ -1429,7 +1499,7 @@ export function Chat(props: ChatProps) {
             <ul className="mx-auto mb-8 flex max-w-column flex-col gap-8" aria-label="Waiting for you">
               {waits.map(({ chat: of, wait }) => (
                 <li
-                  key={`${of.id}-${wait.mod}`}
+                  key={`${of.id}-${wait.extension}`}
                   className="flex flex-wrap items-center gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-10 shadow-raised"
                 >
                   <span className="min-w-0 flex-1 text-body">
@@ -1447,7 +1517,7 @@ export function Chat(props: ChatProps) {
                         variant={button.primary ? 'primary' : 'default'}
                         disabled={!connected}
                         onClick={() =>
-                          send({ type: 'mod.wait.answer', chatId: of.id, mod: wait.mod, button: button.id })
+                          send({ type: 'extension.wait.answer', chatId: of.id, extension: wait.extension, button: button.id })
                         }
                       >
                         {button.label}
@@ -1524,10 +1594,12 @@ export function Chat(props: ChatProps) {
               connected={connected}
               send={send}
               hide={props.contextOverlay ? props.toggleContext : undefined}
-              modUi={props.modUi}
+              extensionUi={props.extensionUi}
               panelViews={props.panelViews}
               terminalErrors={props.terminalErrors}
               pickers={window.kothar}
+              setups={props.setups}
+              openSetups={() => openSettings('setups')}
             />
           </SidePanel>
         )}

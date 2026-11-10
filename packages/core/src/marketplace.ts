@@ -1,20 +1,20 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import type { ModManifest, ModUse } from '@kothar/mod-api'
+import type { ExtensionManifest, ExtensionUse } from '@kothar/extension-api'
 import { moveCommunityDir } from './vocab-move.ts'
 import { garageHolder } from './garage-lock.ts'
 import {
   type CatalogEntry,
   checkCatalog,
-  checkModManifest,
+  checkExtensionManifest,
   checkTheme,
   type InstalledItem,
   isItemId,
   type MarketEntry,
   type MarketKind,
   MAX_MANIFEST_BYTES,
-  MAX_MOD_BYTES,
+  MAX_EXTENSION_BYTES,
   MAX_THEME_BYTES,
   previewOf,
   type ThemeFile,
@@ -47,16 +47,17 @@ type InstallRecord = { version: string; installedAt: string; sha256: Record<stri
 const RECORD = 'installed.json'
 const THEME_FILE = 'theme.json'
 const MANIFEST = 'manifest.json'
-export const MOD_MAIN = 'main.mjs'
+export const EXTENSION_MAIN = 'main.mjs'
 
-// Community mods live apart from <garage>/mods/<id>/, which is every mod's own storage and stays on uninstall.
+// Community extensions live apart from <garage>/extensions/<id>/, which is every extension's own storage and stays on
+// uninstall.
 export const communityDir = (garage: string) => join(garage, 'community')
 
-export type CommunityInstall = { manifest: ModManifest; item: InstalledItem; dir: string }
+export type CommunityInstall = { manifest: ExtensionManifest; item: InstalledItem; dir: string }
 
-// The community mods installed in the garage: each <garage>/community/<id>/ with a valid manifest.json, its main.mjs
-// and installed.json. Folders that don't pass are skipped and left on disk.
-export function installedMods(garage: string): CommunityInstall[] {
+// The community extensions installed in the garage: each <garage>/community/<id>/ with a valid manifest.json, its
+// main.mjs and installed.json. Folders that don't pass are skipped and left on disk.
+export function installedExtensions(garage: string): CommunityInstall[] {
   // Moving folders is for the core that holds the garage; one reading it before (or without) the lock leaves them.
   const holder = garageHolder(garage)
   if (holder === undefined || holder === process.pid) moveCommunityDir(garage)
@@ -66,12 +67,12 @@ export function installedMods(garage: string): CommunityInstall[] {
     .sort()
     .flatMap((id): CommunityInstall[] => {
       const dir = join(root, id)
-      if (!isItemId(id) || !statSync(dir).isDirectory() || !existsSync(join(dir, MOD_MAIN))) return []
+      if (!isItemId(id) || !statSync(dir).isDirectory() || !existsSync(join(dir, EXTENSION_MAIN))) return []
       try {
-        const manifest = checkModManifest(JSON.parse(readFileSync(join(dir, MANIFEST), 'utf8')))
+        const manifest = checkExtensionManifest(JSON.parse(readFileSync(join(dir, MANIFEST), 'utf8')))
         const record = JSON.parse(readFileSync(join(dir, RECORD), 'utf8')) as InstallRecord
         if (manifest.id !== id) return []
-        return [{ manifest, item: itemOf('mod', manifest, record), dir }]
+        return [{ manifest, item: itemOf('extension', manifest, record), dir }]
       } catch {
         return []
       }
@@ -180,20 +181,20 @@ export function openMarketplace(options: {
     return { release, bytes, theme }
   }
 
-  // The manifest is downloaded to show what the mod uses; main.mjs only once it's installed.
-  async function latestMod(entry: CatalogEntry) {
+  // The manifest is downloaded to show what the extension uses; main.mjs only once it's installed.
+  async function latestExtension(entry: CatalogEntry) {
     const release = await latestRelease(entry.repo)
     const bytes = await assetBytes(release, entry.repo, MANIFEST, MAX_MANIFEST_BYTES)
-    let manifest: ModManifest
+    let manifest: ExtensionManifest
     try {
-      manifest = checkModManifest(JSON.parse(bytes.toString('utf8')))
+      manifest = checkExtensionManifest(JSON.parse(bytes.toString('utf8')))
     } catch (error) {
       throw new Error(`"${entry.name}" has a broken manifest: ${messageOf(error)}`)
     }
     if (manifest.id !== entry.id) throw new Error(`"${entry.name}" names itself "${manifest.id}", not "${entry.id}"`)
-    const main = release.assets.find((a) => a.name === MOD_MAIN)
-    if (!main) throw new Error(`${entry.repo}'s latest release (${release.tag}) has no ${MOD_MAIN}`)
-    if (main.size > MAX_MOD_BYTES) throw new Error(`${MOD_MAIN} in ${entry.repo} is over ${MAX_MOD_BYTES} bytes`)
+    const main = release.assets.find((a) => a.name === EXTENSION_MAIN)
+    if (!main) throw new Error(`${entry.repo}'s latest release (${release.tag}) has no ${EXTENSION_MAIN}`)
+    if (main.size > MAX_EXTENSION_BYTES) throw new Error(`${EXTENSION_MAIN} in ${entry.repo} is over ${MAX_EXTENSION_BYTES} bytes`)
     return { release, bytes, manifest }
   }
 
@@ -203,8 +204,8 @@ export function openMarketplace(options: {
     return Promise.all(
       entries.map(async (entry): Promise<MarketEntry> => {
         try {
-          if (entry.kind === 'mod') {
-            const { release, manifest } = await latestMod(entry)
+          if (entry.kind === 'extension') {
+            const { release, manifest } = await latestExtension(entry)
             const notes = release.notes && { notes: release.notes }
             return { ...entry, latest: { tag: release.tag, version: manifest.version, ...notes, uses: manifest.uses } }
           }
@@ -271,10 +272,10 @@ export function openMarketplace(options: {
     }
   }
 
-  // Installs or updates. For a mod, added is what the new version uses that the installed one didn't.
-  async function install(kind: MarketKind, id: unknown): Promise<{ added: ModUse[] }> {
+  // Installs or updates. For an extension, added is what the new version uses that the installed one didn't.
+  async function install(kind: MarketKind, id: unknown): Promise<{ added: ExtensionUse[] }> {
     if (!isItemId(id)) throw new Error(`Not a marketplace id: ${String(id)}`)
-    if (kind !== 'theme' && kind !== 'mod') throw new Error(`Not something Kothar installs: ${String(kind)}`)
+    if (kind !== 'theme' && kind !== 'extension') throw new Error(`Not something Kothar installs: ${String(kind)}`)
     const entry = (await catalog()).find((e) => e.kind === kind && e.id === id)
     if (!entry) throw new Error(`The marketplace has no ${kind} "${id}"`)
     const installedAt = new Date(now()).toISOString()
@@ -291,55 +292,55 @@ export function openMarketplace(options: {
       rmSync(join(themesDir, `${id}.json`), { force: true })
       return { added: [] }
     }
-    const { release, bytes, manifest } = await latestMod(entry)
-    const main = await assetBytes(release, entry.repo, MOD_MAIN, MAX_MOD_BYTES)
-    const before = installedMods(options.garage).find((m) => m.manifest.id === id)?.manifest.uses
-    writeItem(join(communityDir(options.garage), id), { [MANIFEST]: bytes, [MOD_MAIN]: main }, {
+    const { release, bytes, manifest } = await latestExtension(entry)
+    const main = await assetBytes(release, entry.repo, EXTENSION_MAIN, MAX_EXTENSION_BYTES)
+    const before = installedExtensions(options.garage).find((m) => m.manifest.id === id)?.manifest.uses
+    writeItem(join(communityDir(options.garage), id), { [MANIFEST]: bytes, [EXTENSION_MAIN]: main }, {
       source: 'marketplace',
       repo: entry.repo,
       tag: release.tag,
       version: manifest.version,
       installedAt,
-      sha256: { [MANIFEST]: sha256(bytes), [MOD_MAIN]: sha256(main) },
+      sha256: { [MANIFEST]: sha256(bytes), [EXTENSION_MAIN]: sha256(main) },
     })
     return { added: before ? manifest.uses.filter((use) => !before.includes(use)) : [] }
   }
 
   function uninstall(kind: MarketKind, id: unknown) {
     if (!isItemId(id)) throw new Error(`Not a marketplace id: ${String(id)}`)
-    if (kind === 'mod') return rmSync(join(communityDir(options.garage), id), { recursive: true, force: true })
+    if (kind === 'extension') return rmSync(join(communityDir(options.garage), id), { recursive: true, force: true })
     if (kind !== 'theme') throw new Error(`Not something Kothar installs: ${String(kind)}`)
     rmSync(join(themesDir, id), { recursive: true, force: true })
     rmSync(join(themesDir, `${id}.json`), { force: true })
   }
 
-  // Copies a folder an author is working on, without publishing it: a mod (manifest.json and main.mjs), or themes
-  // (<id>.json files in the folder or its themes/ folder). Installs are marked local, with the folder, so they can be
-  // copied again after a rebuild, and the marketplace never offers to update them.
-  function installLocal(path: unknown): { kind: MarketKind; ids: string[]; added: ModUse[] } {
+  // Copies a folder an author is working on, without publishing it: an extension (manifest.json and main.mjs), or
+  // themes (<id>.json files in the folder or its themes/ folder). Installs are marked local, with the folder, so they
+  // can be copied again after a rebuild, and the marketplace never offers to update them.
+  function installLocal(path: unknown): { kind: MarketKind; ids: string[]; added: ExtensionUse[] } {
     if (typeof path !== 'string' || !isAbsolute(path.trim())) throw new Error('Pick a folder, or type its full path')
     const folder = path.trim()
     if (!existsSync(folder) || !statSync(folder).isDirectory()) throw new Error(`${folder} isn't a folder`)
     const installedAt = new Date(now()).toISOString()
     if (existsSync(join(folder, MANIFEST))) {
       const bytes = readCapped(join(folder, MANIFEST), MAX_MANIFEST_BYTES)
-      let manifest: ModManifest
+      let manifest: ExtensionManifest
       try {
-        manifest = checkModManifest(JSON.parse(bytes.toString('utf8')))
+        manifest = checkExtensionManifest(JSON.parse(bytes.toString('utf8')))
       } catch (error) {
         throw new Error(`${folder}/${MANIFEST} is broken: ${messageOf(error)}`)
       }
-      if (!existsSync(join(folder, MOD_MAIN))) throw new Error(`${folder} has no ${MOD_MAIN}. Build the mod first.`)
-      const main = readCapped(join(folder, MOD_MAIN), MAX_MOD_BYTES)
-      const before = installedMods(options.garage).find((m) => m.manifest.id === manifest.id)?.manifest.uses
-      writeItem(join(communityDir(options.garage), manifest.id), { [MANIFEST]: bytes, [MOD_MAIN]: main }, {
+      if (!existsSync(join(folder, EXTENSION_MAIN))) throw new Error(`${folder} has no ${EXTENSION_MAIN}. Build the extension first.`)
+      const main = readCapped(join(folder, EXTENSION_MAIN), MAX_EXTENSION_BYTES)
+      const before = installedExtensions(options.garage).find((m) => m.manifest.id === manifest.id)?.manifest.uses
+      writeItem(join(communityDir(options.garage), manifest.id), { [MANIFEST]: bytes, [EXTENSION_MAIN]: main }, {
         source: 'local',
         path: folder,
         version: manifest.version,
         installedAt,
-        sha256: { [MANIFEST]: sha256(bytes), [MOD_MAIN]: sha256(main) },
+        sha256: { [MANIFEST]: sha256(bytes), [EXTENSION_MAIN]: sha256(main) },
       })
-      return { kind: 'mod', ids: [manifest.id], added: before ? manifest.uses.filter((use) => !before.includes(use)) : [] }
+      return { kind: 'extension', ids: [manifest.id], added: before ? manifest.uses.filter((use) => !before.includes(use)) : [] }
     }
     const dirs = [folder, join(folder, 'themes')].filter((dir) => existsSync(dir) && statSync(dir).isDirectory())
     const files = dirs.flatMap((dir) => readdirSync(dir).filter((n) => n.endsWith('.json')).map((n) => join(dir, n)))
@@ -359,7 +360,7 @@ export function openMarketplace(options: {
       throw new Error(
         problems.length
           ? `No theme in ${folder} passed the check. ${problems[0]}`
-          : `${folder} has no manifest.json (a mod) or <id>.json theme files`,
+          : `${folder} has no manifest.json (an extension) or <id>.json theme files`,
       )
     }
     for (const { bytes, theme } of themes) {
@@ -383,7 +384,7 @@ export function openMarketplace(options: {
     themes: () => installedThemes().map(({ theme }) => theme),
     installed: (): InstalledItem[] => [
       ...installedThemes().map(({ item }) => item),
-      ...installedMods(options.garage).map(({ item }) => item),
+      ...installedExtensions(options.garage).map(({ item }) => item),
     ],
     install,
     uninstall,

@@ -2,8 +2,9 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, afterEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createLocalMachine, RUN_TIMEOUT_MS, STDERR_TAIL_CHARS, STRIPPED_ENV_KEYS } from './machine.ts'
+import { cantPs, cantSandbox, needs } from './test-env.ts'
 
 const cwd = process.cwd()
 const node = process.execPath
@@ -101,7 +102,8 @@ describe('localMachine', () => {
     expect(performance.now() - start).toBeLessThan(450)
   })
 
-  it('kills the processes an engine started', async () => {
+  it('kills the processes an engine started', async (context) => {
+    needs(context, cantPs)
     const grandchild = spawnGrandchild('setInterval(() => {}, 1000)')
     const parent = `const c = ${grandchild}; console.log(c.pid); setInterval(() => {}, 1000)`
     const proc = fast.spawn(node, ['-e', parent], { cwd })
@@ -112,7 +114,8 @@ describe('localMachine', () => {
     await waitFor(() => !alive(pid))
   })
 
-  it('force-kills a started process that ignores SIGTERM after the engine has exited', async () => {
+  it('force-kills a started process that ignores SIGTERM after the engine has exited', async (context) => {
+    needs(context, cantPs)
     const stubborn = `process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)`
     const grandchild = spawnGrandchild(stubborn, `{ stdio: 'ignore' }`)
     const parent = `const c = ${grandchild}; setTimeout(() => console.log(c.pid), 200); setInterval(() => {}, 1000)`
@@ -141,7 +144,8 @@ describe('localMachine', () => {
     expect(result).toMatchObject({ code: 0, stdout: 'done\n' })
   })
 
-  it('gives up on a run that takes too long', async () => {
+  it('gives up on a run that takes too long', async (context) => {
+    needs(context, cantPs)
     const start = performance.now()
     const hang = `process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000)`
     const result = await fast.run(node, ['-e', hang], { cwd })
@@ -181,7 +185,8 @@ describe('localMachine', () => {
     expect(result.stderr).toMatch(/ENOENT/)
   })
 
-  it('stopAll waits for an engine that ignores SIGTERM until it is force-killed', async () => {
+  it('stopAll waits for an engine that ignores SIGTERM until it is force-killed', async (context) => {
+    needs(context, cantPs)
     const machine = createLocalMachine({ killGraceMs: 200 })
     const stubborn = `process.on('SIGTERM', () => {}); console.log(process.pid); setInterval(() => {}, 1000)`
     const proc = machine.spawn(node, ['-e', stubborn], { cwd })
@@ -193,7 +198,8 @@ describe('localMachine', () => {
     expect(alive(pid)).toBe(false)
   })
 
-  it('stopAll returns as soon as engines and the processes they started have exited', async () => {
+  it('stopAll returns as soon as engines and the processes they started have exited', async (context) => {
+    needs(context, cantPs)
     const machine = createLocalMachine({ killGraceMs: 5000 })
     const slowToStop = `process.on('SIGTERM', () => setTimeout(() => process.exit(), 300)); console.log('ready'); setInterval(() => {}, 1000)`
     const grandchild = spawnGrandchild(slowToStop, `{ stdio: ['ignore', 'pipe', 'ignore'] }`)
@@ -221,6 +227,7 @@ describe('localMachine', () => {
 })
 
 describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
+  beforeEach((context) => needs(context, cantSandbox))
   const root = mkdtempSync(join(tmpdir(), 'kothar-sandbox-'))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
   let dirs = 0
@@ -339,7 +346,8 @@ describe.skipIf(process.platform !== 'darwin')('a sandboxed process', () => {
     rmSync(mktemp.stdout.trim(), { force: true })
   })
 
-  it('is still stopped with the processes it started', async () => {
+  it('is still stopped with the processes it started', async (context) => {
+    needs(context, cantPs)
     const grandchild = spawnGrandchild('setInterval(() => {}, 1000)')
     const parent = `const c = ${grandchild}; console.log(c.pid); setInterval(() => {}, 1000)`
     const proc = fast.spawn(node, ['-e', parent], { cwd, sandbox: { writable: [] } })
@@ -366,12 +374,14 @@ describe('when the core dies', () => {
     return pid
   }
 
-  it('kills its engines when it crashes', async () => {
+  it('kills its engines when it crashes', async (context) => {
+    needs(context, cantPs)
     const pid = await runCore(`setTimeout(() => { throw new Error('crash') })`)
     await waitFor(() => !alive(pid))
   })
 
-  it('kills its engines when it exits', async () => {
+  it('kills its engines when it exits', async (context) => {
+    needs(context, cantPs)
     const pid = await runCore(`process.exit(3)`)
     await waitFor(() => !alive(pid))
   })

@@ -52,7 +52,9 @@ describe('the catalog', () => {
 
   it('holds pointers only: an id, kind, name, author, description and repo', () => {
     const entry = entryOf(nord)
-    expect(checkCatalog({ version: 2, entries: [entry, { ...entry, kind: 'mod' }] })).toEqual([entry, { ...entry, kind: 'mod' }])
+    expect(checkCatalog({ version: 2, entries: [entry, { ...entry, kind: 'extension' }] })).toEqual([entry, { ...entry, kind: 'extension' }])
+    // Catalogs written when extensions were mods say "mod".
+    expect(checkCatalog({ version: 2, entries: [{ ...entry, kind: 'mod' }] })).toEqual([{ ...entry, kind: 'extension' }])
     const bad: unknown[] = [
       { version: 1, entries: [] },
       { version: 2, entries: {} },
@@ -121,14 +123,14 @@ describe('the marketplace', () => {
     expect(entries[2]!.problem).toBe("someone/themes's latest release (v1) has no nope.json")
   })
 
-  it('lists mods beside themes, with what their latest release says they use', async () => {
-    const manifest = { id: 'a-mod', name: 'A mod', version: '0.2.0', author: 'Me', description: 'D', api: 1, uses: ['panels', 'run'] }
-    const { fetch } = fakeGitHub([entryOf(nord), entryOf(nord, { kind: 'mod', id: 'a-mod', repo: 'me/a-mod' })], {
+  it('lists extensions beside themes, with what their latest release says they use', async () => {
+    const manifest = { id: 'a-extension', name: 'An extension', version: '0.2.0', author: 'Me', description: 'D', api: 1, uses: ['panels', 'run'] }
+    const { fetch } = fakeGitHub([entryOf(nord), entryOf(nord, { kind: 'extension', id: 'a-extension', repo: 'me/a-extension' })], {
       [REPO]: { tag: 'v1', files: { 'nord.json': bytesOf(nord) } },
-      'me/a-mod': { tag: 'v0.2.0', files: { 'manifest.json': JSON.stringify(manifest), 'main.mjs': 'export default {}' } },
+      'me/a-extension': { tag: 'v0.2.0', files: { 'manifest.json': JSON.stringify(manifest), 'main.mjs': 'export default {}' } },
     })
     const entries = await open(tempGarage(), fetch).listing()
-    expect(entries[1]).toMatchObject({ id: 'a-mod', latest: { tag: 'v0.2.0', version: '0.2.0', uses: ['run', 'panels'] } })
+    expect(entries[1]).toMatchObject({ id: 'a-extension', latest: { tag: 'v0.2.0', version: '0.2.0', uses: ['run', 'panels'] } })
     // main.mjs is only downloaded on install.
     expect(fetch.mock.calls.some(([url]) => url.endsWith('/main.mjs'))).toBe(false)
   })
@@ -306,7 +308,7 @@ describe('the core', () => {
       adapters: [adapter],
       defaultEngine: adapter.id,
       machine: sandboxingMachine,
-      mods: [],
+      extensions: [],
       marketplaceUrl: CATALOG_URL,
       fetch,
     })

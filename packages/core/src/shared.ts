@@ -7,14 +7,14 @@ import type {
   CompletionRequest,
   EngineEvent,
   McpServer,
-  ModAction,
-  ModManifest,
-  ModSetting,
-  ModUse,
-  ModValues,
-  ModView,
-  ModWait,
-} from '@kothar/mod-api'
+  ExtensionAction,
+  ExtensionManifest,
+  ExtensionSetting,
+  ExtensionUse,
+  ExtensionValues,
+  ExtensionView,
+  ExtensionWait,
+} from '@kothar/extension-api'
 
 export type {
   Answers,
@@ -26,7 +26,7 @@ export type {
   MessageKind,
   Question,
   ToolKind,
-} from '@kothar/mod-api'
+} from '@kothar/extension-api'
 
 export interface EngineProcess {
   write(data: string): void
@@ -136,9 +136,21 @@ export interface Session {
   close(): void
 }
 
-export type AccountStatus = { signedIn: boolean; label?: string }
+// note: why a login the engine has can't be used by Kothar's sessions, shown on its account row.
+export type AccountStatus = { signedIn: boolean; label?: string; note?: string }
 
-export type LoginEvent = { type: 'url'; url: string } | { type: 'done' } | { type: 'failed'; error: string }
+// noCode: the sign-in finishes on its own once the browser redirects back, with no code for the user to paste.
+// instructions: what the sign-in page will ask for, such as a device code to type in.
+export type LoginEvent =
+  | { type: 'url'; url: string; noCode?: boolean; instructions?: string }
+  | { type: 'done' }
+  | { type: 'failed'; error: string }
+
+// How an engine that signs in to more than one provider (model vendor) adds an account: per provider, each way it
+// takes, a browser sign-in or an API key. Engines with one provider offer none.
+export type AccountMethod = { id: string; label: string; kind: 'login' | 'apiKey' }
+export type AccountProvider = { id: string; name: string; group?: string; methods: AccountMethod[] }
+export type AccountChoice = { provider: string; method: string }
 
 export interface LoginFlow {
   submitCode(code: string): void
@@ -157,26 +169,43 @@ export interface Adapter {
   steering?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
-    login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
+    login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void, choice?: AccountChoice): LoginFlow
     logout(machine: Machine, accountDir: string): Promise<void>
     apiKeys?: boolean
+    // The providers an account can be for. Adding one then takes a provider and one of its methods.
+    providers?(machine: Machine): Promise<AccountProvider[]>
+    // Saves an API key in the account's folder the engine's own way. Without it, the core keeps the key and hands it
+    // to sessions as apiKey.
+    addApiKey?(machine: Machine, accountDir: string, key: string, choice?: AccountChoice): Promise<void>
   }
 }
 
-export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean }
+export type Account = {
+  id: string
+  name: string
+  kind: 'login' | 'apiKey'
+  label?: string
+  signedIn?: boolean
+  note?: string
+  // The provider it's for, on engines that offer providers.
+  provider?: string
+}
 
 export type EngineAccounts = {
   engine: string
   active: string
   apiKeys: boolean
   accounts: Account[]
-  login?: { name: string; url?: string; error?: string }
+  // instructions: what the sign-in page asks for, such as a device code. adding: a key being saved, with no link.
+  login?: { name: string; url?: string; noCode?: boolean; instructions?: string; error?: string; adding?: boolean }
+  providers?: AccountProvider[]
 }
 
 export const PERMISSION_DEFAULTS = {
   editAnywhere: false,
   autoRunCommands: true,
-  askNetworkCommands: true,
+  autoNetworkCommands: false,
+  autoEnvCommands: false,
   autoFetch: true,
   autoRead: true,
 }
@@ -195,7 +224,7 @@ export const ASK_FIRST_COMMANDS = ['git push', 'npm publish', 'gh', 'curl', 'wge
 export type ChatInfo = PermissionSwitches & {
   id: string
   name: string
-  mod?: string
+  extension?: string
   parentId?: string
   worker?: boolean
   parentMessages?: number
@@ -218,9 +247,31 @@ export type ChatInfo = PermissionSwitches & {
   // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
   doneAt?: string
   readAt?: string
-  // Spaces only: each mod's spaceSettings as saved, by mod id.
-  modValues?: Record<string, Record<string, unknown>>
+  // Spaces only: each extension's spaceSettings as saved, by extension id.
+  extensionValues?: Record<string, Record<string, unknown>>
+  // The id of the setup the chat uses (Settings → Setups). A worker uses one only when its spawn names it.
+  setup?: string
 }
+
+/**
+ * A saved setup for a kind of job (Settings → Setups), kept as `<garage>/setups/<id>.json`. Everything but the name is
+ * optional; what a setup leaves out follows Settings. A chat's own model and thinking picks win over the setup's.
+ * `extensionsOff`: extensions that are on in Settings but left out of this setup's sessions (their tools, MCP
+ * servers, instructions, message and output transforms, permission answers, memory and workers). A setup can't turn on an
+ * extension that's off in Settings, since it hasn't started. `instructions` join each session's instructions just
+ * before the context items.
+ */
+export type Setup = {
+  id: string
+  name: string
+  engine?: string
+  model?: string
+  thinking?: ThinkingLevel
+  extensionsOff?: string[]
+  instructions?: string
+}
+
+export const MAX_SETUP_INSTRUCTIONS = 20_000
 
 /** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
 export const isUnread = (chat: Pick<ChatInfo, 'doneAt' | 'readAt'>) =>
@@ -252,9 +303,9 @@ export const editsAnywhere = (...layers: PermissionSwitches[]) => switchedOn('ed
 export const MODEL_ROLES = ['chat', 'planning', 'searching', 'workers'] as const
 
 export type ModelRole = (typeof MODEL_ROLES)[number]
-// The mod API names the same roles; this fails to compile if the two lists drift apart.
+// The extension API names the same roles; this fails to compile if the two lists drift apart.
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-export const ROLES_MATCH_MOD_API: Same<ModelRole, ApiModelRole> = true
+export const ROLES_MATCH_EXTENSION_API: Same<ModelRole, ApiModelRole> = true
 
 export const ROLE_NAMES: Record<ModelRole, string> = {
   chat: 'Chat',
@@ -280,30 +331,41 @@ export const levelsOf = (engine: EngineInfo | undefined, model?: string): Thinki
 // with every chat and never saves it; it's absent when nothing can run.
 export type Run = { engine: string; model: string; thinking?: ThinkingLevel }
 
-export type ModInfo = {
+export type ExtensionInfo = {
   id: string
   name: string
   description: string
   enabled: boolean
-  settings: ModSetting[]
-  values: ModValues
+  settings: ExtensionSetting[]
+  values: ExtensionValues
   setup?: SetupState
+  // The extension's own part of its Settings page (Extension.settingsView), as drawn now, or why it couldn't be.
+  settingsView?: { view?: ExtensionView; error?: string }
   loadError?: string
-  // A community mod: installed in the garage from the marketplace or a folder, and what it says it uses. running: the
-  // version this run of Kothar loaded, if any; mods load only at startup.
+  // It has a chat of its own (Home). A setup can't leave it out of that chat, so setup forms don't list it.
+  ownsChat?: boolean
+  // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
+  // the version this run of Kothar loaded, if any; extensions load only at startup.
   community?: {
     version: string
     author: string
-    uses: ModUse[]
+    uses: ExtensionUse[]
     source: 'marketplace' | 'local'
     repo?: string
+    // The release installed (marketplace).
+    tag?: string
     path?: string
     running?: string
+    // The version the user last turned on, as Kothar recorded it; an extension runs only as those exact files.
+    approved?: { version: string; uses: ExtensionUse[]; tag?: string }
+    // Why it was turned off at startup: its files aren't the ones the user turned on.
+    held?: string
   }
 }
 
-// A community mod whose code this run of Kothar doesn't match what the settings ask for, so it changes only when Kothar
-// restarts: start (on, never loaded), update (loaded, then updated or reinstalled), stop (loaded, now off or uninstalled).
+// A community extension whose code this run of Kothar doesn't match what the settings ask for, so it changes only when
+// Kothar restarts: start (on, never loaded), update (loaded, then updated or reinstalled), stop (loaded, now off or
+// uninstalled).
 export type RestartChange = { id: string; name: string; change: 'start' | 'update' | 'stop' }
 
 // What waits for a restart, and whether this Kothar can restart itself (the desktop app, or npm run dev's core).
@@ -318,7 +380,7 @@ export type SetupState = {
   error?: string
 }
 
-export function settingProblem(setting: ModSetting, value: unknown) {
+export function settingProblem(setting: ExtensionSetting, value: unknown) {
   if (setting.type === 'select') {
     if (setting.options.some((option) => option.value === value)) return undefined
     return `must be one of: ${setting.options.map((option) => option.label).join(', ')}`
@@ -359,7 +421,7 @@ export const MAX_ATTACHMENT_BYTES = 20_000_000
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 75_000_000
 export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
-export type { Attachment } from '@kothar/mod-api'
+export type { Attachment } from '@kothar/extension-api'
 
 export type Upload = { name: string; mimeType: string; base64: string }
 
@@ -375,21 +437,24 @@ export type QueuedMessage = {
   steering?: true
 }
 
-// A mod's tab in the right sidebar, and a mod's action in the General tab, for one chat.
-export type PanelTab = { mod: string; id: string; title: string }
-export type CommandInfo = { mod: string; id: string; label: string; hint?: string }
+// An extension's tab in the right sidebar, and an extension's action in the General tab, for one chat.
+export type PanelTab = { extension: string; id: string; title: string }
+export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
 
 export type ChatState = ChatInfo & {
   run?: Run
   status: ChatStatus
   entries: ChatEntry[]
+  // Where entries starts in the chat's log: the UI gets the latest page, and asks for older ones (chat.history).
+  // Absent: from the start.
+  from?: number
   draft: string
   queue: QueuedMessage[]
-  // What mods are waiting on the user for, while the turn runs (ModHost.wait).
+  // What extensions are waiting on the user for, while the turn runs (ExtensionHost.wait).
   waits?: ChatWait[]
 }
 
-export type ChatWait = ModWait & { mod: string }
+export type ChatWait = ExtensionWait & { extension: string }
 
 export type ClientMessage =
   | { type: 'engine.setEnabled'; engine: string; enabled: boolean }
@@ -401,6 +466,8 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   // The user has seen the chat's latest turn.
   | { type: 'chat.read'; chatId: string }
+  // The page of the chat's log before entry `before`, reaching back to entry `to` if given.
+  | { type: 'chat.history'; chatId: string; before: number; to?: number }
   // A model of the chat's own (on `engine`, else its current one), or none to follow its model list again; and a
   // thinking level of its own, or none to take the list's.
   | { type: 'chat.setModel'; chatId: string; engine?: string; model?: string; thinking?: ThinkingLevel }
@@ -411,13 +478,13 @@ export type ClientMessage =
   | { type: 'chat.interrupt'; chatId: string; force?: boolean }
   | { type: 'permission.respond'; chatId: string; requestId: string; allow: boolean }
   | { type: 'question.respond'; chatId: string; requestId: string; answers?: Answers }
-  // Replies with chat.context and chat.mods.
+  // Replies with chat.context and chat.extensions.
   | { type: 'context.get'; chatId: string }
-  | { type: 'mod.panel.get'; chatId: string; mod: string; panel: string }
-  | { type: 'mod.panel.action'; chatId: string; mod: string; panel: string; action: ModAction }
-  | { type: 'mod.space.set'; chatId: string; mod: string; key: string; value: string | number | boolean }
-  | { type: 'mod.command'; chatId: string; mod: string; command: string }
-  | { type: 'mod.wait.answer'; chatId: string; mod: string; button: string }
+  | { type: 'extension.panel.get'; chatId: string; extension: string; panel: string }
+  | { type: 'extension.panel.action'; chatId: string; extension: string; panel: string; action: ExtensionAction }
+  | { type: 'extension.space.set'; chatId: string; extension: string; key: string; value: string | number | boolean }
+  | { type: 'extension.command'; chatId: string; extension: string; command: string }
+  | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
@@ -426,19 +493,29 @@ export type ClientMessage =
   | { type: 'instructions.write'; text: string }
   | { type: 'workFolder.set'; path: string }
   | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
-  | { type: 'mod.setEnabled'; modId: string; enabled: boolean }
-  | { type: 'mod.setValue'; modId: string; key: string; value: string | number | boolean }
-  | { type: 'mod.install'; modId: string }
-  | { type: 'mod.cancelInstall'; modId: string }
-  // The master switch for community mods (off by default): while it's off, none loads, whatever its own switch says.
-  | { type: 'communityMods.setEnabled'; enabled: boolean }
-  // Stops every chat as quitting does, then starts Kothar again, so community mod changes apply.
+  | { type: 'extension.setEnabled'; extensionId: string; enabled: boolean }
+  | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
+  | { type: 'extension.install'; extensionId: string }
+  | { type: 'extension.cancelInstall'; extensionId: string }
+  // Draws the extension's settings view again (the page opened), answered with extension.updated.
+  | { type: 'extension.settingsView.get'; extensionId: string }
+  | { type: 'extension.settingsView.action'; extensionId: string; action: ExtensionAction }
+  // The master switch for community extensions (off by default): while it's off, none loads, whatever its own switch
+  // says.
+  | { type: 'communityExtensions.setEnabled'; enabled: boolean }
+  // Stops every chat as quitting does, then starts Kothar again, so community extension changes apply.
   | { type: 'app.restart' }
   | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
+  // Saves a setup: a new one without an id, else replaces the one with that id. Everyone gets setups.updated.
+  | { type: 'setup.save'; setup: Omit<Setup, 'id'> & { id?: string } }
+  // Removes a setup; chats that used it go back to Settings.
+  | { type: 'setup.remove'; id: string }
+  // The setup a chat uses, or none; applies from its next message.
+  | { type: 'chat.setSetup'; chatId: string; setup?: string }
   | { type: 'memory.set'; engine?: string; model?: string }
-  | { type: 'account.login'; engine: string; name: string }
+  | { type: 'account.login'; engine: string; name: string; provider?: string; method?: string }
   | { type: 'account.code'; engine: string; code: string }
-  | { type: 'account.addApiKey'; engine: string; name: string; key: string }
+  | { type: 'account.addApiKey'; engine: string; name: string; key: string; provider?: string; method?: string }
   | { type: 'account.cancelLogin'; engine: string }
   | { type: 'account.use'; engine: string; accountId: string }
   | { type: 'account.remove'; engine: string; accountId: string }
@@ -450,17 +527,19 @@ export type ClientMessage =
   // themes.updated for a theme); replies market.installFailed if it can't.
   | { type: 'market.install'; kind: MarketKind; id: string }
   | { type: 'market.uninstall'; kind: MarketKind; id: string }
-  // Copies a folder on this computer (a mod or themes) as a local install; replies market.localInstalled or
+  // Copies a folder on this computer (an extension or themes) as a local install; replies market.localInstalled or
   // market.localFailed.
   | { type: 'market.installLocal'; path: string }
-  // Searches the message text of Home (while its mod is on) and every space, not workers. Replies search.results with
-  // the same id, so a reply to an older query can be told apart.
+  // Searches the message text of Home (while its extension is on) and every space, not workers. Replies search.results
+  // with the same id, so a reply to an older query can be told apart.
   | { type: 'search'; id: number; query: string }
   // Opens the user's terminal app at one of the chat's folders: a context folder, its space's work folder or a
   // checkout. Replies terminal.result.
   | { type: 'terminal.open'; chatId: string; path: string }
   // 'auto' for the system's default terminal, or one of WorkFolder.terminals by id.
   | { type: 'terminal.set'; terminal: string }
+  // Show in Finder, for an extension view's text with reveal: only inside Kothar's own folders (host.reveal's rule).
+  | { type: 'reveal'; path: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.
@@ -471,6 +550,8 @@ export type SearchHit = {
   snippet: string
   match: { start: number; length: number }
   nth: number
+  // Where the message is in the chat's log.
+  entry: number
 }
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
@@ -482,13 +563,14 @@ export type CoreMessage =
       chats: ChatState[]
       accounts: EngineAccounts[]
       contextDefaults: Record<ContextSection, boolean>
-      mods: ModInfo[]
+      extensions: ExtensionInfo[]
       modelLists: ModelLists
+      setups: Setup[]
       memory: MemorySettings
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
-      communityMods: boolean
+      communityExtensions: boolean
       restart: RestartState
     }
   | { type: 'engine.updated'; engine: EngineInfo }
@@ -497,22 +579,28 @@ export type CoreMessage =
   | { type: 'chat.updated'; chat: ChatInfo & { run?: Run } }
   | { type: 'chat.removed'; chatId: string }
   | { type: 'chat.entry'; chatId: string; entry: ChatEntry }
+  // The answer to chat.history: the log's entries from `from` up to `before`.
+  | { type: 'chat.history'; chatId: string; before: number; from: number; entries: ChatEntry[] }
   | { type: 'chat.delta'; chatId: string; text: string }
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.waits'; chatId: string; waits: ChatWait[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
-  | { type: 'chat.mods'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
-  | { type: 'mod.panel'; chatId: string; mod: string; panel: string; view?: ModView; error?: string }
+  | { type: 'chat.extensions'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
-  // A mod that's new to the list (a community mod just installed) is added.
-  | { type: 'mod.updated'; mod: ModInfo }
-  | { type: 'mod.removed'; modId: string }
-  | { type: 'communityMods.updated'; enabled: boolean }
+  // An extension that's new to the list (a community extension just installed) is added.
+  | { type: 'extension.updated'; extension: ExtensionInfo }
+  | { type: 'extension.removed'; extensionId: string }
+  | { type: 'communityExtensions.updated'; enabled: boolean }
   | { type: 'restart.updated'; restart: RestartState }
   | { type: 'models.updated'; lists: ModelLists }
+  | { type: 'setups.updated'; setups: Setup[] }
+  // The answer to setup.save, to its sender only: the setup as saved, or why it was refused.
+  | { type: 'setup.saved'; setup: Setup }
+  | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).
@@ -526,6 +614,8 @@ export type CoreMessage =
   | { type: 'market.localFailed'; path: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
+  // An extension's notification (host.notify); chatId: clicking it opens that chat.
+  | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
 
@@ -566,10 +656,10 @@ export type ThemeFile = {
 export const PREVIEW_TOKENS = ['accent', 'bg', 'panel', 'text'] as const satisfies readonly ThemeToken[]
 export type ThemePreview = Record<'dark' | 'light', Record<(typeof PREVIEW_TOKENS)[number], string>>
 
-export type MarketKind = 'theme' | 'mod'
+export type MarketKind = 'theme' | 'extension'
 
 // One entry of the marketplace's catalog.json: a pointer to the author's own GitHub repo, whose latest release carries
-// what installs (a theme: <id>.json; a mod: manifest.json and main.mjs).
+// what installs (a theme: <id>.json; an extension: manifest.json and main.mjs).
 export type CatalogEntry = {
   id: string
   kind: MarketKind
@@ -582,7 +672,7 @@ export type CatalogEntry = {
 // A catalog entry with what its repo's latest release carries, or why that couldn't be read (problem). notes: the start of
 // the release's notes, if it has any.
 export type MarketEntry = CatalogEntry & {
-  latest?: { tag: string; version: string; notes?: string; preview?: ThemePreview; uses?: ModUse[] }
+  latest?: { tag: string; version: string; notes?: string; preview?: ThemePreview; uses?: ExtensionUse[] }
   problem?: string
 }
 
@@ -613,12 +703,15 @@ const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
 const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
 export const MAX_MANIFEST_BYTES = 64 * 1024
-export const MAX_MOD_BYTES = 5 * 1024 * 1024
-export const MOD_API_VERSION = 1
+export const MAX_EXTENSION_BYTES = 5 * 1024 * 1024
+export const EXTENSION_API_VERSION = 1
 
-// What a community mod can say it uses, as the user reads it before install. The keys are ModUse, in this order.
-export const MOD_USES: Record<ModUse, string> = {
+// What a community extension can say it uses, as the user reads it before install. The keys are ExtensionUse, in this
+// order.
+export const EXTENSION_USES: Record<ExtensionUse, string> = {
   run: 'Runs programs on your computer',
+  network: 'Reaches the internet',
+  files: 'Reads or writes your files',
   setup: 'Installs software it needs',
   mcpServers: 'Starts MCP servers for agents',
   permissions: 'Approves or denies agents\' requests for you',
@@ -637,12 +730,12 @@ export const MOD_USES: Record<ModUse, string> = {
   settings: 'Has settings',
 }
 
-export const isModUse = (use: unknown): use is ModUse => typeof use === 'string' && Object.hasOwn(MOD_USES, use)
+export const isExtensionUse = (use: unknown): use is ExtensionUse => typeof use === 'string' && Object.hasOwn(EXTENSION_USES, use)
 
-// In MOD_USES order, so lists read the same everywhere.
-export const sortUses = (uses: Iterable<ModUse>) => {
+// In EXTENSION_USES order, so lists read the same everywhere.
+export const sortUses = (uses: Iterable<ExtensionUse>) => {
   const set = new Set(uses)
-  return (Object.keys(MOD_USES) as ModUse[]).filter((use) => set.has(use))
+  return (Object.keys(EXTENSION_USES) as ExtensionUse[]).filter((use) => set.has(use))
 }
 
 const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
@@ -662,6 +755,7 @@ function onlyKeys(value: unknown, what: string, required: readonly string[], opt
 }
 
 function text(value: unknown, what: string, max: number) {
+  // oxlint-disable-next-line no-control-regex -- rejects control characters on purpose
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
     throw new Error(`${what} must be text of 1 to ${max} characters`)
   }
@@ -709,15 +803,15 @@ export function checkTheme(value: unknown): ThemeFile {
   }
 }
 
-// Throws, saying why, unless value is a community mod's manifest.json with exactly the known fields.
-export function checkModManifest(value: unknown): ModManifest {
+// Throws, saying why, unless value is a community extension's manifest.json with exactly the known fields.
+export function checkExtensionManifest(value: unknown): ExtensionManifest {
   const fields = ['id', 'name', 'version', 'author', 'description', 'api', 'uses']
   const manifest = onlyKeys(value, 'manifest.json', fields)
-  if (manifest.api !== MOD_API_VERSION) throw new Error(`manifest.json is for mod API ${String(manifest.api)}, not ${MOD_API_VERSION}`)
+  if (manifest.api !== EXTENSION_API_VERSION) throw new Error(`manifest.json is for extension API ${String(manifest.api)}, not ${EXTENSION_API_VERSION}`)
   if (!Array.isArray(manifest.uses)) throw new Error('manifest.json uses must be a list')
-  const unknown = manifest.uses.find((use) => !isModUse(use))
+  const unknown = manifest.uses.find((use) => !isExtensionUse(use))
   if (unknown !== undefined) throw new Error(`manifest.json uses "${String(unknown)}", which Kothar doesn't know`)
-  return { ...itemFields(manifest, 'manifest.json'), api: MOD_API_VERSION, uses: sortUses(manifest.uses as ModUse[]) }
+  return { ...itemFields(manifest, 'manifest.json'), api: EXTENSION_API_VERSION, uses: sortUses(manifest.uses as ExtensionUse[]) }
 }
 
 export const isRepo = (repo: unknown): repo is string => typeof repo === 'string' && REPO.test(repo) && !repo.includes('..')
@@ -732,11 +826,13 @@ export function checkCatalog(value: unknown): CatalogEntry[] {
     const what = `Marketplace entry ${i + 1}`
     const entry = onlyKeys(raw, what, ['id', 'kind', 'name', 'author', 'description', 'repo'])
     if (!isItemId(entry.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
-    if (entry.kind !== 'theme' && entry.kind !== 'mod') throw new Error(`Marketplace entry "${entry.id}" is a "${entry.kind}"`)
+    // Extensions were mods, and catalogs written then still say "mod".
+    const kind = entry.kind === 'mod' ? 'extension' : entry.kind
+    if (kind !== 'theme' && kind !== 'extension') throw new Error(`Marketplace entry "${entry.id}" is a "${entry.kind}"`)
     if (!isRepo(entry.repo)) throw new Error(`Marketplace entry "${entry.id}" repo must be owner/name`)
     return {
       id: entry.id,
-      kind: entry.kind,
+      kind,
       name: text(entry.name, `${what} name`, 40),
       author: text(entry.author, `${what} author`, 60),
       description: text(entry.description, `${what} description`, 200),

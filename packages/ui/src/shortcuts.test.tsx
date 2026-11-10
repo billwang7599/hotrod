@@ -2,6 +2,8 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { Tooltip } from 'radix-ui'
+import { useState } from 'react'
+import { PanelToggle } from './controls.tsx'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { nthSpace, spaceOrder, stepSpace } from './nav.ts'
 import { ShortcutsPage } from './shortcuts-page.tsx'
@@ -13,6 +15,7 @@ import {
   conflictsOf,
   formatBinding,
   matches,
+  panelShortcuts,
   refusal,
   reloadShortcuts,
   resetAllBindings,
@@ -142,7 +145,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
 })
 
 describe('space order', () => {
-  const HOME = chat({ id: 'main', name: 'Home', mod: 'home' })
+  const HOME = chat({ id: 'main', name: 'Home', extension: 'home' })
   const A = chat({ id: 'a', order: 0 })
   const B = chat({ id: 'b', order: 1 })
   const P = chat({ id: 'p', order: 0, pinned: true })
@@ -258,5 +261,119 @@ describe('in the window', () => {
 
     act(() => ([...container.querySelectorAll('button')].find((b) => b.textContent === 'Reset all')!).click())
     expect(bindings().newSpace).toBe('Mod+N')
+  })
+
+  // Like the app: both panels' toggle buttons and keys share one state.
+  function Panels({ covered = false, chatOpen = true }: { covered?: boolean; chatOpen?: boolean }) {
+    const [sidebar, setSidebar] = useState(true)
+    const [context, setContext] = useState(false)
+    const toggleSidebar = () => setSidebar((open) => !open)
+    const toggleContext = () => setContext((open) => !open)
+    useShortcuts(panelShortcuts({ covered, chatOpen, toggleSidebar, toggleContext }))
+    return (
+      <Tooltip.Provider delayDuration={0}>
+        <PanelToggle
+          side="left"
+          label="Sidebar"
+          noun="sidebar"
+          open={sidebar}
+          toggle={toggleSidebar}
+          action="toggleSidebar"
+        />
+        <PanelToggle
+          side="right"
+          label="Context panel"
+          noun="context"
+          open={context}
+          toggle={toggleContext}
+          action="toggleContextPanel"
+        />
+        <textarea aria-label="composer" />
+      </Tooltip.Provider>
+    )
+  }
+  const pressed = (label: string) =>
+    container.querySelector(`[aria-label="${label}"]`)!.getAttribute('aria-pressed') === 'true'
+
+  test('⌘[ and ⌘] show and hide the sidebar and the context panel, even from the composer', () => {
+    act(() => root.render(<Panels />))
+    expect([pressed('Sidebar'), pressed('Context panel')]).toEqual([true, false])
+    const composer = container.querySelector('textarea')!
+    press(composer, { key: '[', code: 'BracketLeft', ...mod })
+    expect(pressed('Sidebar')).toBe(false)
+    press(composer, { key: '[', code: 'BracketLeft', ...mod })
+    expect(pressed('Sidebar')).toBe(true)
+    // A layout that types another character on the key (here German, ü) still matches the physical key.
+    press(composer, { key: '+', code: 'BracketRight', ...mod })
+    expect([pressed('Sidebar'), pressed('Context panel')]).toEqual([true, true])
+  })
+
+  test("the bracket keys never reach the browser, so its own ⌘[ / ⌘] (back and forward) don't run", () => {
+    act(() => root.render(<Panels />))
+    const keys = [
+      { key: '[', code: 'BracketLeft' },
+      { key: ']', code: 'BracketRight' },
+    ]
+    for (const init of keys) {
+      const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init, ...mod })
+      act(() => void window.dispatchEvent(event))
+      expect(event.defaultPrevented).toBe(true)
+    }
+  })
+
+  test('a saved remap of a panel key is kept; without one, the panel keys are the bracket defaults', () => {
+    localStorage.setItem('kothar.shortcuts', JSON.stringify({ toggleSidebar: 'Mod+B' }))
+    reloadShortcuts()
+    expect([bindings().toggleSidebar, bindings().toggleContextPanel]).toEqual(['Mod+B', 'Mod+]'])
+    localStorage.removeItem('kothar.shortcuts')
+    reloadShortcuts()
+    expect([bindings().toggleSidebar, bindings().toggleContextPanel]).toEqual(['Mod+[', 'Mod+]'])
+  })
+
+  test('the panel keys follow a remap, and do nothing behind a dialog or, for the context panel, without a chat', () => {
+    act(() => root.render(<Panels />))
+    act(() => setBinding('toggleSidebar', 'Mod+Shift+S'))
+    press(window, { key: '[', code: 'BracketLeft', ...mod })
+    expect(pressed('Sidebar')).toBe(true)
+    press(window, { key: 'S', code: 'KeyS', shiftKey: true, ...mod })
+    expect(pressed('Sidebar')).toBe(false)
+
+    act(() => root.render(<Panels covered />))
+    press(window, { key: 'S', code: 'KeyS', shiftKey: true, ...mod })
+    press(window, { key: ']', code: 'BracketRight', ...mod })
+    expect([pressed('Sidebar'), pressed('Context panel')]).toEqual([false, false])
+
+    act(() => root.render(<Panels chatOpen={false} />))
+    press(window, { key: ']', code: 'BracketRight', ...mod })
+    expect(pressed('Context panel')).toBe(false)
+    press(window, { key: 'S', code: 'KeyS', shiftKey: true, ...mod })
+    expect(pressed('Sidebar')).toBe(true)
+  })
+
+  test("a panel toggle's tooltip shows the user's current keys", async () => {
+    act(() => root.render(<Panels />))
+    const tooltip = async (label: string) => {
+      const button = container.querySelector(`[aria-label="${label}"]`) as HTMLElement
+      act(() => button.focus())
+      await act(() => new Promise((done) => setTimeout(done, 10)))
+      return document.querySelector('[role="tooltip"]')?.textContent ?? ''
+    }
+    expect(await tooltip('Sidebar')).toBe(`Hide sidebar${formatBinding('Mod+[')}`)
+    expect(await tooltip('Context panel')).toBe(`Show context${formatBinding('Mod+]')}`)
+    act(() => setBinding('toggleContextPanel', 'Mod+Shift+K'))
+    expect(await tooltip('Context panel')).toBe(`Show context${formatBinding('Mod+Shift+K')}`)
+    act(() => setBinding('toggleContextPanel', null))
+    expect(await tooltip('Context panel')).toBe('Show context')
+  })
+
+  test('the panel keys are on the menu, and clash with no other default', () => {
+    const all = bindings()
+    expect([all.toggleSidebar, all.toggleContextPanel]).toEqual(['Mod+[', 'Mod+]'])
+    expect(conflictsOf('toggleSidebar', 'Mod+[')).toEqual([])
+    expect(conflictsOf('toggleContextPanel', 'Mod+]')).toEqual([])
+    expect([refusal('Mod+['), refusal('Mod+]')]).toEqual([undefined, undefined])
+    expect([acceleratorOf('Mod+['), acceleratorOf('Mod+]')]).toEqual(['CmdOrCtrl+[', 'CmdOrCtrl+]'])
+    expect([formatBinding('Mod+[', true), formatBinding('Mod+]', false)]).toEqual(['⌘[', 'Ctrl+]'])
+    expect(bindingOf({ key: '[', code: 'BracketLeft', metaKey: true, ctrlKey: false, altKey: false, shiftKey: false }, true)).toBe('Mod+[')
   })
 })

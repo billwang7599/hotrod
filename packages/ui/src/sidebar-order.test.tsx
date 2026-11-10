@@ -40,7 +40,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
   ...change,
 })
 
-const HOME = chat({ id: 'main', name: 'Home', mod: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
+const HOME = chat({ id: 'main', name: 'Home', extension: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
 const A = chat({ id: 'a', name: 'Alpha', order: 0 })
 const B = chat({ id: 'b', name: 'Beta', order: 1 })
 const C = chat({ id: 'c', name: 'Gamma', order: 2 })

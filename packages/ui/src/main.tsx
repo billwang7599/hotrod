@@ -1,6 +1,6 @@
 // First, so preferences saved before the rename move to their new keys before any module reads them.
 import './renamed-storage.ts'
-import { useCallback, useEffect, useMemo, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -9,15 +9,16 @@ import { useCore } from './connection.ts'
 import { pruneDrafts } from './drafts.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
-import { MarketplaceDialog, type MarketKindFilter } from './marketplace.tsx'
+import { MarketplaceDialog } from './marketplace.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
 import { changesText, RestartButton } from './restart.tsx'
-import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
+import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
-import { useLooking, useMarkRead } from './unread.ts'
+import { isLooking, useLooking, useMarkRead } from './unread.ts'
+import { createNotifier, deliver } from './notifications.ts'
 import {
   dockedPanels,
   folderName,
@@ -26,6 +27,7 @@ import {
   MIN_WINDOW_PX,
   reduce,
   storedColumn,
+  type Action,
   storedFlag,
 } from './state.ts'
 import './styles.css'
@@ -57,6 +59,9 @@ declare global {
       forceQuit(): Promise<void>
       vibrancy: boolean
       setAppearance(appearance: { scheme: 'system' | 'light' | 'dark'; vibrancy: boolean; background: string }): void
+      /** A system notification; clicking it brings the window to the front and calls onOpenChat with open. */
+      notify?(notification: { title: string; body: string; open?: string }): void
+      onOpenChat?(listener: (chatId: string) => void): () => void
     }
   }
 }
@@ -79,7 +84,24 @@ function App() {
     ...s,
     selectedId: localStorage.getItem(SELECTED_KEY) ?? '',
   }))
-  const send = useCore(dispatch)
+  // Notifications see each message with what the user saw before it (notifications.ts).
+  const seenRef = useRef({ chats: state.chats, selectedId: state.selectedId })
+  useLayoutEffect(() => {
+    seenRef.current = { chats: state.chats, selectedId: state.selectedId }
+  })
+  const openRef = useRef((_chatId: string) => {})
+  // oxlint-disable-next-line react/refs -- read when a notification is clicked, never during render
+  const [notifier] = useState(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))))
+  const receive = useCallback(
+    (action: Action) => {
+      if (action.type !== 'connection' && action.type !== 'select' && action.type !== 'toast.dismiss') {
+        notifier.observe(action, { ...seenRef.current, looking: isLooking() })
+      }
+      dispatch(action)
+    },
+    [notifier],
+  )
+  const send = useCore(receive)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
   const notify = useCallback((message: string) => dispatch({ type: 'error', message }), [])
 
@@ -91,7 +113,11 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
   const [changingWorkFolder, setChangingWorkFolder] = useState(false)
-  useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  const [workPath, setWorkPath] = useState(state.workFolder.path)
+  if (state.workFolder.path !== workPath) {
+    setWorkPath(state.workFolder.path)
+    setChangingWorkFolder(false)
+  }
   useEffect(() => state.themes && setInstalledThemes(state.themes), [state.themes])
   const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {
@@ -142,16 +168,23 @@ function App() {
     dispatch({ type: 'select', chatId })
     setOverlay((open) => (open === 'sidebar' ? null : open))
   }, [])
+  // A notification clicked: its chat opens, if it's still there.
+  useEffect(() => {
+    openRef.current = (chatId) => {
+      if (seenRef.current.chats.some((c) => c.id === chatId)) select(chatId)
+    }
+  }, [select])
+  useEffect(() => window.kothar?.onOpenChat?.((chatId) => openRef.current(chatId)), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, installed, marketFailures, mods, localInstall, communityMods } = state
+  const { catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions } = state
   const market = useMemo(
-    () => ({ catalog, themes, installed, marketFailures, mods, localInstall, communityMods }),
-    [catalog, themes, installed, marketFailures, mods, localInstall, communityMods],
+    () => ({ catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions }),
+    [catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions],
   )
   // What a restart would stop.
   const running = state.chats.filter((c) => c.status !== 'idle').length
@@ -161,8 +194,8 @@ function App() {
     if (picked) send({ type: 'chat.create', name: folderName(picked), folders: [picked] })
   }, [connected, send])
   const [searching, setSearching] = useState(false)
-  const [marketplace, setMarketplace] = useState<{ open: boolean; kind?: MarketKindFilter }>({ open: false })
-  const openMarketplace = useCallback((kind?: MarketKindFilter) => setMarketplace({ open: true, kind }), [])
+  const [marketplace, setMarketplace] = useState(false)
+  const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
@@ -173,7 +206,8 @@ function App() {
     newSpace: () => connected && setNameRequest({ kind: 'new' }),
     settings: () => openSettings(),
     search: () => setSearching((open) => !open),
-    marketplace: () => (marketplace.open ? setMarketplace({ open: false }) : openMarketplace()),
+    marketplace: () => setMarketplace((open) => !open),
+    ...panelShortcuts({ covered: settingsOpen || marketplace, chatOpen: !!selected, toggleSidebar, toggleContext }),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
   }
   useShortcuts(shortcuts)
@@ -244,7 +278,7 @@ function App() {
                 tone="warning"
                 action={<RestartButton restart={state.restart} running={running} connected={connected} send={send} />}
               >
-                Restart Kothar to apply community mod changes: {changesText(state.restart.changes)}.
+                Restart Kothar to apply community extension changes: {changesText(state.restart.changes)}.
               </Banner>
             )}
             {engine?.enabled && (!engine.installed || !signedIn) && (
@@ -262,12 +296,14 @@ function App() {
               engines={state.engines}
               accounts={state.accounts}
               contextDefaults={state.contextDefaults}
-              mods={state.mods}
+              extensions={state.extensions}
               modelLists={state.modelLists}
+              setups={state.setups}
+              setupSave={state.setupSave}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
-              communityMods={communityMods}
+              communityExtensions={communityExtensions}
               restart={state.restart}
               running={running}
               openMarketplace={openMarketplace}
@@ -300,17 +336,25 @@ function App() {
                 setColumnPx={setColumnPx}
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
-                modUi={state.modUi}
+                extensionUi={state.extensionUi}
                 panelViews={state.panelViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists}
+                setups={state.setups}
                 select={select}
               />
             ) : (
               <>
                 <header className="flex h-44 shrink-0 items-center border-b px-12">
-                  <PanelToggle side="left" label="Sidebar" noun="sidebar" open={sidebarShown} toggle={toggleSidebar} />
+                  <PanelToggle
+                    side="left"
+                    label="Sidebar"
+                    noun="sidebar"
+                    open={sidebarShown}
+                    toggle={toggleSidebar}
+                    action="toggleSidebar"
+                  />
                 </header>
                 <div className="m-auto flex max-w-420 flex-col items-center gap-12 p-24 text-center text-muted">
                   <strong className="text-body font-semibold text-text">
@@ -337,9 +381,8 @@ function App() {
             </AnimatePresence>
           </div>
           <MarketplaceDialog
-            open={marketplace.open}
-            kind={marketplace.kind}
-            close={() => setMarketplace({ open: false })}
+            open={marketplace}
+            close={() => setMarketplace(false)}
             market={market}
             connected={connected}
             send={send}

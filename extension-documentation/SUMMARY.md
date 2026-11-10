@@ -1,0 +1,22 @@
+# Summary
+
+The sidebar order of these pages. Each line links a page; indented lines sit under the one above.
+
+- [Home](index.md)
+- [Introduction](introduction.md)
+- [Using extensions](using-extensions.md)
+- [Quick start](quick-start.md)
+- [Extension anatomy](anatomy.md)
+- API reference
+  - [The extension object](reference/extension.md)
+  - [Settings and setup](reference/settings.md)
+  - [Tools, MCP servers, instructions and memory](reference/agents.md)
+  - [Panels and commands](reference/panels.md)
+  - [Events and hooks](reference/events.md)
+  - [The host](reference/host.md)
+  - [The manifest and uses](reference/manifest.md)
+  - [Types](reference/types.md)
+- [Examples](examples.md)
+- [Publishing](publishing.md)
+- [Themes](themes.md)
+- [FAQ and troubleshooting](faq.md)

@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type Adapter, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
+import { onJsonLines } from './jsonl.ts'
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -163,7 +164,6 @@ export const pi: Adapter = {
     const send = (command: unknown) => proc.write(JSON.stringify(command) + '\n')
     // Each steer command's request id, to match a refusal to its message.
     const steerIds = new Map<string, string>()
-    let buffer = ''
     let turnError: string | undefined
     let closed = false
     // Steered messages not yet taken in, oldest first. pi's user messages carry no id, and it delivers steers in order,
@@ -231,23 +231,9 @@ export const pi: Adapter = {
       }
     }
 
-    proc.onStdout((chunk) => {
-      buffer += chunk
-      let newline
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline).replace(/\r$/, '')
-        buffer = buffer.slice(newline + 1)
-        if (!line.trim()) continue
-        let msg
-        try {
-          msg = JSON.parse(line)
-        } catch {
-          continue
-        }
-        handle(msg)
-      }
-    })
+    const lines = onJsonLines(proc, handle)
     proc.onExit((code, stderrTail) => {
+      lines.flush()
       if (code === 0 || closed) return emit({ type: 'session.ended' })
       emit({ type: 'session.ended', error: stderrTail.trim() || `pi exited with code ${code}` })
     })

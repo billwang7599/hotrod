@@ -3,19 +3,22 @@ import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Mod } from '@kothar/mod-api'
+import type { Extension } from '@kothar/extension-api'
 import { claudeCode } from './adapters/claude-code.ts'
+import { codex } from './adapters/codex.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
+import { opencode } from './adapters/opencode.ts'
 import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
+import { loadCommunityExtensions, loadExtensions } from './extensions.ts'
 import { moveGarage, portInUse } from './garage-move.ts'
 import { localMachine } from './machine.ts'
-import { loadCommunityMods, loadMods } from './mods.ts'
 import { startServer } from './server.ts'
 import type { Adapter, Machine } from './shared.ts'
+import { renameSettings } from './vocab-move.ts'
 
-const registered: Adapter[] = [claudeCode, pi, createFakeAdapter(undefined, undefined, { steering: true })]
-const STOCK_MODS_DIR = fileURLToPath(new URL('../../../mods/', import.meta.url))
+const registered: Adapter[] = [claudeCode, pi, codex, opencode, createFakeAdapter(undefined, undefined, { steering: true })]
+const STOCK_EXTENSIONS_DIR = fileURLToPath(new URL('../../../extensions/', import.meta.url))
 
 // Kothar was called Hotrod; installs from then keep working, so every KOTHAR_ variable falls back to its HOTROD_ name.
 export function envVar(env: Record<string, string | undefined>, name: string): string | undefined {
@@ -37,20 +40,22 @@ export async function startCore(
     env?: Record<string, string | undefined>
     uiDir?: string
     adapters?: Adapter[]
-    mods?: Mod[]
+    extensions?: Extension[]
     machine?: Machine
     home?: string
-    // Where the built-in mods are: the repo's mods/ unless a packaged app ships them elsewhere.
-    modsDir?: string
+    // Where the built-in extensions are: the repo's extensions/ unless a packaged app ships them elsewhere.
+    extensionsDir?: string
     // How this host restarts Kothar; see openCore's restart.
     restart?: () => void
     // Tests pass a stub, so no terminal really opens.
     openTerminal?: (dir: string, choice?: string) => Promise<void>
+    // Shows a path in Finder; the desktop app passes Electron's, tests a stub.
+    reveal?: (path: string) => Promise<void>
   } = {},
 ) {
   const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
-  const modsDir = options.modsDir ?? STOCK_MODS_DIR
-  const { mods, brokenMods } = options.mods ? { mods: options.mods, brokenMods: [] } : await loadMods(modsDir)
+  const extensionsDir = options.extensionsDir ?? STOCK_EXTENSIONS_DIR
+  const { extensions, brokenExtensions } = options.extensions ? { extensions: options.extensions, brokenExtensions: [] } : await loadExtensions(extensionsDir)
   const port = Number(envVar(env, 'PORT') ?? 4317)
   const garage = envVar(env, 'GARAGE') ?? (await defaultGarage({ home, machine, inUse: () => portInUse(port) }))
   const uiUrl = uiDir ? `http://127.0.0.1:${port}` : (envVar(env, 'UI_ORIGIN') ?? 'http://localhost:4318')
@@ -60,19 +65,24 @@ export async function startCore(
   const defaultEngine = engine ?? adapters[0]?.id ?? ''
   const marketplaceUrl = envVar(env, 'MARKETPLACE_URL')
   const githubToken = envVar(env, 'GITHUB_TOKEN')
-  const community = options.mods ? [] : await loadCommunityMods(garage, (id) => savedOn(garage, id))
+  const community = options.extensions ? [] : await loadCommunityExtensions(
+    garage,
+    (id) => savedOn(garage, id),
+    (id) => savedSwitch(garage, id),
+  )
   const core = openCore({
     garage,
     adapters,
     defaultEngine,
     machine,
-    mods,
-    brokenMods,
+    extensions,
+    brokenExtensions,
     community,
     marketplaceUrl,
     githubToken,
     ...(options.restart && { restart: options.restart }),
     ...(options.openTerminal && { openTerminal: options.openTerminal }),
+    ...(options.reveal && { reveal: options.reveal }),
   })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')
@@ -92,19 +102,29 @@ export async function startCore(
   }
 }
 
-// Whether settings.json has community mods on and this one turned on, read before the core opens so only mods that are
-// on get imported.
+// Whether settings.json has community extensions on and this one turned on, read before the core opens so only
+// extensions that are on get imported. Settings saved when extensions were mods are read under the new names.
 export function savedOn(garage: string, id: string) {
+  return savedSettings(garage)?.communityExtensions === true && savedSwitch(garage, id)
+}
+
+// The extension's own switch in settings.json, whatever the Community extensions switch says.
+export function savedSwitch(garage: string, id: string) {
+  return savedSettings(garage)?.extensions?.[id]?.enabled === true
+}
+
+function savedSettings(garage: string) {
   try {
     const settings = JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))
-    return settings.communityMods === true && settings.mods?.[id]?.enabled === true
+    renameSettings(settings)
+    return settings
   } catch {
-    return false
+    return undefined
   }
 }
 
 // Runs the core and restarts it in this process when asked (npm run dev): the old one stops every chat as quitting does,
-// and the new one reads the settings and community mods again on the same port and token, so the UI reconnects.
+// and the new one reads the settings and community extensions again on the same port and token, so the UI reconnects.
 export async function runRestartable(start: (restart: () => void) => ReturnType<typeof startCore>) {
   let restarting: Promise<void> | undefined
   const restart = () => {

@@ -4,7 +4,7 @@ import { AlertDialog, Dialog, Tabs } from 'radix-ui'
 import {
   CONTEXT_SECTIONS,
   MODEL_ROLES,
-  MOD_USES,
+  EXTENSION_USES,
   PERMISSION_SWITCHES,
   levelsOf,
   settingProblem,
@@ -20,11 +20,12 @@ import {
   type ModelRole,
   type ModelRow,
   type ThinkingLevel,
-  type ModInfo,
+  type ExtensionInfo,
   type RestartState,
+  type Setup,
   type WorkFolder,
 } from '@kothar/core/shared'
-import type { ModSetting } from '@kothar/mod-api'
+import type { ExtensionSetting } from '@kothar/extension-api'
 import { PERMISSIONS, SECTIONS } from './context-panel.tsx'
 import {
   Button,
@@ -41,18 +42,29 @@ import {
 } from './controls.tsx'
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
+import {
+  askNotificationLeave,
+  notificationsAllowed,
+  setNotificationPref,
+  useNotificationPrefs,
+  type NotifyKind,
+} from './notifications.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { MOD_WARNING, modStatus, UsesList, type Market, type MarketKindFilter } from './marketplace.tsx'
+import { changesSinceApproved, EXTENSION_WARNING, extensionStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
+import { ExtensionViewer } from './extension-view.tsx'
+import { SetupsPage } from './setups-page.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
   accounts: EngineAccounts[]
   contextDefaults: Record<ContextSection, boolean>
-  mods: ModInfo[]
+  extensions: ExtensionInfo[]
   modelLists: ModelLists
+  setups?: Setup[]
+  setupSave?: { count: number; id?: string; error?: string }
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean
@@ -61,12 +73,12 @@ type PageProps = {
   market?: Market
   // The desktop app's folder picker, for Install from folder.
   pickFolder?: (title?: string) => Promise<string | null>
-  // The master switch for community mods, what waits for a restart, and how many chats a restart would stop.
-  communityMods?: boolean
+  // The master switch for community extensions, what waits for a restart, and how many chats a restart would stop.
+  communityExtensions?: boolean
   restart?: RestartState
   running?: number
   // Opens the Marketplace window over Settings, showing one kind first.
-  openMarketplace?: (kind?: MarketKindFilter) => void
+  openMarketplace?: () => void
 }
 
 const NO_RESTART: RestartState = { changes: [], canRestart: false }
@@ -79,7 +91,7 @@ type Page = {
   body: (props: PageProps) => ReactNode
 }
 
-const NAV_GROUPS = ['Options', 'Mods'] as const
+const NAV_GROUPS = ['Options', 'Extensions'] as const
 
 const WORK_FOLDER_TITLE = 'Choose a work folder'
 const WORK_FOLDER_HINT =
@@ -187,10 +199,11 @@ const PAGES = [
     title: 'Appearance',
     body: ({ openMarketplace }: PageProps) => (
       <>
-        <Appearance browse={openMarketplace && (() => openMarketplace('theme'))} />
+        <Appearance browse={openMarketplace} />
         <ShownPaths />
         <ShownSteps />
         <ShownReports />
+        <Notifications />
       </>
     ),
   },
@@ -227,6 +240,17 @@ const PAGES = [
     },
   },
   {
+    id: 'setups',
+    group: 'Options',
+    title: 'Setups',
+    intro:
+      `A setup is a saved model, thinking level, extensions and instructions for a kind of job. Pick one for a ${CHAT_NOUN.one} ` +
+      'in its General tab; a lead can also start a worker with one by name. What a setup leaves out follows Settings.',
+    body: ({ setups = [], setupSave, engines, extensions, connected, send }: PageProps) => (
+      <SetupsPage setups={setups} engines={engines} extensions={extensions} connected={connected} send={send} saved={setupSave} />
+    ),
+  },
+  {
     id: 'context',
     group: 'Options',
     title: 'Context',
@@ -249,90 +273,93 @@ const PAGES = [
     ),
   },
   {
-    id: 'mods',
-    group: 'Mods',
-    title: 'Built-in mods',
-    intro: 'Mods that ship with Kothar. One with settings or a setup gets its own page while it is on.',
-    body: (props: PageProps) => <ModsPage {...props} />,
+    id: 'extensions',
+    group: 'Extensions',
+    title: 'Built-in extensions',
+    intro: 'Extensions that ship with Kothar. One with settings or a setup gets its own page while it is on.',
+    body: (props: PageProps) => <ExtensionsPage {...props} />,
   },
   {
-    id: 'community-mods',
-    group: 'Mods',
-    title: 'Community mods',
-    intro: 'Mods installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
-    body: (props: PageProps) => <CommunityModsPage {...props} />,
+    id: 'community-extensions',
+    group: 'Extensions',
+    title: 'Community hub',
+    intro: 'Extensions installed from the Marketplace or a folder. Each stays off until you turn it on, and changes apply when Kothar restarts.',
+    body: (props: PageProps) => <CommunityExtensionsPage {...props} />,
   },
 ] as const satisfies readonly Page[]
 
-export type SettingsPage = (typeof PAGES)[number]['id'] | `mod:${string}`
+export type SettingsPage = (typeof PAGES)[number]['id'] | `extension:${string}`
 
 export const COMMUNITY_RISKS =
-  'Community mods are code from other people, and they run inside Kothar with your permissions.\n\n' +
+  'Community extensions are code from other people, and they run inside Kothar with your permissions.\n\n' +
   '• They can read your files and settings, and reach the network.\n' +
   "• Kothar doesn't review them.\n" +
-  '• An update can change what a mod does.\n\n' +
-  'Each mod still stays off until you turn it on.'
+  '• An update can change what an extension does.\n\n' +
+  'Each extension still stays off until you turn it on.'
 
-export async function setCommunityMods(enabled: boolean, send: (m: ClientMessage) => void) {
+export async function setCommunityExtensions(enabled: boolean, send: (m: ClientMessage) => void) {
   if (enabled) {
-    const ok = await confirm({ text: 'Turn on community mods?', body: COMMUNITY_RISKS, ok: 'Turn on community mods' })
+    const ok = await confirm({ text: 'Turn on community extensions?', body: COMMUNITY_RISKS, ok: 'Turn on community extensions' })
     if (!ok) return
   }
-  send({ type: 'communityMods.setEnabled', enabled })
+  send({ type: 'communityExtensions.setEnabled', enabled })
 }
 
-function CommunityModsPage(props: PageProps) {
-  const { mods, connected, send, communityMods = false, restart = NO_RESTART, running = 0, openMarketplace } = props
-  const community = mods.filter((m) => m.community)
-  const turn = async (m: ModInfo, enabled: boolean) => {
+function CommunityExtensionsPage(props: PageProps) {
+  const { extensions, connected, send, communityExtensions = false, restart = NO_RESTART, running = 0, openMarketplace } = props
+  const community = extensions.filter((m) => m.community)
+  const turn = async (m: ExtensionInfo, enabled: boolean) => {
     if (enabled) {
       const { uses, repo, path } = m.community!
-      const listed = uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+      const listed = uses.map((use) => `• ${EXTENSION_USES[use]}`).join('\n')
+      const changes = changesSinceApproved(m)
       const ok = await confirm({
-        text: `Turn on ${m.name}?`,
+        text: `Turn on ${m.name} ${m.community!.version}?`,
         body:
           `From ${repo ? `github.com/${repo}` : (path ?? 'a folder on this computer')}. It runs code on your computer with ` +
           'your permissions.' +
+          (changes ? `\n\n${changes}` : '') +
           (listed ? `\n\nIt says it:\n${listed}` : '') +
+          '\n\nKothar runs exactly these files. Any update turns it off again until you turn it on.' +
           '\n\nIt starts when Kothar restarts.',
         ok: 'Turn on',
       })
       if (!ok) return
     }
-    send({ type: 'mod.setEnabled', modId: m.id, enabled })
+    send({ type: 'extension.setEnabled', extensionId: m.id, enabled })
   }
   return (
     <>
       <RestartNotice restart={restart} running={running} connected={connected} send={send} />
       <div className={`${GROUP} mb-12`}>
         <SettingRow
-          name="Community mods"
+          name="Community extensions"
           description={
-            communityMods ? (
-              'On. A mod below runs while its own switch is on.'
+            communityExtensions ? (
+              'On. An extension below runs while its own switch is on.'
             ) : (
-              <span className="text-amber">Off. No community mod runs, whatever its own switch says.</span>
+              <span className="text-amber">Off. No community extension runs, whatever its own switch says.</span>
             )
           }
         >
           <Switch
-            label="Community mods"
-            checked={communityMods}
+            label="Community extensions"
+            checked={communityExtensions}
             disabled={!connected}
-            onChange={(on) => void setCommunityMods(on, send)}
+            onChange={(on) => void setCommunityExtensions(on, send)}
           />
         </SettingRow>
       </div>
       <div className="flex items-start gap-16 pb-12">
-        <p className="flex-1 text-sm text-amber">{MOD_WARNING}</p>
-        {openMarketplace && <Button onClick={() => openMarketplace('mod')}>Browse…</Button>}
+        <p className="flex-1 text-sm text-amber">{EXTENSION_WARNING}</p>
+        {openMarketplace && <Button onClick={() => openMarketplace()}>Browse…</Button>}
       </div>
-      {!community.length && <p className="text-muted">No community mods installed. Find them in the Marketplace.</p>}
+      {!community.length && <p className="text-muted">No community extensions installed. Find them in the Marketplace.</p>}
       {community.length > 0 && (
-        <div className={`${GROUP} transition-opacity ${communityMods ? '' : 'opacity-60'}`} aria-disabled={!communityMods}>
+        <div className={`${GROUP} transition-opacity ${communityExtensions ? '' : 'opacity-60'}`} aria-disabled={!communityExtensions}>
           {community.map((m) => {
             const { version, author, uses, source, repo, path } = m.community!
-            const status = modStatus(m, communityMods)
+            const status = extensionStatus(m, communityExtensions)
             return (
               <SettingRow
                 key={m.id}
@@ -371,14 +398,14 @@ function CommunityModsPage(props: PageProps) {
                 <Button
                   variant="ghost"
                   disabled={!connected}
-                  onClick={() => send({ type: 'market.uninstall', kind: 'mod', id: m.id })}
+                  onClick={() => send({ type: 'market.uninstall', kind: 'extension', id: m.id })}
                 >
                   Uninstall
                 </Button>
                 <Switch
                   label={m.name}
                   checked={m.enabled}
-                  disabled={!connected || (!communityMods && !m.enabled)}
+                  disabled={!connected || (!communityExtensions && !m.enabled)}
                   onChange={(on) => void turn(m, on)}
                 />
               </SettingRow>
@@ -390,12 +417,12 @@ function CommunityModsPage(props: PageProps) {
   )
 }
 
-function ModsPage({ mods: all, connected, send }: PageProps) {
-  const mods = all.filter((m) => !m.community)
+function ExtensionsPage({ extensions: all, connected, send }: PageProps) {
+  const extensions = all.filter((m) => !m.community)
   const [setupFor, setSetupFor] = useState<string>()
   const [setupShown, setSetupShown] = useState(false)
-  const mod = mods.find((m) => m.id === setupFor && m.enabled)
-  const status = mod?.setup?.status
+  const extension = extensions.find((m) => m.id === setupFor && m.enabled)
+  const status = extension?.setup?.status
   const settled = !status || status === 'ready'
   if (setupFor && settled && status !== undefined) setSetupFor(undefined)
   const open = !settled && (setupShown || status !== 'checking')
@@ -406,7 +433,7 @@ function ModsPage({ mods: all, connected, send }: PageProps) {
   }
   return (
     <div className={GROUP}>
-      {mods.map((m) => (
+      {extensions.map((m) => (
         <SettingRow
           key={m.id}
           name={m.name}
@@ -423,18 +450,18 @@ function ModsPage({ mods: all, connected, send }: PageProps) {
             checked={m.enabled}
             disabled={!connected || m.loadError !== undefined}
             onChange={(enabled) => {
-              send({ type: 'mod.setEnabled', modId: m.id, enabled })
+              send({ type: 'extension.setEnabled', extensionId: m.id, enabled })
               if (enabled && m.setup) setSetupFor(m.id)
             }}
           />
         </SettingRow>
       ))}
-      {mod?.setup && <ModSetupDialog open={open} mod={mod} connected={connected} send={send} close={close} />}
+      {extension?.setup && <ExtensionSetupDialog open={open} extension={extension} connected={connected} send={send} close={close} />}
     </div>
   )
 }
 
-// A mod's text is plain; its web addresses become links.
+// An extension's text is plain; its web addresses become links.
 const linked = (text: string) =>
   text.split(/(https:\/\/[^\s)]*[^\s).,;:])/).map((part, i) =>
     i % 2 ? (
@@ -446,12 +473,12 @@ const linked = (text: string) =>
     ),
   )
 
-const setupTitle = (mod: ModInfo) => mod.setup?.message ?? `${mod.name} isn't set up`
+const setupTitle = (extension: ExtensionInfo) => extension.setup?.message ?? `${extension.name} isn't set up`
 
-type SetupProps = { mod: ModInfo; connected: boolean; send: (m: ClientMessage) => void }
+type SetupProps = { extension: ExtensionInfo; connected: boolean; send: (m: ClientMessage) => void }
 
-function SetupStatus({ mod }: { mod: ModInfo }) {
-  const setup = mod.setup!
+function SetupStatus({ extension }: { extension: ExtensionInfo }) {
+  const setup = extension.setup!
   const percent = Math.round((setup.progress ?? 0) * 100)
   return (
     <>
@@ -459,7 +486,7 @@ function SetupStatus({ mod }: { mod: ModInfo }) {
         <div className="flex flex-col gap-6">
           <div
             role="progressbar"
-            aria-label={`Installing ${mod.name}`}
+            aria-label={`Installing ${extension.name}`}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={percent}
@@ -476,11 +503,11 @@ function SetupStatus({ mod }: { mod: ModInfo }) {
   )
 }
 
-function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { open: boolean; close: () => void }) {
+function ExtensionSetupDialog({ open, extension, connected, send, close }: SetupProps & { open: boolean; close: () => void }) {
   const focus = useReturnFocus()
-  const installing = mod.setup?.status === 'installing'
+  const installing = extension.setup?.status === 'installing'
   const cancel = () => {
-    if (installing) send({ type: 'mod.cancelInstall', modId: mod.id })
+    if (installing) send({ type: 'extension.cancelInstall', extensionId: extension.id })
     close()
   }
   return (
@@ -503,16 +530,16 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
                 {...MOTION.pop}
               >
                 <div className="flex flex-col gap-4">
-                  <AlertDialog.Title className="text-[16px] font-semibold">{setupTitle(mod)}</AlertDialog.Title>
-                  {mod.setup?.description && <p className="text-sm text-muted">{linked(mod.setup.description)}</p>}
+                  <AlertDialog.Title className="text-[16px] font-semibold">{setupTitle(extension)}</AlertDialog.Title>
+                  {extension.setup?.description && <p className="text-sm text-muted">{linked(extension.setup.description)}</p>}
                 </div>
-                <SetupStatus mod={mod} />
+                <SetupStatus extension={extension} />
                 <div className="flex justify-end gap-8">
                   <Button onClick={cancel}>Cancel</Button>
                   <Button
                     variant="primary"
-                    disabled={!connected || mod.setup?.status !== 'missing'}
-                    onClick={() => send({ type: 'mod.install', modId: mod.id })}
+                    disabled={!connected || extension.setup?.status !== 'missing'}
+                    onClick={() => send({ type: 'extension.install', extensionId: extension.id })}
                   >
                     {installing ? 'Installing…' : 'Install'}
                   </Button>
@@ -526,22 +553,22 @@ function ModSetupDialog({ open, mod, connected, send, close }: SetupProps & { op
   )
 }
 
-function ModSetupRow({ mod, connected, send }: SetupProps) {
-  const status = mod.setup!.status
+function ExtensionSetupRow({ extension, connected, send }: SetupProps) {
+  const status = extension.setup!.status
   return (
     <SettingRow
-      name={<span className={status === 'ready' ? '' : 'text-amber'}>{setupTitle(mod)}</span>}
-      description={linked(mod.setup!.description)}
-      below={(status === 'installing' || status === 'checking' || mod.setup!.error) && <SetupStatus mod={mod} />}
+      name={<span className={status === 'ready' ? '' : 'text-amber'}>{setupTitle(extension)}</span>}
+      description={linked(extension.setup!.description)}
+      below={(status === 'installing' || status === 'checking' || extension.setup!.error) && <SetupStatus extension={extension} />}
     >
       {status === 'ready' && <span className="rounded-full bg-green/14 px-8 py-2 text-xs text-green">Ready</span>}
       {status === 'missing' && (
-        <Button variant="primary" disabled={!connected} onClick={() => send({ type: 'mod.install', modId: mod.id })}>
+        <Button variant="primary" disabled={!connected} onClick={() => send({ type: 'extension.install', extensionId: extension.id })}>
           Install
         </Button>
       )}
       {status === 'installing' && (
-        <Button disabled={!connected} onClick={() => send({ type: 'mod.cancelInstall', modId: mod.id })}>
+        <Button disabled={!connected} onClick={() => send({ type: 'extension.cancelInstall', extensionId: extension.id })}>
           Cancel
         </Button>
       )}
@@ -549,28 +576,56 @@ function ModSetupRow({ mod, connected, send }: SetupProps) {
   )
 }
 
-const modPages = (mods: ModInfo[], communityMods: boolean): Page[] =>
-  mods
-    .filter((mod) => mod.enabled && (!mod.community || communityMods) && (mod.settings.length || mod.setup))
-    .map((mod) => ({
-      id: `mod:${mod.id}`,
-      group: 'Mods',
-      title: mod.name,
+// The extension's own part of its page (Extension.settingsView), drawn by the core. Opening the page asks for a fresh
+// one, as what it shows (such as disk use) may have changed since.
+function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
+  const { id } = extension
+  useEffect(() => {
+    if (connected) send({ type: 'extension.settingsView.get', extensionId: id })
+  }, [connected, id, send])
+  const shown = extension.settingsView
+  if (!shown) return null
+  return (
+    <div className="flex flex-col py-12 not-first:border-t">
+      <ExtensionViewer
+        view={shown.view}
+        error={shown.error}
+        act={(action) => connected && send({ type: 'extension.settingsView.action', extensionId: id, action })}
+        reveal={(path) => connected && send({ type: 'reveal', path })}
+      />
+    </div>
+  )
+}
+
+// A built-in extension with a settings view keeps its page while off, showing only that view.
+const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolean): Page[] =>
+  extensions
+    .filter(
+      (extension) =>
+        (extension.enabled || (extension.settingsView && !extension.community)) &&
+        (!extension.community || communityExtensions) &&
+        (extension.settings.length || extension.setup || extension.settingsView),
+    )
+    .map((extension) => ({
+      id: `extension:${extension.id}`,
+      group: 'Extensions',
+      title: extension.name,
       body: ({ connected, send }: PageProps) => (
         <div className={GROUP}>
-          {mod.community && (
-            <SettingRow name="Uses" description={<UsesList uses={mod.community.uses} />} />
+          {extension.community && (
+            <SettingRow name="Uses" description={<UsesList uses={extension.community.uses} />} />
           )}
-          {mod.setup && <ModSetupRow mod={mod} connected={connected} send={send} />}
-          {mod.settings.map((setting) => (
-            <ModSettingRow
+          {extension.enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
+          {extension.enabled && extension.settings.map((setting) => (
+            <ExtensionSettingRow
               key={setting.key}
               setting={setting}
-              value={mod.values[setting.key]}
+              value={extension.values[setting.key]}
               disabled={!connected}
-              save={(value) => send({ type: 'mod.setValue', modId: mod.id, key: setting.key, value })}
+              save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
             />
           ))}
+          {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
         </div>
       ),
     }))
@@ -623,6 +678,57 @@ function ShownReports() {
         >
           <Switch label="Show worker reports unfolded" checked={shown} onChange={showReportsByDefault} />
         </SettingRow>
+      </div>
+    </>
+  )
+}
+
+const NOTIFY_KINDS: { kind: NotifyKind; name: string; hint: string }[] = [
+  { kind: 'needsYou', name: 'Needs you', hint: 'A permission request, a question, or an extension waiting on you' },
+  { kind: 'finished', name: 'Finished', hint: `A ${CHAT_NOUN.one} or Home finished a turn. Workers report to their ${CHAT_NOUN.one} instead.` },
+  { kind: 'errors', name: 'Errors', hint: 'A turn ended with an error, a worker\'s too' },
+]
+
+const NOTIFY_HINT = `Only while you aren't looking at that ${CHAT_NOUN.one}. With Kothar in front, only what needs you or failed in another ${CHAT_NOUN.one} shows. Several at once show as one; clicking it opens the ${CHAT_NOUN.one}.`
+
+function Notifications() {
+  const prefs = useNotificationPrefs()
+  // In a browser tab (development), the browser asks before a page may notify.
+  const [allowed, setAllowed] = useState(notificationsAllowed)
+  const allow = async () => setAllowed((await askNotificationLeave()) === 'granted')
+  return (
+    <>
+      <div className="flex items-center gap-6 pt-24 pb-8 font-semibold">
+        <Hint text={NOTIFY_HINT}>
+          <span>Notifications</span>
+        </Hint>
+      </div>
+      <div className={GROUP}>
+        <SettingRow name="Show notifications">
+          {prefs.enabled && !allowed && (
+            <Button size="small" onClick={() => void allow()}>
+              Allow in this browser
+            </Button>
+          )}
+          <Switch label="Show notifications" checked={prefs.enabled} onChange={(on) => setNotificationPref('enabled', on)} />
+        </SettingRow>
+        {NOTIFY_KINDS.map(({ kind, name, hint }) => (
+          <SettingRow
+            key={kind}
+            name={
+              <Hint text={hint}>
+                <span className="self-start">{name}</span>
+              </Hint>
+            }
+          >
+            <Switch
+              label={`Notify: ${name}`}
+              checked={prefs[kind]}
+              disabled={!prefs.enabled}
+              onChange={(on) => setNotificationPref(kind, on)}
+            />
+          </SettingRow>
+        ))}
       </div>
     </>
   )
@@ -811,7 +917,8 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             key={a.id}
             name={accountLabel(a)}
             description={
-              a.id === 'default' && (a.signedIn ? `Signed in through ${id} itself` : `No one is signed in to ${id} itself`)
+              a.note ??
+              (a.id === 'default' && (a.signedIn ? `Signed in through ${id} itself` : `No one is signed in to ${id} itself`))
             }
           >
             {a.id === listed.active ? (
@@ -832,7 +939,9 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             )}
           </SettingRow>
         ))}
-        {!login ? (
+        {!login && accounts.providers ? (
+          <ProviderAccountForm accounts={accounts} connected={connected} send={send} />
+        ) : !login ? (
           <SettingRow name="Add account">
             <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
               <input
@@ -850,12 +959,45 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
           <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
             <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
           </SettingRow>
+        ) : login.adding ? (
+          <SettingRow name={`Adding “${login.name}”…`}>{cancelLogin}</SettingRow>
+        ) : accounts.providers ? (
+          <SettingRow
+            name={`Signing in “${login.name}”`}
+            description={
+              login.url && (
+                <>
+                  Open{' '}
+                  <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                    the sign-in page
+                  </a>
+                  {login.instructions ? ` and ${login.instructions.replace(/^Enter/, 'enter')}` : ''}
+                </>
+              )
+            }
+          >
+            {cancelLogin}
+          </SettingRow>
         ) : (
           <>
             <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
               {!login.url && cancelLogin}
             </SettingRow>
-            {login.url && (
+            {login.url && login.noCode && (
+              <SettingRow
+                name={
+                  <>
+                    No window?{' '}
+                    <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                      Open the sign-in link
+                    </a>
+                  </>
+                }
+              >
+                {cancelLogin}
+              </SettingRow>
+            )}
+            {login.url && !login.noCode && (
               <SettingRow
                 name="Paste a code"
                 description={
@@ -885,7 +1027,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             )}
           </>
         )}
-        {accounts.apiKeys && (
+        {accounts.apiKeys && !accounts.providers && (
           <SettingRow name="Add API key">
             <form className="flex min-w-0 gap-6" onSubmit={addKey}>
               <input
@@ -912,16 +1054,90 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
   )
 }
 
-type ModSettingProps = {
-  setting: ModSetting
+// For engines that sign in to many providers: a name, the provider, how (when it offers more than one way), then a
+// key or a browser sign-in.
+function ProviderAccountForm({ accounts, connected, send }: EngineAccountsProps) {
+  const id = accounts.engine
+  const providers = accounts.providers ?? []
+  const [name, setName] = useState('')
+  const [providerId, setProviderId] = useState('')
+  const [methodId, setMethodId] = useState('')
+  const [key, setKey] = useState('')
+  const provider = providers.find((p) => p.id === providerId)
+  const methods = provider?.methods ?? []
+  const method = methods.length === 1 ? methods[0] : methods.find((m) => m.id === methodId)
+  const pickProvider = (value: string) => {
+    setProviderId(value)
+    setMethodId('')
+  }
+  const ready = connected && name.trim() !== '' && provider !== undefined && method !== undefined
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!ready) return
+    const choice = { engine: id, name: name.trim(), provider: provider.id, method: method.id }
+    if (method.kind === 'apiKey') {
+      if (!key.trim()) return
+      send({ type: 'account.addApiKey', ...choice, key })
+    } else send({ type: 'account.login', ...choice })
+    setName('')
+    setKey('')
+  }
+  return (
+    <SettingRow name="Add account">
+      <form className="flex min-w-0 flex-wrap gap-6" onSubmit={submit}>
+        <input className="w-140" value={name} placeholder="Name, e.g. Work" onChange={(e) => setName(e.target.value)} />
+        <Select
+          label="Provider"
+          value={providerId}
+          placeholder="Provider…"
+          hint="The model provider this account signs in to"
+          disabled={!connected || !providers.length}
+          options={providers.map((p) => ({ value: p.id, label: p.name, group: p.group }))}
+          onChange={pickProvider}
+        />
+        {methods.length > 1 && (
+          <Select
+            label="Sign-in method"
+            value={methodId}
+            placeholder="How…"
+            disabled={!connected}
+            options={methods.map((m) => ({ value: m.id, label: m.kind === 'apiKey' ? 'API key' : m.label }))}
+            onChange={setMethodId}
+          />
+        )}
+        {method?.kind === 'apiKey' && (
+          <input
+            className="w-140"
+            type="password"
+            value={key}
+            placeholder="API key"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setKey(e.target.value)}
+          />
+        )}
+        <Button variant="primary" disabled={!ready || (method.kind === 'apiKey' && !key.trim())}>
+          {method?.kind === 'apiKey' ? 'Add' : 'Sign in…'}
+        </Button>
+      </form>
+    </SettingRow>
+  )
+}
+
+type ExtensionSettingProps = {
+  setting: ExtensionSetting
   value: string | number | boolean | undefined
   disabled: boolean
   save: (value: string | number | boolean) => void
 }
 
-function ModSettingRow({ setting, value, disabled, save }: ModSettingProps) {
+function ExtensionSettingRow({ setting, value, disabled, save }: ExtensionSettingProps) {
   const [draft, setDraft] = useState(String(value))
-  useEffect(() => setDraft(String(value)), [value])
+  const [was, setWas] = useState(value)
+  if (value !== was) {
+    setWas(value)
+    setDraft(String(value))
+  }
   const row = (control: ReactNode, below?: ReactNode) => (
     <SettingRow name={setting.label} description={setting.description && linked(setting.description)} below={below}>
       {control}
@@ -1110,7 +1326,7 @@ type SettingsProps = PageProps & {
 
 export function SettingsDialog({ open, page, openPage, close, ...props }: SettingsProps) {
   const focus = useReturnFocus()
-  const pages: readonly Page[] = [...PAGES, ...modPages(props.mods, props.communityMods ?? false)]
+  const pages: readonly Page[] = [...PAGES, ...extensionPages(props.extensions, props.communityExtensions ?? false)]
   const current = pages.find((p) => p.id === page) ?? PAGES[0]
   return (
     <Dialog.Root open={open} onOpenChange={(open) => open || close()}>

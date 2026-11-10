@@ -99,7 +99,7 @@ it('a garage set in the environment is used as is, with nothing moved', async ()
   const garage = mkdtempSync(join(tmpdir(), 'kothar-test-'))
   cleanups.push(() => rmSync(garage, { recursive: true, force: true }))
   const env = { KOTHAR_GARAGE: garage, KOTHAR_PORT: '4457' }
-  const kothar = await startCore({ env, home: dir, mods: [], adapters: [createFakeAdapter()] })
+  const kothar = await startCore({ env, home: dir, extensions: [], adapters: [createFakeAdapter()] })
   cleanups.push(() => kothar.close(true))
   expect(kothar.garage).toBe(garage)
   expect(existsSync(join(old, 'settings.json'))).toBe(true)

@@ -10,11 +10,11 @@ import {
   type ClientMessage,
   type EngineInfo,
   type ModelLists,
-  type ModInfo,
+  type ExtensionInfo,
   type SetupState,
   type WorkFolder,
 } from '@kothar/core/shared'
-import type { ModSetting } from '@kothar/mod-api'
+import type { ExtensionSetting } from '@kothar/extension-api'
 import { PERMISSIONS } from './context-panel.tsx'
 import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
 
@@ -111,7 +111,7 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
               engines={[]}
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
-              mods={[]}
+              extensions={[]}
               modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
@@ -129,7 +129,11 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
   expect(PERMISSION_SWITCHES).toContain('autoFetch')
   expect(PERMISSIONS.autoFetch.label).toBe('Fetch web pages without asking')
+  expect(PERMISSIONS.autoNetworkCommands.label).toBe('Run network commands without asking')
   expect(PERMISSION_DEFAULTS.autoFetch).toBe(true)
+  expect(PERMISSION_DEFAULTS.autoNetworkCommands).toBe(false)
+  expect(PERMISSIONS.autoEnvCommands.label).toBe('Let commands use .env files without asking')
+  expect(PERMISSION_DEFAULTS.autoEnvCommands).toBe(false)
   for (const name of PERMISSION_SWITCHES) {
     const toggle = () =>
       dialog().querySelector(`[aria-label="${PERMISSIONS[name].label}"]`) as HTMLButtonElement
@@ -177,7 +181,7 @@ test('from Settings it starts at the current folder and can be cancelled', () =>
   expect(close).toHaveBeenCalled()
 })
 
-const setupMod = (enabled: boolean, setup: Omit<SetupState, 'description'>, settings: ModSetting[] = []): ModInfo => ({
+const setupExtension = (enabled: boolean, setup: Omit<SetupState, 'description'>, settings: ExtensionSetting[] = []): ExtensionInfo => ({
   id: 'browser',
   name: 'Browser',
   description: 'Browse the web.',
@@ -187,7 +191,7 @@ const setupMod = (enabled: boolean, setup: Omit<SetupState, 'description'>, sett
   setup: { description: 'Downloads a browser.', ...setup },
 })
 
-function renderMods(mods: ModInfo[], page: SettingsPage, sent: ClientMessage[] = []) {
+function renderExtensions(extensions: ExtensionInfo[], page: SettingsPage, sent: ClientMessage[] = []) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -201,7 +205,7 @@ function renderMods(mods: ModInfo[], page: SettingsPage, sent: ClientMessage[] =
               engines={[]}
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
-              mods={mods}
+              extensions={extensions}
               modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}
@@ -220,47 +224,47 @@ const setupDialog = () => document.querySelector('[role="alertdialog"]') as HTML
 const setupButton = (name: string) =>
   [...setupDialog()!.querySelectorAll('button')].find((b) => b.textContent === name) as HTMLButtonElement
 
-test('turning on a mod that is not set up asks to install it, shows the progress and can cancel', () => {
-  const sent = renderMods([setupMod(false, { status: 'checking' })], 'mods')
+test('turning on an extension that is not set up asks to install it, shows the progress and can cancel', () => {
+  const sent = renderExtensions([setupExtension(false, { status: 'checking' })], 'extensions')
   act(() => (dialog().querySelector('[aria-label="Browser"]') as HTMLButtonElement).click())
-  expect(sent).toEqual([{ type: 'mod.setEnabled', modId: 'browser', enabled: true }])
-  renderMods([setupMod(true, { status: 'checking' })], 'mods', sent)
+  expect(sent).toEqual([{ type: 'extension.setEnabled', extensionId: 'browser', enabled: true }])
+  renderExtensions([setupExtension(true, { status: 'checking' })], 'extensions', sent)
   expect(setupDialog()).toBeNull()
 
   const missing = { status: 'missing', message: 'Browser not installed' } as const
-  renderMods([setupMod(true, missing)], 'mods', sent)
+  renderExtensions([setupExtension(true, missing)], 'extensions', sent)
   expect(setupDialog()!.textContent).toContain('Browser not installed')
   act(() => setupButton('Install').click())
-  expect(sent.at(-1)).toEqual({ type: 'mod.install', modId: 'browser' })
+  expect(sent.at(-1)).toEqual({ type: 'extension.install', extensionId: 'browser' })
 
   const installing = { ...missing, status: 'installing', progressText: 'Downloading Chromium', progress: 0.4 } as const
-  renderMods([setupMod(true, installing)], 'mods', sent)
+  renderExtensions([setupExtension(true, installing)], 'extensions', sent)
   expect(setupDialog()!.textContent).toContain('Downloading Chromium')
   expect(setupDialog()!.querySelector('[role="progressbar"]')!.getAttribute('aria-valuenow')).toBe('40')
-  renderMods([setupMod(true, { status: 'checking', message: missing.message })], 'mods', sent)
+  renderExtensions([setupExtension(true, { status: 'checking', message: missing.message })], 'extensions', sent)
   expect(setupDialog()!.textContent).toContain('Browser not installed')
-  renderMods([setupMod(true, { ...missing, error: 'Download failed' })], 'mods', sent)
+  renderExtensions([setupExtension(true, { ...missing, error: 'Download failed' })], 'extensions', sent)
   expect(setupDialog()!.textContent).toContain('Download failed')
   act(() => setupButton('Install').click())
-  renderMods([setupMod(true, { status: 'installing' })], 'mods', sent)
+  renderExtensions([setupExtension(true, { status: 'installing' })], 'extensions', sent)
   act(() => setupButton('Cancel').click())
   expect(sent.slice(-2)).toEqual([
-    { type: 'mod.install', modId: 'browser' },
-    { type: 'mod.cancelInstall', modId: 'browser' },
+    { type: 'extension.install', extensionId: 'browser' },
+    { type: 'extension.cancelInstall', extensionId: 'browser' },
   ])
   expect(setupDialog()).toBeNull()
 
-  renderMods([setupMod(false, { status: 'missing', message: 'Browser not installed' })], 'mods', sent)
+  renderExtensions([setupExtension(false, { status: 'missing', message: 'Browser not installed' })], 'extensions', sent)
   act(() => (dialog().querySelector('[aria-label="Browser"]') as HTMLButtonElement).click())
-  renderMods([setupMod(true, { status: 'checking', message: 'Browser not installed' })], 'mods', sent)
-  renderMods([setupMod(true, { status: 'ready', message: 'Browser installed' })], 'mods', sent)
+  renderExtensions([setupExtension(true, { status: 'checking', message: 'Browser not installed' })], 'extensions', sent)
+  renderExtensions([setupExtension(true, { status: 'ready', message: 'Browser installed' })], 'extensions', sent)
   expect(setupDialog()).toBeNull()
 })
 
-test("a mod that didn't load is listed off, its switch disabled and the reason under it", () => {
+test("an extension that didn't load is listed off, its switch disabled and the reason under it", () => {
   const loadError = "@playwright/mcp isn't installed. Run npm install in the Kothar folder, then restart Kothar."
-  const broken: ModInfo = { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError }
-  const sent = renderMods([broken], 'mods')
+  const broken: ExtensionInfo = { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError }
+  const sent = renderExtensions([broken], 'extensions')
   const toggle = dialog().querySelector('[aria-label="browser"]') as HTMLButtonElement
   expect(toggle.getAttribute('aria-checked')).toBe('false')
   expect(toggle.disabled).toBe(true)
@@ -269,23 +273,23 @@ test("a mod that didn't load is listed off, its switch disabled and the reason u
   expect(sent).toEqual([])
 })
 
-test("a mod's page shows its setup, with Install while it is missing, even when it has no settings", () => {
-  const sent = renderMods([setupMod(true, { status: 'missing', message: 'Browser not installed' })], 'mod:browser')
+test("an extension's page shows its setup, with Install while it is missing, even when it has no settings", () => {
+  const sent = renderExtensions([setupExtension(true, { status: 'missing', message: 'Browser not installed' })], 'extension:browser')
   const tabs = [...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
   expect(tabs).toContain('Browser')
   expect(dialog().textContent).toContain('Browser not installed')
   act(() => ([...dialog().querySelectorAll('button')].find((b) => b.textContent === 'Install') as HTMLElement).click())
-  expect(sent).toEqual([{ type: 'mod.install', modId: 'browser' }])
-  renderMods([setupMod(true, { status: 'ready', message: 'Browser installed' })], 'mod:browser', sent)
+  expect(sent).toEqual([{ type: 'extension.install', extensionId: 'browser' }])
+  renderExtensions([setupExtension(true, { status: 'ready', message: 'Browser installed' })], 'extension:browser', sent)
   expect(dialog().textContent).toContain('Browser installed')
   expect([...dialog().querySelectorAll('button')].some((b) => b.textContent === 'Install')).toBe(false)
 })
 
-test("a mod's web addresses are links, in its setup and its settings", () => {
+test("an extension's web addresses are links, in its setup and its settings", () => {
   const url = 'https://chromewebstore.google.com/detail/playwright-extension/abc'
-  const token: ModSetting = { key: 'token', label: 'Token', description: `Copy it from ${url}.`, type: 'text', default: '' }
-  const mod = setupMod(true, { status: 'missing' }, [token])
-  renderMods([{ ...mod, setup: { ...mod.setup!, description: `Add it (${url}), then wait.` } }], 'mod:browser')
+  const token: ExtensionSetting = { key: 'token', label: 'Token', description: `Copy it from ${url}.`, type: 'text', default: '' }
+  const extension = setupExtension(true, { status: 'missing' }, [token])
+  renderExtensions([{ ...extension, setup: { ...extension.setup!, description: `Add it (${url}), then wait.` } }], 'extension:browser')
   const links = [...dialog().querySelectorAll('a')].map((a) => [a.textContent, a.getAttribute('href')])
   expect(links).toEqual([
     [url, url],
@@ -294,9 +298,9 @@ test("a mod's web addresses are links, in its setup and its settings", () => {
   expect(dialog().textContent).toContain(`Add it (${url}), then wait.`)
 })
 
-test("a mod's text setting saves on blur and resets to its default while it differs", () => {
-  const notes = { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 } satisfies ModSetting
-  const notesMod = (value: string): ModInfo => ({
+test("an extension's text setting saves on blur and resets to its default while it differs", () => {
+  const notes = { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 } satisfies ExtensionSetting
+  const notesExtension = (value: string): ExtensionInfo => ({
     id: 'tester',
     name: 'Tester',
     description: 'For tests.',
@@ -315,7 +319,7 @@ test("a mod's text setting saves on blur and resets to its default while it diff
   }
   const blur = () => act(() => area().dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
 
-  const sent = renderMods([notesMod(notes.default)], 'mod:tester')
+  const sent = renderExtensions([notesExtension(notes.default)], 'extension:tester')
   expect(area().value).toBe(notes.default)
   expect(area().rows).toBe(notes.rows)
   expect(reset()).toBeUndefined()
@@ -326,20 +330,20 @@ test("a mod's text setting saves on blur and resets to its default while it diff
   expect(sent).toEqual([])
   expect(reset()).toBeDefined()
   blur()
-  expect(sent).toEqual([{ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' }])
+  expect(sent).toEqual([{ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' }])
 
-  renderMods([notesMod('Be thorough.\nCite files.')], 'mod:tester', sent)
+  renderExtensions([notesExtension('Be thorough.\nCite files.')], 'extension:tester', sent)
   act(() => reset()!.click())
-  expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
+  expect(sent.at(-1)).toEqual({ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: '' })
   expect(area().value).toBe(notes.default)
-  renderMods([notesMod(notes.default)], 'mod:tester', sent)
+  renderExtensions([notesExtension(notes.default)], 'extension:tester', sent)
   expect(area().value).toBe(notes.default)
   expect(reset()).toBeUndefined()
 
   edit('  ')
   blur()
   expect(area().value).toBe(notes.default)
-  expect(sent.at(-1)).toEqual({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: '' })
+  expect(sent.at(-1)).toEqual({ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: '' })
 })
 
 test('Settings → Models lists each role once across engines, each model with its own thinking level', () => {
@@ -390,7 +394,7 @@ test('Settings → Models lists each role once across engines, each model with i
               engines={[cc, pi]}
               accounts={[]}
               contextDefaults={{ agents: true, folders: true, files: true }}
-              mods={[]}
+              extensions={[]}
               modelLists={lists}
               workFolder={workFolder}
               chooseWorkFolder={() => {}}

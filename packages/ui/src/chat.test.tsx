@@ -730,7 +730,7 @@ test('the down button points at a question waiting below', () => {
 test('the global AGENTS.md is editable in every chat, Home too, and saves as the global instructions', async () => {
   const global: ContextItem = { section: 'agents', path: '/g/AGENTS.md', from: GLOBAL_CONTEXT, enabled: true, text: 'OLD' }
   const box = () => container.querySelector('textarea[aria-label="AGENTS.md of Global"]') as HTMLTextAreaElement
-  for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
+  for (const chat of [{}, { id: 'main', name: 'Home', extension: 'home' }]) {
     const sent: ClientMessage[] = []
     render(chat, (m) => sent.push(m), { contextOpen: true, contextItems: [global] })
     expect(box().readOnly).toBe(false)
@@ -754,7 +754,8 @@ test("each panel tab folds its explanations under How this works, not in tooltip
   expect(about().textContent).toContain('Folders:')
   const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => tab.click())
-  expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
+  const permissions = container.querySelector('aside section[aria-label="Permissions"] details')!
+  expect(permissions.textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
   expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
   localStorage.clear()
 })
@@ -844,7 +845,7 @@ test('every chat, Home too, overrides each permission default in its Context pan
     const select = () =>
       container.querySelector<HTMLButtonElement>(`aside button[aria-label="${PERMISSIONS[name].label}"]`)!
     const [fallback, flipped] = PERMISSION_DEFAULTS[name] ? ['On', 'Off'] : ['Off', 'On']
-    for (const chat of [{}, { id: 'main', name: 'Home', mod: 'home' }]) {
+    for (const chat of [{}, { id: 'main', name: 'Home', extension: 'home' }]) {
       const sent: ClientMessage[] = []
       render(chat, (m) => sent.push(m), { contextOpen: true })
       expect(select().textContent).toBe(fallback)
@@ -946,10 +947,10 @@ test("a worker's permission request waits in its space, which answers it and tur
   expect(card()).toBeNull()
 })
 
-test("a mod's wait shows above the composer with its buttons, in the chat and in its worker's space", () => {
+test("an extension's wait shows above the composer with its buttons, in the chat and in its worker's space", () => {
   const sent: ClientMessage[] = []
   const wait = {
-    mod: 'browser',
+    extension: 'browser',
     text: 'Browser: Log in to GitHub',
     buttons: [
       { id: 'open', label: 'Open browser' },
@@ -961,14 +962,14 @@ test("a mod's wait shows above the composer with its buttons, in the chat and in
   render(space, (m) => sent.push(m))
   expect(bar()!.textContent).toContain('Browser: Log in to GitHub')
   act(() => [...bar()!.querySelectorAll('button')].find((b) => b.textContent === 'Done')!.click())
-  expect(sent.at(-1)).toEqual({ type: 'mod.wait.answer', chatId: 'p1', mod: 'browser', button: 'done' })
+  expect(sent.at(-1)).toEqual({ type: 'extension.wait.answer', chatId: 'p1', extension: 'browser', button: 'done' })
 
   render({ ...SPACE, status: 'running' as const, items: [USER] }, (m) => sent.push(m), {
     chats: [worker({ status: 'waiting', items: [USER], waits: [wait] })],
   })
   expect(bar()!.textContent).toContain('Worker Fix tests: Browser: Log in to GitHub')
   act(() => [...bar()!.querySelectorAll('button')].find((b) => b.textContent === 'Open browser')!.click())
-  expect(sent.at(-1)).toEqual({ type: 'mod.wait.answer', chatId: 's1', mod: 'browser', button: 'open' })
+  expect(sent.at(-1)).toEqual({ type: 'extension.wait.answer', chatId: 's1', extension: 'browser', button: 'open' })
 
   render({ ...SPACE, items: [USER] }, () => {})
   expect(bar()).toBeNull()

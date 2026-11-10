@@ -1,16 +1,16 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { envVar, startCore } from '@kothar/core/main'
 import { fixPath } from './shell-path.ts'
 import { userDataDir } from './user-data.ts'
 
-// The packaged app is one bundled main.mjs with the UI, preload, icon and built-in mods beside it (see
+// The packaged app is one bundled main.mjs with the UI, preload, icon and built-in extensions beside it (see
 // scripts/stage.mjs); from the repo, each sits where the source tree has it.
 const packaged = app.isPackaged
 const local = (inRepo: string, inApp: string) => fileURLToPath(new URL(packaged ? inApp : inRepo, import.meta.url))
 const uiDir = local('../../ui/dist', 'ui')
 const preload = local('preload.cjs', 'preload.cjs')
-const modsDir = packaged ? fileURLToPath(new URL('mods/', import.meta.url)) : undefined
+const extensionsDir = packaged ? fileURLToPath(new URL('extensions/', import.meta.url)) : undefined
 // A page that dies again this soon after a reload stays dead instead of looping.
 const RELOAD_COOLDOWN_MS = 10_000
 const icon = local('../assets/icon.png', 'icon.png')
@@ -22,6 +22,8 @@ const MENU_DEFAULTS: Record<string, string | null> = {
   newSpace: 'CmdOrCtrl+N',
   newSpaceFromFolder: 'CmdOrCtrl+Shift+O',
   settings: 'CmdOrCtrl+,',
+  toggleSidebar: 'CmdOrCtrl+[',
+  toggleContextPanel: 'CmdOrCtrl+]',
 }
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
@@ -47,14 +49,17 @@ async function start() {
   if (packaged) await fixPath()
   await app.whenReady()
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
-  // Restart (Settings, after community mod changes) quits as usual, stopping every chat and process, then relaunches.
+  // Restart (Settings, after community extension changes) quits as usual, stopping every chat and process, then
+  // relaunches.
   const kothar = await startCore({
     uiDir,
-    ...(modsDir && { modsDir }),
+    ...(extensionsDir && { extensionsDir }),
     restart: () => {
       app.relaunch()
       app.quit()
     },
+    // Show in Finder: the core has already checked the path is one of Kothar's own (host.reveal).
+    reveal: async (path) => shell.showItemInFolder(path),
   })
 
   const window = new BrowserWindow({
@@ -139,6 +144,24 @@ async function start() {
     const result = await dialog.showOpenDialog(window, { title, properties: ['openFile', 'multiSelections'] })
     return result.canceled ? [] : result.filePaths
   })
+  // The UI decides when to notify (packages/ui/src/notifications.ts); clicking one brings the window up on its chat.
+  // Each is kept until clicked or closed, or macOS may drop it (and its click) once it's garbage collected.
+  const notifications = new Set<Notification>()
+  ipcMain.on('notify', (_event, shown: { title?: unknown; body?: unknown; open?: unknown }) => {
+    if (!Notification.isSupported() || typeof shown?.title !== 'string') return
+    const notification = new Notification({ title: shown.title, body: typeof shown.body === 'string' ? shown.body : '' })
+    const open = typeof shown.open === 'string' ? shown.open : undefined
+    notifications.add(notification)
+    notification.on('click', () => {
+      notifications.delete(notification)
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+      if (open !== undefined) window.webContents.send('open-chat', open)
+    })
+    notification.on('close', () => notifications.delete(notification))
+    notification.show()
+  })
   ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
     const { scheme, vibrancy, background } = appearance
     if (scheme === 'system' || scheme === 'light' || scheme === 'dark') nativeTheme.themeSource = scheme
@@ -192,7 +215,24 @@ async function start() {
           ],
         },
         { role: 'editMenu' },
-        { role: 'viewMenu' },
+        {
+          label: 'View',
+          submenu: [
+            item('toggleSidebar', 'Sidebar'),
+            item('toggleContextPanel', 'Context panel'),
+            { type: 'separator' },
+            // The rest of Electron's own View menu.
+            { role: 'reload' },
+            { role: 'forceReload' },
+            { role: 'toggleDevTools' },
+            { type: 'separator' },
+            { role: 'resetZoom' },
+            { role: 'zoomIn' },
+            { role: 'zoomOut' },
+            { type: 'separator' },
+            { role: 'togglefullscreen' },
+          ],
+        },
         { role: 'windowMenu' },
       ]),
     )

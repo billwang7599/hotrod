@@ -24,7 +24,7 @@ describe('memory bench', () => {
     expect(costsOf(native!).warm).toBeLessThan(costsOf(native!).noCache)
     expect(costsOf(rolling!).warm).toBeGreaterThan(costsOf(rolling!).noCache)
     const report = reportOf(results, { turns: 30, seed: 1, chars: 1 })
-    expect(report).toContain('| Memory mod: summary tree |')
+    expect(report).toContain('| Memory extension: summary tree |')
     expect(report).toContain('| Native session (modelled) |')
     expect(report).toMatch(/\| 30 \| [\d,]+ \| [\d,]+ \| [\d,]+ \| [\d,]+ \|/)
   }, 60_000)

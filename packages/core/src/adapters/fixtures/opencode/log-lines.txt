@@ -1,0 +1,4 @@
+timestamp=2026-11-10T06:34:09.213Z level=ERROR run=11068ec2 message="stream error" providerID=openai modelID=gpt-5.5 session.id=ses_1 small=false agent=build mode=primary error.error="AI_APICallError: You exceeded your current quota, please check your plan"
+timestamp=2026-11-10T06:22:45.332Z level=ERROR run=b394ca9b message=process session.id=ses_1 messageID=msg_1 error="The model is broken" stack="AI_APICallError: The model is broken\n    at <anonymous> (/$bunfs/root/chunk-h0mjhy3t.js:6:14583)"
+timestamp=2026-11-10T06:22:08.519Z level=WARN run=10ae5a87 message="background dependency install failed" dir="/tmp/kothar-opencode.abc/config/opencode" error="npm install failed"
+timestamp=2026-11-10T06:22:09.000Z level=ERROR run=10ae5a87 message="failed to get prompt" clientName=browser error="Connection closed"

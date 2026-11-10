@@ -1,4 +1,4 @@
-import type { ModView } from '@kothar/mod-api'
+import type { ExtensionView } from '@kothar/extension-api'
 import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
   RestartState,
@@ -20,7 +20,8 @@ import type {
   EngineInfo,
   ModelLists,
   Run,
-  ModInfo,
+  Setup,
+  ExtensionInfo,
   PanelTab,
   QueuedMessage,
   Question,
@@ -64,14 +65,22 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
-  // mod and panel: clicking the note opens that mod's panel.
-  | { kind: 'note'; text: string; mod?: string; panel?: string }
+  // extension and panel: clicking the note opens that extension's panel.
+  | { kind: 'note'; text: string; extension?: string; panel?: string }
+
+// Thinking as it streams in: never logged, but kept with the entries so items can be rebuilt from them.
+type Shown = ChatEntry | { type: 'thinking.shown'; text: string }
 
 export type ChatView = ChatInfo & {
   // What the chat runs now, as the core picked it; absent when nothing can run.
   run?: Run
   status: ChatStatus
   items: Item[]
+  // The part of the log loaded so far (the latest page, and older ones as the view scrolls up), where it starts in
+  // the log, and how many items older pages have added in front, so the items shown before keep their place.
+  entries?: Shown[]
+  from?: number
+  shift?: number
   draft: string
   queue: QueuedMessage[]
   waits?: ChatWait[]
@@ -86,8 +95,9 @@ export type State = {
   chats: ChatView[]
   selectedId: string
   contextDefaults: Record<ContextSection, boolean>
-  mods: ModInfo[]
+  extensions: ExtensionInfo[]
   modelLists: ModelLists
+  setups: Setup[]
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
@@ -97,17 +107,19 @@ export type State = {
   // marketKey), counted so the same error twice still reads as a new answer.
   catalog?: { entries?: MarketEntry[]; error?: string }
   marketFailures: Record<string, { error: string; count: number }>
-  // The master switch for community mods, and the community mod changes that wait for a restart.
-  communityMods: boolean
+  // The master switch for community extensions, and the community extension changes that wait for a restart.
+  communityExtensions: boolean
   restart: RestartState
   // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
   localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
+  // The core's answer to the last setup save, counted so the same answer twice still reads as new.
+  setupSave?: { count: number; id?: string; error?: string }
   // The core's latest answer to the search palette.
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
-  // The selected chat's mod panels and commands, and the views of the panels it has opened (panelKey).
-  modUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
-  panelViews: Record<string, { view?: ModView; error?: string }>
+  // The selected chat's extension panels and commands, and the views of the panels it has opened (panelKey).
+  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  panelViews: Record<string, { view?: ExtensionView; error?: string }>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
@@ -129,11 +141,12 @@ export const initialState: State = {
   chats: [],
   selectedId: '',
   contextDefaults: { agents: true, folders: true, files: true },
-  mods: [],
+  extensions: [],
   modelLists: NO_LISTS,
+  setups: [],
   workFolder: { defaultPath: '', canSandbox: true },
   marketFailures: {},
-  communityMods: false,
+  communityExtensions: false,
   restart: { changes: [], canRestart: false },
   panelViews: {},
   terminalErrors: {},
@@ -147,8 +160,14 @@ const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pendi
 const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
 const NO_REPLY = '(No reply)'
 
-function applyEntry(items: Item[], entry: ChatEntry): Item[] {
+function applyEntry(items: Item[], entry: Shown): Item[] {
   switch (entry.type) {
+    case 'thinking.shown': {
+      const last = items.at(-1)
+      return last?.kind === 'thinking'
+        ? [...items.slice(0, -1), { kind: 'thinking', text: last.text + entry.text }]
+        : [...items, { kind: 'thinking', text: entry.text }]
+    }
     case 'user.message': {
       const { text, attachments } = entry
       const old = attachments ? null : OLD_REPORT.exec(text)
@@ -180,7 +199,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
     case 'tool.completed':
       return items.map((i) =>
         i.kind === 'tool' && i.toolId === entry.toolId
-          ? { ...i, state: entry.isError ? 'error' : 'done', output: entry.output }
+          ? { ...i, state: entry.stopped ? 'stopped' : entry.isError ? 'error' : 'done', output: entry.output }
           : i,
       )
     case 'permission.requested': {
@@ -232,21 +251,44 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
       )
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
-    case 'mod.note': {
-      const { text, mod, panel } = entry
-      return [...items, { kind: 'note', text, ...(mod && panel && { mod, panel }) }]
+    case 'extension.note': {
+      const { text, extension, panel } = entry
+      return [...items, { kind: 'note', text, ...(extension && panel && { extension, panel }) }]
     }
-    // The turn's error or a mod's note says it.
+    // The turn's error or an extension's note says it.
     case 'limit.reached':
     case 'turn.started':
       return items
   }
 }
 
-const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
+const toView = ({ entries, from, ...chat }: ChatState): ChatView => ({
+  ...chat,
+  items: entries.reduce(applyEntry, []),
+  entries,
+  from: from ?? 0,
+  shift: 0,
+})
 
-type Shown = { at: number; item: Item }
-type TranscriptRow = Shown | { at: number; steps: Item[] }
+// Streamed thinking joins the last thinking entry, as it joins the last thinking item.
+const withThinking = (entries: Shown[], text: string): Shown[] => {
+  const last = entries.at(-1)
+  return last?.type === 'thinking.shown'
+    ? [...entries.slice(0, -1), { type: 'thinking.shown', text: last.text + text }]
+    : [...entries, { type: 'thinking.shown', text }]
+}
+
+// An older page goes in front, and the items are built again from all the entries: a turn the page cut in two
+// joins up again.
+function withOlder(chat: ChatView, page: Extract<CoreMessage, { type: 'chat.history' }>): ChatView {
+  if (page.before !== chat.from || page.from >= page.before) return chat
+  const entries = [...page.entries, ...(chat.entries ?? [])]
+  const items = entries.reduce(applyEntry, [])
+  return { ...chat, entries, items, from: page.from, shift: (chat.shift ?? 0) + items.length - chat.items.length }
+}
+
+type ShownItem = { at: number; item: Item }
+type TranscriptRow = ShownItem | { at: number; steps: Item[] }
 
 const waiting = (item: Item) =>
   (item.kind === 'permission' && item.outcome === 'pending') ||
@@ -258,7 +300,7 @@ const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pen
 // waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
-  let turn: Shown[] = []
+  let turn: ShownItem[] = []
   const endTurn = (live: boolean) => {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
@@ -304,12 +346,13 @@ export function reduce(state: State, action: Action): State {
         accounts: action.accounts,
         chats: action.chats.map(toView),
         contextDefaults: action.contextDefaults,
-        mods: action.mods,
+        extensions: action.extensions,
         modelLists: action.modelLists,
+        setups: action.setups ?? [],
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
-        communityMods: action.communityMods,
+        communityExtensions: action.communityExtensions,
         restart: action.restart,
       })
     case 'engine.updated':
@@ -349,19 +392,19 @@ export function reduce(state: State, action: Action): State {
       return updateChat(state, action.chatId, (c) => ({
         ...c,
         items: applyEntry(c.items, action.entry),
+        ...(c.entries && { entries: [...c.entries, action.entry] }),
         draft: endsText(action.entry) ? '' : c.draft,
       }))
+    case 'chat.history':
+      return updateChat(state, action.chatId, (c) => withOlder(c, action))
     case 'chat.delta':
       return updateChat(state, action.chatId, (c) => ({ ...c, draft: c.draft + action.text }))
     case 'chat.thinking':
-      return updateChat(state, action.chatId, (c) => {
-        const last = c.items.at(-1)
-        const items: Item[] =
-          last?.kind === 'thinking'
-            ? [...c.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
-            : [...c.items, { kind: 'thinking', text: action.text }]
-        return { ...c, items }
-      })
+      return updateChat(state, action.chatId, (c) => ({
+        ...c,
+        items: applyEntry(c.items, { type: 'thinking.shown', text: action.text }),
+        ...(c.entries && { entries: withThinking(c.entries, action.text) }),
+      }))
     case 'chat.status':
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
     case 'chat.queue':
@@ -373,15 +416,15 @@ export function reduce(state: State, action: Action): State {
     case 'chat.context':
       if (action.chatId !== state.selectedId) return state
       return { ...state, context: { chatId: action.chatId, items: action.items } }
-    case 'chat.mods': {
+    case 'chat.extensions': {
       if (action.chatId !== state.selectedId) return state
       const { chatId, panels, commands } = action
-      return { ...state, modUi: { chatId, panels, commands } }
+      return { ...state, extensionUi: { chatId, panels, commands } }
     }
-    case 'mod.panel': {
+    case 'extension.panel': {
       if (action.chatId !== state.selectedId) return state
       const { view, error } = action
-      const key = panelKey(action.chatId, action.mod, action.panel)
+      const key = panelKey(action.chatId, action.extension, action.panel)
       return { ...state, panelViews: { ...state.panelViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
     }
     case 'context.file': {
@@ -392,19 +435,26 @@ export function reduce(state: State, action: Action): State {
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
-    case 'mod.updated': {
-      const known = state.mods.some((m) => m.id === action.mod.id)
-      const mods = known ? state.mods.map((m) => (m.id === action.mod.id ? action.mod : m)) : [...state.mods, action.mod]
-      return { ...state, mods }
+    case 'extension.updated': {
+      const known = state.extensions.some((m) => m.id === action.extension.id)
+      const extensions = known ? state.extensions.map((m) => (m.id === action.extension.id ? action.extension : m)) : [...state.extensions, action.extension]
+      return { ...state, extensions }
     }
-    case 'mod.removed':
-      return { ...state, mods: state.mods.filter((m) => m.id !== action.modId) }
-    case 'communityMods.updated':
-      return { ...state, communityMods: action.enabled }
+    case 'extension.removed':
+      return { ...state, extensions: state.extensions.filter((m) => m.id !== action.extensionId) }
+    case 'communityExtensions.updated':
+      return { ...state, communityExtensions: action.enabled }
     case 'restart.updated':
       return { ...state, restart: action.restart }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
+    case 'setups.updated':
+      return { ...state, setups: action.setups }
+    case 'setup.saved':
+    case 'setup.refused': {
+      const answer = action.type === 'setup.saved' ? { id: action.setup.id } : { error: action.error }
+      return { ...state, setupSave: { ...answer, count: (state.setupSave?.count ?? 0) + 1 } }
+    }
     case 'memory.updated':
       return state
     case 'workFolder.updated':
@@ -435,6 +485,9 @@ export function reduce(state: State, action: Action): State {
       const terminalErrors = action.error ? { ...rest, [terminalKey(action.chatId, action.path)]: action.error } : rest
       return { ...state, terminalErrors }
     }
+    // Shown by the notifier (notifications.ts), not kept in state.
+    case 'notify':
+      return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
     case 'error':
@@ -446,13 +499,13 @@ export function reduce(state: State, action: Action): State {
     case 'connection':
       return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
-      return { ...state, selectedId: action.chatId, context: undefined, modUi: undefined, panelViews: {} }
+      return { ...state, selectedId: action.chatId, context: undefined, extensionUi: undefined, panelViews: {} }
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }
 }
 
-export const panelKey = (chatId: string, mod: string, panel: string) => `${chatId}/${mod}/${panel}`
+export const panelKey = (chatId: string, extension: string, panel: string) => `${chatId}/${extension}/${panel}`
 
 const newestFirst = (a: ChatView, b: ChatView) => b.createdAt.localeCompare(a.createdAt)
 
@@ -471,7 +524,7 @@ export function chatTree(chats: ChatView[]) {
   const archivedRoots = chats.filter((c) => c.archived && !chats.find((p) => p.id === c.parentId)?.archived)
   return {
     active: activeRoots
-      .sort((a, b) => Number(!!b.mod) - Number(!!a.mod) || bySpaceOrder(a, b))
+      .sort((a, b) => Number(!!b.extension) - Number(!!a.extension) || bySpaceOrder(a, b))
       .flatMap((c) => walk(c, 0, false)),
     archived: archivedRoots.sort(newestFirst).flatMap((c) => walk(c, 0, true)),
   }
@@ -510,7 +563,7 @@ export const workerRequests = (chats: ChatView[], chatId: string): WorkerRequest
     .filter((c) => c.worker && !c.archived)
     .flatMap((chat) => pendingIn(chat).map((permission) => ({ chat, permission })))
 
-/** What mods wait on the user for in a chat and the workers below it, answered from that chat. */
+/** What extensions wait on the user for in a chat and the workers below it, answered from that chat. */
 export const waitsBelow = (chats: ChatView[], chatId: string) =>
   familyOf(chats, chatId)
     .filter((c, i) => i === 0 || (c.worker && !c.archived))
@@ -613,7 +666,7 @@ export function formatBytes(bytes: number) {
 export const MAX_PREVIEW_BYTES = 1_000_000
 
 export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
-  if (chat.mod || chat.archived || !items) return undefined
+  if (chat.extension || chat.archived || !items) return undefined
   const pinned = items.some((i) => i.section === 'files' && i.from === chat.id && i.path === path)
   return pinned ? 'pinned' : 'unpinned'
 }
@@ -630,11 +683,13 @@ export function accountLabel(account: Account) {
 
 export function listedAccounts({ active, accounts }: EngineAccounts) {
   const own = accounts.find((a) => a.id === 'default')
-  const sameLogin = (a: Account) => a !== own && a.kind === 'login' && a.signedIn && a.label === own?.label
+  // A label names the person signed in, except on engines with providers, where it names the provider.
+  const sameLogin = (a: Account) =>
+    a !== own && a.kind === 'login' && !a.provider && a.signedIn && a.label === own?.label
   const twin = own?.signedIn && own.label && accounts.find(sameLogin)
   if (!own || !twin) return { active, accounts }
   return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
 }
 
-// One key per installable thing: a theme and a mod may share an id.
+// One key per installable thing: a theme and an extension may share an id.
 export const marketKey = (kind: MarketKind, id: string) => `${kind}:${id}`

@@ -1,7 +1,0 @@
-{
-  "name": "@kothar/mod-api",
-  "private": true,
-  "license": "MIT",
-  "type": "module",
-  "exports": { ".": "./index.ts" }
-}

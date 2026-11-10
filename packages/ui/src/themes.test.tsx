@@ -375,7 +375,7 @@ describe('appearance', () => {
     for (const [theme] of EVERY)
       for (const scheme of SCHEMES) {
         chooseAppearance({ theme, scheme })
-        const { vibrancy, background } = mac.bridge.setAppearance.mock.lastCall?.[0]
+        const { vibrancy, background } = mac.bridge.setAppearance.mock.lastCall![0]
         expect(vibrancy, `${theme} ${scheme}`).toBe(theme === 'glass')
         if (theme !== 'glass') expect(background, `${theme} ${scheme}`).toMatch(/^#[0-9a-f]{6}$/i)
       }

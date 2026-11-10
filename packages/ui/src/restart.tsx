@@ -38,7 +38,7 @@ export function RestartButton({ restart, running, connected, send }: Props) {
   )
 }
 
-// Inline in Settings: which community mod changes wait for a restart.
+// Inline in Settings: which community extension changes wait for a restart.
 export function RestartNotice(props: Props) {
   const { changes } = props.restart
   if (!changes.length) return null

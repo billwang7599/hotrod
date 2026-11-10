@@ -6,27 +6,42 @@
 
 <p align="center">A desktop app for running coding agents.</p>
 
-Bring your own engines (coding-agent CLIs like Claude Code, Codex and pi) and drive them all from one place. Kothar
-keeps a small core and lets you customize the rest with mods, which work with every engine.
+Bring your own engines (coding-agent CLIs like Claude Code, Codex, OpenCode and pi) and drive them all from one place. Kothar
+keeps a small core and lets you customize the rest with extensions, which work with every engine.
 
-## Mods
+## Extensions
 
-A mod is written once and works with every engine. It can add panels and commands, react to chats and turns, answer
-permission requests, rewrite messages, and run commands, all through Kothar's public mod API.
+An extension is written once and works with every engine. It can add panels and commands, react to chats and turns,
+answer permission requests, rewrite messages, and run commands, all through Kothar's public extension API.
 
-**Mod documentation:** [mod-documentation/](mod-documentation/index.md) covers using, building and publishing mods and
-themes, with the full API reference.
+**Extension documentation:** [extension-documentation/](extension-documentation/index.md) covers using, building and
+publishing extensions and themes, with the full API reference.
 
-Community mods install from the marketplace in Settings, from their authors' own repos. A mod is code, so it lists what
-it uses through the mod API (running programs, reading chats, answering permission requests and so on). Kothar shows
-that list before you install it, refuses to start a mod that does more than it listed, and keeps every community mod
-off until you turn it on. Mods load when Kothar starts, so turning one on takes a restart.
+Community extensions install from the marketplace in Settings, from their authors' own repos. An extension is code, so
+it lists what it uses through the extension API (running programs, reading chats, answering permission requests and so
+on). Kothar shows that list before you install it, refuses to start an extension that does more than it listed, and
+keeps every community extension off until you turn it on. Extensions load when Kothar starts, so turning one on takes a
+restart.
 
-**Writing a mod or theme:** start from the template
+**Writing an extension or theme:** start from the template
 [billwang7599/kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod) (or
 [kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme) for a theme). Try it with **Install from
-folder…** in the Marketplace window (**Browse…** in Settings → Community mods) before you publish, then follow the
-[author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod) to list it.
+folder…** in the Marketplace window (**Browse…** in Settings → Community hub) before you publish, then follow the
+[author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-extension) to list it.
+
+## Setups
+
+A setup is a saved choice for a kind of job: an engine and model with its thinking level, extensions to leave out, and
+extra instructions. Make them in Settings → Setups and pick one for a space in its General tab. A worker always uses its
+closest parent's setup, which is its space's, and can't pick its own. A setup applies from the chat's next message. A model or thinking level picked for the chat
+itself still wins, and anything the setup leaves out follows Settings. Each setup is a plain JSON file in
+`<garage>/setups/`.
+
+A setup's instructions go into each session after the extensions' instructions and before the context items (the global
+`AGENTS.md`, then each chat's), so your own `AGENTS.md` files read last. A setup can switch off extensions that are on,
+for its chats only, but it can't turn on one that's off in Settings. Those chats don't get its tools, instructions,
+panel tabs or commands. An extension with a chat of its own, such as Home,
+always stays on in that chat, so the setup form doesn't list it.
 
 ## Themes
 
@@ -37,7 +52,7 @@ anything but colours.
 The marketplace is a catalog of pointers in its own repo,
 [billwang7599/kothar-marketplace](https://github.com/billwang7599/kothar-marketplace). Each entry names its author's own
 repo, and Kothar installs from that repo's latest GitHub release, so authors own and update their work without a PR
-here. Its README says how to publish and submit a theme or a mod.
+here. Its README says how to publish and submit a theme or an extension.
 
 ## Status
 
@@ -58,9 +73,10 @@ To try a build beside your own Kothar, run it on a throwaway garage:
 
 ## License
 
-- **Kothar's core, app and built-in mods:** [Functional Source License 1.1, Apache 2.0 future licence](LICENSE.md)
+- **Kothar's core, app and built-in extensions:** [Functional Source License 1.1, Apache 2.0 future licence](LICENSE.md)
   (FSL-1.1-ALv2). You may use, copy, modify and redistribute it for any purpose except a competing commercial
   product or service. Two years after each version is released, that version becomes Apache 2.0.
-- **The mod API (`packages/mod-api`):** [MIT](packages/mod-api/LICENSE), so mods can use any licence they like.
+- **The extension API (`packages/extension-api`):** [MIT](packages/extension-api/LICENSE), so extensions can use any
+  licence they like.
 
 Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md).

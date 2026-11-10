@@ -64,7 +64,7 @@ describe('claudeCode adapter', () => {
     expect(fake.spawned[0]?.env).toEqual({ KOTHAR_MCP_TOKEN: token })
   })
 
-  it("connects each mod's MCP server next to Kothar's, running without asking the tools of those that allow it", () => {
+  it("connects each extension's MCP server next to Kothar's, running without asking the tools of those that allow it", () => {
     const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
     const mcpServers = [
       { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' }, allowTools: true },
@@ -741,7 +741,7 @@ describe('claudeCode accounts', () => {
   })
 
   it('logs in with the account config folder, passes on the sign-in link and a pasted code', () => {
-    const { fake, events, flow } = startLogin()
+    const { fake, events } = startLogin()
     expect(fake.spawned).toEqual([
       { command: 'claude', args: ['auth', 'login', '--claudeai'], cwd: dir, env: { CLAUDE_CONFIG_DIR: dir } },
     ])

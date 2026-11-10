@@ -10,8 +10,9 @@ import {
   type CommandInfo,
   type ContextItem,
   type ContextSection,
-  type PanelTab as ModTab,
+  type PanelTab as ExtensionTab,
   type PermissionSwitch,
+  type Setup,
   type WorkFolder,
   type Worktree,
 } from '@kothar/core/shared'
@@ -20,8 +21,9 @@ import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
-import { ModViewer } from './mod-view.tsx'
-import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
+import { ExtensionViewer } from './extension-view.tsx'
+import { SETUP_HINT } from './setups-page.tsx'
+import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
 import { folderName, lineOf, panelKey, terminalKey, type ChatView, type State } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -57,11 +59,18 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
       'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
       'anywhere on, or on a system Kothar can’t sandbox, every command asks but plain reads.',
   },
-  askNetworkCommands: {
-    label: 'Ask before commands that publish or reach the network',
+  autoNetworkCommands: {
+    label: 'Run network commands without asking',
     about:
-      `Commands that mention ${ASK_FIRST_COMMANDS.join(', ')} ask you first, even while commands run without ` +
-      'asking.',
+      `Agents also run commands that publish or reach the network (${ASK_FIRST_COMMANDS.join(', ')}) without ` +
+      'asking you first. Only matters while Run commands without asking is on; off, those commands ask.',
+  },
+  autoEnvCommands: {
+    label: 'Let commands use .env files without asking',
+    about:
+      '.env files often hold keys and passwords. On: sandboxed commands that read or edit a project’s .env files, ' +
+      'and reads of them, run without asking you first. SSH keys, other logins and Kothar’s saved accounts still ' +
+      'ask. Only matters while Run commands without asking is on.',
   },
   autoFetch: {
     label: 'Fetch web pages without asking',
@@ -72,7 +81,8 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
     about:
       'Agents read and search files outside the work folder, and run commands that only read (ls, cat, grep, ' +
       'git status, git log…), without asking, sandboxed or not. Logins and keys still ask: ~/.ssh, ~/.aws, ' +
-      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files and Kothar’s saved accounts.',
+      '~/.gnupg, ~/.config/gh, Keychains, .netrc, .env files (unless Let commands use .env files without asking lets ' +
+      'them through) and Kothar’s saved accounts.',
   },
 }
 const PERMISSIONS_HINT =
@@ -188,7 +198,11 @@ function CardBody({ collapsed, className, children }: { collapsed: boolean; clas
 
 function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const [text, setText] = useState(item.text)
-  useEffect(() => setText(item.text), [item.text])
+  const [was, setWas] = useState(item.text)
+  if (item.text !== was) {
+    setWas(item.text)
+    setText(item.text)
+  }
   const { collapsed, toggle } = useCollapsed(item)
   const paths = usePathsShown()
   const own = item.from === chatId
@@ -483,6 +497,41 @@ function FoldPicker({ label, shown, choose }: { label: string; shown: boolean; c
   )
 }
 
+const NO_SETUP = 'none:'
+
+/** The setup this chat uses, at the top of the General tab. */
+function SetupPicker({ chat, setups, disabled, send, openSetups }: {
+  chat: ChatView
+  setups: Setup[]
+  disabled: boolean
+  send: (m: ClientMessage) => void
+  openSetups?: () => void
+}) {
+  const current = setups.find((s) => s.id === chat.setup)
+  return (
+    <section className="flex flex-col gap-6" aria-label="Setup">
+      <About intro={SETUP_HINT} notes={[]} />
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+        <span className="min-w-0 flex-1">Setup</span>
+        <Select
+          label="Setup"
+          value={current?.id ?? NO_SETUP}
+          disabled={disabled || (!setups.length && !current)}
+          options={[{ value: NO_SETUP, label: 'None' }, ...setups.map((s) => ({ value: s.id, label: s.name }))]}
+          onChange={(value) =>
+            send({ type: 'chat.setSetup', chatId: chat.id, ...(value !== NO_SETUP && { setup: value }) })
+          }
+        />
+      </div>
+      {openSetups && (
+        <Button variant="ghost" size="small" className="w-fit" onClick={openSetups}>
+          {setups.length ? 'Edit setups…' : 'Make a setup…'}
+        </Button>
+      )}
+    </section>
+  )
+}
+
 function ViewPickers({ chatId }: { chatId: string }) {
   const steps = useStepsShown(chatId)
   const reports = useReportsShown(chatId)
@@ -535,12 +584,12 @@ function Permissions({ chat, above, workFolder, disabled, send }: {
   )
 }
 
-// Kothar's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
+// Kothar's own tabs; an extension's panel is `extension:<extension>/<panel>` (extensionTabId).
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
-/** Actions mods add for this chat, listed in the General tab. */
-function ModCommands({ chatId, commands, disabled, send }: {
+/** Actions extensions add for this chat, listed in the General tab. */
+function ExtensionCommands({ chatId, commands, disabled, send }: {
   chatId: string
   commands: CommandInfo[]
   disabled: boolean
@@ -554,16 +603,16 @@ function ModCommands({ chatId, commands, disabled, send }: {
         {commands.map((c) => {
           const button = (
             <Button
-              key={`${c.mod}/${c.id}`}
+              key={`${c.extension}/${c.id}`}
               size="small"
               disabled={disabled}
-              onClick={() => send({ type: 'mod.command', chatId, mod: c.mod, command: c.id })}
+              onClick={() => send({ type: 'extension.command', chatId, extension: c.extension, command: c.id })}
             >
               {c.label}
             </Button>
           )
           return c.hint ? (
-            <Hint key={`${c.mod}/${c.id}`} text={c.hint}>
+            <Hint key={`${c.extension}/${c.id}`} text={c.hint}>
               {button}
             </Hint>
           ) : (
@@ -620,11 +669,14 @@ type ContextPanelProps = {
   connected: boolean
   send: (m: ClientMessage) => void
   hide?: () => void
-  modUi?: State['modUi']
+  extensionUi?: State['extensionUi']
   panelViews?: State['panelViews']
   terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
   pickers?: Pickers
+  setups?: Setup[]
+  // Opens Settings → Setups.
+  openSetups?: () => void
 }
 
 export function ContextPanel(props: ContextPanelProps) {
@@ -637,19 +689,22 @@ export function ContextPanel(props: ContextPanelProps) {
   // A worker follows its space's switches unless it has its own.
   const above = chat ? lineOf(chats, chat).slice(1) : []
   // The space's work folder, once its first message has picked one.
-  const workDir = chat && !chat.mod ? (above.at(-1) ?? chat).workDir : undefined
-  const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
-  const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
+  const workDir = chat && !chat.extension ? (above.at(-1) ?? chat).workDir : undefined
+  const sections: readonly ContextSection[] = chat?.extension ? ['agents'] : CONTEXT_SECTIONS
+  const intro = chat?.extension ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const tab = usePanelTab()
-  const modUi = props.modUi?.chatId === chatId ? props.modUi : undefined
-  const modTabs: ModTab[] = chat ? (modUi?.panels ?? []) : []
-  const modTab = modTabs.find((p) => modTabId(p.mod, p.id) === tab)
-  const known = tab === 'general' || modTab
+  const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []) : []
+  const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
+  const known = tab === 'general' || extensionTab
   const shown: PanelTabId = chat && known ? tab : 'context'
-  const panelView = modTab && props.panelViews?.[panelKey(chatId, modTab.mod, modTab.id)]
+  const panelView = extensionTab && props.panelViews?.[panelKey(chatId, extensionTab.extension, extensionTab.id)]
+  // By the tab's names, not the tab object, which is new on every render.
+  const tabExtension = extensionTab?.extension
+  const tabPanel = extensionTab?.id
   useEffect(() => {
-    if (connected && modTab) send({ type: 'mod.panel.get', chatId, mod: modTab.mod, panel: modTab.id })
-  }, [chatId, connected, modTab?.mod, modTab?.id, send])
+    if (connected && tabExtension && tabPanel) send({ type: 'extension.panel.get', chatId, extension: tabExtension, panel: tabPanel })
+  }, [chatId, connected, tabExtension, tabPanel, send])
   const width = usePanelWidth('context')
   const canAdd = shown === 'context' && !locked && sections.includes('folders')
   const drop = useDropPaths(
@@ -659,7 +714,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const tabs: TabEntry[] = [
     ...(chat ? [{ id: 'general', label: TAB_LABEL.general! }] : []),
     { id: 'context', label: TAB_LABEL.context! },
-    ...modTabs.map((p) => ({ id: modTabId(p.mod, p.id), label: p.title })),
+    ...extensionTabs.map((p) => ({ id: extensionTabId(p.extension, p.id), label: p.title })),
   ]
   return (
     <aside
@@ -682,12 +737,12 @@ export function ContextPanel(props: ContextPanelProps) {
       </AnimatePresence>
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <PanelTabs tabs={tabs} active={shown} choose={choosePanelTab} />
-        {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
+        {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} action="toggleContextPanel" />}
       </header>
       <div
         className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"
         role="tabpanel"
-        aria-label={modTab?.title ?? TAB_LABEL[shown]}
+        aria-label={extensionTab?.title ?? TAB_LABEL[shown]}
       >
         {shown === 'context' && (
           <About intro={`${intro} Edits apply from the next message.`} notes={sections.map((s) => SECTIONS[s])} />
@@ -725,6 +780,9 @@ export function ContextPanel(props: ContextPanelProps) {
               </section>
             )
           })}
+        {shown === 'general' && chat && !chat.worker && (
+          <SetupPicker chat={chat} setups={props.setups ?? []} disabled={locked} send={send} openSetups={props.openSetups} />
+        )}
         {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
         {shown === 'general' && chat && workDir && (
           <WorkFolderRow
@@ -739,14 +797,15 @@ export function ContextPanel(props: ContextPanelProps) {
           <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
         )}
         {shown === 'general' && chat && (
-          <ModCommands chatId={chatId} commands={modUi?.commands ?? []} disabled={locked} send={send} />
+          <ExtensionCommands chatId={chatId} commands={extensionUi?.commands ?? []} disabled={locked} send={send} />
         )}
-        {modTab && (
-          <ModViewer
+        {extensionTab && (
+          <ExtensionViewer
             view={panelView?.view}
             error={panelView?.error}
-            act={(action) => send({ type: 'mod.panel.action', chatId, mod: modTab.mod, panel: modTab.id, action })}
-            set={(key, value) => send({ type: 'mod.space.set', chatId, mod: modTab.mod, key, value })}
+            act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}
+            set={(key, value) => send({ type: 'extension.space.set', chatId, extension: extensionTab.extension, key, value })}
+            reveal={(path) => send({ type: 'reveal', path })}
           />
         )}
       </div>

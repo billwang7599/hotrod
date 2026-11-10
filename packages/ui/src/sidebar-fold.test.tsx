@@ -127,6 +127,13 @@ test('a folded row shows when a hidden worker is running or waiting', async () =
   expect(dotOf('space').className).toContain('bg-faint')
 })
 
+test('a stopping chat shows a grey dot, never the amber one that means it waits on you', () => {
+  render([chat('space', { status: 'stopping' }), sub('a', { status: 'waiting' })], 'other')
+  expect(dotOf('space').className).toContain('bg-muted')
+  expect(dotOf('space').className).not.toContain('bg-amber')
+  expect(dotOf('a').className).toContain('bg-amber')
+})
+
 test('the worker being viewed stays in the list when its space folds', async () => {
   render([chat('space'), sub('a'), sub('b')], 'a')
   await click(toggle('Hide workers'))

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 /**
  * Keyboard shortcuts: one registry of actions, each with a default binding the user can remap in Settings → Shortcuts.
@@ -46,13 +46,15 @@ const actions: ShortcutAction[] = [
   { id: 'newSpace', label: 'New space', defaultKeys: 'Mod+N', menu: true },
   { id: 'newSpaceFromFolder', label: 'New space from folder', defaultKeys: 'Mod+Shift+O', desktopOnly: true, menu: true },
   { id: 'settings', label: 'Settings', defaultKeys: 'Mod+,', menu: true },
+  { id: 'toggleSidebar', label: 'Show or hide the sidebar', defaultKeys: 'Mod+[', menu: true },
+  { id: 'toggleContextPanel', label: 'Show or hide the context panel', defaultKeys: 'Mod+]', menu: true },
   { id: 'marketplace', label: 'Marketplace', defaultKeys: null },
 ]
 
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((listener) => listener())
 
-/** Adds an action to the registry, for mods and later features. Replaces one with the same id. */
+/** Adds an action to the registry, for extensions and later features. Replaces one with the same id. */
 export function registerShortcut(action: ShortcutAction) {
   const at = actions.findIndex((a) => a.id === action.id)
   if (at < 0) actions.push(action)
@@ -259,6 +261,17 @@ export function acceleratorOf(binding: Binding | null): string | null {
 
 export type ShortcutHandlers = Partial<Record<string, () => void>>
 
+type Panels = { covered: boolean; chatOpen: boolean; toggleSidebar: () => void; toggleContext: () => void }
+
+/**
+ * The keys that show or hide the side panels, the same as their toggle buttons. Behind Settings or the Marketplace
+ * (covered) the panels can't be seen, so the keys do nothing; the context panel also needs an open chat.
+ */
+export function panelShortcuts({ covered, chatOpen, toggleSidebar, toggleContext }: Panels): ShortcutHandlers {
+  if (covered) return {}
+  return { toggleSidebar, ...(chatOpen && { toggleContextPanel: toggleContext }) }
+}
+
 /** The action a key press runs, if it has a handler. */
 export function actionFor(e: KeyLike, handlers: ShortcutHandlers, all = current, mac = isMac()) {
   return actions.find((a) => handlers[a.id] && matches(e, all[a.id] ?? null, mac))?.id
@@ -271,7 +284,9 @@ export function actionFor(e: KeyLike, handlers: ShortcutHandlers, all = current,
  */
 export function useShortcuts(handlers: ShortcutHandlers) {
   const latest = useRef(handlers)
-  latest.current = handlers
+  useLayoutEffect(() => {
+    latest.current = handlers
+  })
   useEffect(() => {
     // The page and the desktop menu can both see one key press; whichever is second is dropped.
     let last = { id: '', at: 0, from: '' }

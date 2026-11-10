@@ -1,0 +1,654 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { ChatSummary, Extension, ExtensionHost, ExtensionListItem, ExtensionView } from '@kothar/extension-api'
+import { createFakeAdapter } from '@kothar/core/fake'
+import { startCore } from '@kothar/core/main'
+import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kothar/core/shared'
+import { sandboxingMachine as localMachine } from '@kothar/core/test-machine'
+import { elapsed } from '../../packages/ui/src/elapsed.ts'
+import { addressOf, createProcessesExtension, duration, endNote, LINE_MAX_CHARS, plain, portOf } from './index.ts'
+
+const cleanups: (() => void | Promise<void>)[] = []
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
+})
+
+function tempDir() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  return dir
+}
+
+async function until(check: () => boolean, tries = 600) {
+  for (let i = 0; i < tries && !check(); i++) await new Promise((r) => setTimeout(r, 10))
+  if (!check()) throw new Error('timed out')
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const at = '2026-01-01T00:00:00.000Z'
+
+// A core on the fake engine with the Processes extension. Processes really run, on this computer, but unsandboxed: the
+// machine notes the sandbox each was given, so the tests run where sandbox-exec doesn't.
+async function start(options: { logMaxBytes?: number } = {}) {
+  const garage = tempDir()
+  const work = join(garage, 'work')
+  // A space and its worker, saved as if from before, so the worker exists without running a model.
+  const spaceId = 'space001'
+  const workDir = join(work, spaceId)
+  mkdirSync(workDir, { recursive: true })
+  const saved = (id: string, fields: object) => {
+    mkdirSync(join(garage, 'chats', id), { recursive: true })
+    const chat = { id, engine: 'fake', createdAt: at, ...fields }
+    writeFileSync(join(garage, 'chats', id, 'chat.json'), JSON.stringify(chat))
+  }
+  saved(spaceId, { name: 'Web', folders: [], files: [], archived: false, workDir })
+  saved('sub001', { name: 'Builder', parentId: spaceId, worker: true })
+
+  const spawned: { command: string; args: string[]; cwd: string; sandbox?: Sandbox }[] = []
+  const machine: Machine = {
+    ...localMachine,
+    canSandbox: true,
+    spawn(command, args, { sandbox, ...rest }) {
+      spawned.push({ command, args, cwd: rest.cwd, ...(sandbox && { sandbox }) })
+      return localMachine.spawn(command, args, rest)
+    },
+  }
+  const made = createProcessesExtension({ settleMs: 300, stopWaitMs: 3000, refreshMs: 50, ...options })
+  let host: ExtensionHost | undefined
+  const extension: Extension = { ...made.extension, onChatCreated: (_chat, context) => void (host = context.host) }
+  const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: work, KOTHAR_PORT: '0' }
+  // No terminal really opens: the folders asked for are noted, and terminal.fails makes the next ones fail.
+  const terminals: string[] = []
+  const terminal = { fails: '' }
+  const openTerminal = async (dir: string) => {
+    if (terminal.fails) throw new Error(terminal.fails)
+    terminals.push(dir)
+  }
+  const kothar = await startCore({ env, adapters: [createFakeAdapter([], 0)], extensions: [extension], machine, openTerminal })
+  let closed = false
+  const close = async () => {
+    if (!closed) await kothar.close(true)
+    closed = true
+  }
+  cleanups.push(close)
+  const { core } = kothar
+  const messages: CoreMessage[] = []
+  core.onMessage((m) => messages.push(m))
+  const replies: CoreMessage[] = []
+  const handle = (m: ClientMessage) => core.handle(m, (r) => replies.push(r))
+  // Any chat made hands the test the extension's host.
+  handle({ type: 'chat.create', name: 'Other' })
+  const caller = (id: string): ChatSummary => {
+    const chat = core.chats().find((c) => c.id === id)!
+    return { id: chat.id, name: chat.name, engine: chat.engine, ...(chat.parentId && { parentId: chat.parentId }) }
+  }
+  const tool = async (name: string, input: Record<string, unknown>, from = spaceId): Promise<any> => {
+    const found = extension.tools!.find((t) => t.name === name)!
+    return found.run(input, { caller: caller(from), values: {}, host: host! })
+  }
+  const logDir = join(garage, 'extensions', 'processes')
+  const tabs = (chatId = spaceId) => {
+    handle({ type: 'context.get', chatId })
+    const listed = replies.findLast((m) => m.type === 'chat.extensions' && m.chatId === chatId)
+    return listed?.type === 'chat.extensions' ? listed.panels.map((p) => p.title) : []
+  }
+  const views = (chatId = spaceId) => messages.filter((m) => m.type === 'extension.panel' && m.chatId === chatId)
+  type Action = Extract<ClientMessage, { type: 'extension.panel.action' }>['action']
+  const panel = async (action?: Action, chatId = spaceId) => {
+    const seen = views(chatId).length
+    const where = { chatId, extension: 'processes', panel: 'processes' }
+    handle(action ? { type: 'extension.panel.action', ...where, action } : { type: 'extension.panel.get', ...where })
+    await until(() => views(chatId).length > seen)
+    return lastView(chatId)
+  }
+  const lastView = (chatId = spaceId) => {
+    const shown = views(chatId).at(-1)
+    if (shown?.type !== 'extension.panel' || !shown.view) throw new Error('no view')
+    return shown.view
+  }
+  return {
+    core,
+    garage,
+    workDir,
+    spaceId,
+    handle,
+    tool,
+    spawned,
+    made,
+    close,
+    logDir,
+    tabs,
+    panel,
+    views,
+    lastView,
+    terminals,
+    terminal,
+    host: () => host!,
+  }
+}
+
+describe('output', () => {
+  it('finds the local address a server prints', () => {
+    expect(portOf('  ➜  Local:   http://localhost:5173/')).toEqual({ port: 5173, url: 'http://localhost:5173/' })
+    expect(portOf('\x1b[32mready\x1b[0m on http://0.0.0.0:3000')).toEqual({ port: 3000, url: 'http://localhost:3000/' })
+    expect(portOf('Serving at https://127.0.0.1:8443/app')).toEqual({ port: 8443, url: 'https://localhost:8443/app' })
+    expect(portOf('Server listening on port 8080')).toEqual({ port: 8080, url: 'http://localhost:8080/' })
+    expect(portOf('connected to localhost:5432')).toEqual({ port: 5432, url: 'http://localhost:5432/' })
+    expect(portOf('Network: http://192.168.1.4:5173/')).toBeUndefined()
+    expect(portOf('compiled 3 files in 120ms')).toBeUndefined()
+    expect(portOf('http://localhost:99999')).toBeUndefined()
+  })
+
+  it('tells a full URL from a bare host:port', () => {
+    expect(addressOf('Local: http://localhost:5173/')).toMatchObject({ port: 5173, exact: true })
+    expect(addressOf('connected to localhost:5432')).toMatchObject({ port: 5432, exact: false })
+  })
+
+  it('strips colours and turns carriage returns into lines', () => {
+    expect(plain('\x1b[1m\x1b[32mok\x1b[0m\rnext')).toBe('ok\nnext')
+  })
+
+  it('says how long something ran', () => {
+    expect([duration(5_000), duration(125_000), duration(3_725_000), duration(90_000_000)]).toEqual([
+      '5s',
+      '2m 5s',
+      '1h 2m',
+      '1d 1h',
+    ])
+  })
+
+  it('says it the same way the UI ticks a live uptime', () => {
+    for (const ms of [-1, 0, 999, 59_999, 60_000, 3_599_999, 3_600_000, 86_399_999, 86_400_000, 900_000_000])
+      expect(elapsed(ms)).toBe(duration(ms))
+  })
+})
+
+describe('the tools', () => {
+  it('start a process that keeps running, list it, read its output and stop it with what it started', async () => {
+    const t = await start()
+    const started = await t.tool('start_process', {
+      command: 'echo "pid $$"; sleep 300 & echo "child $!"; echo oops >&2; wait',
+      name: 'server',
+    })
+    expect(started).toMatchObject({ id: 'p1', name: 'server', status: 'running', cwd: t.workDir, startedBy: 'Web' })
+    expect(started.output).toContain('oops')
+    const listed = await t.tool('list_processes', {})
+    expect(listed).toMatchObject([{ id: 'p1', status: 'running', uptime: expect.any(String) }])
+    const read = await t.tool('read_output', { id: 'server', lines: 2 })
+    expect(read.output.split('\n')).toEqual([expect.stringMatching(/^child \d+$/), 'oops'])
+    const child = Number(/child (\d+)/.exec(read.output)![1])
+    expect(alive(child)).toBe(true)
+
+    expect(await t.tool('stop_process', { id: 'p1' })).toMatchObject({ id: 'p1', status: 'stopped' })
+    await until(() => !alive(child))
+    expect(await t.tool('stop_process', { id: 'p1' })).toMatchObject({ note: 'It had already ended.' })
+  })
+
+  it('report a command that fails at once, and its exit code', async () => {
+    const t = await start()
+    const started = await t.tool('start_process', { command: 'echo nope; exit 3' })
+    expect(started).toMatchObject({ status: 'exited', exitCode: 3, output: 'nope', name: 'echo nope; exit 3' })
+  })
+
+  it('give the address a server opens', async () => {
+    const t = await start()
+    const started = await t.tool('start_process', { command: 'echo "  Local: http://localhost:5173/"; sleep 300' })
+    expect(started).toMatchObject({ status: 'running', url: 'http://localhost:5173/' })
+  })
+
+  it('run in the space’s sandbox, in its work folder unless told where', async () => {
+    const t = await start()
+    mkdirSync(join(t.workDir, 'app'))
+    await t.tool('start_process', { command: 'sleep 300', cwd: 'app' })
+    expect(t.spawned.at(-1)).toMatchObject({
+      command: '/bin/sh',
+      args: ['-c', 'exec 2>&1\nsleep 300'],
+      cwd: join(t.workDir, 'app'),
+      sandbox: { writable: [t.workDir], tmpDir: join(t.workDir, '.tmp') },
+    })
+    t.handle({ type: 'chat.setPermission', chatId: t.spaceId, name: 'editAnywhere', enabled: true })
+    await t.tool('start_process', { command: 'sleep 301' })
+    expect(t.spawned.at(-1)?.sandbox).toBeUndefined()
+  })
+
+  it('refuse a folder outside the space, a duplicate, and an unknown id', async () => {
+    const t = await start()
+    await expect(t.tool('start_process', { command: 'sleep 300', cwd: tempDir() })).rejects.toThrow(/inside the space/)
+    await expect(t.tool('start_process', { command: 'sleep 300', cwd: '..' })).rejects.toThrow(/inside the space/)
+    await expect(t.tool('start_process', { command: 'sleep 300', cwd: 'missing' })).rejects.toThrow(/No such folder/)
+    await t.tool('start_process', { command: 'sleep 300', name: 'web' })
+    await expect(t.tool('start_process', { command: 'sleep 300' })).rejects.toThrow(/already running/)
+    await expect(t.tool('start_process', { command: 'sleep 9', name: 'web' })).rejects.toThrow(/already running/)
+    await expect(t.tool('read_output', { id: 'p9' })).rejects.toThrow(/No process "p9"/)
+  })
+
+  it('belong to the space: a worker’s process is the lead’s to see and stop', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'sleep 300', name: 'watch' }, 'sub001')
+    const listed = await t.tool('list_processes', {})
+    expect(listed).toMatchObject([{ id: 'p1', name: 'watch', startedBy: 'Builder' }])
+    expect(await t.tool('stop_process', { id: 'watch' })).toMatchObject({ status: 'stopped' })
+  })
+})
+
+describe('logs', () => {
+  it('go to a plain file per process, moved aside once past the cap', async () => {
+    const t = await start({ logMaxBytes: 2000 })
+    await t.tool('start_process', { command: 'for i in $(seq 1 300); do echo "line $i"; done; sleep 300' })
+    const log = join(t.logDir, t.spaceId, 'p1.log')
+    await until(() => existsSync(log) && readFileSync(log, 'utf8').includes('line 300'))
+    expect(readFileSync(log, 'utf8').length).toBeLessThanOrEqual(2000)
+    expect(readFileSync(`${log}.1`, 'utf8').length).toBeLessThanOrEqual(2000)
+    const read = await t.tool('read_output', { id: 'p1', lines: 1 })
+    expect(read.output).toBe('line 300')
+  })
+
+  it('keep the start of a burst bigger than a whole log, in the file moved aside', async () => {
+    const t = await start({ logMaxBytes: 1000 })
+    // One write of 1500 bytes, so it arrives as one chunk.
+    await t.tool('start_process', { command: "printf 'START%01495dEND'; exec sleep 300", name: 'burst' })
+    const log = join(t.logDir, t.spaceId, 'p1.log')
+    await until(() => existsSync(log) && readFileSync(log, 'utf8').endsWith('END'))
+    expect(readFileSync(`${log}.1`, 'utf8')).toMatch(/^START0+$/)
+    expect(readFileSync(`${log}.1`, 'utf8').length + readFileSync(log, 'utf8').length).toBe(1503)
+  })
+})
+
+describe('stopping', () => {
+  const running = async (t: Awaited<ReturnType<typeof start>>) => {
+    const started = await t.tool('start_process', { command: 'echo "pid $$"; exec sleep 300' })
+    return Number(/pid (\d+)/.exec(started.output)![1])
+  }
+
+  it('happens when the space is deleted, and its logs go', async () => {
+    const t = await start()
+    const pid = await running(t)
+    t.handle({ type: 'chat.delete', chatId: t.spaceId })
+    await until(() => !alive(pid))
+    await until(() => !existsSync(join(t.logDir, t.spaceId)))
+  })
+
+  it('happens when the space is archived', async () => {
+    const t = await start()
+    const pid = await running(t)
+    t.handle({ type: 'chat.archive', chatId: t.spaceId, archived: true })
+    await until(() => !alive(pid))
+    expect(t.made.processes(t.spaceId)).toMatchObject([{ status: 'stopped' }])
+  })
+
+  it('happens when the extension is turned off', async () => {
+    const t = await start()
+    const pid = await running(t)
+    t.handle({ type: 'extension.setEnabled', extensionId: 'processes', enabled: false })
+    await until(() => !alive(pid))
+  })
+
+  it('happens when Kothar quits', async () => {
+    const t = await start()
+    const pid = await running(t)
+    await t.close()
+    expect(alive(pid)).toBe(false)
+  })
+})
+
+// The view's parts, flattened in order.
+function partsOf(view: ExtensionView): ExtensionView[] {
+  return view.type === 'stack' || view.type === 'row' ? view.children.flatMap(partsOf) : [view]
+}
+const rows = (view: ExtensionView) =>
+  partsOf(view).flatMap((part) => (part.type === 'list' ? part.items : []))
+const buttons = (view: ExtensionView) => partsOf(view).flatMap((part) => (part.type === 'button' ? [part.label] : []))
+const code = (view: ExtensionView) => partsOf(view).find((part) => part.type === 'code')
+
+describe('polish', () => {
+  it("shows the server's own URL, not a database address it printed first", async () => {
+    const t = await start()
+    const command = 'echo "db at localhost:5432"; echo "Local: http://localhost:5173/"; echo "proxy localhost:9000"; exec sleep 300'
+    await t.tool('start_process', { command, name: 'web' })
+    await until(() => t.made.processes(t.spaceId)[0]!.lines.length >= 3)
+    expect(t.made.processes(t.spaceId)[0]).toMatchObject({ port: 5173, url: 'http://localhost:5173/' })
+  })
+
+  it('wraps very long lines and output that never ends a line, keeping the log file as it was', async () => {
+    const t = await start()
+    const long = LINE_MAX_CHARS + 500
+    await t.tool('start_process', { command: `head -c ${long} /dev/zero | tr '\\0' x; echo; exec sleep 300`, name: 'long' })
+    await t.tool('start_process', { command: `head -c ${LINE_MAX_CHARS * 3} /dev/zero | tr '\\0' y; exec sleep 300`, name: 'endless' })
+    const [first, second] = t.made.processes(t.spaceId)
+    await until(() => first!.lines.length >= 1 && second!.lines.length >= 2)
+    await until(() => first!.lines.length >= 2)
+    expect(first!.lines.slice(0, 2)).toEqual(['x'.repeat(LINE_MAX_CHARS), 'x'.repeat(500)])
+    expect(second!.lines.every((line) => line.length <= LINE_MAX_CHARS)).toBe(true)
+    expect(second!.partial.length).toBeLessThanOrEqual(LINE_MAX_CHARS)
+    expect(readFileSync(first!.log, 'utf8')).toContain('x'.repeat(long))
+  })
+
+  it('reads a \\r\\n split across two chunks as one line break', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: "printf 'a\\r'; sleep 0.3; printf '\\nb\\n'; exec sleep 300", name: 'crlf' })
+    const [proc] = t.made.processes(t.spaceId)
+    await until(() => proc!.lines.includes('b'))
+    expect(proc!.lines).toEqual(['a', 'b'])
+  })
+
+  it('shows a process as stopping until it has gone, without a second Stop', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: "trap 'sleep 0.5; exit 0' TERM; while :; do sleep 0.1; done", name: 'slow' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const stopping = await t.panel({ name: 'stop', value: 'p1' })
+    expect(rows(stopping)[0]).toMatchObject({ dot: 'faint', badges: [expect.objectContaining({ text: 'stopping' })] })
+    expect(buttons(stopping)).toEqual(['Restart', 'Open in Terminal'])
+    await until(() => t.made.processes(t.spaceId)[0]?.status === 'stopped')
+  })
+
+  it('ignores a second Restart while one is under way', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo "run $$"; exec sleep 300', name: 'web' })
+    await t.panel()
+    const runs = t.spawned.length
+    const where = { chatId: t.spaceId, extension: 'processes', panel: 'processes' }
+    const restart = { type: 'extension.panel.action', ...where, action: { name: 'restart', value: 'p1' } } as const
+    t.handle(restart)
+    t.handle(restart)
+    await until(() => t.spawned.length > runs && t.made.processes(t.spaceId)[0]?.status === 'running')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(t.spawned.length).toBe(runs + 1)
+    expect(partsOf(t.lastView()).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+  })
+
+  it('says inline why a Restart failed', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'web' })
+    await t.tool('stop_process', { id: 'p1' })
+    await t.tool('start_process', { command: 'exec sleep 301', name: 'web' })
+    await t.panel()
+    const failed = await t.panel({ name: 'restart', value: 'p1' })
+    expect(partsOf(failed)).toContainEqual(
+      expect.objectContaining({ type: 'text', tone: 'error', text: expect.stringContaining('"web" (p2) is already running') }),
+    )
+  })
+})
+
+describe('the Processes tab', () => {
+  it('shows once the space has a process, in the space and its workers, and goes once they are cleared', async () => {
+    const t = await start()
+    expect(t.tabs()).toEqual([])
+    await t.tool('start_process', { command: 'echo hi', name: 'once' })
+    expect(t.tabs()).toEqual(['Processes'])
+    expect(t.tabs('sub001')).toEqual(['Processes'])
+    const view = await t.panel({ name: 'clear' })
+    expect(view).toEqual({ type: 'empty', text: 'No processes' })
+    expect(t.tabs()).toEqual([])
+  })
+
+  it('lists each process with a status dot, its live uptime and its address', async () => {
+    const t = await start()
+    const before = Date.now()
+    await t.tool('start_process', { command: 'echo "Local: http://localhost:5173/"; sleep 300', name: 'web' })
+    await t.tool('start_process', { command: 'exit 2', name: 'broken' })
+    const view = await t.panel()
+    expect(rows(view)).toEqual([
+      expect.objectContaining({
+        label: 'web',
+        dot: 'success',
+        link: { text: 'localhost:5173', url: 'http://localhost:5173/' },
+        selected: false,
+      }),
+      expect.objectContaining({ label: 'broken', dot: 'error', badges: [expect.objectContaining({ text: 'exit 2' })] }),
+    ])
+    // The running row carries when it started, for the UI to tick; the ended one a fixed "after" in its badge.
+    const [web, broken] = rows(view) as [ExtensionListItem, ExtensionListItem]
+    expect(web.since).toBeGreaterThanOrEqual(before)
+    expect(web.since).toBeLessThanOrEqual(Date.now())
+    expect(web.detail).toBeUndefined()
+    expect(broken.since).toBeUndefined()
+    expect(broken.badges?.[0]?.hint).toMatch(/^Exited with code 2 after \d+s$/)
+    expect(buttons(view)).toEqual(['Clear ended'])
+  })
+
+  it('opens a row to show its command and live output, followed to the end', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo first; sleep 1.5; echo second; sleep 300', name: 'web' })
+    await t.panel()
+    const open = await t.panel({ name: 'open', value: 'p1' })
+    expect(rows(open)[0]).toMatchObject({ selected: true, hint: 'Hide its output' })
+    const command = 'echo first; sleep 1.5; echo second; sleep 300'
+    expect(partsOf(open)).toContainEqual(expect.objectContaining({ type: 'text', text: command }))
+    expect(buttons(open)).toEqual(['Stop', 'Restart', 'Open in Terminal'])
+    expect(code(open)).toMatchObject({ follow: true, text: 'first' })
+    // New output draws the open tab again by itself.
+    await until(() => (code(t.lastView()) as { text?: string } | undefined)?.text === 'first\nsecond')
+    const closed = await t.panel({ name: 'open', value: 'p1' })
+    expect(code(closed)).toBeUndefined()
+  })
+
+  it('opens the terminal at a process’s folder, and says so inline when it can’t', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'web' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const opened = await t.panel({ name: 'terminal', value: 'p1' })
+    expect(t.terminals).toEqual([realpathSync(t.workDir)])
+    expect(partsOf(opened).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+    t.terminal.fails = 'Couldn’t open Ghostty. Is it installed?'
+    const failed = await t.panel({ name: 'terminal', value: 'p1' })
+    expect(partsOf(failed)).toContainEqual(
+      expect.objectContaining({ type: 'text', tone: 'error', text: 'Couldn’t open Ghostty. Is it installed?' }),
+    )
+    // Any other action clears it.
+    t.terminal.fails = ''
+    const after = await t.panel({ name: 'open', value: 'p1' })
+    expect(partsOf(after).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+  })
+
+  it('lets an extension open a terminal only inside a space’s folders', async () => {
+    const t = await start()
+    const outside = tempDir()
+    await expect(t.host().openTerminal(outside)).rejects.toThrow(/isn't inside a space's folders/)
+    await expect(t.host().openTerminal('relative/path')).rejects.toThrow(/isn't inside/)
+    const inside = join(t.workDir, 'app')
+    mkdirSync(inside)
+    await t.host().openTerminal(inside)
+    expect(t.terminals).toEqual([realpathSync(inside)])
+  })
+
+  it('stops and restarts a process under the same id', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo "run $$"; exec sleep 300', name: 'web' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const stopped = await t.panel({ name: 'stop', value: 'p1' })
+    await until(() => t.made.processes(t.spaceId)[0]?.status === 'stopped')
+    expect(buttons(stopped)).toContain('Restart')
+    await t.panel({ name: 'restart', value: 'p1' })
+    await until(() => (code(t.lastView()) as { text?: string } | undefined)?.text?.split('run ').length === 3)
+    const [proc] = t.made.processes(t.spaceId)
+    expect(proc).toMatchObject({ id: 'p1', status: 'running' })
+    expect((code(t.lastView()) as { text: string }).text).toMatch(/^run \d+\n--- restarted ---\nrun \d+$/)
+    expect(buttons(t.lastView())).toEqual(['Stop', 'Restart', 'Open in Terminal'])
+    // Restarting a running one stops it first.
+    const pid = Number(/run (\d+)$/.exec(proc!.lines.join('\n'))?.[1])
+    await t.panel({ name: 'restart', value: 'p1' })
+    await until(() => !alive(pid))
+    expect(t.made.processes(t.spaceId)).toMatchObject([{ id: 'p1', status: 'running' }])
+  })
+
+  it('notes in the space when a process fails on its own', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exit 4', name: 'web' })
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'quiet' })
+    await t.tool('stop_process', { id: 'quiet' })
+    const notes = t.core.chats().find((c) => c.id === t.spaceId)!.entries.filter((e) => e.type === 'extension.note')
+    const note = { text: 'web exited with code 4', extension: 'processes', panel: 'processes' }
+    expect(notes).toEqual([expect.objectContaining(note)])
+  })
+
+  it('notes in the space when a process is killed outside Kothar, but not when Kothar quits', async () => {
+    const t = await start()
+    const notes = () => t.core.chats().find((c) => c.id === t.spaceId)!.entries.filter((e) => e.type === 'extension.note')
+    // exec: the pid the shell prints is the sleep's, so killing it is a kill from outside, as out of memory would be.
+    await t.tool('start_process', { command: 'echo pid $$; exec sleep 300', name: 'web' })
+    const proc = t.made.processes(t.spaceId)[0]!
+    await until(() => /pid \d+/.test(proc.lines.join('\n')))
+    process.kill(Number(/pid (\d+)/.exec(proc.lines.join('\n'))![1]), 'SIGKILL')
+    await until(() => proc.status !== 'running')
+    expect(proc).toMatchObject({ status: 'exited', code: null })
+    expect(notes()).toEqual([expect.objectContaining({ text: 'web was killed outside Kothar', panel: 'processes' })])
+
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'api' })
+    const api = t.made.processes(t.spaceId).find((p) => p.name === 'api')!
+    await t.close()
+    expect(api.status).toBe('stopped')
+    expect(notes()).toHaveLength(1)
+  })
+
+  it('names the signal a shell reports, and says nothing of a clean exit', () => {
+    expect(endNote('web', 0)).toBeUndefined()
+    expect(endNote('web', 4)).toBe('web exited with code 4')
+    expect(endNote('web', null)).toBe('web was killed outside Kothar')
+    expect(endNote('web', 137)).toBe('web was killed outside Kothar (SIGKILL)')
+    expect(endNote('web', 143)).toBe('web was killed outside Kothar (SIGTERM)')
+    expect(endNote('web', 200)).toBe('web exited with code 200')
+  })
+})
+
+it("lists other extensions' rows, such as the Browser's, with their buttons, which go back to the extension that owns them", async () => {
+  const { extension } = createProcessesExtension()
+  const panel = extension.panels![0]!
+  const actions: string[] = []
+  const refreshed: string[] = []
+  let rows = [
+    {
+      extension: 'browser',
+      key: 'browser',
+      label: 'Browser',
+      detail: 'In the background',
+      since: 1000,
+      dot: 'success' as const,
+      actions: [{ name: 'open', label: 'Open' }, { name: 'stop', label: 'Stop' }],
+    },
+  ]
+  const host = {
+    space: (chatId: string) => ({ id: chatId === 'w1' ? 's1' : chatId, name: 'S', folders: [], checkouts: [] }),
+    processes: () => rows,
+    processAction: async (spaceId: string, owner: string, key: string, action: string) =>
+      void actions.push(`${spaceId} ${owner} ${key} ${action}`),
+    chats: () => [{ id: 's1' }, { id: 'w1', parentId: 's1' }],
+    refresh: (chatId: string) => void refreshed.push(chatId),
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  // The tab shows for a space with no processes of its own, once another extension lists one.
+  expect(panel.shown!(chat, context)).toBe(true)
+  const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
+  expect(view.children[0]).toEqual({
+    type: 'list',
+    label: 'Browser',
+    items: [{ key: 'browser:browser', label: 'Browser', detail: 'In the background', since: 1000, dot: 'success' }],
+  })
+  const buttons = (view.children[1] as Extract<ExtensionView, { type: 'row' }>).children
+  expect(buttons.map((b) => b.type === 'button' && b.label)).toEqual(['Open', 'Stop'])
+  const stop = buttons[1] as Extract<ExtensionView, { type: 'button' }>
+  await panel.onAction!(stop.action, chat, context)
+  expect(actions).toEqual(['s1 browser browser stop'])
+  // Its rows changed: the space and its workers draw again.
+  extension.onProcessesChanged!('s1', context)
+  expect(refreshed).toEqual(['s1', 'w1'])
+  rows = []
+  expect(panel.shown!(chat, context)).toBe(false)
+})
+
+it("says inline why another extension's button failed", async () => {
+  const { extension } = createProcessesExtension()
+  const panel = extension.panels![0]!
+  const host = {
+    space: (chatId: string) => ({ id: chatId, name: 'S', folders: [], checkouts: [] }),
+    processes: () => [{ extension: 'browser', key: 'browser', label: 'Browser', actions: [{ name: 'open', label: 'Show' }] }],
+    processAction: async () => {
+      throw new Error('Browser is off')
+    },
+    chats: () => [{ id: 's1' }],
+    refresh: () => {},
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  await panel.onAction!({ name: 'extension', value: { extension: 'browser', key: 'browser', action: 'open' } }, chat, context)
+  const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
+  expect(view.children).toContainEqual({ type: 'text', text: 'Browser is off', tone: 'error', small: true })
+})
+
+it('stops a process its space lost while it was still starting, and lets the space go', async () => {
+  const { extension, processes } = createProcessesExtension({ settleMs: 10 })
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  let spawned: (handle: unknown) => void = () => {}
+  const stops: string[] = []
+  let exit: (code: number | null, tail: string) => void = () => {}
+  const handle = { stop: () => (stops.push('stop'), exit(null, '')), onOutput: () => {}, onExit: (f: typeof exit) => (exit = f) }
+  const space = { id: 's1', name: 'S', folders: [], checkouts: [], workDir: dir }
+  const host = {
+    space: () => space,
+    spawn: () => new Promise((resolve) => (spawned = resolve)),
+    storage: { dir: join(dir, 'store') },
+    chats: () => [],
+    chat: () => undefined,
+    refresh: () => {},
+    note: () => {},
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const caller = { id: 's1', name: 'S', engine: 'fake' }
+  const started = extension.tools![0]!.run({ command: 'sleep 300' }, { caller, values: {}, host } as never)
+  await until(() => processes('s1').length === 1)
+  extension.onChatRemoved!({ id: 's1' } as never, context as never)
+  spawned(handle)
+  await started
+  expect(stops).toEqual(['stop'])
+  // Once it ended, the deleted space's list and logs went.
+  await until(() => processes('s1').length === 0)
+  expect(existsSync(join(dir, 'store', 's1'))).toBe(false)
+})
+
+it('counts whatever ends after onStop as stopped by Kothar, with no note, until it starts again', async () => {
+  const { extension, processes } = createProcessesExtension({ settleMs: 10 })
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const exits: ((code: number | null, tail: string) => void)[] = []
+  const handle = () => ({ stop: () => {}, onOutput: () => {}, onExit: (f: (code: number | null, tail: string) => void) => exits.push(f) })
+  const space = { id: 's1', name: 'S', folders: [], checkouts: [], workDir: dir }
+  const notes: string[] = []
+  const host = {
+    space: () => space,
+    spawn: async () => handle(),
+    storage: { dir: join(dir, 'store') },
+    chats: () => [space],
+    chat: () => space,
+    refresh: () => {},
+    processesChanged: () => {},
+    note: (_chat: string, text: string) => void notes.push(text),
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const caller = { id: 's1', name: 'S', engine: 'fake' }
+  const run = (command: string) => extension.tools![0]!.run({ command }, { caller, values: {}, host } as never)
+  await extension.onStart!(context as never)
+  await run('sleep 1')
+  await extension.onStop!(context as never)
+  exits[0]!(null, '')
+  expect(processes('s1')[0]).toMatchObject({ status: 'stopped' })
+  expect(notes).toEqual([])
+  await extension.onStart!(context as never)
+  await run('sleep 2')
+  exits[1]!(null, '')
+  expect(processes('s1')[1]).toMatchObject({ status: 'exited' })
+  expect(notes).toEqual(['sleep 2 was killed outside Kothar'])
+})

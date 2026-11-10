@@ -58,3 +58,17 @@ export function fakeMachine(runResults: Record<string, { code: number | null; st
     exit: (code: number | null, stderrTail = '') => exit(code, stderrTail),
   }
 }
+
+// A lone process for code that reads one (the line reader, the RPC client): what it was sent, and its stdout.
+export function fakeProc() {
+  const written: string[] = []
+  let stdout = (_: string) => {}
+  const proc: EngineProcess = {
+    write: (data) => void written.push(data),
+    closeStdin: () => {},
+    kill: () => {},
+    onStdout: (listener) => (stdout = listener),
+    onExit: () => {},
+  }
+  return { proc, written, stdout: (chunk: string) => stdout(chunk) }
+}
