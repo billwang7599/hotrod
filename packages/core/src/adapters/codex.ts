@@ -241,12 +241,21 @@ function listModels(machine: Machine): Promise<any[] | undefined> {
 }
 
 export const KEYCHAIN_NOTE = 'Signed in through the Keychain, which Kothar’s sessions can’t use: add the account in Kothar'
+export const envKeyNote = (name: string) => `${name} is set, but Codex’s sessions don’t read it: add the key as an account in Kothar`
+
+// An API key the user set only in their environment. Codex's login status and app-server both ignore it (checked on
+// codex-cli 0.167.0), and Kothar strips OPENAI_API_KEY from what it starts, so it never signs a session in. Read from
+// the core's own environment, as loginDir reads CODEX_HOME.
+const envKeyOf = () => ['CODEX_API_KEY', 'OPENAI_API_KEY'].find((name) => process.env[name]?.trim())
 
 async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
   const options = { cwd: '/', env: { CODEX_HOME: loginDir(accountDir) } }
   const status = await machine.run('codex', ['login', 'status'], options).catch(() => null)
   const text = `${status?.stdout ?? ''}\n${status?.stderr ?? ''}`
-  if (status?.code !== 0 || /not logged in/i.test(text)) return { signedIn: false }
+  if (status?.code !== 0 || /not logged in/i.test(text)) {
+    const envKey = !accountDir && envKeyOf()
+    return { signedIn: false, ...(envKey && { note: envKeyNote(envKey) }) }
+  }
   // Sessions link in auth.json. The user's own Codex may keep its login in the Keychain instead
   // (cli_auth_credentials_store = "keyring" or "auto"), where Kothar's sessions can't reach it.
   if (!accountDir) {
