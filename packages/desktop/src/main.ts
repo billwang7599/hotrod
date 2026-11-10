@@ -22,6 +22,8 @@ const MENU_DEFAULTS: Record<string, string | null> = {
   newSpace: 'CmdOrCtrl+N',
   newSpaceFromFolder: 'CmdOrCtrl+Shift+O',
   settings: 'CmdOrCtrl+,',
+  toggleSidebar: 'CmdOrCtrl+B',
+  toggleContextPanel: 'CmdOrCtrl+Alt+B',
 }
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.
@@ -213,7 +215,24 @@ async function start() {
           ],
         },
         { role: 'editMenu' },
-        { role: 'viewMenu' },
+        {
+          label: 'View',
+          submenu: [
+            item('toggleSidebar', 'Sidebar'),
+            item('toggleContextPanel', 'Context panel'),
+            { type: 'separator' },
+            // The rest of Electron's own View menu.
+            { role: 'reload' },
+            { role: 'forceReload' },
+            { role: 'toggleDevTools' },
+            { type: 'separator' },
+            { role: 'resetZoom' },
+            { role: 'zoomIn' },
+            { role: 'zoomOut' },
+            { type: 'separator' },
+            { role: 'togglefullscreen' },
+          ],
+        },
         { role: 'windowMenu' },
       ]),
     )

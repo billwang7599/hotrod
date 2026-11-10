@@ -1251,6 +1251,7 @@ export function Chat(props: ChatProps) {
             noun="sidebar"
             open={props.sidebarOpen}
             toggle={props.toggleSidebar}
+            action="toggleSidebar"
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
             <Hint text={!chat.extension && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
@@ -1298,6 +1299,7 @@ export function Chat(props: ChatProps) {
             noun="context"
             open={props.contextOpen}
             toggle={props.toggleContext}
+            action="toggleContextPanel"
           />
         </header>
         <div

@@ -9,6 +9,7 @@ import {
 } from 'react'
 import { AnimatePresence, m, type Transition } from 'motion/react'
 import { AlertDialog, Select as SelectPrimitive, Switch as SwitchPrimitive, Tooltip } from 'radix-ui'
+import { formatBinding, useBindings } from './shortcuts.ts'
 
 const TOAST_MS = 6_000
 export const COPIED_MS = 1_500
@@ -100,11 +101,28 @@ export function Hint({ text, side, align, open, onOpenChange, children, onFocus,
   )
 }
 
-type PanelToggleProps = { side: 'left' | 'right'; label: string; noun: string; open: boolean; toggle: () => void }
+type PanelToggleProps = {
+  side: 'left' | 'right'
+  label: string
+  noun: string
+  open: boolean
+  toggle: () => void
+  /** The shortcut action that toggles the same panel, whose keys the tooltip shows. */
+  action?: string
+}
 
-export function PanelToggle({ side, label, noun, open, toggle }: PanelToggleProps) {
+export function PanelToggle({ side, label, noun, open, toggle, action }: PanelToggleProps) {
+  const bindings = useBindings()
+  const keys = formatBinding((action && bindings[action]) || null)
   return (
-    <Hint text={`${open ? 'Hide' : 'Show'} ${noun}`}>
+    <Hint
+      text={
+        <>
+          {open ? 'Hide' : 'Show'} {noun}
+          {keys && <kbd className="ml-6 font-sans text-sm tracking-[0.06em] text-muted">{keys}</kbd>}
+        </>
+      }
+    >
       <Button
         variant="ghost"
         size="icon"

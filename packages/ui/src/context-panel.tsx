@@ -729,7 +729,7 @@ export function ContextPanel(props: ContextPanelProps) {
       </AnimatePresence>
       <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-12">
         <PanelTabs tabs={tabs} active={shown} choose={choosePanelTab} />
-        {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} />}
+        {hide && <PanelToggle side="right" label="Context panel" noun="context" open toggle={hide} action="toggleContextPanel" />}
       </header>
       <div
         className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"

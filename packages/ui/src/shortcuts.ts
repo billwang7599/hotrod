@@ -46,6 +46,8 @@ const actions: ShortcutAction[] = [
   { id: 'newSpace', label: 'New space', defaultKeys: 'Mod+N', menu: true },
   { id: 'newSpaceFromFolder', label: 'New space from folder', defaultKeys: 'Mod+Shift+O', desktopOnly: true, menu: true },
   { id: 'settings', label: 'Settings', defaultKeys: 'Mod+,', menu: true },
+  { id: 'toggleSidebar', label: 'Show or hide the sidebar', defaultKeys: 'Mod+B', menu: true },
+  { id: 'toggleContextPanel', label: 'Show or hide the context panel', defaultKeys: 'Mod+Alt+B', menu: true },
   { id: 'marketplace', label: 'Marketplace', defaultKeys: null },
 ]
 
@@ -258,6 +260,17 @@ export function acceleratorOf(binding: Binding | null): string | null {
 }
 
 export type ShortcutHandlers = Partial<Record<string, () => void>>
+
+type Panels = { covered: boolean; chatOpen: boolean; toggleSidebar: () => void; toggleContext: () => void }
+
+/**
+ * The keys that show or hide the side panels, the same as their toggle buttons. Behind Settings or the Marketplace
+ * (covered) the panels can't be seen, so the keys do nothing; the context panel also needs an open chat.
+ */
+export function panelShortcuts({ covered, chatOpen, toggleSidebar, toggleContext }: Panels): ShortcutHandlers {
+  if (covered) return {}
+  return { toggleSidebar, ...(chatOpen && { toggleContextPanel: toggleContext }) }
+}
 
 /** The action a key press runs, if it has a handler. */
 export function actionFor(e: KeyLike, handlers: ShortcutHandlers, all = current, mac = isMac()) {

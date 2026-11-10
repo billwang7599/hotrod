@@ -15,7 +15,7 @@ import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
 import { changesText, RestartButton } from './restart.tsx'
-import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
+import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { isLooking, useLooking, useMarkRead } from './unread.ts'
 import { createNotifier, deliver } from './notifications.ts'
@@ -207,6 +207,7 @@ function App() {
     settings: () => openSettings(),
     search: () => setSearching((open) => !open),
     marketplace: () => setMarketplace((open) => !open),
+    ...panelShortcuts({ covered: settingsOpen || marketplace, chatOpen: !!selected, toggleSidebar, toggleContext }),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
   }
   useShortcuts(shortcuts)
@@ -346,7 +347,14 @@ function App() {
             ) : (
               <>
                 <header className="flex h-44 shrink-0 items-center border-b px-12">
-                  <PanelToggle side="left" label="Sidebar" noun="sidebar" open={sidebarShown} toggle={toggleSidebar} />
+                  <PanelToggle
+                    side="left"
+                    label="Sidebar"
+                    noun="sidebar"
+                    open={sidebarShown}
+                    toggle={toggleSidebar}
+                    action="toggleSidebar"
+                  />
                 </header>
                 <div className="m-auto flex max-w-420 flex-col items-center gap-12 p-24 text-center text-muted">
                   <strong className="text-body font-semibold text-text">
