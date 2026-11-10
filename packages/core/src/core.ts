@@ -132,6 +132,11 @@ type Chat = {
   pendingRequests: Map<string, 'permission' | 'question'>
   // What extensions wait on the user for while the turn runs (ExtensionHost.wait), by extension id.
   waits: Map<string, ExtensionWait>
+  // The turn has ended and extensions hear of it (onSessionEnded, onTurnCompleted): a wait now holds the chat.
+  ending?: boolean
+  // An extension's wait holds the chat after its turn ended: it shows waiting, a worker hasn't reported and queued
+  // messages wait, until the wait ends. error is the turn's, for the report.
+  held?: { error?: string }
   mcpToken?: string
   queue: QueuedMessage[]
   turns: number
@@ -563,8 +568,23 @@ function openLockedCore(options: {
     if (wait) chat.waits.set(extensionId, wait)
     else chat.waits.delete(extensionId)
     broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: waitsOf(chat) })
+    if (wait && chat.ending && !chat.held) {
+      chat.held = {}
+      setStatus(chat, 'waiting')
+    }
     if (wait && chat.status === 'running') setStatus(chat, 'waiting')
+    if (!wait && chat.held && !chat.waits.size) return release(chat, true)
     if (!wait && chat.status === 'waiting' && !chat.pendingRequests.size && !chat.waits.size) setStatus(chat, 'running')
+  }
+
+  // A chat held after its turn goes idle. finish: it ends as the turn would have (a worker reports and goes, queued
+  // messages run); otherwise an extension carries the turn on (continue, retry) and that turn ends it.
+  const release = (chat: Chat, finish: boolean) => {
+    const held = chat.held
+    if (!held) return
+    chat.held = undefined
+    setStatus(chat, 'idle')
+    if (finish && !quitting) finishTurn(chat, held.error)
   }
 
   const append = (chat: Chat, entry: ChatEntry) => {
@@ -735,15 +755,26 @@ function openLockedCore(options: {
     const files = [...new Set(turn.tools.flatMap((t) => (t.kind === 'edit' && t.path ? [t.path] : [])))]
     const summary = { chat: detail, ...(end.error && { error: end.error }), ...turn, files }
     const sessionError = end.type === 'session.ended' ? end.error : undefined
-    callExtensions('onSessionEnded', (extension, context) =>
-      extension.onSessionEnded!({ chat: detail, ...(sessionError && { error: sessionError }) }, context),
-    )
-    callExtensions('onTurnCompleted', (extension, context) => extension.onTurnCompleted!(summary, context))
+    chat.ending = true
+    try {
+      callExtensions('onSessionEnded', (extension, context) =>
+        extension.onSessionEnded!({ chat: detail, ...(sessionError && { error: sessionError }) }, context),
+      )
+      callExtensions('onTurnCompleted', (extension, context) => extension.onTurnCompleted!(summary, context))
+    } finally {
+      chat.ending = false
+    }
+    if (chat.held) chat.held.error = end.error
     if (limit) reportLimit(chat, account, limit)
-    // An extension sent the message again, so the turn goes on.
+    // An extension sent the message again, so the turn goes on, or holds the chat until it does or lets go.
     if (chat.status !== 'idle') return
+    finishTurn(chat, end.error)
+  }
+
+  // What follows a turn that's over: a worker reports and goes, queued messages run.
+  const finishTurn = (chat: Chat, error?: string) => {
     const parent = chat.info.worker ? parentOf(chat) : undefined
-    if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
+    if (parent) reportErrors(() => enqueue(parent, reportOf(chat, error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
@@ -824,12 +855,14 @@ function openLockedCore(options: {
       return { id, text, ...(attachments && { attachments }) }
     })
     setQueue(chat, [...again, ...chat.queue])
+    release(chat, false)
     if (chat.status === 'idle') sendQueue(chat)
   }
 
   // Carries on a turn that stopped part way, as a turn of its own; queued messages wait for it.
   const continueTurn = (chat: Chat, text: string) => {
     if (!text.trim()) throw new Error('A continuation needs a prompt')
+    release(chat, false)
     if (chat.status !== 'idle') throw new Error(`${chat.info.name} is still running`)
     send(chat, '', [], [], text)
   }
@@ -1071,7 +1104,9 @@ function openLockedCore(options: {
       refresh: (chatId) => refreshExtension(extension, chatId),
       wait(chatId, wait) {
         const chat = chatFor(chatId)
-        if (!['running', 'waiting'].includes(chat.status)) throw new Error('A chat waits for the user only while its turn runs')
+        if (!['running', 'waiting'].includes(chat.status) && !chat.ending) {
+          throw new Error('A chat waits for the user only while its turn runs, or as it ends (onTurnCompleted)')
+        }
         setWait(chat, extension.id, checkWait(wait))
       },
       endWait: (chatId) => setWait(chatFor(chatId), extension.id, undefined),
@@ -2188,6 +2223,12 @@ function openLockedCore(options: {
     })
     try {
       const message = { text, ...(attachments.length && { attachments }) }
+      // A chat held after its turn queues the message first, so it runs once the extension lets go.
+      if (chat.held) {
+        enqueue(chat, message)
+        for (const extensionId of [...chat.waits.keys()]) answerWait(chat, extensionId, { message: text })
+        return
+      }
       // A message sent while extensions wait on the user answers them too; it still goes to the agent.
       for (const extensionId of chat.waits.keys()) answerWait(chat, extensionId, { message: text })
       if (steering && canSteer(chat)) {
@@ -2225,6 +2266,8 @@ function openLockedCore(options: {
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
+    // Stop on a chat an extension holds after its turn: nothing runs, so it ends now.
+    if (chat.held && !chat.session) return release(chat, true)
     if (!chat.session && (chat.status === 'running' || chat.status === 'stopping')) return forceStop(chat)
     if (!chat.session) return
     if (force) return forceStop(chat)

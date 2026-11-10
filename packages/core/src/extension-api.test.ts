@@ -309,6 +309,85 @@ describe('transforms', () => {
   })
 })
 
+describe('a wait as the turn ends', () => {
+  const wait = { text: 'Hold on', buttons: [{ id: 'go', label: 'Go' }] }
+
+  it('holds the chat waiting, queues messages behind it, and ends the turn when it ends', async () => {
+    let host: ExtensionHost | undefined
+    let late: unknown
+    let held = 0
+    const t = start({
+      onChatCreated: (_chat, context) => void (host = context.host),
+      onTurnCompleted({ chat }, { host }) {
+        if (chat.name === 'Space' && !held++) host.wait(chat.id, wait)
+      },
+      // Only as the turn ends: after an await it's too late.
+      async onSessionEnded({ chat }, { host }) {
+        await Promise.resolve()
+        if (chat.name !== 'Late') return
+        try {
+          host.wait(chat.id, wait)
+        } catch (error) {
+          late = error
+        }
+      },
+    })
+    const other = t.create('Late')
+    await t.send(other)
+    await until(() => late !== undefined)
+    expect(String(late)).toContain('only while its turn runs')
+    const id = t.create()
+    t.handle({ type: 'chat.send', chatId: id, text: 'Go' })
+    await until(() => t.chat(id).status === 'waiting')
+    expect(t.chat(id).waits).toEqual([expect.objectContaining({ extension: 'test', text: 'Hold on' })])
+    host!.send(id, 'Next')
+    expect(t.chat(id).queue.map((q) => q.text)).toEqual(['Next'])
+    host!.endWait(id)
+    await until(() => t.chat(id).status === 'idle' && !t.chat(id).queue.length)
+    // Late's turn, Space's, then the queued message.
+    expect(t.prompts).toHaveLength(3)
+    expect(t.prompts[2]).toContain('Next')
+  })
+
+  it('lets a continuation carry the turn on, and Stop ends it', async () => {
+    let host: ExtensionHost | undefined
+    let holds = 2
+    const t = start({
+      onChatCreated: (_chat, context) => void (host = context.host),
+      onTurnCompleted({ chat }, { host }) {
+        if (holds-- > 0) host.wait(chat.id, wait)
+      },
+    })
+    const id = t.create()
+    t.handle({ type: 'chat.send', chatId: id, text: 'Go' })
+    await until(() => t.chat(id).status === 'waiting')
+    host!.continue(id, 'Carry on')
+    await until(() => t.prompts.length === 2 && t.chat(id).status === 'waiting')
+    t.handle({ type: 'chat.interrupt', chatId: id })
+    expect(t.chat(id).status).toBe('idle')
+    expect(t.chat(id).waits ?? []).toEqual([])
+  })
+
+  it('keeps a worker from reporting until it ends', async () => {
+    let holding = true
+    const t = withHost({
+      onTurnCompleted({ chat }, { host }) {
+        if (chat.worker && holding) host.wait(chat.id, wait)
+      },
+    })
+    const space = t.create()
+    const worker = t.host().createChat({ name: 'Helper', parentId: space })
+    t.host().send(worker.id, 'Task')
+    await until(() => t.chat(worker.id)?.status === 'waiting')
+    expect(t.chat(space).entries.some((e) => e.type === 'worker.report')).toBe(false)
+    holding = false
+    t.host().endWait(worker.id)
+    await until(() => !t.core.chats().some((c) => c.id === worker.id))
+    await until(() => t.chat(space).status === 'idle')
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(1)
+  })
+})
+
 describe('the host', () => {
   it('lists and reads chats', async () => {
     const t = withHost()

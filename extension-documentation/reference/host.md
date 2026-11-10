@@ -302,7 +302,7 @@ agent.
 
 The wait stays until the extension calls `endWait(chatId)`, the turn ends, or the extension is turned off. Calling
 `wait` again replaces the extension's wait. `wait` throws if the chat's turn isn't running, so call it from a tool's
-`run` or a hook that runs during the turn. The usual shape is a tool that waits on a promise the button resolves:
+`run` or a hook that runs during the turn, or as it ends (see [Holding a chat after its turn](#holding-a-chat-after-its-turn)). The usual shape is a tool that waits on a promise the button resolves:
 
 ```ts
 let answered: (() => void) | undefined
@@ -328,6 +328,25 @@ const extension: Extension = {
 ```
 
 The built-in Browser extension's `ask_user_in_browser` works this way.
+
+### Holding a chat after its turn
+
+Call `wait` from `onTurnCompleted` or `onSessionEnded`, before any `await`, and it holds the chat after its turn
+ended, for something the extension waits on, such as the network coming back:
+
+- The chat shows **waiting** with your bar, as above.
+- A worker doesn't report to its lead yet, and isn't removed.
+- Messages sent to the chat, the user's included, are queued. The user's message still reaches `onWaitAction` as
+  `{ message }`.
+
+The hold ends one of two ways:
+
+- `endWait(chatId)`, the user's **Stop**, or the extension being turned off. The chat then ends its turn as it would
+  have without the hold: a worker reports, with the turn's error, and goes; queued messages run.
+- [`continue` or `retry`](#sending-messages). They carry the turn on, and the turn they start ends it as usual, so a
+  worker reports once.
+
+Hear about Stop from `onStatusChanged`: the chat leaves `waiting`. The built-in Reconnect extension works this way.
 
 ## Processes rows
 

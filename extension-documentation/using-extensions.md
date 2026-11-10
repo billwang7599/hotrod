@@ -31,6 +31,7 @@ The built-in extensions today:
 | Browser | No | Agents browse the web with Playwright in the background, one browser per space. When a page needs you, the agent hands it to you in a window and carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
+| Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 
 ### Where Memory keeps its summaries, and cleaning up
 
@@ -52,6 +53,22 @@ a copy button, and how much disk each mode's summaries take.
 - **Delete summaries**, on Memory's page, deletes one mode's files from every chat, workers' and Home's included. It
   works only for a mode that isn't in use, or for either while Memory is off, and asks first. Chat logs stay. If you
   switch back to that mode later, Kothar writes the summaries again with model calls on your own logins.
+
+### When the connection drops
+
+Engines retry short drops on their own. When a drop lasts longer, the turn ends with an error, and Reconnect takes over:
+
+- The chat shows **waiting**, with "Offline: will continue when the connection is back" above the composer. A
+  worker's bar shows in its space too, and the worker doesn't report to its lead yet.
+- Kothar checks whether the engine's API answers after 5 seconds, then twice as long each time, up to every 5 minutes.
+  Once it answers, the chat continues the turn where it stopped, with its memory.
+- An overloaded or unavailable service (errors like 529 or 503) waits the same way, without the network check.
+- **Try now** checks at once. **Don't continue**, **Stop** or sending a message ends the wait; your message then runs
+  as usual.
+- After the longest wait (Settings → Extensions → Reconnect, 2 hours by default), or 5 continuations of one message,
+  Kothar stops trying and the turn ends with its error.
+
+A Stop, a usage limit or any other error ends the turn as before.
 
 ## Community extensions
 

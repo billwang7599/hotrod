@@ -248,6 +248,10 @@ export type ExtensionHost = {
   // sending the chat a message, calls the extension's onWaitAction. Only while the chat's turn runs, as from a tool's
   // run; calling it again replaces this extension's wait. It goes with endWait, when the turn ends, or when the
   // extension is turned off.
+  // Called from onTurnCompleted or onSessionEnded (synchronously, before any await), it holds the chat after its turn
+  // instead: the chat shows waiting, a worker doesn't report yet and queued messages, the user's included, wait. The
+  // hold ends with endWait, Stop or the extension turned off, and the chat then ends its turn as it would have (a
+  // worker reports, queued messages run); or with continue or retry, which carry the turn on.
   wait(chatId: string, wait: ExtensionWait): void
   endWait(chatId: string): void
   // The Processes tab's rows from every other extension that's on (Extension.processes) for the space, so an extension
