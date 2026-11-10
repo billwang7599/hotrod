@@ -70,6 +70,8 @@ export type HostDeps<C extends HostChat> = {
   checkWait: (wait: ExtensionWait) => ExtensionWait
   spaceValuesOf: (extension: Extension, chat: C) => ExtensionValues
   setSpaceValue: (extension: Extension, chat: C, key: string, value: unknown) => void
+  /** Adds a file to the chat's own context (Context → Files), as the user adding it there does. */
+  addContextFile: (chat: C, path: string) => void
   /** Where a command an extension starts for a chat runs, and its sandbox. */
   commandPlaceOf: (chat: C) => Promise<Place>
 
@@ -236,6 +238,8 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         await deps.openTerminalAt(real)
       },
       reveal: (path) => deps.reveal(path),
+      // A worker's goes to its space, which owns the context its workers see.
+      addContextFile: (chatId, path) => deps.addContextFile(chatFor(deps.spaceOf(chatFor(String(chatId))).id), String(path)),
     }
     const uses = deps.usesOf(extension)
     const given = uses ? guardHost(host, extension, uses) : host

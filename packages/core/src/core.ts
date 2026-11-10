@@ -34,7 +34,7 @@ import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './
 import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
 import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
-import { type CommunityExtension, valuesOf } from './extensions.ts'
+import { type CommunityExtension, panelTabOf, valuesOf } from './extensions.ts'
 import {
   bySpaceOrder,
   CONTEXT_SECTIONS,
@@ -1107,6 +1107,7 @@ function openLockedCore(options: {
     spaceValuesOf,
     setSpaceValue,
     commandPlaceOf: (chat) => commandPlaceOf(chat),
+    addContextFile: (chat, path) => addContext(chat, 'files', path),
     accounts,
     run: () => runFor(),
     complete: completeFor,
@@ -1133,7 +1134,7 @@ function openLockedCore(options: {
     const on = extensions.filter((extension) => isOnFor(extension, chat))
     const panels = on.flatMap((extension) =>
       (extension.panels ?? []).flatMap((p): PanelTab[] =>
-        offeredBy(extension, p, chat) ? [{ extension: extension.id, id: p.id, title: p.title }] : [],
+        offeredBy(extension, p, chat) ? [panelTabOf(extension.id, p)] : [],
       ),
     )
     const commands = on.flatMap((extension) =>
@@ -1157,6 +1158,9 @@ function openLockedCore(options: {
   const withControls = (extension: Extension, chat: Chat, view: ExtensionView): ExtensionView => {
     if (view.type === 'stack' || view.type === 'row' || view.type === 'card') {
       return { ...view, children: view.children.map((child) => withControls(extension, chat, child)) }
+    }
+    if (view.type === 'split') {
+      return { ...view, side: withControls(extension, chat, view.side), main: withControls(extension, chat, view.main) }
     }
     if (view.type !== 'switch' && view.type !== 'picker') return view
     const setting = extension.spaceSettings?.find((s) => s.key === view.setting)

@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Extension, ExtensionHost, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
+import type { Extension, ExtensionHost, ExtensionPanel, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
 import { type CommunityInstall, installedExtensions, EXTENSION_MAIN } from './marketplace.ts'
 import { approvalsFor, logHistory, reviewOf } from './approvals.ts'
-import { EXTENSION_USES, settingProblem, sortUses } from './shared.ts'
+import { EXTENSION_USES, type PanelTab, settingProblem, sortUses } from './shared.ts'
 
 const MISSING_PACKAGE = /^Cannot find (?:package|module) '((?:@[^/']+\/)?[^/'.:][^/':]*)(?:\/[^']*)?'/
 
@@ -83,6 +83,20 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onProcessesChanged', 'panels'],
 ]
 
+// What the UI gets of a panel: where it shows, its keys and whether the left sidebar lists it. Anything else an
+// extension put there is dropped, and a placement, shortcut or sidebar of the wrong kind is left out.
+export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
+  const { id, title, placement, shortcut, sidebar } = panel
+  return {
+    extension,
+    id,
+    title,
+    ...(placement === 'popup' && { placement }),
+    ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
+    ...(sidebar === true && { sidebar }),
+  }
+}
+
 // What each host call needs listed. FREE_HOST_CALLS need nothing; any other call is refused.
 export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   chats: 'readChats',
@@ -107,6 +121,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   spawn: 'run',
   openTerminal: 'run',
   reveal: 'run',
+  addContextFile: 'sendMessages',
   wait: 'panels',
   endWait: 'panels',
   processes: 'panels',

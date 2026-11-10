@@ -63,6 +63,7 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
     spaceValuesOf: unused,
     setSpaceValue: unused,
     commandPlaceOf: unused,
+    addContextFile: unused,
     accounts: { list: () => [], use: unused },
     run: () => unused,
     complete: unused,
@@ -176,5 +177,20 @@ describe('openExtensionHosts', () => {
 
     await expect(off.spawn('true', [])).rejects.toThrow('Demo is off')
     await expect(quitting.spawn('true', [])).rejects.toThrow('Kothar is quitting')
+  })
+})
+
+describe('addContextFile', () => {
+  it("adds the file to the chat's space, so a worker's goes to the space its workers share", () => {
+    const space = chatAt(tempDir())
+    const worker: HostChat = { ...chatAt(tempDir()), info: { id: 'w1', name: 'Worker', folders: [], files: [], parentId: 'c1' } as unknown as ChatInfo }
+    const added: [string, string][] = []
+    const { hostFor } = hostsWith(space, {
+      chatFor: (id) => (id === 'c1' ? space : id === 'w1' ? worker : (() => { throw new Error(`No chat ${id}`) })()),
+      spaceOf: () => ({ id: 'c1', name: 'Chat', folders: [], checkouts: [] }),
+      addContextFile: (chat, path) => added.push([chat.info.id, path]),
+    })
+    hostFor(extension).addContextFile('w1', '/notes/a.md')
+    expect(added).toEqual([['c1', '/notes/a.md']])
   })
 })

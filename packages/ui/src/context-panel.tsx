@@ -703,7 +703,8 @@ export function ContextPanel(props: ContextPanelProps) {
   const intro = chat?.extension ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const tab = usePanelTab()
   const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
-  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []) : []
+  // A popup panel opens over the chat instead (extension-popups.tsx).
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup') : []
   const extensionNames = useMemo(() => new Map((props.extensions ?? []).map((e) => [e.id, e.name])), [props.extensions])
   const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
   const known = tab === 'general' || extensionTab

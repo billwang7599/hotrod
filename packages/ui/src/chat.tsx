@@ -35,7 +35,7 @@ import {
 } from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { choosePanelTab, extensionTabId } from './panel-tab.ts'
+import { choosePanelTab, extensionTabId, openPopup } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
 import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
@@ -1207,6 +1207,8 @@ export function Chat(props: ChatProps) {
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
     },
     openPanel: (extension: string, panel: string) => {
+      const popup = props.extensionUi?.panels.some((p) => p.extension === extension && p.id === panel && p.placement === 'popup')
+      if (popup) return openPopup(extensionTabId(extension, panel))
       choosePanelTab(extensionTabId(extension, panel))
       if (!props.contextOpen) props.toggleContext()
     },

@@ -54,7 +54,7 @@ extension and before you turn it on, and holds the extension to it:
 | `setup` | Installs software it needs | `setup` |
 | `mcpServers` | Starts MCP servers for agents | `mcpServers` |
 | `permissions` | Approves or denies agents' requests for you | `onPermissionRequested` |
-| `sendMessages` | Sends messages and starts chats as you | `host.send`, `host.createChat`, `host.retry`, `host.continue`, `host.interrupt` |
+| `sendMessages` | Sends messages and starts chats as you | `host.send`, `host.createChat`, `host.retry`, `host.continue`, `host.interrupt`, `host.addContextFile` |
 | `accounts` | Sees and switches your engine accounts | `host.accounts`, `host.useAccount` |
 | `models` | Makes model calls on your accounts | `host.complete` |
 | `memory` | Decides what agents remember of each chat | `memory`, `host.chatStorage` |

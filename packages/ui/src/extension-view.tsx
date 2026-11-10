@@ -1,7 +1,8 @@
-import { createContext, useContext, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { Button, Chevron, confirm, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
+import { MarkdownEditor } from './markdown-editor.tsx'
 
 /**
  * Draws an extension's panel from the view tree its core side sends (ExtensionView in @kothar/extension-api), with
@@ -31,6 +32,8 @@ const FOLLOW_PX = 16
 const GAPS = { tight: 'gap-4', normal: 'gap-8', loose: 'gap-18' }
 const JUSTIFY = { start: 'justify-start', between: 'justify-between', end: 'justify-end' }
 const MAX_CODE_LINES = 400
+// How long a search box waits after the last key before it sends.
+export const SEARCH_VIEW_MS = 150
 
 type Act = (action: ExtensionAction) => void
 // Saves one of the extension's space settings, for a panel's switches and pickers.
@@ -291,6 +294,39 @@ function Form({ node, act }: { node: FormNode; act: Act }) {
   )
 }
 
+type SearchNode = Extract<ExtensionView, { type: 'search' }>
+
+// What's typed stays as the panel draws again (with what matches); a new key starts over at value.
+function Search({ node, act }: { node: SearchNode; act: Act }) {
+  const start = node.key ?? ''
+  const [typed, setTyped] = useState({ start, text: node.value ?? '' })
+  const text = typed.start === start ? typed.text : (node.value ?? '')
+  const sent = useRef(text)
+  const latest = useRef(act)
+  useLayoutEffect(() => {
+    latest.current = act
+  })
+  useEffect(() => {
+    if (text === sent.current) return
+    const timer = setTimeout(() => {
+      sent.current = text
+      latest.current({ name: node.action, value: text })
+    }, SEARCH_VIEW_MS)
+    return () => clearTimeout(timer)
+  }, [text, node.action])
+  return (
+    <input
+      type="search"
+      className="min-w-0 text-sm"
+      aria-label={node.label ?? node.placeholder ?? 'Search'}
+      placeholder={node.placeholder}
+      spellCheck={false}
+      value={text}
+      onChange={(e) => setTyped({ start, text: e.target.value })}
+    />
+  )
+}
+
 function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   switch (node.type) {
     case 'stack':
@@ -382,6 +418,35 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       return <SettingSwitch node={node} />
     case 'picker':
       return <SettingPicker node={node} />
+    case 'split':
+      return (
+        // Side by side once there's room; in a narrow panel the side sits above.
+        <div className="@container flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-12 @min-[560px]:flex-row" data-split>
+            <div className="flex min-h-0 min-w-0 flex-col gap-8 @min-[560px]:w-240 @min-[560px]:shrink-0 @min-[560px]:overflow-y-auto @min-[560px]:border-r @min-[560px]:pr-12">
+              <Node node={node.side} act={act} />
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-8 @min-[560px]:overflow-y-auto">
+              <Node node={node.main} act={act} />
+            </div>
+          </div>
+        </div>
+      )
+    case 'search':
+      return <Search node={node} act={act} />
+    case 'editor':
+      return (
+        <MarkdownEditor
+          docKey={node.key}
+          text={node.text}
+          label={node.label}
+          placeholder={node.placeholder}
+          autofocus={node.autofocus}
+          onChange={(text) => act({ name: node.change, value: text })}
+          onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
+          onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
+        />
+      )
     default:
       return null
   }

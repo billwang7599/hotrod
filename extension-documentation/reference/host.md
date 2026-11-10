@@ -92,6 +92,7 @@ export { lastQuestion, workFolder }
 | `retry(chatId)` | Sends the chat's last message again, ahead of anything queued. |
 | `continue(chatId, text)` | Carries on the chat's last turn with a prompt from Kothar, as a turn of its own. The agent sees the turn so far in its memory. The prompt isn't shown or logged as a message, and queued messages run after it. The chat must be idle. |
 | `interrupt(chatId)` | Asks a running turn to stop, as the Stop button does. |
+| `addContextFile(chatId, path)` | Adds a file to the chat's context (**Context → Files**), as the user adding it there does. It's pasted into the instructions of the chat's next sessions and its workers'. A worker's goes to its space. Throws a short message for the user when there's no such file, it's already there, or the chat keeps no files (an extension's own chat, such as Home). |
 
 ```ts
 import type { Extension } from '@kothar/extension-api'

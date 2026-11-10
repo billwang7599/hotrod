@@ -14,6 +14,7 @@ import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
+import { ExtensionPopup, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -197,6 +198,13 @@ function App() {
   const [marketplace, setMarketplace] = useState(false)
   const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
+  // The open chat's extension panels: popups, their keys and sidebar entries.
+  const panels = (selected && state.extensionUi?.chatId === selected.id && state.extensionUi.panels) || []
+  const showContext = useCallback(() => {
+    if (contextDocks) setContextOpen(true)
+    else setOverlay('context')
+  }, [contextDocks])
+  const panelKeys = usePanelShortcuts(panels, showContext)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
     nextSpace: () => goTo(stepSpace(state.chats, state.selectedId, 1)),
@@ -209,6 +217,7 @@ function App() {
     marketplace: () => setMarketplace((open) => !open),
     ...panelShortcuts({ covered: settingsOpen || marketplace, chatOpen: !!selected, toggleSidebar, toggleContext }),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
+    ...(!settingsOpen && !marketplace && panelKeys),
   }
   useShortcuts(shortcuts)
   const keys = useBindings()
@@ -248,7 +257,11 @@ function App() {
                     askName={setNameRequest}
                     newSpaceKeys={keys.newSpace}
                   />
-                  <SidebarFooter settingsKeys={keys.settings} openSettings={() => openSettings()} />
+                  <SidebarFooter
+                    settingsKeys={keys.settings}
+                    openSettings={() => openSettings()}
+                    entries={sidebarEntries(panels, keys, showContext)}
+                  />
                 </aside>
               </SidePanel>
             )}
@@ -389,6 +402,15 @@ function App() {
             send={send}
             pickFolder={window.kothar?.pickFolder}
           />
+          {selected && (
+            <ExtensionPopup
+              chatId={selected.id}
+              panels={panels}
+              panelViews={state.panelViews}
+              connected={connected}
+              send={send}
+            />
+          )}
           <SearchPalette
             open={searching}
             close={() => setSearching(false)}

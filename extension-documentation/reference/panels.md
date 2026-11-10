@@ -7,7 +7,7 @@ description: Add tabs to the right sidebar and actions to a chat's General tab.
 
 ## Panels
 
-`panels` adds tabs to the right sidebar, beside **General** and **Context**. A panel's code runs in Kothar's core, not
+`panels` adds tabs to the right sidebar, beside **General** and **Context**, or popups over the chat. A panel's code runs in Kothar's core, not
 in the window. It returns its UI as data, a **view**, and Kothar draws it with its own controls. So a panel looks like
 the rest of Kothar in every theme, and runs no code in the window.
 
@@ -63,6 +63,9 @@ A `ExtensionPanel` has:
 | `shown(chat, context)` | Optional. Whether this chat gets the tab. Without it, every chat does. |
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
+| `placement` | Optional. `'tab'` (the default) or `'popup'`: a large window over the chat, for work that wants room, such as notes. Esc closes it. It draws for the chat that's open, as a tab does. |
+| `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
+| `sidebar` | Optional. `true` adds an entry to the left sidebar, above **Settings**, that opens the panel. |
 
 When the panel redraws:
 
@@ -109,6 +112,9 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `empty` | `text` | A quiet placeholder, such as "No processes". |
 | `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the extension's boolean `spaceSettings`. See below. |
 | `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the extension's select `spaceSettings`. See below. |
+| `split` | `side`, `main` | Two columns, for a popup: a narrow `side`, such as a list, and `main`, such as an editor. Each scrolls on its own. In a narrow panel `side` sits above `main`. |
+| `search` | `action`, `key?`, `value?`, `placeholder?`, `label?` | A search box. As the user types, it sends `{ name: action, value: text }` after a short pause. What's typed stays as the panel redraws; a new `key` starts over at `value`. |
+| `editor` | `key`, `text`, `change`, `links?`, `tags?`, `label?`, `placeholder?`, `autofocus?` | A Markdown editor with live preview. See below. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
 
@@ -140,6 +146,24 @@ the user's theme.
 **Code:** `language: 'diff'` colours added and removed lines; other languages are shown plain. For output that grows,
 such as a log, set `follow: true`. Then `maxLines` keeps the last lines instead of the first, and the view stays
 scrolled to the end as lines arrive, unless the user scrolls up.
+
+### Editor
+
+An `editor` edits Markdown with a live preview, as Obsidian does. The text stays plain Markdown, but outside the line
+being edited its marks are hidden and it's drawn as it reads: headings, bold, italics, code, quotes, lists and links.
+
+- **Saving:** it sends `{ name: change, value: text }` with the whole text, a moment after the user stops typing, and
+  when the editor loses focus or closes.
+- **Starting over:** a new `key` starts over at `text`. With the same `key`, a new `text` (say, the file changed on
+  disk) replaces the editor's only while the user has nothing unsent.
+- **Links and tags:** `[[wikilinks]]` and `#tags` are drawn as links. With `links`, clicking one sends
+  `{ name: links, value: target }`, where the target is the part before any `|` or `#`. With `tags`, clicking a tag
+  sends `{ name: tags, value: tag }`, without the `#`. On the line being edited, ⌘-click (Ctrl-click elsewhere)
+  follows them, so a plain click still places the cursor.
+
+```ts
+{ type: 'editor', key: note.path, text: note.body, change: 'save', links: 'open-link', tags: 'filter-tag' }
+```
 
 ### Switches and pickers
 

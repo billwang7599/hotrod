@@ -245,6 +245,11 @@ export type ExtensionHost = {
   // the data folder (the garage), the work folder, and each chat's folders, files, work folder and checkouts. Rejects
   // with a short message for the user otherwise, or when the path doesn't exist.
   reveal(path: string): Promise<void>
+  // Adds a file to the chat's context (Context → Files), as the user adding it there does: it's pasted into the
+  // instructions of the chat's next sessions and its workers'. A worker's goes to its space. Throws with a short message
+  // for the user when it can't: no such file, it's already there, or the chat keeps no files (an extension's own chat,
+  // such as Home).
+  addContextFile(chatId: string, path: string): void
   // Files of the extension's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The
   // core's own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
   chatStorage(chatId: string): ExtensionStorage
@@ -451,6 +456,32 @@ export type ExtensionView =
       cancel?: { label: string; action: ExtensionAction }
     }
   | { type: 'empty'; text: string }
+  // Two columns, for a popup (ExtensionPanel.placement): side is a narrow column on the left, such as a list, and main
+  // takes the rest, such as an editor. Each scrolls on its own. In a narrow panel side sits above main.
+  | { type: 'split'; side: ExtensionView; main: ExtensionView }
+  // A search box. As the user types it sends the action named action with value: the text (after a short pause), so the
+  // panel can draw what matches. key: a new key starts over at value; otherwise what's typed stays as the panel draws
+  // again.
+  | { type: 'search'; key?: string; value?: string; placeholder?: string; label?: string; action: string }
+  // A Markdown editor with live preview, as in Obsidian: the text stays plain Markdown, but outside the line being
+  // edited its marks are hidden and it's drawn as it reads (headings, bold, italics, code, quotes, lists, links). It
+  // sends the action named change with value: the whole text, a moment after the user stops typing and when the
+  // editor loses focus or closes. key: a new key starts over at text. With the same key, a new text from the extension
+  // (say, the file changed on disk) replaces the editor's only while the user has nothing unsent.
+  // links: clicking a [[wikilink]] sends this action with value: its target (before any | or #). tags: clicking a
+  // #tag sends this action with value: the tag without its #. Without them, they're drawn but don't act.
+  | {
+      type: 'editor'
+      key: string
+      text: string
+      change: string
+      label?: string
+      placeholder?: string
+      links?: string
+      tags?: string
+      // Puts the cursor in it when it first shows.
+      autofocus?: boolean
+    }
   // Controls for one of the extension's spaceSettings in the panel's space (a worker's panel shows its space's): a
   // switch for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws
   // again. label defaults to the setting's. value and options are filled in by the core from the space's saved values
@@ -466,10 +497,19 @@ export type ExtensionView =
       options?: { value: string | number; label: string }[]
     }
 
-// A tab beside General, Context and Permissions in the right sidebar.
+// A tab beside General and Context in the right sidebar, or a popup over the chat.
 export type ExtensionPanel = {
   id: string
   title: string
+  // 'tab' (the default): a tab in the right sidebar. 'popup': a large window over the chat, for work that wants room,
+  // such as notes; Esc closes it. Either way it belongs to the chat that's open, and draws for it.
+  placement?: 'tab' | 'popup'
+  // Keys that open the panel (a popup) or show its tab, out of the box, such as 'Mod+Shift+N' (Mod is ⌘ on macOS,
+  // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left
+  // off; pick ones that are free.
+  shortcut?: string
+  // An entry in the left sidebar, below the spaces, that opens the panel.
+  sidebar?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
@@ -611,7 +651,7 @@ export type ExtensionUse =
   | 'memory'
   // Host calls: chats, chat, read, space, messages, reaches, reachable.
   | 'readChats'
-  // send, createChat, retry, continue, interrupt
+  // send, createChat, retry, continue, interrupt, addContextFile
   | 'sendMessages'
   // accounts, useAccount
   | 'accounts'

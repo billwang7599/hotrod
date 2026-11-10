@@ -28,3 +28,27 @@ export function usePanelTab() {
     },
   )
 }
+
+/**
+ * The extension popup that's open (ExtensionPanel.placement 'popup'), by extensionTabId, or null. Shared so a shortcut,
+ * a sidebar entry or a note in the chat can open one. Not kept across reloads.
+ */
+let popup: string | null = null
+const popupListeners = new Set<() => void>()
+
+export const currentPopup = () => popup
+
+export function openPopup(id: string | null) {
+  popup = id
+  for (const listener of popupListeners) listener()
+}
+
+export function usePopup() {
+  return useSyncExternalStore(
+    (listener) => {
+      popupListeners.add(listener)
+      return () => popupListeners.delete(listener)
+    },
+    () => popup,
+  )
+}
