@@ -8,7 +8,7 @@ import { startCore } from '@kothar/core/main'
 import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kothar/core/shared'
 import { sandboxingMachine as localMachine } from '@kothar/core/test-machine'
 import { elapsed } from '../../packages/ui/src/elapsed.ts'
-import { createProcessesExtension, duration, plain, portOf } from './index.ts'
+import { addressOf, createProcessesExtension, duration, LINE_MAX_CHARS, plain, portOf } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -149,6 +149,11 @@ describe('output', () => {
     expect(portOf('http://localhost:99999')).toBeUndefined()
   })
 
+  it('tells a full URL from a bare host:port', () => {
+    expect(addressOf('Local: http://localhost:5173/')).toMatchObject({ port: 5173, exact: true })
+    expect(addressOf('connected to localhost:5432')).toMatchObject({ port: 5432, exact: false })
+  })
+
   it('strips colours and turns carriage returns into lines', () => {
     expect(plain('\x1b[1m\x1b[32mok\x1b[0m\rnext')).toBe('ok\nnext')
   })
@@ -247,6 +252,16 @@ describe('logs', () => {
     const read = await t.tool('read_output', { id: 'p1', lines: 1 })
     expect(read.output).toBe('line 300')
   })
+
+  it('keep the start of a burst bigger than a whole log, in the file moved aside', async () => {
+    const t = await start({ logMaxBytes: 1000 })
+    // One write of 1500 bytes, so it arrives as one chunk.
+    await t.tool('start_process', { command: "printf 'START%01495dEND'; exec sleep 300", name: 'burst' })
+    const log = join(t.logDir, t.spaceId, 'p1.log')
+    await until(() => existsSync(log) && readFileSync(log, 'utf8').endsWith('END'))
+    expect(readFileSync(`${log}.1`, 'utf8')).toMatch(/^START0+$/)
+    expect(readFileSync(`${log}.1`, 'utf8').length + readFileSync(log, 'utf8').length).toBe(1503)
+  })
 })
 
 describe('stopping', () => {
@@ -294,6 +309,76 @@ const rows = (view: ExtensionView) =>
   partsOf(view).flatMap((part) => (part.type === 'list' ? part.items : []))
 const buttons = (view: ExtensionView) => partsOf(view).flatMap((part) => (part.type === 'button' ? [part.label] : []))
 const code = (view: ExtensionView) => partsOf(view).find((part) => part.type === 'code')
+
+describe('polish', () => {
+  it("shows the server's own URL, not a database address it printed first", async () => {
+    const t = await start()
+    const command = 'echo "db at localhost:5432"; echo "Local: http://localhost:5173/"; echo "proxy localhost:9000"; exec sleep 300'
+    await t.tool('start_process', { command, name: 'web' })
+    await until(() => t.made.processes(t.spaceId)[0]!.lines.length >= 3)
+    expect(t.made.processes(t.spaceId)[0]).toMatchObject({ port: 5173, url: 'http://localhost:5173/' })
+  })
+
+  it('wraps very long lines and output that never ends a line, keeping the log file as it was', async () => {
+    const t = await start()
+    const long = LINE_MAX_CHARS + 500
+    await t.tool('start_process', { command: `head -c ${long} /dev/zero | tr '\\0' x; echo; exec sleep 300`, name: 'long' })
+    await t.tool('start_process', { command: `head -c ${LINE_MAX_CHARS * 3} /dev/zero | tr '\\0' y; exec sleep 300`, name: 'endless' })
+    const [first, second] = t.made.processes(t.spaceId)
+    await until(() => first!.lines.length >= 1 && second!.lines.length >= 2)
+    await until(() => first!.lines.length >= 2)
+    expect(first!.lines.slice(0, 2)).toEqual(['x'.repeat(LINE_MAX_CHARS), 'x'.repeat(500)])
+    expect(second!.lines.every((line) => line.length <= LINE_MAX_CHARS)).toBe(true)
+    expect(second!.partial.length).toBeLessThanOrEqual(LINE_MAX_CHARS)
+    expect(readFileSync(first!.log, 'utf8')).toContain('x'.repeat(long))
+  })
+
+  it('reads a \\r\\n split across two chunks as one line break', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: "printf 'a\\r'; sleep 0.3; printf '\\nb\\n'; exec sleep 300", name: 'crlf' })
+    const [proc] = t.made.processes(t.spaceId)
+    await until(() => proc!.lines.includes('b'))
+    expect(proc!.lines).toEqual(['a', 'b'])
+  })
+
+  it('shows a process as stopping until it has gone, without a second Stop', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: "trap 'sleep 0.5; exit 0' TERM; while :; do sleep 0.1; done", name: 'slow' })
+    await t.panel()
+    await t.panel({ name: 'open', value: 'p1' })
+    const stopping = await t.panel({ name: 'stop', value: 'p1' })
+    expect(rows(stopping)[0]).toMatchObject({ dot: 'faint', badges: [expect.objectContaining({ text: 'stopping' })] })
+    expect(buttons(stopping)).toEqual(['Restart', 'Open in Terminal'])
+    await until(() => t.made.processes(t.spaceId)[0]?.status === 'stopped')
+  })
+
+  it('ignores a second Restart while one is under way', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'echo "run $$"; exec sleep 300', name: 'web' })
+    await t.panel()
+    const runs = t.spawned.length
+    const where = { chatId: t.spaceId, extension: 'processes', panel: 'processes' }
+    const restart = { type: 'extension.panel.action', ...where, action: { name: 'restart', value: 'p1' } } as const
+    t.handle(restart)
+    t.handle(restart)
+    await until(() => t.spawned.length > runs && t.made.processes(t.spaceId)[0]?.status === 'running')
+    await new Promise((r) => setTimeout(r, 300))
+    expect(t.spawned.length).toBe(runs + 1)
+    expect(partsOf(t.lastView()).some((p) => p.type === 'text' && p.tone === 'error')).toBe(false)
+  })
+
+  it('says inline why a Restart failed', async () => {
+    const t = await start()
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'web' })
+    await t.tool('stop_process', { id: 'p1' })
+    await t.tool('start_process', { command: 'exec sleep 301', name: 'web' })
+    await t.panel()
+    const failed = await t.panel({ name: 'restart', value: 'p1' })
+    expect(partsOf(failed)).toContainEqual(
+      expect.objectContaining({ type: 'text', tone: 'error', text: expect.stringContaining('"web" (p2) is already running') }),
+    )
+  })
+})
 
 describe('the Processes tab', () => {
   it('shows once the space has a process, in the space and its workers, and goes once they are cleared', async () => {
@@ -454,4 +539,54 @@ it("lists other extensions' rows, such as the Browser's, with their buttons, whi
   expect(refreshed).toEqual(['s1', 'w1'])
   rows = []
   expect(panel.shown!(chat, context)).toBe(false)
+})
+
+it("says inline why another extension's button failed", async () => {
+  const { extension } = createProcessesExtension()
+  const panel = extension.panels![0]!
+  const host = {
+    space: (chatId: string) => ({ id: chatId, name: 'S', folders: [], checkouts: [] }),
+    processes: () => [{ extension: 'browser', key: 'browser', label: 'Browser', actions: [{ name: 'open', label: 'Show' }] }],
+    processAction: async () => {
+      throw new Error('Browser is off')
+    },
+    chats: () => [{ id: 's1' }],
+    refresh: () => {},
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  await panel.onAction!({ name: 'extension', value: { extension: 'browser', key: 'browser', action: 'open' } }, chat, context)
+  const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
+  expect(view.children).toContainEqual({ type: 'text', text: 'Browser is off', tone: 'error', small: true })
+})
+
+it('stops a process its space lost while it was still starting, and lets the space go', async () => {
+  const { extension, processes } = createProcessesExtension({ settleMs: 10 })
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  let spawned: (handle: unknown) => void = () => {}
+  const stops: string[] = []
+  let exit: (code: number | null, tail: string) => void = () => {}
+  const handle = { stop: () => (stops.push('stop'), exit(null, '')), onOutput: () => {}, onExit: (f: typeof exit) => (exit = f) }
+  const space = { id: 's1', name: 'S', folders: [], checkouts: [], workDir: dir }
+  const host = {
+    space: () => space,
+    spawn: () => new Promise((resolve) => (spawned = resolve)),
+    storage: { dir: join(dir, 'store') },
+    chats: () => [],
+    chat: () => undefined,
+    refresh: () => {},
+    note: () => {},
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const caller = { id: 's1', name: 'S', engine: 'fake' }
+  const started = extension.tools![0]!.run({ command: 'sleep 300' }, { caller, values: {}, host } as never)
+  await until(() => processes('s1').length === 1)
+  extension.onChatRemoved!({ id: 's1' } as never, context as never)
+  spawned(handle)
+  await started
+  expect(stops).toEqual(['stop'])
+  // Once it ended, the deleted space's list and logs went.
+  await until(() => processes('s1').length === 0)
+  expect(existsSync(join(dir, 'store', 's1'))).toBe(false)
 })

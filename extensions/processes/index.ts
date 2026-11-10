@@ -17,6 +17,9 @@ export const PANEL_LINES = 200
 
 // Kept in memory per process for read_output; the log file has the rest.
 export const TAIL_LINES = 1000
+// A longer line is wrapped into lines this long in memory and the tab (the log file keeps it as it was), so the tail
+// stays TAIL_LINES short of this each, even for a minified bundle or output that never ends a line.
+export const LINE_MAX_CHARS = 2000
 export const READ_DEFAULT_LINES = 100
 export const READ_MAX_LINES = 500
 // A log past this size moves to <id>.log.1 (replacing the one before), so each process keeps at most twice this.
@@ -45,10 +48,17 @@ export type Proc = {
   endedAt?: number
   port?: number
   url?: string
+  // The address came from a full URL, which a later line doesn't replace; a bare host:port (a database it connects
+  // to, say) gives way to the first URL.
+  exact?: boolean
   lines: string[]
   partial: string
+  // The last chunk ended in \r, so a \n opening the next is the same line break.
+  afterCr?: boolean
   log: string
+  // Asked to stop; before it has a handle, it's stopped as soon as it gets one.
   stopping?: boolean
+  restarting?: boolean
   handle?: ExtensionProcess
   ended: Promise<void>
   end: () => void
@@ -67,19 +77,24 @@ const validPort = (text: string | undefined) => {
   return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined
 }
 
-// The first local address a line of output names, as a link that opens on this computer.
-export function portOf(line: string): { port: number; url: string } | undefined {
+// The first local address a line of output names, as a link that opens on this computer. exact: it was a full URL.
+export function addressOf(line: string): { port: number; url: string; exact: boolean } | undefined {
   const text = plain(line)
   const url = URL_PATTERN.exec(text)
   if (url) {
     const port = validPort(url[2])
     const host = LOCAL_HOSTS.has(url[1]!.toLowerCase()) ? 'localhost' : url[1]
     const scheme = /^https/i.test(url[0]) ? 'https' : 'http'
-    if (port) return { port, url: `${scheme}://${host}:${port}${url[3] ?? '/'}` }
+    if (port) return { port, url: `${scheme}://${host}:${port}${url[3] ?? '/'}`, exact: true }
   }
   const bare = HOST_PORT.exec(text) ?? SAYS_PORT.exec(text)
   const port = validPort(bare?.[2] ?? bare?.[1])
-  return port ? { port, url: `http://localhost:${port}/` } : undefined
+  return port ? { port, url: `http://localhost:${port}/`, exact: false } : undefined
+}
+
+export function portOf(line: string): { port: number; url: string } | undefined {
+  const found = addressOf(line)
+  return found && { port: found.port, url: found.url }
 }
 
 export function duration(ms: number) {
@@ -121,8 +136,10 @@ export function createProcessesExtension(
   const counters = new Map<string, number>()
   // Per chat looking at the tab, the process whose output it shows.
   const selected = new Map<string, string>()
-  // Per chat, why its last Open in Terminal failed, shown under the buttons until the next try.
-  const terminalErrors = new Map<string, { proc: string; error: string }>()
+  // Per chat, why its last button failed (Open in Terminal, Restart, another extension's row), shown under that row's
+  // buttons until the next action. proc: the process id, or extension:key for another extension's row.
+  const actionErrors = new Map<string, { proc: string; error: string }>()
+  const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
   // The space's tab and its workers' show the same processes, so all of them are drawn again.
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
@@ -169,26 +186,45 @@ export function createProcessesExtension(
     return cwd
   }
 
+  const notice = (proc: Proc, line: string) => {
+    if (proc.exact) return
+    const found = addressOf(line)
+    if (found && (proc.port === undefined || found.exact)) Object.assign(proc, found)
+  }
+
   const addLines = (proc: Proc, chunk: string) => {
-    const parts = plain(proc.partial + chunk).split('\n')
+    // \r\n split across two chunks: the \r already ended the line.
+    const text = proc.afterCr && chunk.startsWith('\n') ? chunk.slice(1) : chunk
+    if (chunk) proc.afterCr = chunk.endsWith('\r')
+    const parts = plain(proc.partial + text).split('\n')
     proc.partial = parts.pop() ?? ''
-    for (const line of parts) {
-      proc.lines.push(line)
-      if (proc.port === undefined) Object.assign(proc, portOf(line))
+    // Output with no newline for too long is a line of its own.
+    while (proc.partial.length > LINE_MAX_CHARS) {
+      parts.push(proc.partial.slice(0, LINE_MAX_CHARS))
+      proc.partial = proc.partial.slice(LINE_MAX_CHARS)
     }
-    if (proc.port === undefined && proc.partial) Object.assign(proc, portOf(proc.partial))
+    for (const line of parts) {
+      notice(proc, line)
+      for (let at = 0; at < line.length; at += LINE_MAX_CHARS) proc.lines.push(line.slice(at, at + LINE_MAX_CHARS))
+      if (!line) proc.lines.push(line)
+    }
+    if (proc.partial) notice(proc, proc.partial)
     if (proc.lines.length > TAIL_LINES) proc.lines.splice(0, proc.lines.length - TAIL_LINES)
   }
 
   const writeLog = (proc: Proc, chunk: string) => {
     try {
+      // A burst bigger than a whole log fills it, moves it aside and goes on in a new one, so its start isn't lost;
+      // only what's past both files is.
       let bytes = Buffer.from(chunk)
-      if (existsSync(proc.log) && statSync(proc.log).size + bytes.length > logMaxBytes) {
-        renameSync(proc.log, `${proc.log}.1`)
+      if (bytes.length > 2 * logMaxBytes) bytes = bytes.subarray(bytes.length - 2 * logMaxBytes)
+      while (bytes.length) {
+        const size = existsSync(proc.log) ? statSync(proc.log).size : 0
+        if (size > 0 && size + bytes.length > logMaxBytes) renameSync(proc.log, `${proc.log}.1`)
+        const piece = bytes.subarray(0, logMaxBytes)
+        appendFileSync(proc.log, piece)
+        bytes = bytes.subarray(piece.length)
       }
-      // A chunk bigger than a whole log keeps its end.
-      if (bytes.length > logMaxBytes) bytes = bytes.subarray(bytes.length - logMaxBytes)
-      appendFileSync(proc.log, bytes)
     } catch {
       // A log that can't be written (the space went) leaves the tail in memory.
     }
@@ -239,6 +275,8 @@ export function createProcessesExtension(
         host.note(proc.spaceId, `${proc.name} exited with code ${code}`, { panel: PANEL })
       }
     })
+    // Stopped while it was starting (its space deleted or archived, Stop pressed): it goes now.
+    if (proc.stopping) handle.stop()
   }
 
   const endable = () => {
@@ -283,6 +321,8 @@ export function createProcessesExtension(
       await launch(host, proc)
     } catch (error) {
       spaces.set(space.id, listOf(space.id).filter((p) => p !== proc))
+      // Nothing waiting on it (a space being deleted) waits forever.
+      proc.end()
       throw error
     }
     changed(host, space.id)
@@ -290,9 +330,9 @@ export function createProcessesExtension(
   }
 
   const stop = (proc: Proc) => {
-    if (proc.status !== 'running' || !proc.handle) return
+    if (proc.status !== 'running') return
     proc.stopping = true
-    proc.handle.stop()
+    proc.handle?.stop()
   }
 
   const stopSpace = (spaceId: string) => listOf(spaceId).forEach(stop)
@@ -301,26 +341,33 @@ export function createProcessesExtension(
     Promise.race([promise, new Promise((resolve) => setTimeout(resolve, ms))])
 
   // The same command again, under the same id, with its output so far kept above a line that says so.
+  // A second Restart while one is under way does nothing, rather than stopping the new run or failing.
   const restart = async (host: ExtensionHost, proc: Proc) => {
-    if (proc.status === 'running') {
-      stop(proc)
-      await waitFor(proc.ended, stopWaitMs)
-      if (proc.status === 'running') throw new Error(`${proc.name} hasn’t stopped yet`)
-    }
-    checkFree(proc.spaceId, proc, proc)
-    mkdirSync(dirname(proc.log), { recursive: true })
-    const mark = '--- restarted ---\n'
-    writeLog(proc, mark)
-    addLines(proc, mark)
-    for (const key of ['code', 'endedAt', 'port', 'url'] as const) delete proc[key]
-    Object.assign(proc, { status: 'running', startedAt: now(), ...endable() })
+    if (proc.restarting) return
+    proc.restarting = true
     try {
-      await launch(host, proc)
-    } catch (error) {
-      Object.assign(proc, { status: 'exited', code: null, endedAt: now() })
-      proc.end()
-      throw error
+      if (proc.status === 'running') {
+        stop(proc)
+        changed(host, proc.spaceId)
+        await waitFor(proc.ended, stopWaitMs)
+        if (proc.status === 'running') throw new Error(`${proc.name} hasn’t stopped yet`)
+      }
+      checkFree(proc.spaceId, proc, proc)
+      mkdirSync(dirname(proc.log), { recursive: true })
+      const mark = '--- restarted ---\n'
+      writeLog(proc, mark)
+      addLines(proc, mark)
+      for (const key of ['code', 'endedAt', 'port', 'url', 'exact'] as const) delete proc[key]
+      Object.assign(proc, { status: 'running', startedAt: now(), ...endable() })
+      try {
+        await launch(host, proc)
+      } catch (error) {
+        Object.assign(proc, { status: 'exited', code: null, endedAt: now() })
+        proc.end()
+        throw error
+      }
     } finally {
+      delete proc.restarting
       changed(host, proc.spaceId)
     }
   }
@@ -354,6 +401,10 @@ export function createProcessesExtension(
   const spaceIdOf = (host: ExtensionHost, chatId: string) => host.space(chatId)?.id
 
   const ended = (proc: Proc): { text: string; tone: ExtensionTone; hint: string } | undefined => {
+    if (proc.status === 'running' && (proc.stopping || proc.restarting)) {
+      const text = proc.restarting ? 'restarting' : 'stopping'
+      return { text, tone: 'faint', hint: 'Waiting for it and what it started to exit' }
+    }
     if (proc.status === 'running') return undefined
     const ran = duration((proc.endedAt ?? now()) - proc.startedAt)
     if (proc.status === 'stopped') return { text: 'stopped', tone: 'faint', hint: `Stopped after ${ran}` }
@@ -368,7 +419,7 @@ export function createProcessesExtension(
     return {
       key: proc.id,
       label: proc.name,
-      dot: proc.status === 'running' ? 'success' : (end?.tone ?? 'faint'),
+      dot: proc.status === 'running' && !end ? 'success' : (end?.tone ?? 'faint'),
       // The UI ticks it, so a quiet process's uptime stays current without the panel being sent again.
       ...(proc.status === 'running' && { since: proc.startedAt }),
       ...(end && { badges: [end] }),
@@ -388,7 +439,7 @@ export function createProcessesExtension(
       hint: 'Stop it and everything it started',
     }
     const buttons: ExtensionView[] = [
-      ...(proc.status === 'running' ? [stopButton] : []),
+      ...(proc.status === 'running' && !proc.stopping ? [stopButton] : []),
       {
         type: 'button',
         label: 'Restart',
@@ -403,7 +454,7 @@ export function createProcessesExtension(
         hint: `Open your terminal app in ${proc.cwd}`,
       },
     ]
-    const failed = terminalErrors.get(chatId)
+    const failed = actionErrors.get(chatId)
     return {
       type: 'stack',
       gap: 'tight',
@@ -426,8 +477,11 @@ export function createProcessesExtension(
 
   // Other extensions' rows (host.processes), such as the Browser's: a list item and its buttons, which go back to that
   // extension.
-  const extensionRowsOf = (host: ExtensionHost, spaceId: string): ExtensionView[] =>
-    host.processes(spaceId).flatMap((row) => [
+  const extensionRowsOf = (host: ExtensionHost, spaceId: string, chatId: string): ExtensionView[] =>
+    host.processes(spaceId).flatMap((row) => {
+      const failed = actionErrors.get(chatId)
+      const error = failed?.proc === `${row.extension}:${row.key}` ? failed.error : undefined
+      return [
       {
         type: 'list',
         label: row.label,
@@ -458,11 +512,13 @@ export function createProcessesExtension(
             } as const,
           ]
         : []),
-    ])
+      ...(error ? [{ type: 'text', text: error, tone: 'error', small: true } as const] : []),
+    ]
+    })
 
   const panelView = (spaceId: string, chatId: string, host: ExtensionHost): ExtensionView => {
     const list = listOf(spaceId)
-    const extensionRows = extensionRowsOf(host, spaceId)
+    const extensionRows = extensionRowsOf(host, spaceId, chatId)
     if (!list.length && !extensionRows.length) return { type: 'empty', text: 'No processes' }
     const open = selected.get(chatId)
     const children: ExtensionView[] = [...extensionRows]
@@ -606,9 +662,12 @@ export function createProcessesExtension(
         async onAction(action, chat, { host }) {
           const spaceId = spaceIdOf(host, chat.id)
           if (spaceId === undefined) return
+          actionErrors.delete(chat.id)
           if (action.name === 'extension') {
             const { extension, key, action: name } = (action.value ?? {}) as Record<string, string>
-            return host.processAction(spaceId, String(extension), String(key), String(name))
+            return host.processAction(spaceId, String(extension), String(key), String(name)).catch((error: unknown) => {
+              actionErrors.set(chat.id, { proc: `${extension}:${key}`, error: messageOf(error) })
+            })
           }
           if (action.name === 'clear') {
             clear(spaceId)
@@ -616,12 +675,9 @@ export function createProcessesExtension(
           }
           const proc = listOf(spaceId).find((p) => p.id === action.value)
           if (!proc) return
-          if (action.name !== 'terminal') terminalErrors.delete(chat.id)
           if (action.name === 'terminal') {
-            terminalErrors.delete(chat.id)
             await host.openTerminal(proc.cwd).catch((error: unknown) => {
-              const text = error instanceof Error ? error.message : String(error)
-              terminalErrors.set(chat.id, { proc: proc.id, error: text })
+              actionErrors.set(chat.id, { proc: proc.id, error: messageOf(error) })
             })
           } else if (action.name === 'open') {
             if (selected.get(chat.id) === proc.id) selected.delete(chat.id)
@@ -630,7 +686,9 @@ export function createProcessesExtension(
             stop(proc)
           } else if (action.name === 'restart') {
             selected.set(chat.id, proc.id)
-            await restart(host, proc)
+            await restart(host, proc).catch((error: unknown) => {
+              actionErrors.set(chat.id, { proc: proc.id, error: messageOf(error) })
+            })
           }
         },
       },
@@ -644,7 +702,7 @@ export function createProcessesExtension(
     },
     onChatRemoved(chat, { host }) {
       selected.delete(chat.id)
-      terminalErrors.delete(chat.id)
+      actionErrors.delete(chat.id)
       if (chat.parentId !== undefined) return
       clearTimeout(pending.get(chat.id))
       pending.delete(chat.id)
