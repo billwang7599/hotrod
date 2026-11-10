@@ -7,7 +7,7 @@ import type { ChatView } from './state.ts'
  * space or Home finished a turn, a turn (a worker's too) ended with an error, or an extension asked for one
  * (host.notify). Shown only while the user isn't looking at that chat: with Kothar's window in front, only what needs
  * them or failed in another space shows; a finished turn there already turns its space bold. A burst (several workers
- * failing at once) becomes one notification. Settings → General turns them off, or one kind of them.
+ * failing at once) becomes one notification. Settings → Appearance → Notifications turns them off, or one kind of them.
  */
 export type NotifyKind = 'needsYou' | 'finished' | 'errors'
 export type NotificationPrefs = { enabled: boolean } & Record<NotifyKind, boolean>

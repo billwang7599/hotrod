@@ -236,7 +236,7 @@ background work, where there's no hook to throw from. It needs nothing listed.
 from Kothar: a wait gave up, a browser needs you to log in. It needs nothing listed. Title and body are plain text; a
 title past 120 characters or a body past 400 is cut.
 
-Kothar shows it as it shows its own (**Settings → General → Notifications**): not at all if you turned notifications
+Kothar shows it as it shows its own (**Settings → Appearance → Notifications**): not at all if you turned notifications
 off, and not while you're looking at the chat it names (or that chat's space). Several arriving within a second show as
 one. With `chatId`, clicking it brings Kothar to the front and opens that chat, or the space of a worker. An unknown
 `chatId` throws.

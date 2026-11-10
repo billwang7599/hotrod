@@ -1120,7 +1120,7 @@ function openLockedCore(options: {
         append(chatFor(chatId), { at, type: 'extension.note', text, ...(panel !== undefined && { extension: extension.id, panel }) })
       },
       error: (text) => extensionError(extension, String(text)),
-      // The UI decides whether it shows (Settings → General → Notifications) and draws it as the system's notification.
+      // The UI decides whether it shows (Settings → Appearance → Notifications) and draws it as the system's notification.
       notify({ chatId, title, body }) {
         const chat = chatId === undefined ? undefined : chatFor(String(chatId))
         broadcast({
