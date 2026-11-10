@@ -8,7 +8,7 @@ import { startCore } from '@kothar/core/main'
 import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kothar/core/shared'
 import { sandboxingMachine as localMachine } from '@kothar/core/test-machine'
 import { elapsed } from '../../packages/ui/src/elapsed.ts'
-import { addressOf, createProcessesExtension, duration, LINE_MAX_CHARS, plain, portOf } from './index.ts'
+import { addressOf, createProcessesExtension, duration, endNote, LINE_MAX_CHARS, plain, portOf } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -493,6 +493,34 @@ describe('the Processes tab', () => {
     const note = { text: 'web exited with code 4', extension: 'processes', panel: 'processes' }
     expect(notes).toEqual([expect.objectContaining(note)])
   })
+
+  it('notes in the space when a process is killed outside Kothar, but not when Kothar quits', async () => {
+    const t = await start()
+    const notes = () => t.core.chats().find((c) => c.id === t.spaceId)!.entries.filter((e) => e.type === 'extension.note')
+    // exec: the pid the shell prints is the sleep's, so killing it is a kill from outside, as out of memory would be.
+    await t.tool('start_process', { command: 'echo pid $$; exec sleep 300', name: 'web' })
+    const proc = t.made.processes(t.spaceId)[0]!
+    await until(() => /pid \d+/.test(proc.lines.join('\n')))
+    process.kill(Number(/pid (\d+)/.exec(proc.lines.join('\n'))![1]), 'SIGKILL')
+    await until(() => proc.status !== 'running')
+    expect(proc).toMatchObject({ status: 'exited', code: null })
+    expect(notes()).toEqual([expect.objectContaining({ text: 'web was killed outside Kothar', panel: 'processes' })])
+
+    await t.tool('start_process', { command: 'exec sleep 300', name: 'api' })
+    const api = t.made.processes(t.spaceId).find((p) => p.name === 'api')!
+    await t.close()
+    expect(api.status).toBe('stopped')
+    expect(notes()).toHaveLength(1)
+  })
+
+  it('names the signal a shell reports, and says nothing of a clean exit', () => {
+    expect(endNote('web', 0)).toBeUndefined()
+    expect(endNote('web', 4)).toBe('web exited with code 4')
+    expect(endNote('web', null)).toBe('web was killed outside Kothar')
+    expect(endNote('web', 137)).toBe('web was killed outside Kothar (SIGKILL)')
+    expect(endNote('web', 143)).toBe('web was killed outside Kothar (SIGTERM)')
+    expect(endNote('web', 200)).toBe('web exited with code 200')
+  })
 })
 
 it("lists other extensions' rows, such as the Browser's, with their buttons, which go back to the extension that owns them", async () => {
@@ -589,4 +617,38 @@ it('stops a process its space lost while it was still starting, and lets the spa
   // Once it ended, the deleted space's list and logs went.
   await until(() => processes('s1').length === 0)
   expect(existsSync(join(dir, 'store', 's1'))).toBe(false)
+})
+
+it('counts whatever ends after onStop as stopped by Kothar, with no note, until it starts again', async () => {
+  const { extension, processes } = createProcessesExtension({ settleMs: 10 })
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-processes-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const exits: ((code: number | null, tail: string) => void)[] = []
+  const handle = () => ({ stop: () => {}, onOutput: () => {}, onExit: (f: (code: number | null, tail: string) => void) => exits.push(f) })
+  const space = { id: 's1', name: 'S', folders: [], checkouts: [], workDir: dir }
+  const notes: string[] = []
+  const host = {
+    space: () => space,
+    spawn: async () => handle(),
+    storage: { dir: join(dir, 'store') },
+    chats: () => [space],
+    chat: () => space,
+    refresh: () => {},
+    processesChanged: () => {},
+    note: (_chat: string, text: string) => void notes.push(text),
+  } as unknown as ExtensionHost
+  const context = { values: {}, host }
+  const caller = { id: 's1', name: 'S', engine: 'fake' }
+  const run = (command: string) => extension.tools![0]!.run({ command }, { caller, values: {}, host } as never)
+  await extension.onStart!(context as never)
+  await run('sleep 1')
+  await extension.onStop!(context as never)
+  exits[0]!(null, '')
+  expect(processes('s1')[0]).toMatchObject({ status: 'stopped' })
+  expect(notes).toEqual([])
+  await extension.onStart!(context as never)
+  await run('sleep 2')
+  exits[1]!(null, '')
+  expect(processes('s1')[1]).toMatchObject({ status: 'exited' })
+  expect(notes).toEqual(['sleep 2 was killed outside Kothar'])
 })

@@ -117,6 +117,19 @@ const real = (path: string) => {
 
 const text = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
 
+// Exit codes a shell gives a command a signal killed (128 + the signal), by name, for the ones worth naming.
+const SIGNALS: Record<number, string> = { 1: 'SIGHUP', 2: 'SIGINT', 6: 'SIGABRT', 9: 'SIGKILL', 15: 'SIGTERM' }
+
+// The line for the space when a process ended without Kothar stopping it, or nothing for a clean exit. code is null when
+// a signal killed it directly; a shell running it reports 128 + the signal.
+export function endNote(name: string, code: number | null) {
+  if (code === 0) return undefined
+  if (code === null) return `${name} was killed outside Kothar`
+  const signal = code > 128 ? SIGNALS[code - 128] : undefined
+  if (signal) return `${name} was killed outside Kothar (${signal})`
+  return `${name} exited with code ${code}`
+}
+
 export function createProcessesExtension(
   options: {
     now?: () => number
@@ -131,6 +144,8 @@ export function createProcessesExtension(
   const settleMs = options.settleMs ?? SETTLE_MS
   const stopWaitMs = options.stopWaitMs ?? STOP_WAIT_MS
   const refreshMs = options.refreshMs ?? REFRESH_MS
+  // Set from onStop to onStart: Kothar is quitting or Processes was turned off, so whatever ends was stopped by Kothar.
+  let ending = false
   // Per space, in the order they started.
   const spaces = new Map<string, Proc[]>()
   const counters = new Map<string, number>()
@@ -262,7 +277,8 @@ export function createProcessesExtension(
       if (proc.handle !== handle) return
       if (proc.partial) addLines(proc, '\n')
       if (stderrTail.trim()) addLines(proc, `${stderrTail.trimEnd()}\n`)
-      proc.status = proc.stopping ? 'stopped' : 'exited'
+      // Kothar quitting, or Processes turned off, stops it too (onStop runs before the core kills what it spawned).
+      proc.status = proc.stopping || ending ? 'stopped' : 'exited'
       proc.code = code
       proc.endedAt = now()
       delete proc.handle
@@ -270,10 +286,10 @@ export function createProcessesExtension(
       proc.end()
       prune(proc.spaceId)
       changed(host, proc.spaceId)
-      // A process that failed on its own is worth a line in the space; one killed by a signal was stopped.
-      if (proc.status === 'exited' && typeof code === 'number' && code !== 0 && host.chat(proc.spaceId)) {
-        host.note(proc.spaceId, `${proc.name} exited with code ${code}`, { panel: PANEL })
-      }
+      // A process that failed on its own, or was killed from outside Kothar (out of memory, kill -9), is worth a line
+      // in the space. One Kothar stopped isn't.
+      const line = proc.status === 'exited' && host.chat(proc.spaceId) ? endNote(proc.name, code) : undefined
+      if (line) host.note(proc.spaceId, line, { panel: PANEL })
     })
     // Stopped while it was starting (its space deleted or archived, Stop pressed): it goes now.
     if (proc.stopping) handle.stop()
@@ -696,6 +712,13 @@ export function createProcessesExtension(
     // The rows another extension lists here changed; the tab may need to appear too.
     onProcessesChanged(spaceId, { host }) {
       changed(host, spaceId)
+    },
+    // onStop is only called for an extension that started.
+    onStart() {
+      ending = false
+    },
+    onStop() {
+      ending = true
     },
     onChatArchived(chat, archived) {
       if (archived && chat.parentId === undefined) stopSpace(chat.id)

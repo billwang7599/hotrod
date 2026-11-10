@@ -180,7 +180,10 @@ to end. Nothing times it out. It resolves with a `ExtensionProcess`:
 `options` are `{ cwd?, env?, chat? }`. With `chat`, the command runs as that chat's own commands do: sandboxed to its
 space's work folder and checkouts, unless the chat may edit anywhere. `cwd` then defaults to the space's work folder; without `chat`, it defaults to `/`.
 
-Everything an extension started stops when the extension is turned off or Kothar quits.
+Everything an extension started stops when the extension is turned off or Kothar quits. `onStop` runs first (for an
+extension that started, so give it an `onStart`, even an empty one), before any of its processes exit: an extension
+can set a flag there and tell those exits from a process that died on its own. Processes does this to note a process
+killed outside Kothar, without a false note at quit.
 
 ```ts
 import type { ExtensionHost } from '@kothar/extension-api'
