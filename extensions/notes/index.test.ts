@@ -234,3 +234,41 @@ it('makes, edits, renames and deletes notes from the panel', async () => {
   // Home has no notes of its own: only global ones.
   expect(JSON.stringify(await panel('main'))).not.toContain('This space')
 })
+
+it('never lets one note overwrite another whose name makes the same file', async () => {
+  const { garage, create, tool, panel } = await start()
+  const app = create('App')
+  const dir = join(garage, 'chats', app, 'notes')
+  expect((await tool(app, 'write_note', { name: 'C tests', description: 'C', body: 'make test' })).isError).toBe(false)
+
+  // "C++ tests" makes c-tests.md too: refused, and the C note is untouched.
+  const clash = await tool(app, 'write_note', { name: 'C++ tests', description: 'C++', body: 'ctest' })
+  expect(clash).toMatchObject({ isError: true })
+  expect(clash.text).toContain('"C tests"')
+  expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
+
+  // From the panel: a new note with the clashing name stays in the form with the reason, and nothing is written.
+  await panel(app, { name: 'new', value: 'space' })
+  const refused = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C++ tests', description: '', body: 'ctest' } }))
+  expect(refused).toContain('"type":"form"')
+  expect(refused).toContain('share the file c-tests.md with the note \\"C tests\\"')
+  expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
+  // A new note with an existing note's exact name is refused in the panel too, rather than replacing it.
+  const same = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C tests', description: '', body: 'other' } }))
+  expect(same).toContain('A note named \\"C tests\\" already exists in this space')
+  expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
+  await panel(app, { name: 'cancel' })
+
+  // Renaming a note to another note's name keeps both.
+  await panel(app, { name: 'new', value: 'space' })
+  await panel(app, { name: 'save', value: { name: 'Deploys', description: '', body: 'ship' } })
+  await panel(app, { name: 'edit', value: `${app}:deploys.md` })
+  const renamed = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C tests', description: '', body: 'ship' } }))
+  expect(renamed).toContain('already exists')
+  expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
+  expect(readFileSync(join(dir, 'deploys.md'), 'utf8')).toContain('ship')
+  // Saving under its own name, in other letter case, still edits it.
+  const kept = JSON.stringify(await panel(app, { name: 'save', value: { name: 'DEPLOYS', description: '', body: 'ship it' } }))
+  expect(kept).not.toContain('"type":"form"')
+  expect(readFileSync(join(dir, 'deploys.md'), 'utf8')).toContain('ship it')
+})

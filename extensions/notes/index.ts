@@ -148,13 +148,16 @@ const find = (notes: Note[], name: unknown) => {
 
 const bodyOf = (note: Note) => parseNote(readFileSync(note.path, 'utf8'), note.file).body
 
-// Saves a note in its scope, replacing one of the same name there. replacing: the note being edited, removed if the
-// name changed.
+// Saves a note in its scope. replacing: the note being edited, removed if the name changed. Another note already in
+// the file the name makes is never overwritten: it's refused when that note has another name (names that differ only in
+// punctuation, such as "C++ tests" and "C tests", share a file), and when it has the same name unless sameName is
+// 'replace' (write_note's rule; the panel asks for a new name instead).
 export function saveNote(
   host: ExtensionHost,
   chatId: string,
   input: { name?: unknown; description?: unknown; body?: unknown; scope?: unknown },
   replacing?: Note,
+  sameName: 'replace' | 'refuse' = 'replace',
 ): Note {
   const name = oneLine(input.name)
   if (!name) throw new Error('A note needs a name')
@@ -168,10 +171,18 @@ export function saveNote(
   const scope: NoteScope = input.scope === 'global' || input.scope === 'space' ? input.scope : hasSpaceNotes(space) ? 'space' : 'global'
   if (scope === 'space' && !hasSpaceNotes(space)) throw new Error(`${space.name} keeps no notes of its own; save a global note`)
   const file = `${slug}.md`
+  const key = `${scope === 'global' ? 'global' : space.id}:${file}`
+  const existing = notesFor(host, chatId).find((note) => note.key === key)
+  if (existing && existing.key !== replacing?.key) {
+    const where = scope === 'global' ? 'in global notes' : 'in this space'
+    if (existing.name.toLowerCase() !== name.toLowerCase()) {
+      throw new Error(`"${name}" would share the file ${file} with the note "${existing.name}" ${where}: pick another name`)
+    }
+    if (sameName === 'refuse') throw new Error(`A note named "${existing.name}" already exists ${where}: pick another name`)
+  }
   const text = noteText(name, description, String(input.body ?? ''))
   const storage = scope === 'global' ? host.storage : host.chatStorage(space.id)
   storage.write(scope === 'global' ? file : `${NOTES_DIR}/${file}`, text)
-  const key = `${scope === 'global' ? 'global' : space.id}:${file}`
   if (replacing && replacing.key !== key) removeNote(host, replacing)
   const saved = notesFor(host, chatId).find((note) => note.key === key)
   if (!saved) throw new Error('The note was saved but can\'t be read back')
@@ -192,8 +203,9 @@ export function setNoteOn(host: ExtensionHost, chatId: string, key: string, on: 
   else storage.remove(OFF_FILE)
 }
 
-// What the panel is showing per chat: the list, or a form for a new note or one being edited.
-type Editing = { scope: NoteScope } | { key: string }
+// What the panel is showing per chat: the list, or a form for a new note or one being edited, with why its last save
+// was refused.
+type Editing = ({ scope: NoteScope } | { key: string }) & { error?: string }
 
 const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path, on: note.on })
 
@@ -254,6 +266,7 @@ export function createNotesExtension(): Extension {
       type: 'stack',
       children: [
         { type: 'heading', text: note ? `Edit ${note.name}` : scope === 'global' ? 'New global note' : 'New note in this space' },
+        ...(what.error ? [{ type: 'text' as const, text: what.error, tone: 'error' as const }] : []),
         {
           type: 'form',
           key: note?.key ?? `new:${scope}`,
@@ -308,7 +321,8 @@ export function createNotesExtension(): Extension {
         name: 'write_note',
         description:
           'Saves a note for later sessions: something durable, such as how to run this repo’s tests or a decision ' +
-          'the user made. Only when the user asks or it’s clearly worth keeping. Replaces a note of the same name. ' +
+          'the user made. Only when the user asks or it’s clearly worth keeping. Replaces a note of the same name; a ' +
+          'name that would share another note’s file is refused. ' +
           'scope "space" (the default) keeps it for this space and its workers; "global" for every chat. Home ' +
           'saves global notes only. description is one line saying when to read it.',
         inputSchema: {
@@ -411,7 +425,13 @@ export function createNotesExtension(): Extension {
               if (!what) return
               const fields = (action.value ?? {}) as Record<string, unknown>
               const note = 'key' in what ? noteOf(what.key) : undefined
-              saveNote(host, chat.id, { ...fields, scope: note?.scope ?? ('scope' in what ? what.scope : 'space') }, note)
+              try {
+                saveNote(host, chat.id, { ...fields, scope: note?.scope ?? ('scope' in what ? what.scope : 'space') }, note, 'refuse')
+              } catch (error) {
+                // Shown above the form, which keeps what the user typed (same key, same starting values).
+                editing.set(chat.id, { ...what, error: error instanceof Error ? error.message : String(error) })
+                break
+              }
               editing.delete(chat.id)
               host.refresh()
               return

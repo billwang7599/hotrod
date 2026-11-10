@@ -67,7 +67,9 @@ text), and the agent reads one in full when it fits the task.
 - **The Notes tab** lists them, and makes, edits and deletes them. **Turn off here** leaves a note out of one chat and
   its workers.
 - **Agents** have `list_notes`, `read_note` and `write_note`. They save a note when you ask, or when what they learned is
-  clearly worth keeping. A note of the same name in the same place is replaced.
+  clearly worth keeping. A note of the same name in the same place is replaced. A note's file is named from its name,
+  so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is refused, from the
+  panel too, rather than overwriting the first. The panel also refuses a new note or a rename to a name already taken.
 
 Notes are plain files: you can also edit them in any editor, or add a `.md` file to either folder. A file without the
 `---` front matter is named after the file.
