@@ -7,7 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
-import { createNotesExtension, freeName, noteText, noteToDelete, noteWatcher, parseNote, searchNotes, slugOf, type Note } from './index.ts'
+import { backlinksOf, createNotesExtension, freeName, linksIn, linkTarget, noteText, resolveLink, tagsIn, noteToDelete, noteWatcher, parseNote, searchNotes, slugOf, type Note } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -427,4 +427,72 @@ it('stops watching a space’s notes when told to forget it, and everything on c
   await until(() => seen.includes('b'))
   await new Promise((r) => setTimeout(r, 100))
   expect(seen).not.toContain('a')
+})
+
+it('reads [[links]] and #tags from a note, never from code', () => {
+  expect(linkTarget('Deploys|ship notes')).toBe('Deploys')
+  expect(linkTarget('Deploys#Fridays')).toBe('Deploys')
+  const text = '# Heading\nSee [[Deploys|ship]], [[Style]] and [[Deploys#x]]. #todo #12 a#b (#idea) #area/sub\n`[[Not]] #not`\n```\n[[Code]] #code\n```\n'
+  expect(linksIn(text)).toEqual(['Deploys', 'Style'])
+  expect(tagsIn(text)).toEqual(['todo', 'idea', 'area/sub'])
+})
+
+it("resolves a link to this space's note first, by name or file, and finds the notes that link to one", () => {
+  const notes = [
+    note({ key: 'global:deploys.md', name: 'Deploys', file: 'deploys.md' }),
+    note({ key: 's:deploys.md', name: 'Deploys', scope: 'space', spaceId: 's', file: 'deploys.md' }),
+    note({ key: 'global:style-guide.md', name: 'Style guide', file: 'style-guide.md' }),
+    note({ key: 's:index.md', name: 'Index', scope: 'space', spaceId: 's', file: 'index.md' }),
+  ]
+  expect(resolveLink(notes, 'deploys')?.key).toBe('s:deploys.md')
+  expect(resolveLink(notes, 'style-guide')?.key).toBe('global:style-guide.md')
+  expect(resolveLink(notes, 'Style Guide')?.key).toBe('global:style-guide.md')
+  expect(resolveLink(notes, 'Nope')).toBeUndefined()
+  const bodies: Record<string, string> = { 's:index.md': '[[Deploys]] and [[Style guide]]', 'global:deploys.md': '[[Style guide]]' }
+  const linking = (key: string) => backlinksOf(notes, notes.find((n) => n.key === key)!, (n) => bodies[n.key] ?? '').map((n) => n.key)
+  expect(linking('s:deploys.md')).toEqual(['s:index.md'])
+  expect(linking('global:style-guide.md')).toEqual(['global:deploys.md', 's:index.md'])
+  expect(linking('global:deploys.md')).toEqual([])
+})
+
+it('follows a [[link]] from the editor, making the note if there is none, and lists backlinks', async () => {
+  const { garage, create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Index', body: 'See [[Deploys]] and [[Style|style]]' })
+  await tool(app, 'write_note', { name: 'Style', body: 'Short words', scope: 'global' })
+  await panel(app, { name: 'open', value: `${app}:index.md` })
+  // An existing note opens, and lists Index as linking to it.
+  const style = JSON.stringify(await panel(app, { name: 'link', value: 'Style' }))
+  expect(style).toContain('"text":"Short words\\n"')
+  expect(style).toMatch(/"label":"Linked from".*"label":"Index"/)
+  // A missing one is made in this space, empty, and opened.
+  const made = JSON.stringify(await panel(app, { name: 'link', value: 'Deploys' }))
+  expect(readFileSync(join(garage, 'chats', app, 'notes', 'deploys.md'), 'utf8')).toBe('---\nname: Deploys\ndescription: \n---\n\n')
+  expect(made).toContain(`"key":"${app}:deploys.md"`)
+  expect(made).toMatch(/"label":"Linked from".*"label":"Index"/)
+  // The editor sends links and tags back as actions.
+  expect(made).toContain('"links":"link"')
+  expect(made).toContain('"tags":"tag"')
+  // Home makes a missing note global.
+  await panel('main', { name: 'link', value: 'Inbox' })
+  expect(existsSync(join(garage, 'extensions', 'notes', 'inbox.md'))).toBe(true)
+})
+
+it('filters the list by tag, from the tag row or a #tag clicked in the editor', async () => {
+  const { create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Deploys', body: 'Ship #ops #todo' })
+  await tool(app, 'write_note', { name: 'Style', body: 'Short #writing', scope: 'global' })
+  const all = JSON.stringify(await panel(app))
+  for (const tag of ['#ops', '#todo', '#writing']) expect(all).toContain(`"label":"${tag}"`)
+  const ops = JSON.stringify(await panel(app, { name: 'tag', value: 'ops' }))
+  expect(ops).toContain('"label":"Deploys"')
+  expect(ops).not.toContain('"label":"Style"')
+  expect(ops).toMatch(/"label":"#ops","variant":"primary"/)
+  // Clicking the tag again (an empty value) clears it.
+  expect(JSON.stringify(await panel(app, { name: 'tag', value: '' }))).toContain('"label":"Style"')
+  // A tag no note has any more stops filtering.
+  await panel(app, { name: 'tag', value: 'writing' })
+  await tool(app, 'write_note', { name: 'Style', body: 'Short', scope: 'global' })
+  expect(JSON.stringify(await panel(app))).toContain('"label":"Deploys"')
 })

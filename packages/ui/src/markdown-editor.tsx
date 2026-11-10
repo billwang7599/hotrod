@@ -298,6 +298,8 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, on
       if (!link && !tag) return false
       // On the line being edited, a plain click places the cursor; ⌘ or Ctrl follows.
       if (editing && !e.metaKey && !e.ctrlKey) return false
+      // What's typed is sent first, so the extension saves it to this text's note before opening another.
+      flushRef.current()
       if (link && handlers.current.onLink) handlers.current.onLink(link.dataset.link!)
       else if (tag && handlers.current.onTag) handlers.current.onTag(tag.dataset.tag!)
       else return false

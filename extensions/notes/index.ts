@@ -229,6 +229,58 @@ export function searchNotes(notes: Note[], query: string, body: (note: Note) => 
   return [...named, ...inText]
 }
 
+// [[wikilinks]]: the target is what's before any | (alias) or # (heading), as Obsidian reads it. The editor draws the
+// same syntax (its own parser), and its clicks send the target.
+export const linkTarget = (inner: string) => inner.split('|')[0]!.split('#')[0]!.trim()
+
+// Code (fenced blocks and inline spans) holds no links or tags.
+const withoutCode = (text: string) => text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))/gm, '').replace(/`[^`\n]*`/g, '')
+
+/** Every [[wikilink]] target in a note's text, in order, without repeats. */
+export function linksIn(text: string): string[] {
+  const found: string[] = []
+  for (const match of withoutCode(text).matchAll(/\[\[([^[\]\n]+)\]\]/g)) {
+    const target = linkTarget(match[1]!)
+    if (target && !found.includes(target)) found.push(target)
+  }
+  return found
+}
+
+/**
+ * Every #tag in a note's text, without its #, in order, without repeats: # after a space, a bracket or the line's start,
+ * then letters, digits, _, - or /, not all digits (so #12 and headings aren't tags).
+ */
+export function tagsIn(text: string): string[] {
+  const found: string[] = []
+  for (const match of withoutCode(text).matchAll(/(?:^|[\s(])#([\p{L}\p{N}_\-/]+)/gmu)) {
+    const tag = match[1]!
+    if (!/^\d+$/.test(tag) && !found.includes(tag)) found.push(tag)
+  }
+  return found
+}
+
+// The note a link names, among the notes a chat reaches: by name or file (letter case aside), this space's first, as
+// the closest note wins in Obsidian.
+export function resolveLink(notes: Note[], target: string): Note | undefined {
+  const wanted = target.trim().toLowerCase()
+  const file = `${slugOf(target)}.md`
+  const matches = (note: Note) =>
+    note.name.toLowerCase() === wanted || note.file.toLowerCase() === `${wanted}.md` || note.file.toLowerCase() === file
+  return notes.find((note) => note.scope === 'space' && matches(note)) ?? notes.find(matches)
+}
+
+// The notes that link to a note, by name.
+export function backlinksOf(notes: Note[], to: Note, body: (note: Note) => string = bodyOf): Note[] {
+  return notes.filter((note) => {
+    if (note.key === to.key) return false
+    try {
+      return linksIn(body(note)).some((target) => resolveLink(notes, target)?.key === to.key)
+    } catch {
+      return false
+    }
+  })
+}
+
 // The lines of a note that hold a word of the query, for search_notes.
 function hitsIn(note: Note, query: string) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
@@ -299,9 +351,18 @@ export function noteWatcher(onChange: (owner: string) => void, intervalMs = 2000
 }
 
 // What the popup shows per chat: the open note, the search, and a rename in progress with why it was refused.
-type PopupState = { open?: string; query: string; renaming?: { error?: string } }
+type PopupState = { open?: string; query: string; tag?: string; renaming?: { error?: string } }
 
 const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path })
+
+// A note's body, or nothing if it went meanwhile.
+const safeBody = (note: Note) => {
+  try {
+    return bodyOf(note)
+  } catch {
+    return ''
+  }
+}
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
@@ -345,12 +406,20 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
 
   const side = (chat: ChatDetail, host: ExtensionHost, notes: Note[], state: PopupState): ExtensionView => {
     const spaceNotes = hasSpaceNotes(chainOf(host, chat.id)[0])
-    const shown = searchNotes(notes, state.query)
+    const bodies = new Map(notes.map((note) => [note.key, safeBody(note)]))
+    const tagged = new Map(notes.map((note) => [note.key, tagsIn(bodies.get(note.key)!)]))
+    const tags = [...new Set([...tagged.values()].flat())].sort((a, b) => a.localeCompare(b))
+    // A tag no note has any more stops filtering.
+    if (state.tag && !tags.includes(state.tag)) delete state.tag
+    const shown = searchNotes(notes, state.query, (note) => bodies.get(note.key)!).filter(
+      (note) => !state.tag || tagged.get(note.key)!.includes(state.tag),
+    )
+    const filtered = !!state.query || !!state.tag
     const section = (title: string, hint: string, scope: NoteScope, empty: string): ExtensionView[] => {
       const listed = shown.filter((note) => note.scope === scope)
       return [
         { type: 'heading', text: title, hint },
-        { type: 'list', label: title, items: listed.map((note) => row(note, state.open)), empty: state.query ? 'Nothing matches' : empty },
+        { type: 'list', label: title, items: listed.map((note) => row(note, state.open)), empty: filtered ? 'Nothing matches' : empty },
       ]
     }
     return {
@@ -371,13 +440,29 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
           ],
         },
         { type: 'search', key: chat.id, value: state.query, placeholder: 'Search notes', action: 'search' },
+        ...(tags.length
+          ? [
+              {
+                type: 'row' as const,
+                children: tags.map(
+                  (tag): ExtensionView => ({
+                    type: 'button',
+                    label: `#${tag}`,
+                    variant: tag === state.tag ? 'primary' : 'ghost',
+                    action: { name: 'tag', value: tag === state.tag ? '' : tag },
+                    hint: tag === state.tag ? 'Show every note again' : `Only notes tagged #${tag}`,
+                  }),
+                ),
+              },
+            ]
+          : []),
         ...(spaceNotes ? section('This space', 'Kept in the space’s folder; gone when the space is', 'space', 'No notes here yet') : []),
         ...section('Global', 'Kept in Kothar’s own folder, for every space', 'global', 'No global notes yet'),
       ],
     }
   }
 
-  const main = (note: Note | undefined, state: PopupState): ExtensionView => {
+  const main = (note: Note | undefined, state: PopupState, notes: Note[]): ExtensionView => {
     if (!note) return { type: 'empty', text: 'Pick a note, or make a new one' }
     const scope = note.scope === 'global' ? 'Global' : 'This space'
     const header: ExtensionView = {
@@ -433,7 +518,20 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
         header,
         ...rename,
         { type: 'text', text: note.path, mono: true, small: true, tone: 'faint', copy: true, reveal: true },
-        { type: 'editor', key: note.key, text: bodyOf(note), change: 'write', label: note.name, placeholder: 'Write in Markdown…', autofocus: !state.renaming },
+        {
+          type: 'editor',
+          key: note.key,
+          text: bodyOf(note),
+          change: 'write',
+          links: 'link',
+          tags: 'tag',
+          label: note.name,
+          placeholder: 'Write in Markdown… [[Another note]] links, #tag tags',
+          autofocus: !state.renaming,
+        },
+        { type: 'divider' },
+        { type: 'heading', text: 'Linked from', hint: 'Notes with a [[link]] to this one' },
+        { type: 'list', label: 'Linked from', items: backlinksOf(notes, note, safeBody).map((n) => row(n, undefined)), empty: 'No notes link here' },
       ],
     }
   }
@@ -541,7 +639,7 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
             delete state.open
             delete state.renaming
           }
-          return { type: 'split', side: side(chat, host, notes, state), main: main(open, state) }
+          return { type: 'split', side: side(chat, host, notes, state), main: main(open, state, notes) }
         },
         onAction(action: ExtensionAction, chat, { host }) {
           const notes = notesFor(host, chat.id)
@@ -578,6 +676,26 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
             case 'rename':
               state.renaming = {}
               return
+            case 'tag':
+              if (action.value) state.tag = String(action.value).replace(/^#/, '')
+              else delete state.tag
+              return
+            // A [[link]] clicked in the editor: its note opens, made first if there's none, in this space (global
+            // for Home), as Obsidian does.
+            case 'link': {
+              const target = oneLine(action.value)
+              if (!target) return
+              const found = resolveLink(notes, target)
+              if (found) {
+                state.open = found.key
+                delete state.renaming
+                return
+              }
+              const made = saveNote(host, chat.id, { name: target, body: '' }, undefined, 'refuse', true)
+              state.open = made.key
+              delete state.renaming
+              break
+            }
             case 'cancel':
               delete state.renaming
               return

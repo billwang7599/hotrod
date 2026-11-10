@@ -155,3 +155,14 @@ test('clicking a rendered link or tag follows it', () => {
   expect(links).toEqual(['Deploy'])
   expect(tags).toEqual(['todo'])
 })
+
+test('following a link sends what is unsent first, so it lands in the note it was typed in', () => {
+  vi.useFakeTimers()
+  const order: string[] = []
+  mount({ text: 'See [[Deploy]]', onChange: (t) => order.push(`change:${t}`), onLink: (t) => order.push(`link:${t}`) })
+  const view = EditorView.findFromDOM(host.querySelector('.cm-editor') as HTMLElement)!
+  act(() => view.dispatch({ changes: { from: 0, insert: 'Now ' } }))
+  const link = host.querySelector('[data-link]') as HTMLElement
+  act(() => link.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
+  expect(order).toEqual(['change:Now See [[Deploy]]', 'link:Deploy'])
+})

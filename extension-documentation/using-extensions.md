@@ -64,6 +64,11 @@ closes it.
 - **The popup** lists the notes on the left, this space's and global ones, with a search box that searches names,
   descriptions and text. The open note is on the right in a live-preview editor: the Markdown is drawn as it reads, and
   its marks show only on the line you're editing. It saves as you type.
+- **Links:** `[[Another note]]` links to a note by name (`[[Name|shown text]]` shows other text). Click it to open
+  that note, or to make it if there's none yet; on the line you're editing, ⌘-click. A note in this space wins over a
+  global one of the same name. Under the editor, **Linked from** lists the notes that link to the open one.
+- **Tags:** `#tag` anywhere in a note's text (not in code) tags it. The tags show as a row above the list: click one,
+  or a tag in the editor, to list only the notes that have it, and click it again to show them all.
 - **New note** makes an `Untitled` note in this space (**New global** for every space) and asks for its name.
   **Rename** changes its name and its one-line description; **Delete** asks first.
 - **Global notes** are in `<data folder>/extensions/notes/<name>.md`. **A space's notes** are in
