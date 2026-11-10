@@ -533,6 +533,8 @@ export type CoreMessage =
   | { type: 'market.localFailed'; path: string; error: string }
   | { type: 'search.results'; id: number; query: string; hits: SearchHit[] }
   | { type: 'error'; message: string }
+  // An extension's notification (host.notify); chatId: clicking it opens that chat.
+  | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
 

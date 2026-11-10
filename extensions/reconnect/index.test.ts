@@ -58,6 +58,8 @@ async function start() {
   })
   const { core } = kothar
   const handle = (message: Parameters<typeof core.handle>[0]) => core.handle(message, () => {})
+  const notified: { title: string; body: string; chatId?: string }[] = []
+  core.onMessage((m) => m.type === 'notify' && notified.push({ title: m.title, body: m.body, ...(m.chatId && { chatId: m.chatId }) }))
   handle({ type: 'chat.create', name: 'Space' })
   const chatId = core.chats().find((c) => c.name === 'Space')!.id
   const chatOf = (id: string) => core.chats().find((c) => c.id === id)
@@ -70,7 +72,7 @@ async function start() {
     })
   const settled = (id = chatId) => until(() => chatOf(id)?.status === 'idle' && !chatOf(id)!.queue.length)
   const send = (text: string, id = chatId) => handle({ type: 'chat.send', chatId: id, text })
-  return { plans, net, clock, handle, chat, chatOf, chatId, shown, settled, send, prompts, host: () => host! }
+  return { plans, net, clock, handle, chat, chatOf, chatId, shown, settled, send, prompts, notified, host: () => host! }
 }
 
 it('is on by default, with a longest-wait setting', () => {
@@ -207,6 +209,8 @@ it('Try now checks at once, and Don’t continue ends the turn', async () => {
   t.handle({ type: 'extension.wait.answer', chatId: t.chatId, extension: 'reconnect', button: 'cancel' })
   await t.settled()
   expect(t.shown().at(-1)).toBe('Not continuing the dropped turn')
+  // The user said so: nothing to tell them.
+  expect(t.notified).toEqual([])
 })
 
 it('gives up after the longest wait', async () => {
@@ -219,6 +223,13 @@ it('gives up after the longest wait', async () => {
   await t.settled()
   expect(t.shown().at(-1)).toBe('Still offline after 1 min, so Kothar stopped waiting. Send a message to try again.')
   expect(t.prompts).toHaveLength(1)
+  expect(t.notified).toEqual([
+    {
+      chatId: t.chatId,
+      title: 'Reconnect gave up',
+      body: 'Still offline after 1 min, so Kothar stopped waiting. Send a message to try again.',
+    },
+  ])
 })
 
 it('stops continuing a message after its tries run out', async () => {
@@ -229,6 +240,7 @@ it('stops continuing a message after its tries run out', async () => {
   await until(() => t.prompts.length === MAX_TRIES + 1)
   await t.settled()
   expect(t.shown().at(-1)).toBe(`The connection dropped again after ${MAX_TRIES} tries, so Kothar stopped continuing`)
+  expect(t.notified.map((n) => n.title)).toEqual(['Reconnect gave up'])
 
   // A new message starts the count again.
   t.plans.push(dropped())

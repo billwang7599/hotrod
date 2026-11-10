@@ -3,7 +3,7 @@ import { isUnread, type ClientMessage } from '@kothar/core/shared'
 import type { ChatView } from './state.ts'
 
 // The user is looking at this window: it's focused and not hidden. The open chat counts as seen only then.
-const looking = () => document.visibilityState === 'visible' && document.hasFocus()
+export const isLooking = () => document.visibilityState === 'visible' && document.hasFocus()
 
 function subscribe(changed: () => void) {
   addEventListener('focus', changed)
@@ -16,7 +16,7 @@ function subscribe(changed: () => void) {
   }
 }
 
-export const useLooking = () => useSyncExternalStore(subscribe, looking)
+export const useLooking = () => useSyncExternalStore(subscribe, isLooking)
 
 /**
  * Bold in the sidebar: a space (or Home) finished a turn the user hasn't seen. Workers never are; running and

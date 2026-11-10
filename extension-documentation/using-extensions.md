@@ -66,7 +66,7 @@ Engines retry short drops on their own. When a drop lasts longer, the turn ends 
 - **Try now** checks at once. **Don't continue**, **Stop** or sending a message ends the wait; your message then runs
   as usual.
 - After the longest wait (Settings → Extensions → Reconnect, 2 hours by default), or 5 continuations of one message,
-  Kothar stops trying and the turn ends with its error.
+  Kothar stops trying and the turn ends with its error, and you get a notification saying so.
 
 A Stop, a usage limit or any other error ends the turn as before.
 

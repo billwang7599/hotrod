@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, Notification, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { envVar, startCore } from '@kothar/core/main'
 import { fixPath } from './shell-path.ts'
@@ -139,6 +139,24 @@ async function start() {
   ipcMain.handle('pick-files', async (_event, title = 'Choose files') => {
     const result = await dialog.showOpenDialog(window, { title, properties: ['openFile', 'multiSelections'] })
     return result.canceled ? [] : result.filePaths
+  })
+  // The UI decides when to notify (packages/ui/src/notifications.ts); clicking one brings the window up on its chat.
+  // Each is kept until clicked or closed, or macOS may drop it (and its click) once it's garbage collected.
+  const notifications = new Set<Notification>()
+  ipcMain.on('notify', (_event, shown: { title?: unknown; body?: unknown; open?: unknown }) => {
+    if (!Notification.isSupported() || typeof shown?.title !== 'string') return
+    const notification = new Notification({ title: shown.title, body: typeof shown.body === 'string' ? shown.body : '' })
+    const open = typeof shown.open === 'string' ? shown.open : undefined
+    notifications.add(notification)
+    notification.on('click', () => {
+      notifications.delete(notification)
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+      if (open !== undefined) window.webContents.send('open-chat', open)
+    })
+    notification.on('close', () => notifications.delete(notification))
+    notification.show()
   })
   ipcMain.on('set-appearance', (_event, appearance: { scheme: string; vibrancy: boolean; background: string }) => {
     const { scheme, vibrancy, background } = appearance

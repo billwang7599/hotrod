@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('kothar', {
     return () => ipcRenderer.removeListener('quitting', handler)
   },
   forceQuit: () => ipcRenderer.invoke('force-quit'),
+  notify: (/** @type {{ title: string; body: string; open?: string }} */ shown) => ipcRenderer.send('notify', shown),
+  // A notification was clicked: open its chat.
+  onOpenChat: (/** @type {(chatId: string) => void} */ listener) => {
+    const handler = (/** @type {unknown} */ _event, /** @type {string} */ chatId) => listener(chatId)
+    ipcRenderer.on('open-chat', handler)
+    return () => ipcRenderer.removeListener('open-chat', handler)
+  },
   vibrancy: process.platform === 'darwin',
   setAppearance: (/** @type {unknown} */ appearance) => ipcRenderer.send('set-appearance', appearance),
 })

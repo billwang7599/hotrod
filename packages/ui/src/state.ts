@@ -435,6 +435,9 @@ export function reduce(state: State, action: Action): State {
       const terminalErrors = action.error ? { ...rest, [terminalKey(action.chatId, action.path)]: action.error } : rest
       return { ...state, terminalErrors }
     }
+    // Shown by the notifier (notifications.ts), not kept in state.
+    case 'notify':
+      return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
     case 'error':

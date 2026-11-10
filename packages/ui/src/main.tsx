@@ -1,6 +1,6 @@
 // First, so preferences saved before the rename move to their new keys before any module reads them.
 import './renamed-storage.ts'
-import { useCallback, useEffect, useMemo, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -17,7 +17,8 @@ import { SearchPalette } from './search.tsx'
 import { changesText, RestartButton } from './restart.tsx'
 import { useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
-import { useLooking, useMarkRead } from './unread.ts'
+import { isLooking, useLooking, useMarkRead } from './unread.ts'
+import { createNotifier, deliver } from './notifications.ts'
 import {
   dockedPanels,
   folderName,
@@ -26,6 +27,7 @@ import {
   MIN_WINDOW_PX,
   reduce,
   storedColumn,
+  type Action,
   storedFlag,
 } from './state.ts'
 import './styles.css'
@@ -57,6 +59,9 @@ declare global {
       forceQuit(): Promise<void>
       vibrancy: boolean
       setAppearance(appearance: { scheme: 'system' | 'light' | 'dark'; vibrancy: boolean; background: string }): void
+      /** A system notification; clicking it brings the window to the front and calls onOpenChat with open. */
+      notify?(notification: { title: string; body: string; open?: string }): void
+      onOpenChat?(listener: (chatId: string) => void): () => void
     }
   }
 }
@@ -79,7 +84,21 @@ function App() {
     ...s,
     selectedId: localStorage.getItem(SELECTED_KEY) ?? '',
   }))
-  const send = useCore(dispatch)
+  // Notifications see each message with what the user saw before it (notifications.ts).
+  const seenRef = useRef({ chats: state.chats, selectedId: state.selectedId })
+  seenRef.current = { chats: state.chats, selectedId: state.selectedId }
+  const openRef = useRef((_chatId: string) => {})
+  const notifier = useMemo(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))), [])
+  const receive = useCallback(
+    (action: Action) => {
+      if (action.type !== 'connection' && action.type !== 'select' && action.type !== 'toast.dismiss') {
+        notifier.observe(action, { ...seenRef.current, looking: isLooking() })
+      }
+      dispatch(action)
+    },
+    [notifier],
+  )
+  const send = useCore(receive)
   const dismissToast = useCallback((id: number) => dispatch({ type: 'toast.dismiss', id }), [])
   const notify = useCallback((message: string) => dispatch({ type: 'error', message }), [])
 
@@ -142,6 +161,13 @@ function App() {
     dispatch({ type: 'select', chatId })
     setOverlay((open) => (open === 'sidebar' ? null : open))
   }, [])
+  // A notification clicked: its chat opens, if it's still there.
+  useEffect(() => {
+    openRef.current = (chatId) => {
+      if (seenRef.current.chats.some((c) => c.id === chatId)) select(chatId)
+    }
+  }, [select])
+  useEffect(() => window.kothar?.onOpenChat?.((chatId) => openRef.current(chatId)), [])
   const engine = state.engines.find((e) => e.id === selected?.engine)
   const accounts = state.accounts.find((a) => a.engine === selected?.engine)
   const activeAccount = accounts?.accounts.find((a) => a.id === accounts.active)

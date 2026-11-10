@@ -108,10 +108,12 @@ export function createReconnect(options: ReconnectOptions = {}): Extension {
     wait.host.continue(chatId, CONTINUE_PROMPT)
   }
 
-  const giveUp = (chatId: string, text: string) => {
+  // alone: Kothar gave up by itself, not at the user's word, so they hear of it even if they're away.
+  const giveUp = (chatId: string, text: string, alone = false) => {
     const wait = drop(chatId)
     if (!wait) return
     wait.host.note(chatId, text)
+    if (alone) wait.host.notify({ chatId, title: 'Reconnect gave up', body: text })
     // Lets the chat finish its turn: a worker reports the error to its lead, queued messages run.
     wait.host.endWait(chatId)
   }
@@ -130,7 +132,7 @@ export function createReconnect(options: ReconnectOptions = {}): Extension {
     if (wait.host.chat(chatId)?.status !== 'waiting') return void drop(chatId)
     if (ready) return resume(chatId)
     if (now() - wait.since >= wait.maxWaitMs) {
-      return giveUp(chatId, `Still offline after ${minutes(wait.maxWaitMs)}, so Kothar stopped waiting. Send a message to try again.`)
+      return giveUp(chatId, `Still offline after ${minutes(wait.maxWaitMs)}, so Kothar stopped waiting. Send a message to try again.`, true)
     }
     schedule(chatId, wait)
   }
@@ -172,7 +174,9 @@ export function createReconnect(options: ReconnectOptions = {}): Extension {
       drop(chat.id)
       const done = tries.get(chat.id) ?? 0
       if (done >= MAX_TRIES) {
-        host.note(chat.id, `The connection dropped again after ${MAX_TRIES} tries, so Kothar stopped continuing`)
+        const text = `The connection dropped again after ${MAX_TRIES} tries, so Kothar stopped continuing`
+        host.note(chat.id, text)
+        host.notify({ chatId: chat.id, title: 'Reconnect gave up', body: text })
         return
       }
       const maxWaitMs = Math.max(1, Number(values.maxWait) || 120) * 60_000

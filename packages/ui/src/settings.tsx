@@ -41,6 +41,13 @@ import {
 } from './controls.tsx'
 import { accountLabel, engineName, engineProblem, listedAccounts, modelChoices, modelKey, fromModelKey } from './state.ts'
 import { showPaths, usePathsShown } from './paths.ts'
+import {
+  askNotificationLeave,
+  notificationsAllowed,
+  setNotificationPref,
+  useNotificationPrefs,
+  type NotifyKind,
+} from './notifications.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
 import { EXTENSION_WARNING, extensionStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
@@ -192,6 +199,7 @@ const PAGES = [
         <ShownPaths />
         <ShownSteps />
         <ShownReports />
+        <Notifications />
       </>
     ),
   },
@@ -651,6 +659,57 @@ function ShownReports() {
         >
           <Switch label="Show worker reports unfolded" checked={shown} onChange={showReportsByDefault} />
         </SettingRow>
+      </div>
+    </>
+  )
+}
+
+const NOTIFY_KINDS: { kind: NotifyKind; name: string; hint: string }[] = [
+  { kind: 'needsYou', name: 'Needs you', hint: 'A permission request, a question, or an extension waiting on you' },
+  { kind: 'finished', name: 'Finished', hint: `A ${CHAT_NOUN.one} or Home finished a turn. Workers report to their ${CHAT_NOUN.one} instead.` },
+  { kind: 'errors', name: 'Errors', hint: 'A turn ended with an error, a worker\'s too' },
+]
+
+const NOTIFY_HINT = `Only while you aren't looking at that ${CHAT_NOUN.one}. With Kothar in front, only what needs you or failed in another ${CHAT_NOUN.one} shows. Several at once show as one; clicking it opens the ${CHAT_NOUN.one}.`
+
+function Notifications() {
+  const prefs = useNotificationPrefs()
+  // In a browser tab (development), the browser asks before a page may notify.
+  const [allowed, setAllowed] = useState(notificationsAllowed)
+  const allow = async () => setAllowed((await askNotificationLeave()) === 'granted')
+  return (
+    <>
+      <div className="flex items-center gap-6 pt-24 pb-8 font-semibold">
+        <Hint text={NOTIFY_HINT}>
+          <span>Notifications</span>
+        </Hint>
+      </div>
+      <div className={GROUP}>
+        <SettingRow name="Show notifications">
+          {prefs.enabled && !allowed && (
+            <Button size="small" onClick={() => void allow()}>
+              Allow in this browser
+            </Button>
+          )}
+          <Switch label="Show notifications" checked={prefs.enabled} onChange={(on) => setNotificationPref('enabled', on)} />
+        </SettingRow>
+        {NOTIFY_KINDS.map(({ kind, name, hint }) => (
+          <SettingRow
+            key={kind}
+            name={
+              <Hint text={hint}>
+                <span className="self-start">{name}</span>
+              </Hint>
+            }
+          >
+            <Switch
+              label={`Notify: ${name}`}
+              checked={prefs[kind]}
+              disabled={!prefs.enabled}
+              onChange={(on) => setNotificationPref(kind, on)}
+            />
+          </SettingRow>
+        ))}
       </div>
     </>
   )

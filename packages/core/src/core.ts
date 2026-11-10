@@ -110,6 +110,9 @@ export const CHECKOUT_RULES =
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
 const GIT_TIMEOUT_MS = 120_000
 const BRANCH_SLUG_MAX_CHARS = 40
+// An extension's notification (host.notify), cut to what a system notification shows anyway.
+const NOTIFY_TITLE_CHARS = 120
+const NOTIFY_BODY_CHARS = 400
 // Enough of a repo's .git to commit, fetch and rebase in a worktree; hooks and config stay read-only.
 const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'FETCH_HEAD']
 // Moving a branch checked out in another worktree would show there as staged changes.
@@ -1094,6 +1097,17 @@ function openLockedCore(options: {
         append(chatFor(chatId), { at, type: 'extension.note', text, ...(panel !== undefined && { extension: extension.id, panel }) })
       },
       error: (text) => extensionError(extension, String(text)),
+      // The UI decides whether it shows (Settings → General → Notifications) and draws it as the system's notification.
+      notify({ chatId, title, body }) {
+        const chat = chatId === undefined ? undefined : chatFor(String(chatId))
+        broadcast({
+          type: 'notify',
+          extension: extension.id,
+          title: String(title).slice(0, NOTIFY_TITLE_CHARS),
+          body: String(body ?? '').slice(0, NOTIFY_BODY_CHARS),
+          ...(chat && { chatId: chat.info.id }),
+        })
+      },
       run: runFor(),
       // Lazily: hosts can be made before the spawning code below is set up.
       spawn: (command, args, options) => spawnFor(extension)(command, args, options),

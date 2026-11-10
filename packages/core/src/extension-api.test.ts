@@ -560,6 +560,21 @@ describe('the host', () => {
   })
 })
 
+describe('notify', () => {
+  it('sends the UI a notification from the extension, cut to size, about a chat it names', () => {
+    const t = withHost()
+    const id = t.create()
+    t.host().notify({ chatId: id, title: 'Gave up', body: 'x'.repeat(1000) })
+    t.host().notify({ title: 'No chat' })
+    const sent = t.messages.filter((m) => m.type === 'notify')
+    expect(sent).toEqual([
+      { type: 'notify', extension: 'test', title: 'Gave up', body: 'x'.repeat(400), chatId: id },
+      { type: 'notify', extension: 'test', title: 'No chat', body: '' },
+    ])
+    expect(() => t.host().notify({ chatId: 'nope', title: 'Hi' })).toThrow('Unknown chat "nope"')
+  })
+})
+
 describe('panels and commands', () => {
   const view = (text: string): ExtensionView => ({ type: 'stack', children: [{ type: 'text', text }] })
 

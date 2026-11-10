@@ -221,6 +221,10 @@ export type ExtensionHost = {
   note(chatId: string, text: string, options?: { panel?: string }): void
   // An error for the user, shown as one from a hook that throws is: after the extension's name. For background work.
   error(text: string): void
+  // A system notification, such as "Reconnect gave up" or "The browser needs you". Kothar shows it as the other
+  // notifications are (Settings → General → Notifications): only while the user isn't looking at the chat, and a
+  // burst becomes one. With chatId, clicking it opens that chat. Title and body are plain text, cut if long.
+  notify(notification: { chatId?: string; title: string; body?: string }): void
   // Runs a command through the Machine, so it works wherever the core runs. Not sandboxed: it's the extension's own.
   run: ExtensionRun
   // Starts a long-running command through the Machine and returns once it's started, without waiting for it to end.

@@ -21,7 +21,7 @@ names the missing entry.
 | `chatStorage` | `memory` |
 | `spaceValues`, `setSpaceValue` | `settings` |
 | `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
-| `note`, `error`, `storage`, `refresh` | nothing |
+| `note`, `error`, `notify`, `storage`, `refresh` | nothing |
 
 ## Reading chats
 
@@ -219,6 +219,29 @@ export { tellUser }
 
 `error(text)` shows an error to you, the same way as one from a hook that throws: after the extension's name. Use it for
 background work, where there's no hook to throw from. It needs nothing listed.
+
+## Notifications
+
+`notify({ chatId?, title, body? })` shows a system notification, for something you'd want to hear of while you're away
+from Kothar: a wait gave up, a browser needs you to log in. It needs nothing listed. Title and body are plain text; a
+title past 120 characters or a body past 400 is cut.
+
+Kothar shows it as it shows its own (**Settings → General → Notifications**): not at all if you turned notifications
+off, and not while you're looking at the chat it names (or that chat's space). Several arriving within a second show as
+one. With `chatId`, clicking it brings Kothar to the front and opens that chat, or the space of a worker. An unknown
+`chatId` throws.
+
+```ts
+import type { ExtensionHost } from '@kothar/extension-api'
+
+function gaveUp(host: ExtensionHost, chatId: string) {
+  host.notify({ chatId, title: 'Reconnect gave up', body: 'Still offline after 2 hours' })
+}
+
+export { gaveUp }
+```
+
+Don't notify for every step: a note in the chat is for the record, a notification for when the user should come back.
 
 ## Model calls
 
