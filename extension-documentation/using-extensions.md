@@ -175,8 +175,22 @@ that entry, and the **Updates available** filter counts it.
 Before you update, click **See changes**. It opens GitHub's comparison between the release you have and the latest
 one, so you can read what changed. Updates aren't reviewed by anyone.
 
-If an update uses more than the version you turned on, such as an extension that now also runs programs, Kothar turns it
-off and tells you what's new. Turn it on again to allow that.
+Updating an extension that's on asks first. **Kothar runs only the exact files you turned on**, so any update turns the
+extension off until you turn it on again. When you do, the popup names what changed since the version you turned on:
+the versions, anything it now also uses (such as running programs), and a link to the changes on GitHub.
+
+The same goes for files changed any other way, such as `main.mjs` edited on disk: at the next start Kothar doesn't run
+it, turns it off and says why on its row. Reinstalling a local extension with the same files keeps it on.
+
+Kothar keeps this record as plain files in your garage:
+
+- `community/approvals.json`: for each extension you turned on, the version, what it uses and the sha256 of its
+  `manifest.json` and `main.mjs`.
+- `community/history.jsonl`: every install, update, approval, held start and uninstall, one line each, with versions
+  and hashes.
+
+Extensions that were already on when Kothar started keeping approvals are approved as they were, once, and marked
+`carriedOver`.
 
 ### Install from a folder
 
@@ -204,7 +218,8 @@ A community extension is code, and it runs inside Kothar with your permissions.
   with Node's own APIs, without listing anything.
 - **Review is one-time.** A person reviews an extension when it first joins the Marketplace. Later updates reach you
   without another review.
-- **An update can change what an extension does.** Read **See changes** before you update.
+- **An update can change what an extension does.** Read **See changes** before you update. Kothar won't run the new
+  version until you turn it on again.
 
 Turn on only extensions you trust. Themes are different: they're colour files, checked before they install, so they
 can't run code. See [Themes](themes.md).

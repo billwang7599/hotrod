@@ -43,7 +43,8 @@ extension and before you turn it on, and holds the extension to it:
 
 - An extension that sets a field it didn't list doesn't start.
 - A host call it didn't list throws an error.
-- An update that lists more than the version you turned on is turned off until you turn it on again.
+- An update is turned off until you turn it on again, and the popup names what it lists that the version you turned on
+  didn't.
 
 | Value | Shown to you as | Covers |
 |---|---|---|

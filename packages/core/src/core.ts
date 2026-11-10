@@ -37,6 +37,7 @@ import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './
 import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { realPath } from './machine.ts'
 import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
+import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
 import { type CommunityExtension, guardHost, valuesOf } from './extensions.ts'
 import {
   ASK_FIRST_COMMANDS,
@@ -230,7 +231,10 @@ function openLockedCore(options: {
   // one whose tool or chat is taken doesn't run. An extension that didn't load (off, or broken) is listed as a stub
   // with no hooks, so it can be turned on or off; it runs from the next start.
   const builtInIds = new Set(extensions.map((extension) => extension.id))
-  const community = new Map<string, { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string }>()
+  const community = new Map<
+    string,
+    { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string; held?: string }
+  >()
   // The community extensions this run imported (whether or not they loaded), by id with their name, and those installed
   // again since; what's pending a restart is worked out from these and the settings.
   const imported = new Map<string, string>()
@@ -252,7 +256,13 @@ function openLockedCore(options: {
       loadError = `its tool or chat "${clash}" is already taken`
       extension = undefined
     }
-    community.set(manifest.id, { manifest, item, ...(extension && { running: manifest.version }), ...(loadError && { loadError }) })
+    community.set(manifest.id, {
+      manifest,
+      item,
+      ...(extension && { running: manifest.version }),
+      ...(loadError && { loadError }),
+      ...(found.held && { held: found.held }),
+    })
     if (!extension) {
       extensions.push(stubOf(manifest))
       continue
@@ -283,6 +293,12 @@ function openLockedCore(options: {
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   if (renameSettings(settings)) saveSettings()
   moveExtensionsDir(garage)
+  // What the user turned on, per community extension (approvals.ts). One whose files aren't those didn't start; its
+  // switch goes off, so turning it on again is the user reviewing the new files.
+  let approvals: Record<string, Approval> = readApprovals(garage) ?? {}
+  const heldOn = [...community].filter(([id, c]) => c.held && settings.extensions?.[id]?.enabled === true)
+  for (const [id] of heldOn) settings.extensions = { ...settings.extensions, [id]: { ...settings.extensions?.[id], enabled: false } }
+  if (heldOn.length) saveSettings()
   const contextDefaults = (): Record<ContextSection, boolean> => ({
     agents: settings.context?.agents ?? true,
     folders: settings.context?.folders ?? true,
@@ -333,7 +349,8 @@ function openLockedCore(options: {
     }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
-    const { source, repo, path } = from?.item ?? {}
+    const { source, repo, path, tag } = from?.item ?? {}
+    const approval = approvals[id]
     const communityFields = from && {
       community: {
         version: version!,
@@ -341,8 +358,13 @@ function openLockedCore(options: {
         uses: uses!,
         source: source === 'local' ? ('local' as const) : ('marketplace' as const),
         ...(repo && { repo }),
+        ...(tag && { tag }),
         ...(path && { path }),
         ...(from.running && { running: from.running }),
+        ...(approval && {
+          approved: { version: approval.version, uses: approval.uses, ...(approval.tag && { tag: approval.tag }) },
+        }),
+        ...(from.held && { held: from.held }),
       },
       ...(from.loadError && { loadError: from.loadError }),
     }
@@ -1519,8 +1541,15 @@ function openLockedCore(options: {
     const busy = family.find((chat) => chat.status !== 'idle')
     if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${extension.name} off`)
     const changed = isOn(extension) !== enabled
+    const from = community.get(extension.id)
+    if (from && enabled) {
+      // Turning it on approves these exact files; the loader runs nothing else.
+      const install = installedExtensions(garage).find((m) => m.manifest.id === extension.id)
+      if (install) approvals = { ...approvals, [extension.id]: approve(garage, install) }
+      delete from.held
+    }
     saveExtension(extension, { enabled })
-    if (community.has(extension.id)) restartChanged()
+    if (from) restartChanged()
     if (enabled) void checkSetup(extension)
     if (changed) extensionSwitched(extension, enabled, family)
   }
@@ -1583,24 +1612,28 @@ function openLockedCore(options: {
     broadcast({ type: 'restart.updated', restart })
   }
 
-  // A community extension was installed or updated. It runs from the next start; an update that uses more than the
-  // version the user turned on is turned off until they turn it on again.
+  // A community extension was installed or updated. It runs from the next start, and only as the files the user turned
+  // on: an update (any change to its files) turns it off until they review it and turn it on again.
   const communityChanged = (id: string, added: ExtensionUse[]) => {
     const install = installedExtensions(garage).find((m) => m.manifest.id === id)
     if (!install) return
     const known = community.get(id)
+    logInstall(garage, install, !!known)
     community.set(id, { ...known, manifest: install.manifest, item: install.item })
     if (imported.has(id)) reinstalled.add(id)
     const at = extensions.findIndex((m) => m.id === id)
     if (at < 0) extensions.push(stubOf(install.manifest))
     else if (!known?.running) extensions[at] = stubOf(install.manifest)
     const extension = extensions.find((m) => m.id === id)!
-    if (added.length && ownSwitch(extension)) {
+    if (ownSwitch(extension) && reviewOf(approvals[id], install)) {
       setExtensionEnabled(extension, false)
       const more = added.map((use) => EXTENSION_USES[use].toLowerCase()).join('; ')
       broadcast({
         type: 'error',
-        message: `${extension.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`,
+        message: added.length
+          ? `${extension.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`
+          : `${extension.name} was turned off: ${install.manifest.version} isn't the version you turned on. ` +
+            'Read the changes, then turn it on again in Community hub.',
       })
     }
     broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
@@ -1613,7 +1646,12 @@ function openLockedCore(options: {
     const extension = extensions.find((m) => m.id === id)
     if (!community.has(id) || !extension) return marketplace.uninstall('extension', id)
     if (ownSwitch(extension)) setExtensionEnabled(extension, false)
+    const version = community.get(id)?.manifest.version
     marketplace.uninstall('extension', id)
+    forget(garage, id)
+    const { [id]: _gone, ...rest } = approvals
+    approvals = rest
+    logHistory(garage, { id, event: 'uninstalled', ...(version && { version }) })
     const { enabled: _, ...kept } = settings.extensions?.[id] ?? {}
     settings.extensions = { ...settings.extensions, [id]: kept }
     saveSettings()

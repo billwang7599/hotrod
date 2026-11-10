@@ -299,8 +299,14 @@ export type ExtensionInfo = {
     uses: ExtensionUse[]
     source: 'marketplace' | 'local'
     repo?: string
+    // The release installed (marketplace).
+    tag?: string
     path?: string
     running?: string
+    // The version the user last turned on, as Kothar recorded it; an extension runs only as those exact files.
+    approved?: { version: string; uses: ExtensionUse[]; tag?: string }
+    // Why it was turned off at startup: its files aren't the ones the user turned on.
+    held?: string
   }
 }
 

@@ -73,7 +73,7 @@ GitHub token before starting Kothar to lift it.
 
 Read [The risks](using-extensions.md#the-risks). In short: Kothar holds an extension to what its manifest lists through
 the extension API, but can't stop it from using Node's own APIs. Install only extensions you trust, and read **See
-changes** before you update.
+changes** before you update. An update stays off until you turn it on again.
 
 ## My extension was written when extensions were called mods
 

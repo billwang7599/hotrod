@@ -71,8 +71,9 @@ Publish a new release with a higher `version`. You don't need another pull reque
 - They update when they choose. Kothar never updates an extension by itself.
 - **See changes** shows them GitHub's comparison between their release's tag and your latest one. Write clear release
   notes; the Marketplace shows the start of them.
-- If an update lists more in `uses` than before, Kothar turns the extension off until each user turns it on again. Add
-  to `uses` only when you must.
+- Every update turns the extension off until each user turns it on again: Kothar runs only the exact files a user turned
+  on. The popup shows them what you added to `uses`, so add to it only when you must, and ship updates in batches
+  rather than many small ones.
 
 Later releases aren't reviewed again. Keep your extension honest: people trusted the version that was reviewed.
 

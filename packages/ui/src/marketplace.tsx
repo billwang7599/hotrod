@@ -197,14 +197,38 @@ export function ExtensionStatus({ info, communityExtensions }: { info?: Extensio
 // communityExtensions: the master switch; an extension runs only while it and the extension's own switch are on.
 export function extensionStatus(info: ExtensionInfo | undefined, communityExtensions: boolean) {
   if (!info?.community) return undefined
-  const { version, running } = info.community
+  const { version, running, held } = info.community
   const stays = running ? ' Its code stays loaded until Kothar restarts.' : ''
+  if (!info.enabled && held) return `Off: ${held}. Turn it on again to run ${version}.`
   if (!info.enabled) return `Off.${stays || ' Turn it on in Community hub.'}`
   if (!communityExtensions) return `Off while community extensions are off.${stays}`
   if (info.loadError) return undefined
   if (!running) return 'Starts when Kothar restarts.'
   if (running !== version) return `Running ${running}. Restart Kothar to run ${version}.`
   return undefined
+}
+
+// What changed since the version the user last turned on, for the popup that turns it on again; undefined when it's the
+// same version or was never on.
+export function changesSinceApproved(info: ExtensionInfo): string | undefined {
+  const { version, uses, approved, repo, tag, held } = info.community ?? {}
+  if (!approved || !version || !uses) return undefined
+  if (approved.version === version && !held) return undefined
+  const added = uses.filter((use) => !approved.uses.includes(use))
+  const dropped = approved.uses.filter((use) => !uses.includes(use))
+  const lines = [
+    approved.version === version
+      ? `Its files changed since you turned on ${version}.`
+      : `Changed since you turned it on: ${approved.version} → ${version}.`,
+  ]
+  if (added.length) lines.push(`It now also says it:\n${usesText(added)}`)
+  if (dropped.length) lines.push(`It no longer says it:\n${usesText(dropped)}`)
+  if (!added.length && !dropped.length) lines.push('It lists the same uses as before.')
+  if (repo && approved.tag && tag && approved.tag !== tag) {
+    const compare = `${encodeURIComponent(approved.tag)}...${encodeURIComponent(tag)}`
+    lines.push(`Read the changes:\nhttps://github.com/${repo}/compare/${compare}`)
+  }
+  return lines.join('\n\n')
 }
 
 export const EXTENSION_WARNING =
@@ -407,6 +431,18 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
   const updates = shownRows(market, kind, 'updates', '').length
 
   const install = async (row: Row) => {
+    const info = market.extensions?.find((m) => m.id === row.id)
+    if (row.kind === 'extension' && row.installed && info?.enabled) {
+      const href = row.repo && row.latestTag && changesUrl(row.installed, row.repo, row.latestTag)
+      const ok = await confirm({
+        text: `Update ${row.name} to ${row.latest}?`,
+        body:
+          'It turns off until you turn it on again in Community hub, so code you haven\'t reviewed never runs.' +
+          (href ? `\n\nRead the changes first:\n${href}` : ''),
+        ok: 'Update',
+      })
+      if (!ok) return
+    }
     if (row.kind === 'extension' && !row.installed) {
       const ok = await confirm({
         text: `Install ${row.name}?`,

@@ -49,7 +49,7 @@ import {
   type NotifyKind,
 } from './notifications.ts'
 import { showReportsByDefault, showStepsByDefault, useReportsDefault, useStepsDefault } from './steps.ts'
-import { EXTENSION_WARNING, extensionStatus, UsesList, type Market } from './marketplace.tsx'
+import { changesSinceApproved, EXTENSION_WARNING, extensionStatus, UsesList, type Market } from './marketplace.tsx'
 import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
@@ -297,12 +297,15 @@ function CommunityExtensionsPage(props: PageProps) {
     if (enabled) {
       const { uses, repo, path } = m.community!
       const listed = uses.map((use) => `• ${EXTENSION_USES[use]}`).join('\n')
+      const changes = changesSinceApproved(m)
       const ok = await confirm({
-        text: `Turn on ${m.name}?`,
+        text: `Turn on ${m.name} ${m.community!.version}?`,
         body:
           `From ${repo ? `github.com/${repo}` : (path ?? 'a folder on this computer')}. It runs code on your computer with ` +
           'your permissions.' +
+          (changes ? `\n\n${changes}` : '') +
           (listed ? `\n\nIt says it:\n${listed}` : '') +
+          '\n\nKothar runs exactly these files. Any update turns it off again until you turn it on.' +
           '\n\nIt starts when Kothar restarts.',
         ok: 'Turn on',
       })

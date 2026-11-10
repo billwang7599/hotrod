@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Extension, ExtensionHost, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
 import { type CommunityInstall, installedExtensions, EXTENSION_MAIN } from './marketplace.ts'
+import { approvalsFor, logHistory, reviewOf } from './approvals.ts'
 import { EXTENSION_USES, settingProblem, sortUses } from './shared.ts'
 
 const MISSING_PACKAGE = /^Cannot find (?:package|module) '((?:@[^/']+\/)?[^/'.:][^/':]*)(?:\/[^']*)?'/
@@ -134,17 +135,27 @@ export function guardHost(host: ExtensionHost, extension: { name: string }, uses
 }
 
 // A community extension installed in the garage. extension is set when this run of Kothar loaded it, which happens only
-// at startup and only for extensions the user turned on; loadError says why one that's on didn't load.
-export type CommunityExtension = CommunityInstall & { extension?: Extension; loadError?: string }
+// at startup and only for extensions the user turned on; loadError says why one that's on didn't load, and held why one
+// that's on wasn't imported at all: its files aren't the ones the user turned on.
+export type CommunityExtension = CommunityInstall & { extension?: Extension; loadError?: string; held?: string }
 
-// Loads <garage>/community/<id>/main.mjs for each extension that's on. An extension that's off is never imported, so
-// installing one runs none of its code.
+// Loads <garage>/community/<id>/main.mjs for each extension that's on, and only while its files are the ones the user
+// turned on (see approvals.ts). An extension that's off is never imported, so installing one runs none of its code.
 export async function loadCommunityExtensions(garage: string, isOn: (id: string) => boolean): Promise<CommunityExtension[]> {
   const loaded: CommunityExtension[] = []
-  for (const install of installedExtensions(garage)) {
+  const installs = installedExtensions(garage)
+  const approvals = approvalsFor(garage, installs, isOn)
+  for (const install of installs) {
     const { manifest, dir } = install
     if (!isOn(manifest.id)) {
       loaded.push(install)
+      continue
+    }
+    const held = reviewOf(approvals[manifest.id], install)
+    if (held) {
+      console.error(`Didn't start the community extension in ${dir}: ${held}`)
+      logHistory(garage, { id: manifest.id, event: 'held', version: manifest.version, reason: held })
+      loaded.push({ ...install, held })
       continue
     }
     try {

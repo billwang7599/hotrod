@@ -8,6 +8,7 @@ import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import { communityDir, openMarketplace, type Fetch } from './marketplace.ts'
 import { guardHost, loadCommunityExtensions, usesOf } from './extensions.ts'
+import { approvalsFile, historyFile } from './approvals.ts'
 import { checkExtensionManifest, type CatalogEntry, type CoreMessage } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
 import { runRestartable, savedOn } from './main.ts'
@@ -178,7 +179,7 @@ describe('the core', () => {
       enabled: false,
       settings: [],
       values: {},
-      community: { version: '1.0.0', author: 'Someone', uses: ['commands'], source: 'marketplace', repo: 'someone/counter' },
+      community: { version: '1.0.0', author: 'Someone', uses: ['commands'], source: 'marketplace', repo: 'someone/counter', tag: 'v1' },
     })
   })
 
@@ -300,7 +301,7 @@ describe('the core', () => {
     expect(t.core.restart().changes).toEqual([{ id: 'counter', name: 'Extension counter', change: 'stop' }])
   })
 
-  it('keeps an update that uses no more on', async () => {
+  it('turns off any update, even one that uses no more, until the user turns it on again', async () => {
     const garage = tempGarage()
     install(garage, 'counter')
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityExtensions: true, extensions: { counter: { enabled: true } } }))
@@ -315,11 +316,45 @@ describe('the core', () => {
     })
     t.handle({ type: 'market.install', kind: 'extension', id: 'counter' })
     await settle()
-    expect(t.core.extensions().find((m) => m.id === 'counter')).toMatchObject({ enabled: true, community: { version: '1.1.0', running: '1.0.0' } })
-    expect(t.messages).toContainEqual({
-      type: 'restart.updated',
-      restart: { changes: [{ id: 'counter', name: 'Extension counter', change: 'update' }], canRestart: false },
+    expect(t.core.extensions().find((m) => m.id === 'counter')).toMatchObject({
+      enabled: false,
+      community: { version: '1.1.0', running: '1.0.0', approved: { version: '1.0.0', uses: ['commands'], tag: 'v1' } },
     })
+    expect(t.messages).toContainEqual({
+      type: 'error',
+      message: "Extension counter was turned off: 1.1.0 isn't the version you turned on. Read the changes, then turn it on again in Community hub.",
+    })
+    // Turning it on approves 1.1.0, which runs from the next start.
+    t.handle({ type: 'extension.setEnabled', extensionId: 'counter', enabled: true })
+    expect(t.core.extensions().find((m) => m.id === 'counter')).toMatchObject({
+      enabled: true,
+      community: { approved: { version: '1.1.0', tag: 'v1.1.0' } },
+    })
+    expect(t.core.restart().changes).toEqual([{ id: 'counter', name: 'Extension counter', change: 'update' }])
+    const history = readFileSync(historyFile(garage), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    expect(history.map((h) => [h.event, h.version])).toEqual([
+      ['approved', '1.0.0'],
+      ['updated', '1.1.0'],
+      ['approved', '1.1.0'],
+    ])
+    expect(history[1]).toMatchObject({ repo: 'someone/counter', tag: 'v1.1.0', sha256: { 'main.mjs': expect.any(String) } })
+  })
+
+  it('keeps a reinstall of the same files on', async () => {
+    const garage = tempGarage()
+    const folder = join(garage, 'src')
+    mkdirSync(folder)
+    writeFileSync(join(folder, 'manifest.json'), JSON.stringify(manifestOf('local-one')))
+    writeFileSync(join(folder, 'main.mjs'), source('local-one'))
+    const t = start({ garage, community: await loadCommunityExtensions(garage, () => false) })
+    t.handle({ type: 'communityExtensions.setEnabled', enabled: true })
+    t.handle({ type: 'market.installLocal', path: folder })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'local-one', enabled: true })
+    t.handle({ type: 'market.installLocal', path: folder })
+    expect(t.core.extensions().find((m) => m.id === 'local-one')!.enabled).toBe(true)
+    writeFileSync(join(folder, 'main.mjs'), source('local-one', ", commands: []"))
+    t.handle({ type: 'market.installLocal', path: folder })
+    expect(t.core.extensions().find((m) => m.id === 'local-one')!.enabled).toBe(false)
   })
 
   it('runs a community extension turned on under the old mods settings', async () => {
@@ -526,8 +561,96 @@ describe('importing a community extension again', () => {
     writeFileSync(join(dir, 'main.mjs'), source('again', ", description: 'two'").replace("description: 'Does a thing.', ", ''))
     const later = Date.now() / 1000 + 5
     utimesSync(join(dir, 'main.mjs'), later, later)
+    // As the user turning the new files on would.
+    rmSync(approvalsFile(garage))
     const second = await loadCommunityExtensions(garage, () => true)
     expect(first[0]!.extension?.description).toBe('one')
     expect(second[0]!.extension?.description).toBe('two')
+  })
+})
+
+describe('reviewed versions', () => {
+  it('approves extensions already on the first time, then runs only those exact files', async () => {
+    const garage = tempGarage()
+    const dir = install(garage, 'pinned', source('pinned', ", description: 'reviewed'"))
+    install(garage, 'idle')
+    const first = await loadCommunityExtensions(garage, (id) => id === 'pinned')
+    expect(first.find((c) => c.manifest.id === 'pinned')!.extension?.description).toBe('reviewed')
+    const approvals = JSON.parse(readFileSync(approvalsFile(garage), 'utf8'))
+    expect(Object.keys(approvals)).toEqual(['pinned'])
+    expect(approvals.pinned).toMatchObject({ version: '1.0.0', carriedOver: true, sha256: { 'main.mjs': expect.stringMatching(/^[0-9a-f]{64}$/) } })
+
+    // Edited by hand (or swapped by anything else): not imported, and says why.
+    writeFileSync(join(dir, 'main.mjs'), source('pinned', ", description: 'swapped'"))
+    const later = Date.now() / 1000 + 5
+    utimesSync(join(dir, 'main.mjs'), later, later)
+    const second = await loadCommunityExtensions(garage, () => true)
+    expect(second.find((c) => c.manifest.id === 'pinned')).toMatchObject({ held: 'its files changed since you turned on 1.0.0' })
+    expect(second.find((c) => c.manifest.id === 'pinned')!.extension).toBeUndefined()
+    // One the user never turned on isn't approved by the first run any more.
+    expect(second.find((c) => c.manifest.id === 'idle')).toMatchObject({ held: 'it was never turned on in this Kothar' })
+  })
+
+  it('turns a held extension off at startup and approves it when the user turns it on again', async () => {
+    const garage = tempGarage()
+    const dir = install(garage, 'pinned')
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityExtensions: true, extensions: { pinned: { enabled: true } } }))
+    await loadCommunityExtensions(garage, (id) => savedOn(garage, id))
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifestOf('pinned', { version: '1.2.0', uses: ['commands', 'run'] })))
+    const adapter = createFakeAdapter([], 0)
+    const core = openCore({
+      garage,
+      adapters: [adapter],
+      defaultEngine: adapter.id,
+      machine: sandboxingMachine,
+      extensions: [],
+      community: await loadCommunityExtensions(garage, (id) => savedOn(garage, id)),
+      marketplaceUrl: CATALOG_URL,
+    })
+    cores.push(core)
+    expect(core.extensions().find((m) => m.id === 'pinned')).toMatchObject({
+      enabled: false,
+      community: { version: '1.2.0', held: 'it changed from 1.0.0, which you turned on, to 1.2.0', approved: { version: '1.0.0', uses: ['commands'] } },
+    })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).extensions.pinned.enabled).toBe(false)
+    core.handle({ type: 'extension.setEnabled', extensionId: 'pinned', enabled: true }, () => {})
+    const info = core.extensions().find((m) => m.id === 'pinned')!
+    expect(info.enabled).toBe(true)
+    expect(info.community).not.toHaveProperty('held')
+    expect(info.community?.approved).toEqual({ version: '1.2.0', uses: ['run', 'commands'], tag: 'v1' })
+    const next = await loadCommunityExtensions(garage, (id) => savedOn(garage, id))
+    expect(next[0]!.extension?.id).toBe('pinned')
+  })
+
+  it('forgets the approval on uninstall, so installing it again starts off and unapproved', async () => {
+    const garage = tempGarage()
+    install(garage, 'gone')
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityExtensions: true, extensions: { gone: { enabled: true } } }))
+    const adapter = createFakeAdapter([], 0)
+    const core = openCore({
+      garage,
+      adapters: [adapter],
+      defaultEngine: adapter.id,
+      machine: sandboxingMachine,
+      extensions: [],
+      community: await loadCommunityExtensions(garage, (id) => savedOn(garage, id)),
+      marketplaceUrl: CATALOG_URL,
+    })
+    cores.push(core)
+    core.handle({ type: 'market.uninstall', kind: 'extension', id: 'gone' }, () => {})
+    expect(JSON.parse(readFileSync(approvalsFile(garage), 'utf8'))).toEqual({})
+    expect(readFileSync(historyFile(garage), 'utf8')).toContain('"event":"uninstalled"')
+    install(garage, 'gone')
+    const again = await loadCommunityExtensions(garage, () => true)
+    expect(again[0]).toMatchObject({ held: 'it was never turned on in this Kothar' })
+  })
+
+  it('approves nothing when the approvals file is unreadable', async () => {
+    const garage = tempGarage()
+    install(garage, 'pinned')
+    writeFileSync(approvalsFile(garage), '{ not json')
+    const loaded = await loadCommunityExtensions(garage, () => true)
+    expect(loaded[0]).toMatchObject({ held: 'it was never turned on in this Kothar' })
+    expect(existsSync(approvalsFile(garage))).toBe(true)
   })
 })

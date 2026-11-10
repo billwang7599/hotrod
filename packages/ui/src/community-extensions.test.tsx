@@ -127,7 +127,8 @@ test('says when no community extensions are installed', () => {
 test('turning an extension on asks first, naming its repo and what it uses, and says it starts on a restart', async () => {
   const sent = settings([counter()])
   await act(async () => extensionSwitch().click())
-  expect(confirmText()).toContain('Turn on Counter?')
+  expect(confirmText()).toContain('Turn on Counter 1.0.0?')
+  expect(confirmText()).toContain('Kothar runs exactly these files.')
   expect(confirmText()).toContain('From github.com/someone/counter.')
   expect(confirmText()).toContain('• Runs programs on your computer')
   expect(buttons('Turn on')).toHaveLength(1)
@@ -289,6 +290,48 @@ test('the Marketplace says an installed extension is off, and offers its update'
     extensions: [counter()],
   })
   expect(buttons('Update to 2.0.0')).toHaveLength(1)
+})
+
+test('turning an extension on again names what changed since the version the user turned on', async () => {
+  const changed = counter(
+    {},
+    {
+      version: '2.0.0',
+      tag: 'v2.0.0',
+      uses: ['run', 'panels', 'readChats'],
+      approved: { version: '1.0.0', uses: ['run', 'panels'], tag: 'v1.0.0' },
+      held: 'it changed from 1.0.0, which you turned on, to 2.0.0',
+    },
+  )
+  settings([changed])
+  expect(document.querySelector('[role="dialog"]')!.textContent).toContain(
+    'Off: it changed from 1.0.0, which you turned on, to 2.0.0. Turn it on again to run 2.0.0.',
+  )
+  await act(async () => extensionSwitch().click())
+  const text = confirmText()
+  expect(text).toContain('Turn on Counter 2.0.0?')
+  expect(text).toContain('Changed since you turned it on: 1.0.0 → 2.0.0.')
+  expect(text).toContain('It now also says it:')
+  expect(text).toContain('• Reads your chats')
+  expect(text).toContain('https://github.com/someone/counter/compare/v1.0.0...v2.0.0')
+})
+
+test('updating an extension that is on asks first, says it turns off, and links the changes', async () => {
+  const sent = market({
+    catalog: { entries: [{ ...entry, latest: { ...entry.latest!, tag: 'v2.0.0', version: '2.0.0' } }] },
+    installed: [installed],
+    extensions: [counter({ enabled: true }, { approved: { version: '1.0.0', uses: ['run', 'panels'] } })],
+  })
+  detail('Counter')
+  await act(async () => buttons('Update to 2.0.0')[0]!.click())
+  expect(confirmText()).toContain('Update Counter to 2.0.0?')
+  expect(confirmText()).toContain('It turns off until you turn it on again in Community hub')
+  expect(confirmText()).toContain('https://github.com/someone/counter/compare/v1.0.0...v2.0.0')
+  await answer(false)
+  expect(sent.filter((m) => m.type === 'market.install')).toEqual([])
+  await act(async () => buttons('Update to 2.0.0')[0]!.click())
+  await answer(true)
+  expect(sent.at(-1)).toEqual({ type: 'market.install', kind: 'extension', id: 'counter' })
 })
 
 test('the state adds a newly installed extension and drops an uninstalled one', () => {
