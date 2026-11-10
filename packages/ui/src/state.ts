@@ -20,6 +20,7 @@ import type {
   EngineInfo,
   ModelLists,
   Run,
+  Setup,
   ExtensionInfo,
   PanelTab,
   QueuedMessage,
@@ -88,6 +89,7 @@ export type State = {
   contextDefaults: Record<ContextSection, boolean>
   extensions: ExtensionInfo[]
   modelLists: ModelLists
+  setups: Setup[]
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
@@ -131,6 +133,7 @@ export const initialState: State = {
   contextDefaults: { agents: true, folders: true, files: true },
   extensions: [],
   modelLists: NO_LISTS,
+  setups: [],
   workFolder: { defaultPath: '', canSandbox: true },
   marketFailures: {},
   communityExtensions: false,
@@ -306,6 +309,7 @@ export function reduce(state: State, action: Action): State {
         contextDefaults: action.contextDefaults,
         extensions: action.extensions,
         modelLists: action.modelLists,
+        setups: action.setups ?? [],
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
@@ -405,6 +409,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, restart: action.restart }
     case 'models.updated':
       return { ...state, modelLists: action.lists }
+    case 'setups.updated':
+      return { ...state, setups: action.setups }
     case 'memory.updated':
       return state
     case 'workFolder.updated':

@@ -321,6 +321,14 @@ describe('Kothar MCP server', () => {
       expect(calls).toHaveLength(6)
     })
 
+    it('passes a setup named at the spawn on to the worker', async () => {
+      const { calls, json, grant } = await on()
+      expect(await json(grant('aaaa0001'), 'spawn_worker', { task: 'Review', setup: 'Reviewer' })).toEqual({
+        chatId: 'dddd0001',
+      })
+      expect(calls[0]).toEqual(['createChat', { parentId: 'aaaa0001', name: 'Review', setup: 'Reviewer', worker: true }])
+    })
+
     it('counts running, waiting and stopping workers against the limit, never idle ones', async () => {
       const limit = 3
       const { chats, calls, tool, grant } = await on(limit)

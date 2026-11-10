@@ -248,7 +248,29 @@ export type ChatInfo = PermissionSwitches & {
   readAt?: string
   // Spaces only: each extension's spaceSettings as saved, by extension id.
   extensionValues?: Record<string, Record<string, unknown>>
+  // The id of the setup the chat uses (Settings → Setups). A worker uses one only when its spawn names it.
+  setup?: string
 }
+
+/**
+ * A saved setup for a kind of job (Settings → Setups), kept as `<garage>/setups/<id>.json`. Everything but the name is
+ * optional; what a setup leaves out follows Settings. A chat's own model and thinking picks win over the setup's.
+ * `extensionsOff`: extensions that are on in Settings but left out of this setup's sessions (their MCP servers,
+ * instructions, message and output transforms, permission answers, memory and workers). A setup can't turn on an
+ * extension that's off in Settings, since it hasn't started. `instructions` join each session's instructions just
+ * before the context items.
+ */
+export type Setup = {
+  id: string
+  name: string
+  engine?: string
+  model?: string
+  thinking?: ThinkingLevel
+  extensionsOff?: string[]
+  instructions?: string
+}
+
+export const MAX_SETUP_INSTRUCTIONS = 20_000
 
 /** Finished since the user last saw it; chats from before read state existed have no doneAt until their next turn. */
 export const isUnread = (chat: Pick<ChatInfo, 'doneAt' | 'readAt'>) =>
@@ -476,6 +498,12 @@ export type ClientMessage =
   // Stops every chat as quitting does, then starts Kothar again, so community extension changes apply.
   | { type: 'app.restart' }
   | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
+  // Saves a setup: a new one without an id, else replaces the one with that id. Everyone gets setups.updated.
+  | { type: 'setup.save'; setup: Omit<Setup, 'id'> & { id?: string } }
+  // Removes a setup; chats that used it go back to Settings.
+  | { type: 'setup.remove'; id: string }
+  // The setup a chat uses, or none; applies from its next message.
+  | { type: 'chat.setSetup'; chatId: string; setup?: string }
   | { type: 'memory.set'; engine?: string; model?: string }
   | { type: 'account.login'; engine: string; name: string; provider?: string; method?: string }
   | { type: 'account.code'; engine: string; code: string }
@@ -527,6 +555,7 @@ export type CoreMessage =
       contextDefaults: Record<ContextSection, boolean>
       extensions: ExtensionInfo[]
       modelLists: ModelLists
+      setups: Setup[]
       memory: MemorySettings
       workFolder: WorkFolder
       themes: ThemeFile[]
@@ -556,6 +585,7 @@ export type CoreMessage =
   | { type: 'communityExtensions.updated'; enabled: boolean }
   | { type: 'restart.updated'; restart: RestartState }
   | { type: 'models.updated'; lists: ModelLists }
+  | { type: 'setups.updated'; setups: Setup[] }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).

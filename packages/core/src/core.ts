@@ -33,6 +33,7 @@ import type {
   TurnSummary,
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
+import { openSetups } from './setups.ts'
 import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
 import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { realPath } from './machine.ts'
@@ -418,6 +419,27 @@ function openLockedCore(options: {
   const checkEnabled = (engine: string) => {
     if (!isEnabled(engine)) throw new Error(`Engine "${engine}" is off. Turn it on in Settings.`)
   }
+  // Saved setups, read from their files each time so a hand edit applies on the next message too.
+  const jobSetups = openSetups({
+    garage,
+    broadcast,
+    check(setup) {
+      if (setup.engine !== undefined) checkEngine(setup.engine)
+      const offered = setup.engine === undefined ? undefined : detected.get(setup.engine)?.models
+      if (setup.model !== undefined && offered?.length && !offered.some((m) => m.id === setup.model)) {
+        throw new Error(`Engine "${setup.engine}" offers no model "${setup.model}"`)
+      }
+      const known = [...extensions.map((e) => e.id), ...(options.brokenExtensions ?? []).map((e) => e.id)]
+      const unknown = setup.extensionsOff?.find((id) => !known.includes(id))
+      if (unknown !== undefined) throw new Error(`Unknown extension "${unknown}"`)
+    },
+  })
+  const setupOf = (chat: Chat) => jobSetups.get(chat.info.setup)
+  // What model choice needs about a chat: its own picks, its role and its setup's.
+  const choosesOf = (chat: Chat) => ({ ...chat.info, setup: setupOf(chat) })
+  // Whether an extension shapes this chat's sessions: on in Settings, and not left out by the chat's setup.
+  const isOnFor = (extension: Extension, chat: Chat | undefined) =>
+    isOn(extension) && !(chat && setupOf(chat)?.extensionsOff?.includes(extension.id))
   const chatsDir = join(garage, 'chats')
   mkdirSync(chatsDir, { recursive: true })
   const defaultWorkFolder = join(garage, 'work')
@@ -448,7 +470,7 @@ function openLockedCore(options: {
   // any chat whose run changed shows it.
   const followModels = () => {
     for (const chat of chats.values()) {
-      const run = models.runOf(chat.info)
+      const run = models.runOf(choosesOf(chat))
       const follows = chat.info.model === undefined && chat.status === 'idle'
       if (follows && run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
       else if (JSON.stringify(run) !== chat.shownRun) broadcast({ type: 'chat.updated', chat: withRun(chat) })
@@ -577,7 +599,7 @@ function openLockedCore(options: {
   }
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
   const withRun = (chat: Chat) => {
-    const run = models.runOf(chat.info)
+    const run = models.runOf(choosesOf(chat))
     chat.shownRun = JSON.stringify(run)
     return { ...chat.info, ...(run && { run }) }
   }
@@ -634,7 +656,7 @@ function openLockedCore(options: {
   const extensionServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
     const session = { chat: summaryOf(chat.info), workDir, sandboxed }
     const servers = extensions
-      .filter((extension) => isOn(extension) && (!extension.setup || setups.get(extension.id)?.status === 'ready'))
+      .filter((extension) => isOnFor(extension, chat) && (!extension.setup || setups.get(extension.id)?.status === 'ready'))
       .flatMap((extension) => extension.mcpServers?.({ ...session, values: extensionValues(extension) }) ?? [])
     const names = ['kothar', ...servers.map((server) => server.name)]
     const twin = names.find((name, i) => names.indexOf(name) !== i)
@@ -674,10 +696,10 @@ function openLockedCore(options: {
     callExtension(extension, () => extension.onStop?.(contextOf(extension)))
   }
   // The extension that provides memory: the first that's on with one. Without it, the core's window.
-  const memoryExtension = () => extensions.find((extension) => isOn(extension) && extension.memory)
+  const memoryExtension = (chat?: Chat) => extensions.find((extension) => isOnFor(extension, chat) && extension.memory)
   const viewOf = (chat: Chat, messages: MemoryMessage[], tools: boolean) => {
     if (!messages.length) return ''
-    const extension = memoryExtension()
+    const extension = memoryExtension(chat)
     if (extension) {
       try {
         const view = extension.memory!.view({ chat: detailOf(chat), messages, tools }, contextOf(extension))
@@ -689,8 +711,8 @@ function openLockedCore(options: {
     }
     return windowView(messages)
   }
-  const memoryInstructions = (forSession: ExtensionInstructionsFor) => {
-    const extension = memoryExtension()
+  const memoryInstructions = (forSession: ExtensionInstructionsFor, chat: Chat) => {
+    const extension = memoryExtension(chat)
     if (!extension?.memory?.instructions) return []
     try {
       const text = extension.memory.instructions(forSession, contextOf(extension))
@@ -937,7 +959,8 @@ function openLockedCore(options: {
   }
 
   type Hook = { [K in keyof Extension]-?: NonNullable<Extension[K]> extends (...args: never[]) => unknown ? K : never }[keyof Extension]
-  const watchersOf = (hook: Hook) => extensions.filter((extension) => isOn(extension) && extension[hook])
+  // With a chat: only the extensions that shape its sessions (see isOnFor).
+  const watchersOf = (hook: Hook, chat?: Chat) => extensions.filter((extension) => isOnFor(extension, chat) && extension[hook])
   const callExtensions = (hook: Hook, run: (extension: Extension, context: ExtensionContext) => unknown) => {
     if (quitting) return
     for (const extension of watchersOf(hook)) callExtension(extension, () => run(extension, contextOf(extension)))
@@ -945,7 +968,7 @@ function openLockedCore(options: {
 
   // Each extension's text transform in turn; one that throws leaves the text as it was.
   const transformed = (hook: 'transformMessage' | 'transformOutput', chat: Chat, text: string) =>
-    watchersOf(hook).reduce((current, extension) => {
+    watchersOf(hook, chat).reduce((current, extension) => {
       try {
         const next = extension[hook]!(current, detailOf(chat), contextOf(extension))
         if (typeof next !== 'string') throw new Error(`${hook} must return text`)
@@ -967,7 +990,7 @@ function openLockedCore(options: {
     request: PermissionRequest,
     chat: Chat,
   ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
-    const watchers = watchersOf('onPermissionRequested')
+    const watchers = watchersOf('onPermissionRequested', chat)
     const checked = (extension: Extension, verdict: PermissionVerdict | undefined) => {
       if (verdict === undefined || verdict === null) return undefined
       if (typeof verdict.allow === 'boolean') return verdict
@@ -1436,8 +1459,9 @@ function openLockedCore(options: {
     }
   }
 
-  const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole }) => {
+  const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string }) => {
     const name = checkName(spec.name)
+    const setup = spec.setup === undefined ? undefined : setupNamed(spec.setup)
     if (spec.engine !== undefined) {
       checkEngine(spec.engine)
       checkEnabled(spec.engine)
@@ -1447,7 +1471,7 @@ function openLockedCore(options: {
     // Named engine: the chat's own pick of that engine's first model in its list, else the engine's default model.
     // Otherwise it follows its list (a worker: its role's, else Workers', else Chat's).
     const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
-    const engine = spec.engine ?? models.engineFor(role)
+    const engine = spec.engine ?? models.engineFor(role, setup)
     if (parent) checkActive(parent)
     if (parent?.info.worker) throw new Error('A worker cannot start chats')
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
@@ -1470,6 +1494,7 @@ function openLockedCore(options: {
       archived: false,
       createdAt: new Date().toISOString(),
       ...pin,
+      ...(setup && { setup: setup.id }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parent && parentMessages?.length) {
@@ -1481,10 +1506,37 @@ function openLockedCore(options: {
   }
 
   // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
-  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole; setup?: string }) => {
     if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
     if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
-    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role, setup: spec.setup })
+  }
+
+  // A setup by id or name, for a spawn or a picker.
+  const setupNamed = (name: unknown) => {
+    const setup = typeof name === 'string' ? jobSetups.find(name) : undefined
+    if (setup) return setup
+    const names = jobSetups.list().map((s) => `"${s.name}"`)
+    throw new Error(`Unknown setup "${name}". ${names.length ? `The setups are ${names.join(', ')}.` : 'There are no setups.'}`)
+  }
+
+  // The setup a chat uses from its next message, or none.
+  const setChatSetup = (chat: Chat, name: unknown) => {
+    const setup = name === undefined || name === '' ? undefined : setupNamed(name)
+    updateChat(chat, { setup: setup?.id })
+    followModels()
+  }
+
+  const saveSetup = (input: unknown) => {
+    jobSetups.save(input)
+    followModels()
+  }
+
+  // Chats that used a removed setup go back to Settings.
+  const removeSetup = (id: unknown) => {
+    jobSetups.remove(id)
+    for (const chat of chats.values()) if (chat.info.setup === id) updateChat(chat, { setup: undefined })
+    followModels()
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -1669,7 +1721,7 @@ function openLockedCore(options: {
       checkEngine(engine ?? chat.info.engine)
       checkEnabled(engine ?? chat.info.engine)
     }
-    updateChat(chat, models.choose(chat.info, engine, model, thinking))
+    updateChat(chat, models.choose(choosesOf(chat), engine, model, thinking))
   }
 
   const checkActive = (chat: Chat) => {
@@ -1951,9 +2003,9 @@ function openLockedCore(options: {
     if (quitting) throw new Error('Kothar is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
-    const run = models.runOf(chat.info)
+    const run = models.runOf(choosesOf(chat))
     if (run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
-    const cant = run ? undefined : models.whyNot(chat.info)
+    const cant = run ? undefined : models.whyNot(choosesOf(chat))
     if (cant) throw new Error(cant)
     const adapter = adapterFor(chat.info.engine)!
     const editAnywhere = editsAnywhere(...switchesOf(chat))
@@ -1988,16 +2040,19 @@ function openLockedCore(options: {
       return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
     })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
+    // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.
+    const setup = setupOf(chat)
+    const setupText = setup?.instructions ? [`Instructions from the setup "${setup.name}":\n\n${setup.instructions}`] : []
     const role = extensionChatOf(chat)?.instructions
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
-    const spawns = zoomable && !chat.info.worker && isOn(WORKERS_EXTENSION)
+    const spawns = zoomable && !chat.info.worker && isOnFor(WORKERS_EXTENSION, chat)
     const forSession = { chat: detailOf(chat), tools: zoomable }
     const memory = [
       ...(spawns ? [String(extensionValues(WORKERS_EXTENSION).instructions)] : []),
-      ...memoryInstructions(forSession),
+      ...memoryInstructions(forSession, chat),
       ...(parentView ? [`Your parent chat's memory when it started you:\n\n${parentView}`] : []),
     ]
-    const extensionInstructions = watchersOf('instructions').flatMap((extension) => {
+    const extensionInstructions = watchersOf('instructions', chat).flatMap((extension) => {
       try {
         const text = extension.instructions!(forSession, contextOf(extension))
         if (text === undefined || text === null) return []
@@ -2024,7 +2079,7 @@ function openLockedCore(options: {
             ]
           : []),
       ]
-      const parts = [...(role ? [role] : []), ...rules, ...extensionInstructions, ...memory, ...contextText]
+      const parts = [...(role ? [role] : []), ...rules, ...extensionInstructions, ...memory, ...setupText, ...contextText]
       const instructions = parts.join('\n\n')
       const extraDirs = [
         ...(cwd === workDir ? [] : [workDir]),
@@ -2332,9 +2387,10 @@ function openLockedCore(options: {
       return idle ? 'sent' : steers ? 'steered' : 'queued'
     },
     stop: (chatId) => interrupt(chatFor(chatId), false),
-    workers: () => {
+    workers: (chatId?: string) => {
       const { enabled, values } = extensionInfo(WORKERS_EXTENSION)
-      return { enabled, limit: Number(values.limit) }
+      const chat = chatId === undefined ? undefined : chats.get(chatId)
+      return { enabled: enabled && isOnFor(WORKERS_EXTENSION, chat), limit: Number(values.limit) }
     },
     extensionTools: () =>
       extensions
@@ -2416,6 +2472,7 @@ function openLockedCore(options: {
       })),
     ],
     modelLists: models.lists,
+    setups: jobSetups.list,
     memory: () => settings.memory ?? {},
     chats: () => shownChats().map(state),
     workFolder,
@@ -2461,6 +2518,12 @@ function openLockedCore(options: {
           const chat = chatFor(message.chatId)
           return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
         }
+        case 'setup.save':
+          return saveSetup(message.setup)
+        case 'setup.remove':
+          return removeSetup(message.id)
+        case 'chat.setSetup':
+          return setChatSetup(chatFor(message.chatId), message.setup)
         case 'chat.setModel':
           return setModel(
             chatFor(message.chatId),

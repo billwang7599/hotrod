@@ -29,6 +29,18 @@ restart.
 folder…** in the Marketplace window (**Browse…** in Settings → Community hub) before you publish, then follow the
 [author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-extension) to list it.
 
+## Setups
+
+A setup is a saved choice for a kind of job: an engine and model with its thinking level, extensions to leave out, and
+extra instructions. Make them in Settings → Setups and pick one for a space in its General tab. A lead can also start a
+worker with a setup by name. A setup applies from the chat's next message. A model or thinking level picked for the chat
+itself still wins, and anything the setup leaves out follows Settings. Each setup is a plain JSON file in
+`<garage>/setups/`.
+
+A setup's instructions go into each session after the extensions' instructions and before the context items (the global
+`AGENTS.md`, then each chat's), so your own `AGENTS.md` files read last. A setup can switch off extensions that are on,
+for its chats only, but it can't turn on one that's off in Settings.
+
 ## Themes
 
 Kothar ships with two themes, Default and Glass. More themes, such as Nord, Catppuccin and Gruvbox, come from the

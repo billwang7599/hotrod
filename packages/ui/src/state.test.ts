@@ -70,6 +70,7 @@ const snapshot = (chats: ChatState[]): Action =>
     contextDefaults,
     extensions,
     modelLists,
+    setups: [],
     memory: {},
     workFolder: { defaultPath: '/g/work', canSandbox: true },
     themes: [],

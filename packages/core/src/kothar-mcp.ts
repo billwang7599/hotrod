@@ -49,13 +49,14 @@ type Hub = {
   chats(): ChatState[]
   seesAll(chatId: string): boolean
   // A worker below parentId: the same call an extension's host.createChat makes with a parentId.
-  createChild(parentId: string, spec: { name: string; role?: ModelRole }): ChatInfo
+  createChild(parentId: string, spec: { name: string; role?: ModelRole; setup?: string }): ChatInfo
   send(chatId: string, text: string): void
   // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
   deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
   // What the chat's Stop button does.
   stop(chatId: string): void
-  workers(): { enabled: boolean; limit: number }
+  // With a chat: whether that chat may start workers (its setup can leave the Workers extension out).
+  workers(chatId?: string): { enabled: boolean; limit: number }
   extensionTools(): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost }[]
 }
 
@@ -145,19 +146,21 @@ const TOOLS: Record<string, Tool> = {
     description:
       'Start a worker: a new chat below this one that works on the task, in this folder, on the models the ' +
       'user picked for workers. Its final reply comes back to you as a message when its turn ends, so ' +
-      "don't poll it. Give a role to run it on that role's models instead. Returns its id.",
+      "don't poll it. Give a role to run it on that role's models instead, or the name of one of the user's " +
+      'setups (only when the user asked for it) to run it with that setup. Returns its id.',
     input: z.object({
       task: z.string().min(1),
       role: z.enum(['planning', 'searching']).optional(),
+      setup: z.string().min(1).optional(),
     }),
-    run({ hub, caller }: Context, { task, role }: { task: string; role?: ModelRole }) {
+    run({ hub, caller }: Context, { task, role, setup }: { task: string; role?: ModelRole; setup?: string }) {
       const { limit } = hub.workers()
       const running = hub.chats().filter((c) => c.parentId === caller.id && c.worker && c.status !== 'idle').length
       if (limit !== -1 && running >= limit) {
         throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
       }
       const name = workerName(task)
-      const chat = hub.createChild(caller.id, { name, ...(role && { role }) })
+      const chat = hub.createChild(caller.id, { name, ...(role && { role }), ...(setup && { setup }) })
       hub.send(chat.id, task)
       return { chatId: chat.id }
     },
@@ -170,7 +173,7 @@ export function openKotharMcp(hub: Hub) {
   const callers = new Map<string, string>()
 
   const offers = (caller: ChatState, tool: Tool) => {
-    const spawns = !caller.worker && hub.workers().enabled
+    const spawns = !caller.worker && hub.workers(caller.id).enabled
     if (tool.for === 'workers') return spawns
     return spawns || hub.seesAll(caller.id)
   }

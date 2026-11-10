@@ -12,6 +12,7 @@ import {
   type ModelRole,
   type ModelRow,
   type Run,
+  type Setup,
   type ThinkingLevel,
 } from './shared.ts'
 
@@ -23,7 +24,10 @@ import {
 // Each engine's cheap model, newest first: Claude's Haikus, then Codex's Lunas.
 export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5', 'gpt-6-luna', 'gpt-5.6-luna']
 
-type Chooses = Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>
+// setup: the setup the chat uses, if any. Its model comes after the chat's own pick and before the list; its thinking
+// level after the chat's own and before the row's.
+type Chooses = Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'> & { setup?: SetupChoice }
+export type SetupChoice = Pick<Setup, 'name' | 'engine' | 'model' | 'thinking'>
 
 export type ModelSettings = {
   engines: Record<string, boolean>
@@ -72,20 +76,33 @@ export function openModels({
     engineOf(defaultEngine)?.enabled ? defaultEngine : (engines().find((e) => e.enabled)?.id ?? defaultEngine)
 
   /**
-   * What a chat runs: its own model if it picked one (on its engine), else the first row in its role's list (or the
-   * Chat list) that can run, even on another engine. The thinking level is the chat's own, else the row's, else the
-   * fallback, snapped to one the model takes. Undefined when nothing can run; a chat's own pick that can't run doesn't
-   * fall back to the list.
+   * The model a setup pins, if it names an engine: its own model there, else the first of the list's rows on that
+   * engine that can run, else the engine's default model.
+   */
+  const setupRow = (setup: SetupChoice | undefined, list: ModelRow[]) => {
+    if (setup?.engine === undefined) return undefined
+    if (setup.model !== undefined) return { engine: setup.engine, model: setup.model }
+    const engine = engineOf(setup.engine)
+    const row = list.find((r) => r.engine === setup.engine && canRun(engine, r.model))
+    const model = row?.model ?? engine?.defaultModel ?? engine?.models?.[0]?.id
+    return model === undefined ? undefined : { engine: setup.engine, model }
+  }
+
+  /**
+   * What a chat runs: its own model if it picked one (on its engine), else its setup's, else the first row in its
+   * role's list (or the Chat list) that can run, even on another engine. The thinking level is the chat's own, else
+   * the setup's, else the row's, else the fallback, snapped to one the model takes. Undefined when nothing can run; a
+   * chat's own pick or a setup's that can't run doesn't fall back to the list.
    */
   const runOf = (chat: Chooses): Run | undefined => {
     const list = listFor(lists(), chat.role)
-    const row =
-      chat.model !== undefined
-        ? { engine: chat.engine, model: chat.model, ...list.find((r) => r.engine === chat.engine && r.model === chat.model) }
-        : list.find((r) => canRun(engineOf(r.engine), r.model))
+    const pinned = chat.model !== undefined ? { engine: chat.engine, model: chat.model } : setupRow(chat.setup, list)
+    const row = pinned
+      ? { ...pinned, ...list.find((r) => r.engine === pinned.engine && r.model === pinned.model) }
+      : list.find((r) => canRun(engineOf(r.engine), r.model))
     if (!row || !canRun(engineOf(row.engine), row.model)) return undefined
     const engine = engineOf(row.engine)
-    const wanted = chat.thinking ?? row.thinking
+    const wanted = chat.thinking ?? chat.setup?.thinking ?? row.thinking
     const thinking = wanted ? snapLevel(wanted, levelsOf(engine, row.model)) : fallbackLevel(engine, row.model)
     return { engine: row.engine, model: row.model, ...(thinking && { thinking }) }
   }
@@ -95,7 +112,8 @@ export function openModels({
     runOf,
 
     /** The engine a new chat sits on: the one its list (a worker's role list, else Chat's) runs first. */
-    engineFor: (role?: ModelRole) => runOf({ engine: firstOn(), role })?.engine ?? firstOn(),
+    engineFor: (role?: ModelRole, setup?: SetupChoice) =>
+      runOf({ engine: firstOn(), role, setup })?.engine ?? setup?.engine ?? firstOn(),
 
     /** A chat's own pick on `engine`: the first model of its list there, else the engine's default model. */
     pinOn(engine: string, role?: ModelRole): Pick<ChatInfo, 'model' | 'thinking'> | undefined {
@@ -107,9 +125,9 @@ export function openModels({
     },
 
     /**
-     * What a chat saves when the user picks `model` on `engine` (none: follow the list again) and `thinking` (none:
-     * the list's). Picking what the list runs anyway, or the level it would run at, follows the list again, so the chat
-     * keeps up with Settings. The caller checks the engine exists and is on.
+     * What a chat saves when the user picks `model` on `engine` (none: follow its setup or list again) and `thinking`
+     * (none: the setup's or list's). Picking what the setup or list runs anyway, or the level it would run at, follows
+     * them again, so the chat keeps up with Settings. The caller checks the engine exists and is on.
      */
     choose(chat: Chooses, engine?: string, model?: string, thinking?: string): Pick<ChatInfo, 'engine' | 'model' | 'thinking'> {
       const on = model === undefined ? undefined : (engine ?? chat.engine)
@@ -117,13 +135,13 @@ export function openModels({
         throw new Error(`Engine "${on}" offers no model "${model}"`)
       }
       if (thinking !== undefined && !isThinkingLevel(thinking)) throw new Error(`Unknown thinking level "${thinking}"`)
-      const listed = runOf({ engine: chat.engine, role: chat.role })
+      const listed = runOf({ engine: chat.engine, role: chat.role, setup: chat.setup })
       const own = on !== undefined && !(listed?.engine === on && listed.model === model)
-      const runs = own ? runOf({ engine: on!, model, role: chat.role }) : listed
+      const runs = own ? runOf({ engine: on!, model, role: chat.role, setup: chat.setup }) : listed
       if (thinking && runs && !levelsOf(engineOf(runs.engine), runs.model).includes(thinking)) {
         throw new Error(`Model "${runs.model}" offers no thinking level "${thinking}"`)
       }
-      const listLevel = runs && runOf({ engine: runs.engine, model: runs.model, role: chat.role })?.thinking
+      const listLevel = runs && runOf({ engine: runs.engine, model: runs.model, role: chat.role, setup: chat.setup })?.thinking
       return {
         engine: own ? on! : (listed?.engine ?? chat.engine),
         model: own ? model : undefined,
@@ -136,6 +154,18 @@ export function openModels({
      * and runs as is, with no model named.
      */
     whyNot(chat: Chooses): string | undefined {
+      const setup = chat.model === undefined && chat.setup?.engine !== undefined ? chat.setup : undefined
+      if (setup) {
+        const engine = engineOf(setup.engine!)
+        const name = `The setup "${setup.name}"`
+        if (!engine) return `${name} runs on engine "${setup.engine}", which is not available. Pick another model in the setup or for this chat.`
+        if (!engine.enabled) return `${name} runs on engine "${setup.engine}", which is off. Turn it on in Settings.`
+        if (!engine.models?.length) return undefined
+        if (setup.model !== undefined) {
+          return `Engine "${setup.engine}" no longer offers "${setup.model}", which the setup "${setup.name}" runs. Pick another model in Settings → Setups.`
+        }
+        return `${name} runs on engine "${setup.engine}", which offers no model now.`
+      }
       const engine = engineOf(chat.engine)
       if (!engine) return `Engine "${chat.engine}" is not available. Pick another model for this chat.`
       if (!engine.enabled) return `Engine "${chat.engine}" is off. Turn it on in Settings.`
