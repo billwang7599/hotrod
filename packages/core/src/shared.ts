@@ -341,6 +341,8 @@ export type ExtensionInfo = {
   // The extension's own part of its Settings page (Extension.settingsView), as drawn now, or why it couldn't be.
   settingsView?: { view?: ExtensionView; error?: string }
   loadError?: string
+  // It has a chat of its own (Home). A setup can't leave it out of that chat, so setup forms don't list it.
+  ownsChat?: boolean
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
   // the version this run of Kothar loaded, if any; extensions load only at startup.
   community?: {
@@ -586,6 +588,9 @@ export type CoreMessage =
   | { type: 'restart.updated'; restart: RestartState }
   | { type: 'models.updated'; lists: ModelLists }
   | { type: 'setups.updated'; setups: Setup[] }
+  // The answer to setup.save, to its sender only: the setup as saved, or why it was refused.
+  | { type: 'setup.saved'; setup: Setup }
+  | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).

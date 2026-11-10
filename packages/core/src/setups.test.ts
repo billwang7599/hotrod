@@ -31,6 +31,7 @@ async function start({ tools = false } = {}) {
     name: 'Test extension',
     description: '',
     enabledByDefault: true,
+    chats: [{ id: 'own', name: 'Own', instructions: 'Role of the own chat' }],
     instructions: () => 'From the test extension',
     transformMessage: (text) => `${text} (rewritten)`,
     tools: [
@@ -66,7 +67,8 @@ async function start({ tools = false } = {}) {
   const errors: string[] = []
   const handle = (m: ClientMessage) => {
     try {
-      core.handle(m, () => {})
+      // A refused save is answered to its sender, like a thrown error.
+      core.handle(m, (answer) => answer.type === 'setup.refused' && errors.push(answer.error))
     } catch (error) {
       errors.push((error as Error).message)
     }
@@ -254,5 +256,14 @@ describe('setups', () => {
     t.handle({ type: 'chat.setSetup', chatId: quiet, setup: 'Quiet' })
     expect(await t.toolsIn(quiet)).not.toContain('test_tool')
     expect(await t.toolsIn(plain)).toContain('test_tool')
+  })
+
+  it("never leave an extension out of its own chat, whose role needs its tools", async () => {
+    const t = await start({ tools: true })
+    t.save({ name: 'Quiet', extensionsOff: ['test'] })
+    t.handle({ type: 'chat.setSetup', chatId: 'own', setup: 'Quiet' })
+    expect(await t.toolsIn('own')).toContain('test_tool')
+    expect(t.sessions.at(-1)!.instructions).toContain('Role of the own chat')
+    expect(t.sessions.at(-1)!.instructions).toContain('From the test extension')
   })
 })

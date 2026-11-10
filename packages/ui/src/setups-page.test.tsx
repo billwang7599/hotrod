@@ -60,10 +60,13 @@ const wrap = (children: React.ReactNode) => (
   </LazyMotion>
 )
 
-function renderPage(setups: Setup[]) {
-  const sent: ClientMessage[] = []
+type Saved = { count: number; id?: string; error?: string }
+
+function renderPage(setups: Setup[], saved?: Saved, sent: ClientMessage[] = [], shown = extensions) {
   act(() =>
-    root.render(wrap(<SetupsPage setups={setups} engines={engines} extensions={extensions} connected send={(m) => sent.push(m)} />)),
+    root.render(
+      wrap(<SetupsPage setups={setups} engines={engines} extensions={shown} connected send={(m) => sent.push(m)} saved={saved} />),
+    ),
   )
   return sent
 }
@@ -120,6 +123,45 @@ test('duplicates a setup under a new name as a new one', () => {
   submit('Create')
   const { id: _, ...copy } = reviewer
   expect(sent).toEqual([{ type: 'setup.save', setup: { ...copy, name: 'Reviewer copy 2' } }])
+})
+
+test('duplicating while the New setup form is open fills the form with the copy', () => {
+  const sent = renderPage([reviewer])
+  click('New setup')
+  expect(nameInput().value).toBe('')
+  click('Duplicate')
+  expect(nameInput().value).toBe('Reviewer copy')
+  submit('Create')
+  const { id: _, ...copy } = reviewer
+  expect(sent).toEqual([{ type: 'setup.save', setup: { ...copy, name: 'Reviewer copy' } }])
+})
+
+test('keeps the form open until the core saves it, and shows a refusal inline with everything typed kept', () => {
+  const sent = renderPage([], { count: 3 })
+  click('New setup')
+  type(nameInput(), 'Quick fixes')
+  submit('Create')
+  expect(sent).toHaveLength(1)
+  // Waiting for the core: still open, and can't be sent twice.
+  expect(nameInput().value).toBe('Quick fixes')
+  expect(button('Create')!.disabled).toBe(true)
+  renderPage([], { count: 4, error: 'Engine "cc" offers no model "opus"' }, sent)
+  expect(nameInput().value).toBe('Quick fixes')
+  expect(host.textContent).toContain('Engine "cc" offers no model "opus"')
+  expect(button('Create')!.disabled).toBe(false)
+  submit('Create')
+  expect(host.textContent).not.toContain('offers no model')
+  const quick = { id: 'cc33', name: 'Quick fixes' }
+  renderPage([quick], { count: 5, id: quick.id }, sent)
+  expect(host.querySelector('form')).toBeNull()
+  expect(sent).toHaveLength(2)
+})
+
+test("doesn't list an extension with a chat of its own (Home) to leave out", () => {
+  renderPage([reviewer], undefined, [], [...extensions, { ...extension('home', 'Home'), ownsChat: true }])
+  click('Edit')
+  const labels = [...host.querySelectorAll('[role="switch"]')].map((s) => s.getAttribute('aria-label'))
+  expect(labels).toEqual(['Browser in this setup', 'Notes in this setup'])
 })
 
 const space: ChatView = {

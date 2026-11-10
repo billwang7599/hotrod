@@ -64,6 +64,7 @@ type PageProps = {
   extensions: ExtensionInfo[]
   modelLists: ModelLists
   setups?: Setup[]
+  setupSave?: { count: number; id?: string; error?: string }
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean
@@ -245,8 +246,8 @@ const PAGES = [
     intro:
       `A setup is a saved model, thinking level, extensions and instructions for a kind of job. Pick one for a ${CHAT_NOUN.one} ` +
       'in its General tab; a lead can also start a worker with one by name. What a setup leaves out follows Settings.',
-    body: ({ setups = [], engines, extensions, connected, send }: PageProps) => (
-      <SetupsPage setups={setups} engines={engines} extensions={extensions} connected={connected} send={send} />
+    body: ({ setups = [], setupSave, engines, extensions, connected, send }: PageProps) => (
+      <SetupsPage setups={setups} engines={engines} extensions={extensions} connected={connected} send={send} saved={setupSave} />
     ),
   },
   {

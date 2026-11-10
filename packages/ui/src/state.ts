@@ -104,6 +104,8 @@ export type State = {
   restart: RestartState
   // The core's answer to the last Install from folder, counted so the same answer twice still reads as new.
   localInstall?: { path: string; count: number } & ({ kind: MarketKind; ids: string[] } | { error: string })
+  // The core's answer to the last setup save, counted so the same answer twice still reads as new.
+  setupSave?: { count: number; id?: string; error?: string }
   // The core's latest answer to the search palette.
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
@@ -411,6 +413,11 @@ export function reduce(state: State, action: Action): State {
       return { ...state, modelLists: action.lists }
     case 'setups.updated':
       return { ...state, setups: action.setups }
+    case 'setup.saved':
+    case 'setup.refused': {
+      const answer = action.type === 'setup.saved' ? { id: action.setup.id } : { error: action.error }
+      return { ...state, setupSave: { ...answer, count: (state.setupSave?.count ?? 0) + 1 } }
+    }
     case 'memory.updated':
       return state
     case 'workFolder.updated':

@@ -347,6 +347,7 @@ function openLockedCore(options: {
       values,
       ...(view && { settingsView: view }),
       ...(settingsError && { loadError: settingsError }),
+      ...(extension.chats?.length && { ownsChat: true }),
     }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
@@ -437,9 +438,13 @@ function openLockedCore(options: {
   const setupOf = (chat: Chat) => jobSetups.get(chat.info.setup)
   // What model choice needs about a chat: its own picks, its role and its setup's.
   const choosesOf = (chat: Chat) => ({ ...chat.info, setup: setupOf(chat) })
-  // Whether an extension shapes this chat's sessions: on in Settings, and not left out by the chat's setup.
+  // Whether an extension shapes this chat's sessions: on in Settings, and not left out by the chat's setup. An
+  // extension's own chat (Home) always gets it: its role instructions need its tools.
+  const ownsChat = (extension: Extension, chat: Chat) =>
+    extensionChats.some((declared) => declared.id === chat.info.id && declared.extension === extension)
   const isOnFor = (extension: Extension, chat: Chat | undefined) =>
-    isOn(extension) && !(chat && setupOf(chat)?.extensionsOff?.includes(extension.id))
+    isOn(extension) &&
+    !(chat && setupOf(chat)?.extensionsOff?.includes(extension.id) && !ownsChat(extension, chat))
   const chatsDir = join(garage, 'chats')
   mkdirSync(chatsDir, { recursive: true })
   const defaultWorkFolder = join(garage, 'work')
@@ -1528,8 +1533,9 @@ function openLockedCore(options: {
   }
 
   const saveSetup = (input: unknown) => {
-    jobSetups.save(input)
+    const setup = jobSetups.save(input)
     followModels()
+    return setup
   }
 
   // Chats that used a removed setup go back to Settings.
@@ -2518,8 +2524,15 @@ function openLockedCore(options: {
           const chat = chatFor(message.chatId)
           return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
         }
-        case 'setup.save':
-          return saveSetup(message.setup)
+        case 'setup.save': {
+          let answer: CoreMessage
+          try {
+            answer = { type: 'setup.saved', setup: saveSetup(message.setup) }
+          } catch (error) {
+            answer = { type: 'setup.refused', error: messageOf(error) }
+          }
+          return reply(answer)
+        }
         case 'setup.remove':
           return removeSetup(message.id)
         case 'chat.setSetup':

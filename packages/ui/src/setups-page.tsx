@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   levelsOf,
   THINKING_LABELS,
@@ -28,17 +28,35 @@ type Props = {
   extensions: ExtensionInfo[]
   connected: boolean
   send: (m: ClientMessage) => void
+  // The core's answer to the last save (State.setupSave).
+  saved?: { count: number; id?: string; error?: string }
 }
 
 /** Settings → Setups: every saved setup, each editable in place, plus a new one. */
-export function SetupsPage({ setups, engines, extensions, connected, send }: Props) {
+export function SetupsPage({ setups, engines, extensions, connected, send, saved }: Props) {
   // The setup open for editing: its id, 'new' for a new one, or none.
   const [editing, setEditing] = useState<string>()
   const [copyOf, setCopyOf] = useState<Draft>()
-  const save = (draft: Draft) => {
-    send({ type: 'setup.save', setup: draft })
+  // A save sent and not yet answered: the answer count it waits past. The form stays open until the core saves it,
+  // so a refused save keeps everything typed and shows why.
+  const [waiting, setWaiting] = useState<number>()
+  const [refused, setRefused] = useState<string>()
+  const close = () => {
     setEditing(undefined)
     setCopyOf(undefined)
+    setWaiting(undefined)
+    setRefused(undefined)
+  }
+  useEffect(() => {
+    if (waiting === undefined || !saved || saved.count <= waiting) return
+    if (saved.error === undefined) return close()
+    setWaiting(undefined)
+    setRefused(saved.error)
+  }, [saved, waiting])
+  const save = (draft: Draft) => {
+    send({ type: 'setup.save', setup: draft })
+    setWaiting(saved?.count ?? 0)
+    setRefused(undefined)
   }
   const remove = async (setup: Setup) => {
     const ok = await confirm({
@@ -55,26 +73,32 @@ export function SetupsPage({ setups, engines, extensions, connected, send }: Pro
     for (let n = 2; names.includes(name.toLowerCase()); n++) name = `${setup.name} copy ${n}`
     setCopyOf({ ...setup, id: undefined, name })
     setEditing('new')
+    setRefused(undefined)
   }
-  const form = (draft: Draft) => (
+  const open = (id: string) => (setEditing(id), setCopyOf(undefined), setRefused(undefined))
+  // Keyed by what it edits, so opening another draft (Duplicate while New is open) starts a fresh form.
+  const form = (draft: Draft, key: string) => (
     <SetupForm
+      key={key}
       draft={draft}
       taken={setups.filter((s) => s.id !== draft.id).map((s) => s.name.toLowerCase())}
       engines={engines}
       extensions={extensions}
       connected={connected}
+      saving={waiting !== undefined}
+      refused={refused}
       save={save}
-      cancel={() => (setEditing(undefined), setCopyOf(undefined))}
+      cancel={close}
     />
   )
   return (
     <>
       <div className="mb-12">
-        <Button variant="primary" disabled={!connected || editing === 'new'} onClick={() => setEditing('new')}>
+        <Button variant="primary" disabled={!connected || editing === 'new'} onClick={() => open('new')}>
           New setup
         </Button>
       </div>
-      {editing === 'new' && <div className={`${GROUP} mb-12 py-12`}>{form(copyOf ?? { name: '' })}</div>}
+      {editing === 'new' && <div className={`${GROUP} mb-12 py-12`}>{form(copyOf ?? { name: '' }, copyOf ? `copy:${copyOf.name}` : 'new')}</div>}
       {setups.length ? (
         <ul className={GROUP} aria-label="Setups">
           {setups.map((setup) => (
@@ -85,7 +109,7 @@ export function SetupsPage({ setups, engines, extensions, connected, send }: Pro
                   <div className="text-sm text-muted">{summaryOf(setup, engines, extensions)}</div>
                 </div>
                 <div className="flex items-center gap-6">
-                  <Button size="small" disabled={!connected} onClick={() => setEditing(setup.id)}>
+                  <Button size="small" disabled={!connected} onClick={() => open(setup.id)}>
                     Edit
                   </Button>
                   <Button size="small" disabled={!connected} onClick={() => duplicate(setup)}>
@@ -96,7 +120,7 @@ export function SetupsPage({ setups, engines, extensions, connected, send }: Pro
                   </Button>
                 </div>
               </div>
-              {editing === setup.id && form(setup)}
+              {editing === setup.id && form(setup, setup.id)}
             </li>
           ))}
         </ul>
@@ -127,11 +151,14 @@ type FormProps = {
   engines: EngineInfo[]
   extensions: ExtensionInfo[]
   connected: boolean
+  // A save is on its way to the core; refused: why the core turned the last one down.
+  saving: boolean
+  refused?: string
   save: (draft: Draft) => void
   cancel: () => void
 }
 
-function SetupForm({ draft, taken, engines, extensions, connected, save, cancel }: FormProps) {
+function SetupForm({ draft, taken, engines, extensions, connected, saving, refused, save, cancel }: FormProps) {
   const [name, setName] = useState(draft.name)
   const [engine, setEngine] = useState(draft.engine)
   const [model, setModel] = useState(draft.model)
@@ -163,7 +190,7 @@ function SetupForm({ draft, taken, engines, extensions, connected, save, cancel 
     : taken.includes(trimmed.toLowerCase())
       ? `A setup named "${trimmed}" already exists`
       : undefined
-  const ready = connected && trimmed !== '' && !error
+  const ready = connected && !saving && trimmed !== '' && !error
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!ready) return
@@ -177,8 +204,9 @@ function SetupForm({ draft, taken, engines, extensions, connected, save, cancel 
       ...(instructions.trim() && { instructions }),
     })
   }
-  // Only extensions that are on can be left out; one left out earlier stays listed so it can be put back.
-  const listed = extensions.filter((e) => (e.enabled && !e.loadError) || off.includes(e.id))
+  // Only extensions that are on can be left out; one left out earlier stays listed so it can be put back. One with a
+  // chat of its own (Home) isn't listed: a setup never leaves it out of that chat.
+  const listed = extensions.filter((e) => ((e.enabled && !e.loadError) || off.includes(e.id)) && !e.ownsChat)
   return (
     <form className="flex flex-col gap-12" aria-label={draft.id ? `Edit ${draft.name}` : 'New setup'} onSubmit={submit}>
       <label className="flex flex-col gap-4">
@@ -253,6 +281,7 @@ function SetupForm({ draft, taken, engines, extensions, connected, save, cancel 
           onChange={(e) => setInstructions(e.target.value)}
         />
       </label>
+      {refused && <ErrorText>{refused}</ErrorText>}
       <div className="flex justify-end gap-8">
         <Button type="button" onClick={cancel}>
           Cancel
