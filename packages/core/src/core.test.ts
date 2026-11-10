@@ -43,6 +43,7 @@ import {
   type SessionOptions,
   type ThinkingLevel,
 } from './shared.ts'
+import { cantSandbox, cantWriteTmp, needs } from './test-env.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
@@ -706,7 +707,8 @@ describe('worktrees', () => {
 
   it.skipIf(process.platform !== 'darwin')(
     "lets an agent commit in its checkout but not touch the user's checkout, its branch or git hooks",
-    async () => {
+    async (context) => {
+      needs(context, cantSandbox, cantWriteTmp)
       const t = setup(textScript)
       // Outside the per-user temp folder, which a sandbox leaves writable.
       const repo = gitRepo(realpathSync(mkdtempSync('/tmp/kothar-test-')))
