@@ -290,6 +290,7 @@ function App() {
               contextDefaults={state.contextDefaults}
               extensions={state.extensions}
               modelLists={state.modelLists}
+              setups={state.setups}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
@@ -331,6 +332,7 @@ function App() {
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists}
+                setups={state.setups}
                 select={select}
               />
             ) : (

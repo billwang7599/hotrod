@@ -12,6 +12,7 @@ import {
   type ContextSection,
   type PanelTab as ExtensionTab,
   type PermissionSwitch,
+  type Setup,
   type WorkFolder,
   type Worktree,
 } from '@kothar/core/shared'
@@ -21,6 +22,7 @@ import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './st
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
+import { SETUP_HINT } from './setups-page.tsx'
 import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
 import { folderName, lineOf, panelKey, terminalKey, type ChatView, type State } from './state.ts'
 
@@ -483,6 +485,41 @@ function FoldPicker({ label, shown, choose }: { label: string; shown: boolean; c
   )
 }
 
+const NO_SETUP = 'none:'
+
+/** The setup this chat uses, at the top of the General tab. */
+function SetupPicker({ chat, setups, disabled, send, openSetups }: {
+  chat: ChatView
+  setups: Setup[]
+  disabled: boolean
+  send: (m: ClientMessage) => void
+  openSetups?: () => void
+}) {
+  const current = setups.find((s) => s.id === chat.setup)
+  return (
+    <section className="flex flex-col gap-6" aria-label="Setup">
+      <About intro={SETUP_HINT} notes={[]} />
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-6 rounded-lg border px-10 py-8">
+        <span className="min-w-0 flex-1">Setup</span>
+        <Select
+          label="Setup"
+          value={current?.id ?? NO_SETUP}
+          disabled={disabled || (!setups.length && !current)}
+          options={[{ value: NO_SETUP, label: 'None' }, ...setups.map((s) => ({ value: s.id, label: s.name }))]}
+          onChange={(value) =>
+            send({ type: 'chat.setSetup', chatId: chat.id, ...(value !== NO_SETUP && { setup: value }) })
+          }
+        />
+      </div>
+      {openSetups && (
+        <Button variant="ghost" size="small" className="w-fit" onClick={openSetups}>
+          {setups.length ? 'Edit setups…' : 'Make a setup…'}
+        </Button>
+      )}
+    </section>
+  )
+}
+
 function ViewPickers({ chatId }: { chatId: string }) {
   const steps = useStepsShown(chatId)
   const reports = useReportsShown(chatId)
@@ -625,6 +662,9 @@ type ContextPanelProps = {
   terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
   pickers?: Pickers
+  setups?: Setup[]
+  // Opens Settings → Setups.
+  openSetups?: () => void
 }
 
 export function ContextPanel(props: ContextPanelProps) {
@@ -725,6 +765,9 @@ export function ContextPanel(props: ContextPanelProps) {
               </section>
             )
           })}
+        {shown === 'general' && chat && (
+          <SetupPicker chat={chat} setups={props.setups ?? []} disabled={locked} send={send} openSetups={props.openSetups} />
+        )}
         {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
         {shown === 'general' && chat && workDir && (
           <WorkFolderRow

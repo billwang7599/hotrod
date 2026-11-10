@@ -754,7 +754,8 @@ test("each panel tab folds its explanations under How this works, not in tooltip
   expect(about().textContent).toContain('Folders:')
   const tab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find((t) => t.textContent === 'General')!
   act(() => tab.click())
-  expect(about().textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
+  const permissions = container.querySelector('aside section[aria-label="Permissions"] details')!
+  expect(permissions.textContent).toContain(`${PERMISSIONS.editAnywhere.label}:`)
   expect(container.querySelectorAll('aside [data-hint]').length).toBe(0)
   localStorage.clear()
 })

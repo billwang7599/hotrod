@@ -28,6 +28,7 @@ import {
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
+  type Setup,
   type ToolKind,
   type Upload,
   type WorkFolder,
@@ -934,6 +935,7 @@ type ChatProps = {
   terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
+  setups?: Setup[]
   columnPx: number
   setColumnPx: (px: number) => void
   notify: (message: string) => void
@@ -1528,6 +1530,8 @@ export function Chat(props: ChatProps) {
               panelViews={props.panelViews}
               terminalErrors={props.terminalErrors}
               pickers={window.kothar}
+              setups={props.setups}
+              openSetups={() => openSettings('setups')}
             />
           </SidePanel>
         )}

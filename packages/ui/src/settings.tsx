@@ -22,6 +22,7 @@ import {
   type ThinkingLevel,
   type ExtensionInfo,
   type RestartState,
+  type Setup,
   type WorkFolder,
 } from '@kothar/core/shared'
 import type { ExtensionSetting } from '@kothar/extension-api'
@@ -54,6 +55,7 @@ import { Appearance } from './themes.tsx'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { RestartNotice } from './restart.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
+import { SetupsPage } from './setups-page.tsx'
 
 type PageProps = {
   engines: EngineInfo[]
@@ -61,6 +63,7 @@ type PageProps = {
   contextDefaults: Record<ContextSection, boolean>
   extensions: ExtensionInfo[]
   modelLists: ModelLists
+  setups?: Setup[]
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean
@@ -234,6 +237,17 @@ const PAGES = [
       if (!engines.some((e) => e.enabled)) return <p className="text-muted">Turn on an engine to pick models.</p>
       return <ModelListsSection engines={engines} lists={modelLists} connected={connected} send={send} />
     },
+  },
+  {
+    id: 'setups',
+    group: 'Options',
+    title: 'Setups',
+    intro:
+      `A setup is a saved model, thinking level, extensions and instructions for a kind of job. Pick one for a ${CHAT_NOUN.one} ` +
+      'in its General tab; a lead can also start a worker with one by name. What a setup leaves out follows Settings.',
+    body: ({ setups = [], engines, extensions, connected, send }: PageProps) => (
+      <SetupsPage setups={setups} engines={engines} extensions={extensions} connected={connected} send={send} />
+    ),
   },
   {
     id: 'context',
