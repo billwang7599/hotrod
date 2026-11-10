@@ -7,7 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
-import { createNotesExtension, noteIndex, noteText, noteToDelete, noteWatcher, parseNote, slugOf, type Note } from './index.ts'
+import { createNotesExtension, freeName, noteText, noteToDelete, noteWatcher, parseNote, searchNotes, slugOf, type Note } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -101,7 +101,7 @@ async function start() {
     if (shown?.type !== 'extension.panel' || !shown.view) throw new Error(shown?.type === 'extension.panel' ? shown.error : 'no view')
     return shown.view
   }
-  return { core, garage, sessions, handle, create, session, tool, panel, views }
+  return { core, garage, sessions, handle, create, session, tool, panel, views, messages }
 }
 
 const note = (over: Partial<Note>): Note => ({
@@ -111,7 +111,6 @@ const note = (over: Partial<Note>): Note => ({
   scope: 'global',
   file: 'a.md',
   path: '/g/a.md',
-  on: true,
   ...over,
 })
 
@@ -119,34 +118,38 @@ it('reads and writes front matter, and names files from the note name', () => {
   expect(slugOf('How to run the tests!')).toBe('how-to-run-the-tests')
   const text = noteText('Tests', 'When: running\nthe suite', '\nRun npm test\n\n')
   expect(text).toBe('---\nname: Tests\ndescription: When: running the suite\n---\n\nRun npm test\n')
-  expect(parseNote(text, 'tests.md')).toEqual({ name: 'Tests', description: 'When: running the suite', body: '\nRun npm test\n' })
+  expect(parseNote(text, 'tests.md')).toEqual({ name: 'Tests', description: 'When: running the suite', body: 'Run npm test\n' })
   expect(parseNote('Just text', 'plain.md')).toEqual({ name: 'plain', description: '', body: 'Just text' })
+  // What the editor sends comes back byte for byte, blank lines and all.
+  for (const body of ['', '\n\nlead', 'trail\n\n\n', '  spaced  ']) {
+    expect(parseNote(noteText('N', '', body, true), 'n.md').body).toBe(body)
+  }
 })
 
-it('lists notes that are on by name, description and path, never their bodies', () => {
-  const index = noteIndex(
-    [
-      note({ name: 'Deploys', description: 'How to ship', path: '/g/deploys.md' }),
-      note({ key: 's:t.md', name: 'Tests', scope: 'space', spaceId: 's', path: '/c/s/notes/t.md' }),
-      note({ key: 'global:x.md', name: 'Hidden', on: false }),
-    ],
-    true,
-  )!
-  expect(index).toContain('- Deploys (global): How to ship. /g/deploys.md')
-  expect(index).toContain('- Tests (space). /c/s/notes/t.md')
-  expect(index).toContain('read_note')
-  expect(index).not.toContain('Hidden')
-  expect(noteIndex([], true)).toContain('none saved yet')
-  // Without the Kothar MCP server there are no tools to mention, and nothing to say about no notes.
-  expect(noteIndex([], false)).toBeUndefined()
-  expect(noteIndex([note({})], false)).not.toContain('read_note')
+it('names a new note Untitled, then Untitled 2, within its scope', () => {
+  expect(freeName([], 'space')).toBe('Untitled')
+  const taken = [note({ key: 's:untitled.md', file: 'untitled.md', scope: 'space' }), note({ key: 'global:untitled-2.md', file: 'untitled-2.md' })]
+  expect(freeName(taken, 'space')).toBe('Untitled 2')
+  expect(freeName(taken, 'global')).toBe('Untitled')
 })
 
-it('gives each chat the global notes and its own space’s, workers their space’s, and Home only global ones', async () => {
+it('searches names and descriptions first, then text, for every word', () => {
+  const notes = [note({ key: 'a', name: 'Deploys', description: 'Shipping' }), note({ key: 'b', name: 'Tests' }), note({ key: 'c', name: 'Style' })]
+  const bodies: Record<string, string> = { a: 'friday', b: 'how we ship: npm test', c: 'short words' }
+  const found = (q: string) => searchNotes(notes, q, (n) => bodies[n.key]!).map((n) => n.name)
+  expect(found('ship')).toEqual(['Deploys', 'Tests'])
+  expect(found('SHIP npm')).toEqual(['Tests'])
+  expect(found('  ')).toEqual(['Deploys', 'Tests', 'Style'])
+  expect(found('nothing')).toEqual([])
+})
+
+it('puts no notes in any prompt: agents reach the global notes and their space’s with tools only', async () => {
   const { garage, create, session, tool, sessions } = await start()
   const app = create('App')
   const other = create('Other')
-  expect(session(app).instructions).toContain('Notes: none saved yet')
+  // The old index started "Notes:" and told agents about the note tools.
+  expect(session(app).instructions).not.toContain('Notes:')
+  expect(session(app).instructions).not.toContain('write_note')
 
   const saved = await tool(app, 'write_note', { name: 'Run the tests', description: 'Before a PR', body: 'npm test' })
   expect(saved.isError).toBe(false)
@@ -154,32 +157,30 @@ it('gives each chat the global notes and its own space’s, workers their space�
   expect(readFileSync(file, 'utf8')).toBe('---\nname: Run the tests\ndescription: Before a PR\n---\n\nnpm test\n')
   expect(JSON.parse(saved.text)).toMatchObject({ saved: { name: 'Run the tests', scope: 'space', path: file }, replaced: false })
 
-  expect(await tool('main', 'write_note', { name: 'Style', description: 'Prose', body: 'Short words', scope: 'space' })).toMatchObject({
-    isError: true,
-  })
+  expect(await tool('main', 'write_note', { name: 'Style', body: 'Short words', scope: 'space' })).toMatchObject({ isError: true })
   expect((await tool('main', 'write_note', { name: 'Style', description: 'Prose', body: 'Short words' })).isError).toBe(false)
   const global = join(garage, 'extensions', 'notes', 'style.md')
   expect(existsSync(global)).toBe(true)
 
-  const appView = session(app).instructions
-  expect(appView).toContain(`- Run the tests (space): Before a PR. ${file}`)
-  expect(appView).toContain(`- Style (global): Prose. ${global}`)
-  expect(appView).not.toContain('npm test')
-  const otherView = session(other).instructions
-  expect(otherView).toContain('Style')
-  expect(otherView).not.toContain('Run the tests')
-  expect(session('main').instructions).not.toContain('Run the tests')
+  // Saved notes still stay out of every prompt.
+  for (const chat of [app, other, 'main']) {
+    const { instructions } = session(chat)
+    expect(instructions).not.toContain('Run the tests')
+    expect(instructions).not.toContain('Style')
+  }
+  expect(JSON.parse((await tool(app, 'list_notes')).text).map((n: Note) => n.name)).toEqual(['Style', 'Run the tests'])
+  expect(JSON.parse((await tool(other, 'list_notes')).text).map((n: Note) => n.name)).toEqual(['Style'])
 
   // Same name in the same scope replaces it.
   const again = await tool(app, 'write_note', { name: 'run the tests', description: 'Before a PR', body: 'npm run test' })
   expect(JSON.parse(again.text).replaced).toBe(true)
 
-  // A worker sees its space's notes, and saves into its space.
+  // A worker reaches its space's notes, and saves into its space.
   const spawned = await tool(app, 'spawn_worker', { task: 'Look' })
   expect(spawned.isError).toBe(false)
   await until(() => sessions.at(-1)!.prompt === 'Look')
   const worker = JSON.parse(spawned.text).chatId as string
-  expect(sessions.at(-1)!.options.instructions).toContain('run the tests (space)')
+  expect(sessions.at(-1)!.options.instructions).not.toContain('run the tests')
   expect((await tool(worker, 'write_note', { name: 'Found', description: 'x', body: 'y' })).isError).toBe(false)
   expect(existsSync(join(garage, 'chats', app, 'notes', 'found.md'))).toBe(true)
 
@@ -188,51 +189,79 @@ it('gives each chat the global notes and its own space’s, workers their space�
   expect((await tool(other, 'read_note', { name: 'Run the tests' })).isError).toBe(true)
 })
 
-it('switches a note off for a chat and the workers below it, from the panel', async () => {
-  const { garage, create, session, tool, panel, sessions } = await start()
+it('searches notes for an agent, with the matching lines', async () => {
+  const { create, tool } = await start()
   const app = create('App')
-  mkdirSync(join(garage, 'extensions', 'notes'), { recursive: true })
-  writeFileSync(join(garage, 'extensions', 'notes', 'style.md'), noteText('Style', 'Prose', 'Short'))
-  await panel(app, { name: 'toggle', value: 'global:style.md' })
-  expect(session(app).instructions).not.toContain('Style')
-  expect(session('main').instructions).toContain('Style')
-  const listed = JSON.parse((await tool(app, 'list_notes')).text)
-  expect(listed).toEqual([expect.objectContaining({ name: 'Style', on: false })])
-  const spawned = await tool(app, 'spawn_worker', { task: 'Look' })
-  await until(() => sessions.at(-1)!.prompt === 'Look')
-  expect(sessions.at(-1)!.options.instructions).not.toContain('Style')
-  const worker = JSON.parse(spawned.text).chatId as string
-  // A worker's panel is read-only.
-  expect(JSON.stringify(await panel(worker))).not.toContain('"Edit"')
-  await panel(app, { name: 'toggle', value: 'global:style.md' })
-  expect(session(app).instructions).toContain('Style')
-  expect(existsSync(join(garage, 'chats', app, 'notes-off.json'))).toBe(false)
+  await tool(app, 'write_note', { name: 'Deploys', description: 'Shipping', body: '# Deploys\nShip on Fridays\nNever on Mondays' })
+  await tool(app, 'write_note', { name: 'Style', body: 'Short words', scope: 'global' })
+  const hits = JSON.parse((await tool(app, 'search_notes', { query: 'fridays' })).text)
+  expect(hits).toEqual([expect.objectContaining({ name: 'Deploys', scope: 'space', lines: ['Ship on Fridays'] })])
+  expect(JSON.parse((await tool(app, 'search_notes', { query: 'nope' })).text)).toEqual([])
 })
 
-it('makes, edits, renames and deletes notes from the panel', async () => {
+it('opens as a popup with a sidebar entry and keys, not a tab, in every chat', async () => {
+  const { create, handle, messages } = await start()
+  const app = create('App')
+  handle({ type: 'context.get', chatId: app })
+  const shown = messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === app)
+  expect(shown?.type === 'chat.extensions' && shown.panels).toContainEqual({
+    extension: 'notes',
+    id: 'notes',
+    title: 'Notes',
+    placement: 'popup',
+    shortcut: 'Mod+Shift+N',
+    sidebar: true,
+  })
+})
+
+it('makes, writes, renames and deletes notes from the popup', async () => {
   const { garage, create, panel } = await start()
   const app = create('App')
-  const form = await panel(app, { name: 'new', value: 'space' })
-  expect(JSON.stringify(form)).toContain('"type":"form"')
-  await panel(app, { name: 'save', value: { name: 'Deploys', description: 'Shipping', body: '# Ship\n' } })
-  const first = join(garage, 'chats', app, 'notes', 'deploys.md')
-  expect(readFileSync(first, 'utf8')).toContain('# Ship')
+  const dir = join(garage, 'chats', app, 'notes')
+  const made = JSON.stringify(await panel(app, { name: 'new', value: 'space' }))
+  expect(readFileSync(join(dir, 'untitled.md'), 'utf8')).toBe('---\nname: Untitled\ndescription: \n---\n\n')
+  expect(made).toContain('"type":"editor"')
+  expect(made).toContain('"key":"rename:')
 
-  const editing = JSON.stringify(await panel(app, { name: 'edit', value: `${app}:deploys.md` }))
-  expect(editing).toContain('"value":"Deploys"')
-  const list = await panel(app, { name: 'save', value: { name: 'Releases', description: 'Shipping', body: '# Ship\n' } })
-  expect(existsSync(first)).toBe(false)
-  expect(existsSync(join(garage, 'chats', app, 'notes', 'releases.md'))).toBe(true)
-  expect(JSON.stringify(list)).toContain('"title":"Releases"')
+  // The editor's text is kept exactly as typed.
+  await panel(app, { name: 'write', value: '# Ship\n\n' })
+  expect(readFileSync(join(dir, 'untitled.md'), 'utf8')).toBe('---\nname: Untitled\ndescription: \n---\n\n# Ship\n\n')
+
+  const renamed = JSON.stringify(await panel(app, { name: 'renamed', value: { name: 'Releases', description: 'Shipping' } }))
+  expect(existsSync(join(dir, 'untitled.md'))).toBe(false)
+  expect(readFileSync(join(dir, 'releases.md'), 'utf8')).toContain('description: Shipping\n---\n\n# Ship\n\n')
+  expect(renamed).toContain(`"key":"${app}:releases.md"`)
+  expect(renamed).not.toContain('"key":"rename:')
 
   await panel(app, { name: 'new', value: 'global' })
-  await panel(app, { name: 'save', value: { name: 'Everywhere', description: '', body: 'hi' } })
-  expect(existsSync(join(garage, 'extensions', 'notes', 'everywhere.md'))).toBe(true)
+  expect(existsSync(join(garage, 'extensions', 'notes', 'untitled.md'))).toBe(true)
 
-  await panel(app, { name: 'delete', value: `${app}:releases.md` })
-  expect(existsSync(join(garage, 'chats', app, 'notes', 'releases.md'))).toBe(false)
+  const deleted = JSON.stringify(await panel(app, { name: 'delete', value: `${app}:releases.md` }))
+  expect(existsSync(join(dir, 'releases.md'))).toBe(false)
+  expect(deleted).not.toContain('Releases')
   // Home has no notes of its own: only global ones.
-  expect(JSON.stringify(await panel('main'))).not.toContain('This space')
+  const home = JSON.stringify(await panel('main'))
+  expect(home).not.toContain('This space')
+  expect(home).toContain('"label":"Untitled"')
+})
+
+it('lists notes by search, and opens one in the editor', async () => {
+  const { create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Deploys', body: 'Ship on Fridays' })
+  await tool(app, 'write_note', { name: 'Style', body: 'Short words', scope: 'global' })
+  const all = JSON.stringify(await panel(app))
+  expect(all).toContain('"label":"Deploys"')
+  expect(all).toContain('"label":"Style"')
+  expect(all).toContain('Pick a note')
+  const found = JSON.stringify(await panel(app, { name: 'search', value: 'friday' }))
+  expect(found).toContain('"label":"Deploys"')
+  expect(found).not.toContain('"label":"Style"')
+  expect(found).toContain('Nothing matches')
+  const opened = JSON.stringify(await panel(app, { name: 'open', value: `${app}:deploys.md` }))
+  expect(opened).toContain('"type":"editor"')
+  expect(opened).toContain('"text":"Ship on Fridays\\n"')
+  expect(opened).toContain('"selected":true')
 })
 
 it('never lets one note overwrite another whose name makes the same file', async () => {
@@ -247,30 +276,25 @@ it('never lets one note overwrite another whose name makes the same file', async
   expect(clash.text).toContain('"C tests"')
   expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
 
-  // From the panel: a new note with the clashing name stays in the form with the reason, and nothing is written.
+  // From the popup: renaming a note to the clashing name keeps the form open with the reason, and writes nothing.
   await panel(app, { name: 'new', value: 'space' })
-  const refused = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C++ tests', description: '', body: 'ctest' } }))
+  await panel(app, { name: 'write', value: 'ctest' })
+  const refused = JSON.stringify(await panel(app, { name: 'renamed', value: { name: 'C++ tests', description: '' } }))
   expect(refused).toContain('"type":"form"')
   expect(refused).toContain('share the file c-tests.md with the note \\"C tests\\"')
   expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
-  // A new note with an existing note's exact name is refused in the panel too, rather than replacing it.
-  const same = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C tests', description: '', body: 'other' } }))
+  // Renaming to an existing note's exact name is refused too, rather than replacing it; both notes stay.
+  const same = JSON.stringify(await panel(app, { name: 'renamed', value: { name: 'C tests', description: '' } }))
   expect(same).toContain('A note named \\"C tests\\" already exists in this space')
   expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
+  expect(readFileSync(join(dir, 'untitled.md'), 'utf8')).toContain('ctest')
   await panel(app, { name: 'cancel' })
 
-  // Renaming a note to another note's name keeps both.
-  await panel(app, { name: 'new', value: 'space' })
-  await panel(app, { name: 'save', value: { name: 'Deploys', description: '', body: 'ship' } })
-  await panel(app, { name: 'edit', value: `${app}:deploys.md` })
-  const renamed = JSON.stringify(await panel(app, { name: 'save', value: { name: 'C tests', description: '', body: 'ship' } }))
-  expect(renamed).toContain('already exists')
-  expect(readFileSync(join(dir, 'c-tests.md'), 'utf8')).toContain('make test')
-  expect(readFileSync(join(dir, 'deploys.md'), 'utf8')).toContain('ship')
-  // Saving under its own name, in other letter case, still edits it.
-  const kept = JSON.stringify(await panel(app, { name: 'save', value: { name: 'DEPLOYS', description: '', body: 'ship it' } }))
+  // Renaming to its own name in other letter case still renames it.
+  await panel(app, { name: 'rename' })
+  const kept = JSON.stringify(await panel(app, { name: 'renamed', value: { name: 'UNTITLED', description: '' } }))
   expect(kept).not.toContain('"type":"form"')
-  expect(readFileSync(join(dir, 'deploys.md'), 'utf8')).toContain('ship it')
+  expect(readFileSync(join(dir, 'untitled.md'), 'utf8')).toContain('name: UNTITLED')
 })
 
 it('deletes a note by name, from the caller’s space or global notes, asking which when both have the name', async () => {
@@ -354,29 +378,30 @@ it('never deletes a note whose name only shares the file of the name asked for',
   expect(existsSync(join(globalDir, 'c-tests.md'))).toBe(true)
 })
 
-it('shows notes changed outside Kothar in an open Notes tab', async () => {
+it('shows notes changed outside Kothar in an open popup', async () => {
   const { garage, create, panel, views } = await start()
   const app = create('App')
   const shows = (text: string) => views(app).some((m) => m.type === 'extension.panel' && JSON.stringify(m.view).includes(text))
   // The space has no notes folder yet: it's waited for.
-  expect(JSON.stringify(await panel(app))).toContain('No notes for this space yet')
+  expect(JSON.stringify(await panel(app))).toContain('No notes here yet')
   const dir = join(garage, 'chats', app, 'notes')
   mkdirSync(dir)
   writeFileSync(join(dir, 'deploys.md'), noteText('Deploys', 'Shipping', 'ship'))
-  await until(() => shows('"title":"Deploys"'))
+  await until(() => shows('"label":"Deploys"'))
 
+  await panel(app, { name: 'open', value: `${app}:deploys.md` })
   writeFileSync(join(dir, 'deploys.md'), noteText('Deploys', 'Shipping', 'ship on Fridays'))
   await until(() => shows('ship on Fridays'))
 
   const global = join(garage, 'extensions', 'notes')
   mkdirSync(global, { recursive: true })
   writeFileSync(join(global, 'style.md'), noteText('Style', '', 'short'))
-  await until(() => shows('"title":"Style"'))
+  await until(() => shows('"label":"Style"'))
 
   rmSync(join(dir, 'deploys.md'))
   await until(() => {
     const last = views(app).at(-1)
-    return last?.type === 'extension.panel' && !JSON.stringify(last.view).includes('"title":"Deploys"')
+    return last?.type === 'extension.panel' && !JSON.stringify(last.view).includes('"label":"Deploys"')
   })
 })
 

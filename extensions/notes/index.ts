@@ -6,13 +6,17 @@ import type {
   Extension,
   ExtensionAction,
   ExtensionHost,
-  ExtensionStorage,
+  ExtensionListItem,
   ExtensionView,
 } from '@kothar/extension-api'
 
-// A note is a Markdown file with a short front matter (name, description), kept as a plain file so agents can read it
-// with their own tools. Global notes live in the extension's own folder, <garage>/extensions/notes/; a space's in its
-// chat folder, <garage>/chats/<id>/notes/. Each chat can switch a note off; it's off below a chat that switched it off.
+// Notes for the user, as in Obsidian: Markdown files, each with a short front matter (name, description), global or
+// one space's. They open in a popup over the chat (⌘⇧N, or Notes in the sidebar) with a list and search on the left
+// and a live-preview editor on the right. Agents get no notes in their prompts; they search, read and write them with
+// the note tools when the user asks.
+//
+// Global notes live in the extension's own folder, <garage>/extensions/notes/; a space's in its chat folder,
+// <garage>/chats/<id>/notes/. Both are plain folders of .md files, so either can be opened as an Obsidian vault.
 
 export type NoteScope = 'global' | 'space'
 export type Note = {
@@ -25,15 +29,15 @@ export type Note = {
   spaceId?: string
   file: string
   path: string
-  on: boolean
 }
 
 const NOTES_DIR = 'notes'
-const OFF_FILE = 'notes-off.json'
 const MAX_NAME = 80
 const MAX_DESCRIPTION = 200
-// How many notes the index lists at most; the rest are left to list_notes.
-const MAX_INDEXED = 60
+// How many matching lines search_notes gives per note, and how many notes at most.
+const MAX_HITS_PER_NOTE = 3
+const MAX_HIT_NOTES = 20
+const MAX_HIT_CHARS = 200
 
 export const slugOf = (name: string) =>
   name
@@ -45,7 +49,8 @@ export const slugOf = (name: string) =>
 
 const oneLine = (text: unknown) => String(text ?? '').replace(/\s+/g, ' ').trim()
 
-// The front matter's name and description, and the body after it. A file without front matter is named by its file.
+// The front matter's name and description, and the body after it (and after the blank line noteText puts there). A file
+// without front matter is named by its file.
 export function parseNote(text: string, file: string): { name: string; description: string; body: string } {
   const fallback = file.replace(/\.md$/i, '')
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text)
@@ -55,11 +60,16 @@ export function parseNote(text: string, file: string): { name: string; descripti
     const colon = line.indexOf(':')
     if (colon > 0) fields[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim()
   }
-  return { name: fields.name || fallback, description: fields.description ?? '', body: text.slice(match[0].length) }
+  const body = text.slice(match[0].length).replace(/^\r?\n/, '')
+  return { name: fields.name || fallback, description: fields.description ?? '', body }
 }
 
-export const noteText = (name: string, description: string, body: string) =>
-  `---\nname: ${oneLine(name)}\ndescription: ${oneLine(description)}\n---\n\n${body.replace(/^\n+/, '').replace(/\s*$/, '\n')}`
+// A note's file. exact: the body as the editor has it, byte for byte, so what's typed comes back the same; otherwise
+// (an agent's write_note) its leading blank lines go and it ends in one newline.
+export const noteText = (name: string, description: string, body: string, exact = false) =>
+  `---\nname: ${oneLine(name)}\ndescription: ${oneLine(description)}\n---\n\n${
+    exact ? body : body.replace(/^\n+/, '').replace(/\s*$/, '\n')
+  }`
 
 // A chat and every chat above it, top first. A note's space is the top: workers share their space's notes.
 function chainOf(host: ExtensionHost, chatId: string): ChatDetail[] {
@@ -74,15 +84,6 @@ function chainOf(host: ExtensionHost, chatId: string): ChatDetail[] {
 // An extension's own chat (Home) keeps no files of its own, so it gets global notes only.
 const hasSpaceNotes = (space: ChatDetail | undefined) => !!space && !space.extension
 
-function offIn(storage: ExtensionStorage): string[] {
-  try {
-    const parsed = JSON.parse(storage.read(OFF_FILE) ?? '[]')
-    return Array.isArray(parsed) ? parsed.filter((key) => typeof key === 'string') : []
-  } catch {
-    return []
-  }
-}
-
 function filesIn(dir: string) {
   if (!existsSync(dir)) return []
   return readdirSync(dir, { withFileTypes: true })
@@ -90,13 +91,13 @@ function filesIn(dir: string) {
     .map((entry) => entry.name)
 }
 
-function notesIn(dir: string, scope: NoteScope, owner: string, off: Set<string>): Note[] {
+function notesIn(dir: string, scope: NoteScope, owner: string): Note[] {
   return filesIn(dir).flatMap((file) => {
     const path = join(dir, file)
     try {
       const { name, description } = parseNote(readFileSync(path, 'utf8'), file)
       const key = `${owner}:${file}`
-      return [{ key, name, description, scope, ...(scope === 'space' && { spaceId: owner }), file, path, on: !off.has(key) }]
+      return [{ key, name, description, scope, ...(scope === 'space' && { spaceId: owner }), file, path }]
     } catch {
       return []
     }
@@ -105,37 +106,13 @@ function notesIn(dir: string, scope: NoteScope, owner: string, off: Set<string>)
 
 const byName = (a: Note, b: Note) => a.name.localeCompare(b.name)
 
-// The notes that apply to a chat: global ones, then its space's, each marked on unless the chat or one above it switched
-// it off.
+// The notes a chat reaches: global ones, then its space's.
 export function notesFor(host: ExtensionHost, chatId: string): Note[] {
-  const chain = chainOf(host, chatId)
-  const off = new Set(chain.flatMap((chat) => offIn(host.chatStorage(chat.id))))
-  const space = chain[0]
-  const global = notesIn(host.storage.dir, 'global', 'global', off).sort(byName)
+  const space = chainOf(host, chatId)[0]
+  const global = notesIn(host.storage.dir, 'global', 'global').sort(byName)
   if (!hasSpaceNotes(space)) return global
-  const own = notesIn(join(host.chatStorage(space!.id).dir, NOTES_DIR), 'space', space!.id, off).sort(byName)
+  const own = notesIn(join(host.chatStorage(space!.id).dir, NOTES_DIR), 'space', space!.id).sort(byName)
   return [...global, ...own]
-}
-
-export function noteIndex(notes: Note[], tools: boolean): string | undefined {
-  const on = notes.filter((note) => note.on)
-  const how = tools ? 'with read_note or by opening its file' : 'by opening its file'
-  const save = tools
-    ? ' When the user asks you to remember something, or you learn something clearly worth keeping for later ' +
-      "sessions (such as how to run this repo's tests), save it with write_note."
-    : ''
-  if (!on.length) return tools ? `Notes: none saved yet.${save}` : undefined
-  const lines = on.slice(0, MAX_INDEXED).map((note) => {
-    const where = note.scope === 'global' ? 'global' : 'space'
-    return `- ${note.name} (${where})${note.description ? `: ${note.description}` : ''}. ${note.path}`
-  })
-  const more = on.length > MAX_INDEXED ? [`- …and ${on.length - MAX_INDEXED} more (list_notes lists them all).`] : []
-  return [
-    `Notes: saved notes for this chat, by name, with what each is about and its file. Read a note in full (${how}) ` +
-      `when it's relevant to what you're doing; don't read them all up front.${save}`,
-    ...lines,
-    ...more,
-  ].join('\n')
 }
 
 const find = (notes: Note[], name: unknown) => {
@@ -146,18 +123,19 @@ const find = (notes: Note[], name: unknown) => {
   )
 }
 
-const bodyOf = (note: Note) => parseNote(readFileSync(note.path, 'utf8'), note.file).body
+export const bodyOf = (note: Note) => parseNote(readFileSync(note.path, 'utf8'), note.file).body
 
 // Saves a note in its scope. replacing: the note being edited, removed if the name changed. Another note already in
 // the file the name makes is never overwritten: it's refused when that note has another name (names that differ only in
 // punctuation, such as "C++ tests" and "C tests", share a file), and when it has the same name unless sameName is
-// 'replace' (write_note's rule; the panel asks for a new name instead).
+// 'replace' (write_note's rule; the popup asks for a new name instead). exact: keep the body byte for byte (the editor).
 export function saveNote(
   host: ExtensionHost,
   chatId: string,
   input: { name?: unknown; description?: unknown; body?: unknown; scope?: unknown },
   replacing?: Note,
   sameName: 'replace' | 'refuse' = 'replace',
+  exact = false,
 ): Note {
   const name = oneLine(input.name)
   if (!name) throw new Error('A note needs a name')
@@ -180,7 +158,7 @@ export function saveNote(
     }
     if (sameName === 'refuse') throw new Error(`A note named "${existing.name}" already exists ${where}: pick another name`)
   }
-  const text = noteText(name, description, String(input.body ?? ''))
+  const text = noteText(name, description, String(input.body ?? ''), exact)
   const storage = scope === 'global' ? host.storage : host.chatStorage(space.id)
   storage.write(scope === 'global' ? file : `${NOTES_DIR}/${file}`, text)
   if (replacing && replacing.key !== key) removeNote(host, replacing)
@@ -194,13 +172,13 @@ export function removeNote(host: ExtensionHost, note: Note) {
   else host.chatStorage(note.spaceId!).remove(`${NOTES_DIR}/${note.file}`)
 }
 
-export function setNoteOn(host: ExtensionHost, chatId: string, key: string, on: boolean) {
-  const storage = host.chatStorage(chatId)
-  const off = new Set(offIn(storage))
-  if (on) off.delete(key)
-  else off.add(key)
-  if (off.size) storage.write(OFF_FILE, JSON.stringify([...off], null, 2) + '\n')
-  else storage.remove(OFF_FILE)
+// A name no note in the scope has yet: Untitled, then Untitled 2, 3…
+export function freeName(notes: Note[], scope: NoteScope, base = 'Untitled') {
+  const taken = new Set(notes.filter((n) => n.scope === scope).map((n) => n.file))
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? base : `${base} ${i}`
+    if (!taken.has(`${slugOf(name)}.md`)) return name
+  }
 }
 
 // The note whose name is closest to a name no note has, for an error: one sharing its file (names that differ only in
@@ -229,10 +207,42 @@ export function noteToDelete(notes: Note[], name: unknown, scope?: unknown): Not
   throw new Error(`No note named "${label}"${scoped ? ` in ${scope} notes` : ''}${hint}; list_notes lists them`)
 }
 
-// Watches the note folders a Notes tab has shown, so a note added, edited or deleted outside Kothar (in an editor, by
-// git, by an agent's own file tools) shows in an open tab without reopening it. owner is 'global' or a space id. It
-// polls each folder's file names, sizes and times rather than using fs.watch, whose events don't arrive everywhere
-// (they didn't under a sandboxed parent on macOS); a few stats every couple of seconds is cheap.
+// The notes whose name, description or text holds every word of the query (letter case aside), names first.
+export function searchNotes(notes: Note[], query: string, body: (note: Note) => string = bodyOf): Note[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return notes
+  const named: Note[] = []
+  const inText: Note[] = []
+  for (const note of notes) {
+    const head = `${note.name}\n${note.description}`.toLowerCase()
+    if (words.every((w) => head.includes(w))) named.push(note)
+    else {
+      let text = ''
+      try {
+        text = body(note).toLowerCase()
+      } catch {
+        // Gone meanwhile.
+      }
+      if (words.every((w) => head.includes(w) || text.includes(w))) inText.push(note)
+    }
+  }
+  return [...named, ...inText]
+}
+
+// The lines of a note that hold a word of the query, for search_notes.
+function hitsIn(note: Note, query: string) {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return bodyOf(note)
+    .split('\n')
+    .filter((line) => words.some((w) => line.toLowerCase().includes(w)))
+    .slice(0, MAX_HITS_PER_NOTE)
+    .map((line) => (line.length > MAX_HIT_CHARS ? `${line.slice(0, MAX_HIT_CHARS - 1)}…` : line))
+}
+
+// Watches the note folders the popup has shown, so a note added, edited or deleted outside Kothar (in an editor, in
+// Obsidian, by git, by an agent's own file tools) shows in an open popup without reopening it. owner is 'global' or a
+// space id. It polls each folder's file names, sizes and times rather than using fs.watch, whose events don't arrive
+// everywhere (they didn't under a sandboxed parent on macOS); a few stats every couple of seconds is cheap.
 export function noteWatcher(onChange: (owner: string) => void, intervalMs = 2000) {
   const watched = new Map<string, { owner: string; seen: string }>()
   let timer: ReturnType<typeof setInterval> | undefined
@@ -272,6 +282,10 @@ export function noteWatcher(onChange: (owner: string) => void, intervalMs = 2000
       timer = setInterval(check, intervalMs)
       timer.unref?.()
     },
+    // Takes in a change Kothar made itself, so it isn't reported back as one from outside.
+    seen() {
+      for (const [dir, entry] of watched) entry.seen = signature(dir)
+    },
     // Stops watching what belongs to the owner: a space that was deleted.
     forget(owner: string) {
       for (const [dir, entry] of watched) if (entry.owner === owner) watched.delete(dir)
@@ -284,17 +298,23 @@ export function noteWatcher(onChange: (owner: string) => void, intervalMs = 2000
   }
 }
 
-// What the panel is showing per chat: the list, or a form for a new note or one being edited, with why its last save
-// was refused.
-type Editing = ({ scope: NoteScope } | { key: string }) & { error?: string }
+// What the popup shows per chat: the open note, the search, and a rename in progress with why it was refused.
+type PopupState = { open?: string; query: string; renaming?: { error?: string } }
 
-const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path, on: note.on })
+const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path })
 
-// pollMs: how often an open tab looks for notes changed outside Kothar (tests shorten it).
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
+
+// pollMs: how often an open popup looks for notes changed outside Kothar (tests shorten it).
 export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}): Extension {
-  const editing = new Map<string, Editing>()
+  const states = new Map<string, PopupState>()
+  const stateOf = (chatId: string) => {
+    let state = states.get(chatId)
+    if (!state) states.set(chatId, (state = { query: '' }))
+    return state
+  }
   let hostOf: ExtensionHost | undefined
-  // A global note changed: every chat's tab. A space's: the space's and its workers'.
+  // A global note changed: every chat's popup. A space's: the space's and its workers'.
   const watcher = noteWatcher((owner) => {
     const host = hostOf
     if (!host) return
@@ -315,78 +335,105 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
     if (hasSpaceNotes(space)) watcher.add(join(host.chatStorage(space!.id).dir, NOTES_DIR), space!.id)
   }
 
-  const noteCard = (note: Note, chat: ChatDetail, editable: boolean, off: boolean): ExtensionView => ({
-    type: 'card',
-    title: note.name,
-    open: false,
-    badges: [
-      ...(note.on
-        ? []
-        : [{ text: off ? 'Off' : 'Off above', tone: 'faint' as const, hint: off ? undefined : 'Switched off in the space' }]),
-    ],
-    children: [
-      ...(note.description ? [{ type: 'text' as const, text: note.description, tone: 'muted' as const, small: true }] : []),
-      { type: 'text', text: note.path, mono: true, small: true, tone: 'faint', copy: true, reveal: true },
-      { type: 'code', text: bodyOf(note) || '(empty)', language: 'markdown', maxLines: 20 },
-      ...(editable
-        ? [
-            {
-              type: 'row' as const,
-              children: [
-                {
-                  type: 'button' as const,
-                  label: note.on ? 'Turn off here' : 'Turn on here',
-                  action: { name: 'toggle', value: note.key },
-                  hint: note.on
-                    ? 'Leave this note out of this chat\'s instructions and its workers\''
-                    : 'List this note in this chat\'s instructions again',
-                  disabled: !note.on && !off,
-                },
-                { type: 'button' as const, label: 'Edit', action: { name: 'edit', value: note.key } },
-                {
-                  type: 'button' as const,
-                  label: 'Delete',
-                  variant: 'ghost' as const,
-                  action: { name: 'delete', value: note.key },
-                  confirm: {
-                    text: `Delete the note "${note.name}"?`,
-                    body: note.scope === 'global' ? 'It goes from every chat.' : `It goes from this space and its workers.`,
-                    ok: 'Delete',
-                    danger: true,
-                  },
-                },
-              ],
-            },
-          ]
-        : []),
-    ],
+  const row = (note: Note, open: string | undefined): ExtensionListItem => ({
+    key: note.key,
+    label: note.name,
+    selected: note.key === open,
+    action: { name: 'open', value: note.key },
+    ...(note.description && { hint: note.description }),
   })
 
-  const form = (chat: ChatDetail, what: Editing, notes: Note[]): ExtensionView => {
-    const note = 'key' in what ? notes.find((n) => n.key === what.key) : undefined
-    const scope = note?.scope ?? ('scope' in what ? what.scope : 'space')
+  const side = (chat: ChatDetail, host: ExtensionHost, notes: Note[], state: PopupState): ExtensionView => {
+    const spaceNotes = hasSpaceNotes(chainOf(host, chat.id)[0])
+    const shown = searchNotes(notes, state.query)
+    const section = (title: string, hint: string, scope: NoteScope, empty: string): ExtensionView[] => {
+      const listed = shown.filter((note) => note.scope === scope)
+      return [
+        { type: 'heading', text: title, hint },
+        { type: 'list', label: title, items: listed.map((note) => row(note, state.open)), empty: state.query ? 'Nothing matches' : empty },
+      ]
+    }
     return {
       type: 'stack',
+      gap: 'normal',
       children: [
-        { type: 'heading', text: note ? `Edit ${note.name}` : scope === 'global' ? 'New global note' : 'New note in this space' },
-        ...(what.error ? [{ type: 'text' as const, text: what.error, tone: 'error' as const }] : []),
         {
-          type: 'form',
-          key: note?.key ?? `new:${scope}`,
-          fields: [
-            { name: 'name', label: 'Name', value: note?.name ?? '', placeholder: 'How to run the tests' },
+          type: 'row',
+          children: [
+            ...(spaceNotes ? [{ type: 'button' as const, label: 'New note', variant: 'primary' as const, action: { name: 'new', value: 'space' } }] : []),
             {
-              name: 'description',
-              label: 'Description',
-              value: note?.description ?? '',
-              placeholder: 'One line: when an agent should read it',
-              hint: 'Agents see the name and this line, and read the note in full when it fits their task',
+              type: 'button',
+              label: spaceNotes ? 'New global' : 'New note',
+              variant: spaceNotes ? 'normal' : 'primary',
+              action: { name: 'new', value: 'global' },
+              hint: 'A note for every space',
             },
-            { name: 'body', label: 'Note', value: note ? bodyOf(note) : '', rows: 10, mono: true, placeholder: 'Markdown' },
           ],
-          submit: { label: 'Save', action: 'save' },
-          cancel: { label: 'Cancel', action: { name: 'cancel' } },
         },
+        { type: 'search', key: chat.id, value: state.query, placeholder: 'Search notes', action: 'search' },
+        ...(spaceNotes ? section('This space', 'Kept in the space’s folder; gone when the space is', 'space', 'No notes here yet') : []),
+        ...section('Global', 'Kept in Kothar’s own folder, for every space', 'global', 'No global notes yet'),
+      ],
+    }
+  }
+
+  const main = (note: Note | undefined, state: PopupState): ExtensionView => {
+    if (!note) return { type: 'empty', text: 'Pick a note, or make a new one' }
+    const scope = note.scope === 'global' ? 'Global' : 'This space'
+    const header: ExtensionView = {
+      type: 'row',
+      justify: 'between',
+      children: [
+        {
+          type: 'row',
+          children: [
+            { type: 'heading', text: note.name, ...(note.description && { hint: note.description }) },
+            { type: 'badge', text: scope, tone: 'muted' },
+          ],
+        },
+        {
+          type: 'row',
+          children: [
+            { type: 'button', label: 'Rename', variant: 'ghost', action: { name: 'rename' } },
+            {
+              type: 'button',
+              label: 'Delete',
+              variant: 'ghost',
+              action: { name: 'delete', value: note.key },
+              confirm: {
+                text: `Delete the note "${note.name}"?`,
+                body: note.scope === 'global' ? 'Its file goes, for every space.' : 'Its file goes, for this space.',
+                ok: 'Delete',
+                danger: true,
+              },
+            },
+          ],
+        },
+      ],
+    }
+    const rename: ExtensionView[] = state.renaming
+      ? [
+          ...(state.renaming.error ? [{ type: 'text' as const, text: state.renaming.error, tone: 'error' as const }] : []),
+          {
+            type: 'form',
+            key: `rename:${note.key}`,
+            fields: [
+              { name: 'name', label: 'Name', value: note.name },
+              { name: 'description', label: 'Description', value: note.description, placeholder: 'One line, optional' },
+            ],
+            submit: { label: 'Save', action: 'renamed' },
+            cancel: { label: 'Cancel', action: { name: 'cancel' } },
+          },
+        ]
+      : []
+    return {
+      type: 'stack',
+      gap: 'normal',
+      children: [
+        header,
+        ...rename,
+        { type: 'text', text: note.path, mono: true, small: true, tone: 'faint', copy: true, reveal: true },
+        { type: 'editor', key: note.key, text: bodyOf(note), change: 'write', label: note.name, placeholder: 'Write in Markdown…', autofocus: !state.renaming },
       ],
     }
   }
@@ -395,23 +442,36 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
     id: 'notes',
     name: 'Notes',
     description:
-      'Saved Markdown notes that agents find and read when they’re relevant: global ones for every chat, and each ' +
-      'space’s own. Agents see a short index of them and can save new ones.',
+      'Your notes, as in Obsidian: Markdown files, global or per space, in a popup over the chat (⌘⇧N) with search ' +
+      'and a live-preview editor. Agents read and write them with tools when you ask; nothing goes into their prompts.',
     enabledByDefault: true,
-    instructions: ({ chat, tools }, { host }) => noteIndex(notesFor(host, chat.id), tools),
     tools: [
       {
         name: 'list_notes',
         description:
-          'Lists the saved notes this chat can read: global ones and its space’s, with each one’s description, ' +
-          'scope, file and whether it’s on in this chat.',
+          'Lists the user’s notes this chat can reach: global ones and its space’s, with each one’s description, scope ' +
+          'and file. Use when the user mentions their notes.',
         inputSchema: { type: 'object', properties: {} },
         offered: () => true,
         run: (_input, { caller, host }) => notesFor(host, caller.id).map(listedNote),
       },
       {
+        name: 'search_notes',
+        description:
+          'Searches the user’s notes (global and this space’s) for words, in names, descriptions and text, and gives ' +
+          'the matching notes with a few matching lines each. read_note reads one in full.',
+        inputSchema: { type: 'object', properties: { query: { type: 'string', minLength: 1 } }, required: ['query'] },
+        offered: () => true,
+        run({ query }, { caller, host }) {
+          const q = oneLine(query)
+          return searchNotes(notesFor(host, caller.id), q)
+            .slice(0, MAX_HIT_NOTES)
+            .map((note) => ({ ...listedNote(note), lines: hitsIn(note, q) }))
+        },
+      },
+      {
         name: 'read_note',
-        description: 'Reads a saved note in full, by name.',
+        description: 'Reads one of the user’s notes in full, by name.',
         inputSchema: { type: 'object', properties: { name: { type: 'string', minLength: 1 } }, required: ['name'] },
         offered: () => true,
         run({ name }, { caller, host }) {
@@ -423,11 +483,9 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
       {
         name: 'write_note',
         description:
-          'Saves a note for later sessions: something durable, such as how to run this repo’s tests or a decision ' +
-          'the user made. Only when the user asks or it’s clearly worth keeping. Replaces a note of the same name; a ' +
-          'name that would share another note’s file is refused. ' +
-          'scope "space" (the default) keeps it for this space and its workers; "global" for every chat. Home ' +
-          'saves global notes only. description is one line saying when to read it.',
+          'Saves one of the user’s notes, only when the user asks. Replaces a note of the same name; a name that would ' +
+          'share another note’s file is refused. scope "space" (the default) keeps it in this space; "global" for every ' +
+          'space. Home saves global notes only. description is one optional line about it.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -436,7 +494,7 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
             body: { type: 'string' },
             scope: { type: 'string', enum: ['space', 'global'] },
           },
-          required: ['name', 'description', 'body'],
+          required: ['name', 'body'],
         },
         offered: () => true,
         run(input, { caller, host }) {
@@ -449,9 +507,8 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
       {
         name: 'delete_note',
         description:
-          'Deletes a saved note, by name: only when the user asks, or a note you saved is wrong or no longer true ' +
-          '(to correct one, write_note it again instead). Reaches the notes this chat can read: its space’s (a worker ' +
-          'deletes from its space) and global ones, which go from every chat. The name must be the note\u2019s exact name ' +
+          'Deletes one of the user’s notes, by name, only when the user asks. Reaches this space’s notes (a worker ' +
+          'deletes from its space) and global ones, which go from every space. The name must be the note’s exact name ' +
           '(letter case aside). scope ("space" or "global") picks one when both have a note of that name.',
         inputSchema: {
           type: 'object',
@@ -471,110 +528,84 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
       {
         id: 'notes',
         title: 'Notes',
+        placement: 'popup',
+        shortcut: 'Mod+Shift+N',
+        sidebar: true,
         render(chat, { host }) {
           watchFor(host, chat)
           const notes = notesFor(host, chat.id)
-          const what = editing.get(chat.id)
-          // A worker follows its space, and its panel is read-only, as the rest of its sidebar is.
-          const editable = !chat.parentId
-          if (what && editable) return form(chat, what, notes)
-          const ownOff = new Set(offIn(host.chatStorage(chat.id)))
-          const space = chainOf(host, chat.id)[0]
-          const spaceNotes = hasSpaceNotes(space)
-          const section = (title: string, hint: string, listed: Note[], empty: string): ExtensionView[] => [
-            { type: 'heading', text: title, hint },
-            ...(listed.length
-              ? listed.map((note) => noteCard(note, chat, editable, ownOff.has(note.key)))
-              : [{ type: 'empty' as const, text: empty }]),
-          ]
-          return {
-            type: 'stack',
-            gap: 'loose',
-            children: [
-              ...(editable
-                ? [
-                    {
-                      type: 'row' as const,
-                      children: [
-                        ...(spaceNotes
-                          ? [{ type: 'button' as const, label: 'New note', variant: 'primary' as const, action: { name: 'new', value: 'space' } }]
-                          : []),
-                        {
-                          type: 'button' as const,
-                          label: 'New global note',
-                          variant: spaceNotes ? undefined : ('primary' as const),
-                          action: { name: 'new', value: 'global' },
-                        },
-                      ],
-                    },
-                  ]
-                : []),
-              ...(spaceNotes
-                ? section(
-                    'This space',
-                    'Notes for this space and its workers, kept in the space’s folder',
-                    notes.filter((note) => note.scope === 'space'),
-                    'No notes for this space yet',
-                  )
-                : []),
-              ...section(
-                'Global',
-                'Notes for every chat, kept in Kothar’s own folder',
-                notes.filter((note) => note.scope === 'global'),
-                'No global notes yet',
-              ),
-            ],
+          const state = stateOf(chat.id)
+          const open = notes.find((note) => note.key === state.open)
+          // A note deleted elsewhere closes.
+          if (state.open && !open) {
+            delete state.open
+            delete state.renaming
           }
+          return { type: 'split', side: side(chat, host, notes, state), main: main(open, state) }
         },
         onAction(action: ExtensionAction, chat, { host }) {
-          if (chat.parentId) throw new Error('A worker’s notes follow its space')
           const notes = notesFor(host, chat.id)
+          const state = stateOf(chat.id)
           const noteOf = (key: unknown) => {
             const note = notes.find((n) => n.key === key)
             if (!note) throw new Error('That note is gone')
             return note
           }
           switch (action.name) {
-            case 'new':
-              editing.set(chat.id, { scope: action.value === 'global' ? 'global' : 'space' })
+            case 'search':
+              state.query = String(action.value ?? '')
+              return
+            case 'open':
+              state.open = noteOf(action.value).key
+              delete state.renaming
+              return
+            case 'new': {
+              const scope: NoteScope = action.value === 'global' ? 'global' : 'space'
+              const made = saveNote(host, chat.id, { name: freeName(notes, scope), body: '', scope }, undefined, 'refuse', true)
+              state.open = made.key
+              state.renaming = {}
+              state.query = ''
               break
-            case 'edit':
-              editing.set(chat.id, { key: noteOf(action.value).key })
-              break
-            case 'cancel':
-              editing.delete(chat.id)
-              break
-            case 'save': {
-              const what = editing.get(chat.id)
-              if (!what) return
-              const fields = (action.value ?? {}) as Record<string, unknown>
-              const note = 'key' in what ? noteOf(what.key) : undefined
-              try {
-                saveNote(host, chat.id, { ...fields, scope: note?.scope ?? ('scope' in what ? what.scope : 'space') }, note, 'refuse')
-              } catch (error) {
-                // Shown above the form, which keeps what the user typed (same key, same starting values).
-                editing.set(chat.id, { ...what, error: error instanceof Error ? error.message : String(error) })
-                break
-              }
-              editing.delete(chat.id)
-              host.refresh()
+            }
+            case 'write': {
+              const note = state.open ? notes.find((n) => n.key === state.open) : undefined
+              if (!note) return
+              const { name, description } = note
+              saveNote(host, chat.id, { name, description, body: String(action.value ?? ''), scope: note.scope }, note, 'refuse', true)
+              // Other chats with the popup open see it when the watcher next looks; this editor already has the text.
               return
             }
-            case 'toggle': {
-              const note = noteOf(action.value)
-              const ownOff = offIn(host.chatStorage(chat.id)).includes(note.key)
-              setNoteOn(host, chat.id, note.key, ownOff)
+            case 'rename':
+              state.renaming = {}
+              return
+            case 'cancel':
+              delete state.renaming
+              return
+            case 'renamed': {
+              const note = noteOf(state.open)
+              const fields = (action.value ?? {}) as Record<string, unknown>
+              try {
+                const saved = saveNote(host, chat.id, { ...fields, body: bodyOf(note), scope: note.scope }, note, 'refuse', true)
+                state.open = saved.key
+                delete state.renaming
+              } catch (error) {
+                // Shown above the form, which keeps what the user typed (same key, same starting values).
+                state.renaming = { error: errorText(error) }
+                return
+              }
               break
             }
             case 'delete':
               removeNote(host, noteOf(action.value))
-              editing.delete(chat.id)
-              host.refresh()
-              return
+              if (state.open === action.value) delete state.open
+              delete state.renaming
+              break
             default:
               throw new Error(`Unknown action "${action.name}"`)
           }
-          host.refresh(chat.id)
+          // Other chats showing the same notes draw them again; this one draws after its action anyway.
+          watcher.seen()
+          host.refresh()
         },
       },
     ],
@@ -584,7 +615,7 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
       watcher.closeAll()
     },
     onChatRemoved(chat: ChatSummary) {
-      editing.delete(chat.id)
+      states.delete(chat.id)
       watcher.forget(chat.id)
     },
   }

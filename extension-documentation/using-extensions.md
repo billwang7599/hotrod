@@ -31,7 +31,7 @@ The built-in extensions today:
 | Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
-| Notes | Yes | Saved Markdown notes that agents find and read when they're relevant, global or per space. Adds a Notes tab. |
+| Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 
 ### Where Memory keeps its summaries, and cleaning up
@@ -57,26 +57,28 @@ a copy button and **Show in Finder**, and how much disk each mode's summaries ta
 
 ### Notes
 
-A note is a Markdown file with a name and a one-line description, for something worth keeping across sessions, such as
-how to run a repo's tests. Each session's instructions list the notes that apply (name, description and file, never the
-text), and the agent reads one in full when it fits the task.
+Notes are yours, as in Obsidian: Markdown files you write and keep, global or per space. They open in a popup over the
+chat, with **⌘⇧N** (Ctrl+Shift+N elsewhere; change it in **Settings → Shortcuts**) or **Notes** in the sidebar. Esc
+closes it.
 
-- **Global notes** go to every chat. They're in `<data folder>/extensions/notes/<name>.md`.
-- **A space's notes** go to that space and its workers. They're in `<data folder>/chats/<space id>/notes/<name>.md`, so
-  they go when the space is deleted. Home keeps no notes of its own: it sees and writes global ones.
-- **The Notes tab** lists them, and makes, edits and deletes them. **Turn off here** leaves a note out of one chat and
-  its workers.
-- **Agents** have `list_notes`, `read_note`, `write_note` and `delete_note`. They save a note when you ask, or when what they learned is
-  clearly worth keeping. A note of the same name in the same place is replaced. A note's file is named from its name,
-  so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is refused, from the
-  panel too, rather than overwriting the first. The panel also refuses a new note or a rename to a name already taken.
-  `delete_note` deletes only a note with exactly the name given (letter case aside), never one that merely shares its
-  file; otherwise it refuses and names the closest note.
-  They delete a note when you ask, or when one they saved turned out wrong: from their space (a worker's is its space's)
-  or global notes. When both have a note of that name, they must say which.
+- **The popup** lists the notes on the left, this space's and global ones, with a search box that searches names,
+  descriptions and text. The open note is on the right in a live-preview editor: the Markdown is drawn as it reads, and
+  its marks show only on the line you're editing. It saves as you type.
+- **New note** makes an `Untitled` note in this space (**New global** for every space) and asks for its name.
+  **Rename** changes its name and its one-line description; **Delete** asks first.
+- **Global notes** are in `<data folder>/extensions/notes/<name>.md`. **A space's notes** are in
+  `<data folder>/chats/<space id>/notes/<name>.md`, so they go when the space is deleted. Home keeps no notes of its
+  own: it sees global ones.
+- **Agents** get nothing from your notes in their prompts. When you ask ("put that in my notes", "what did I write
+  about X"), they use `search_notes`, `list_notes`, `read_note`, `write_note` and `delete_note`. A note's file is named
+  from its name, so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is
+  refused rather than overwriting the first, and the popup refuses a rename to a name already taken. `delete_note`
+  deletes only a note with exactly the name given (letter case aside), and when this space and global notes both have
+  that name, the agent must say which.
 
-Notes are plain files: you can also edit them in any editor, or add a `.md` file to either folder. A file without the
-`---` front matter is named after the file. An open Notes tab shows such changes within a couple of seconds.
+Notes are plain files: you can also open either folder as an Obsidian vault, edit them in any editor, or add a `.md`
+file. A file without the `---` front matter is named after the file. An open popup shows such changes within a couple
+of seconds.
 
 ### When the connection drops
 
