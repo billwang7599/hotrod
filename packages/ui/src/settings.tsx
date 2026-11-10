@@ -902,7 +902,8 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             key={a.id}
             name={accountLabel(a)}
             description={
-              a.id === 'default' && (a.signedIn ? `Signed in through ${id} itself` : `No one is signed in to ${id} itself`)
+              a.note ??
+              (a.id === 'default' && (a.signedIn ? `Signed in through ${id} itself` : `No one is signed in to ${id} itself`))
             }
           >
             {a.id === listed.active ? (
@@ -946,7 +947,21 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             <SettingRow name={`Signing in “${login.name}”`} description="Finish in the browser window that opened.">
               {!login.url && cancelLogin}
             </SettingRow>
-            {login.url && (
+            {login.url && login.noCode && (
+              <SettingRow
+                name={
+                  <>
+                    No window?{' '}
+                    <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                      Open the sign-in link
+                    </a>
+                  </>
+                }
+              >
+                {cancelLogin}
+              </SettingRow>
+            )}
+            {login.url && !login.noCode && (
               <SettingRow
                 name="Paste a code"
                 description={

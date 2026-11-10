@@ -84,7 +84,7 @@ all of them.
 | `text.completed` | `text` | A finished block of reply text. |
 | `thinking.delta` | `text` | A piece of the agent's thinking. |
 | `tool.started` | `toolId`, `name`, `kind`, `summary`, `input`, `path?` | The agent called a tool. |
-| `tool.completed` | `toolId`, `output`, `isError` | A tool call finished. |
+| `tool.completed` | `toolId`, `output`, `isError`, `stopped?` | A tool call finished. `stopped`: it was cut short and the engine never reported its result. |
 | `permission.requested` | `requestId`, `toolId?`, `name`, `kind`, `summary`, `path?`, `command?`, `input` | The agent asks to do something. |
 | `question.asked` | `requestId`, `toolId?`, `questions` | The agent asks you questions with options to pick. |
 | `limit.reached` | `message`, `resetsAt?` | The account ran into a usage or rate limit. |

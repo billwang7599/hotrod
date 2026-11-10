@@ -37,7 +37,8 @@ export type EngineEvent =
       input: unknown
       path?: string
     }
-  | { type: 'tool.completed'; toolId: string; output: string; isError: boolean }
+  // stopped: the call was cut short and the engine never reported its result (shown as stopped, not done or failed).
+  | { type: 'tool.completed'; toolId: string; output: string; isError: boolean; stopped?: boolean }
   | {
       type: 'permission.requested'
       requestId: string

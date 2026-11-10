@@ -8,15 +8,41 @@ export const CONTINUE_PROMPT =
 // Why a turn ended early: the network was down, or the engine's service was (overloaded, 502/503/504/529).
 export type Reason = 'network' | 'service'
 
-const LIMIT = /usage limit|hit your (?:[\w-]+ )?limit|rate[_ ]?limit|out of (?:extra )?usage|\b429\b/i
-const NETWORK =
-  /\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENETUNREACH|ENETDOWN|EHOSTUNREACH|EPIPE|UND_ERR_[A-Z_]+)\b|getaddrinfo|fetch failed|connection error|connection (?:reset|refused|closed)|socket hang up|network (?:error|is unreachable)|request timed out|connect timeout|you(?:'|’)?re offline|internet connection/i
+// Each pattern lists the real wording of the engines Kothar drives: Claude Code (2.1), pi (pi-ai's own retry list),
+// Codex (0.167, Rust's reqwest and its codexErrorInfo messages) and OpenCode (1.17, Bun's fetch and the AI SDK).
+const LIMIT = /usage limit|hit your (?:[\w-]+ )?limit|rate[_ ]?limit|out of (?:extra )?usage|too many requests|\b429\b/i
+// Load the service is shedding, said in words that would otherwise read as a usage limit (Claude Code).
+const NOT_A_LIMIT = /temporarily limiting requests|not your usage limit/i
+const NETWORK = new RegExp(
+  [
+    // Node, undici and Bun error codes.
+    '\\b(?:ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENETUNREACH|ENETDOWN|EHOSTUNREACH|EPIPE|' +
+      'UND_ERR_[A-Z_]+|ConnectionRefused|ConnectionClosed|FailedToOpenSocket)\\b',
+    // Node and the provider SDKs (Anthropic, OpenAI): "Connection error.", "Request timed out.", "fetch failed".
+    'getaddrinfo|fetch failed|failed to fetch|connection (?:error|reset|refused|closed|lost|failed)|socket hang up',
+    'other side closed|reset before headers|upstream connect|network (?:error|is unreachable|unreachable)',
+    'request timed out|connect timeout|you(?:\'|’)?re offline|internet connection',
+    // undici's mid-stream drop is a bare "terminated".
+    '(?:^|: )terminated\\.?$',
+    // Claude Code: "Unable to connect to API", but not its TLS and certificate errors, which waiting won't fix.
+    'unable to connect to api(?!: ssl)',
+    // Bun (OpenCode): "Unable to connect. Is the computer able to access the url?", a dropped socket.
+    'unable to connect\\. is the computer|socket connection was closed',
+    // Codex: reqwest's "error sending request", hyper's DNS and TCP errors, an SSE stream cut off.
+    'error sending request|dns error|tcp connect error|idle timeout (?:waiting|sending)|stream closed before',
+    'stream ended (?:without|before)|websocket (?:closed|error)|http2 request did not get a response',
+  ].join('|'),
+  'im',
+)
 const SERVICE =
-  /overloaded|service unavailable|bad gateway|gateway time-?out|temporarily unavailable|(?:api error|error|status|http)\W{0,3}5(?:02|03|04|29)\b/i
+  /overloaded|service unavailable|bad gateway|gateway time-?out|temporarily unavailable|server_busy|servers are currently busy|high demand|high load|at capacity|temporarily limiting requests|(?:api error|error|status|http)\W{0,3}5(?:02|03|04|29)\b/i
+// Not the connection's fault even though the words match: a content filter ending Codex's stream.
+const NOT_NETWORK = /content_filter/i
 
 // Only failures the connection explains: a Stop, a usage limit or an ordinary error is left alone.
 export function classify(error: string | undefined): Reason | undefined {
-  if (!error || error === 'Interrupted' || LIMIT.test(error)) return undefined
+  if (!error || error === 'Interrupted' || NOT_NETWORK.test(error)) return undefined
+  if (LIMIT.test(error) && !NOT_A_LIMIT.test(error)) return undefined
   if (NETWORK.test(error)) return 'network'
   if (SERVICE.test(error)) return 'service'
   return undefined

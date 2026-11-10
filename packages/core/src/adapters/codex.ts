@@ -28,6 +28,9 @@ const effortOf = (level: ThinkingLevel) => (level === 'off' ? 'none' : level)
 const LIMIT_ERROR = /usage limit|hit your (?:[\w-]+ )?limit|rate[_ ]limit|out of (?:extra )?(?:usage|credits)|quota/i
 const LIMIT_INFO = new Set(['usageLimitExceeded', 'rateLimitExceeded'])
 
+const STEERED = 'Cut short by your message. Codex didn’t report its result.'
+const STILL_OPEN = 'Codex didn’t report a result before the turn ended.'
+
 const OUTPUT_TAIL_CHARS = 2000
 // Codex's default MCP tool timeout would end a tool call that waits on the user.
 const MCP_CALL_TIMEOUT_S = 24 * 60 * 60
@@ -90,9 +93,12 @@ tool_suggest = false
 skill_search = false
 skill_mcp_dependency_install = false
 
-# Models on Codex's multi-agent v2 get its sub-agent tools whatever multi_agent says.
+# Models on Codex's multi-agent v2 get its sub-agent tools whatever multi_agent says. Its prompt text ("a team of
+# agents", and the note on when to delegate) comes from these two, and empty leaves it out (codex-cli 0.167).
 [features.multi_agent_v2]
 disable_native_tools = true
+root_agent_usage_hint_text = ""
+multi_agent_mode_hint_text = ""
 
 [skills]
 include_instructions = false
@@ -234,11 +240,20 @@ function listModels(machine: Machine): Promise<any[] | undefined> {
   })
 }
 
+export const KEYCHAIN_NOTE = 'Signed in through the Keychain, which Kothar’s sessions can’t use: add the account in Kothar'
+
 async function authStatus(machine: Machine, accountDir?: string): Promise<AccountStatus> {
   const options = { cwd: '/', env: { CODEX_HOME: loginDir(accountDir) } }
   const status = await machine.run('codex', ['login', 'status'], options).catch(() => null)
   const text = `${status?.stdout ?? ''}\n${status?.stderr ?? ''}`
   if (status?.code !== 0 || /not logged in/i.test(text)) return { signedIn: false }
+  // Sessions link in auth.json. The user's own Codex may keep its login in the Keychain instead
+  // (cli_auth_credentials_store = "keyring" or "auto"), where Kothar's sessions can't reach it.
+  if (!accountDir) {
+    const file = join(loginDir(), 'auth.json')
+    const found = await machine.run('/bin/sh', ['-c', 'test -e "$1"', 'sh', file], { cwd: '/' }).catch(() => null)
+    if (found && found.code !== 0) return { signedIn: false, note: KEYCHAIN_NOTE }
+  }
   const email = text.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/)?.[0]
   return { signedIn: true, ...(email && { label: email }) }
 }
@@ -343,7 +358,8 @@ export const codex: Adapter = {
     status: authStatus,
 
     // Codex's browser sign-in: it prints a link (and opens it), then waits on localhost for the redirect. Its messages
-    // go to stderr, so they're joined to stdout to catch the link as it comes.
+    // go to stderr, so they're joined to stdout to catch the link as it comes. Codex opens the browser through macOS
+    // LaunchServices, which no flag or variable turns off (codex-cli 0.167), so Kothar only shows the link as a fallback.
     login(machine, accountDir, emit) {
       const command = 'exec codex login -c cli_auth_credentials_store=\'"file"\' 2>&1'
       const proc = machine.spawn('/bin/sh', ['-c', command], { cwd: accountDir, env: { CODEX_HOME: accountDir } })
@@ -354,7 +370,7 @@ export const codex: Adapter = {
         const url = !sentUrl && output.replace(ANSI, '').match(LOGIN_URL)?.[0]
         if (!url) return
         sentUrl = true
-        emit({ type: 'url', url })
+        emit({ type: 'url', url, noCode: true })
       })
       proc.onExit((code, stderrTail) => {
         if (code === 0) return emit({ type: 'done' })
@@ -448,6 +464,20 @@ export const codex: Adapter = {
     const steers = new Map<string, { accepted: boolean }>()
     const unsent: { id: string; text: string; images?: ImageInput[] }[] = []
 
+    // Tool calls closed as stopped; should Codex report one after all, it's not shown twice.
+    const stopped = new Set<string>()
+    // Closes the open tool calls Codex will never report done, as stopped.
+    const cutShort = (output: string, which: (item: any, id: string) => boolean = () => true) => {
+      for (const [id, item] of items) {
+        if (!toolOf(item) || !which(item, id)) continue
+        items.delete(id)
+        stopped.add(id)
+        emit({ type: 'tool.completed', toolId: id, output, isError: false, stopped: true })
+      }
+    }
+    // A command still waiting on the user's approval isn't running yet, so a steer doesn't cut it short.
+    const awaitingApproval = (id: string) => [...asked.values()].some((a) => String(a.params?.itemId) === id)
+
     const limit = (message: string) => {
       if (limited) return
       limited = true
@@ -464,11 +494,10 @@ export const codex: Adapter = {
       turnId = undefined
       interruptWanted = false
       lastError = undefined
-      // A command a steer cut short keeps running in Codex's background, and Codex never says it's done.
-      for (const [id, item] of items) {
-        if (toolOf(item)) emit({ type: 'tool.completed', toolId: id, output: 'Still running when the turn ended.', isError: false })
-      }
+      // Anything Codex never finished (an interrupted turn, a call still open at its end) shows as stopped.
+      cutShort(STILL_OPEN)
       items.clear()
+      stopped.clear()
       // A steer Codex took (it answered with the turn's id) is part of the turn even if its message never showed.
       for (const [id, steer] of steers) emit({ type: steer.accepted ? 'steer.landed' : 'steer.returned', id })
       steers.clear()
@@ -532,6 +561,10 @@ export const codex: Adapter = {
         case 'account/rateLimits/updated':
           rateLimits = params.rateLimits
           return
+        // A request Codex no longer waits on, answered or not: its command, if any, may now run.
+        case 'serverRequest/resolved':
+          for (const [key, pending] of asked) if (pending.id === params?.requestId) asked.delete(key)
+          return
       }
       if (!inTurn) return
       switch (method) {
@@ -549,6 +582,8 @@ export const codex: Adapter = {
           const item = params.item ?? {}
           items.set(String(item.id), item)
           if (item.type === 'userMessage' && typeof item.clientId === 'string' && steers.delete(item.clientId)) {
+            // A steer cuts short the wait on any command still running, and Codex never reports that command done.
+            cutShort(STEERED, (open, id) => open.type === 'commandExecution' && !awaitingApproval(id))
             return emit({ type: 'steer.landed', id: item.clientId })
           }
           const tool = toolOf(item)
@@ -559,6 +594,7 @@ export const codex: Adapter = {
           const item = params.item ?? {}
           const started = items.get(String(item.id))
           items.delete(String(item.id))
+          if (stopped.delete(String(item.id))) return
           if (item.type === 'agentMessage' && item.text) return emit({ type: 'text.completed', text: item.text })
           if (item.type === 'userMessage' && typeof item.clientId === 'string' && steers.delete(item.clientId)) {
             return emit({ type: 'steer.landed', id: item.clientId })

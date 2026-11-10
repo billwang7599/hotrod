@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
-import { codex, commandOf, configOf } from './codex.ts'
+import { codex, commandOf, configOf, KEYCHAIN_NOTE } from './codex.ts'
 import { fakeMachine } from './test-machine.ts'
 
 // Fixtures are real codex-cli 0.167 app-server output, recorded against a local stand-in for the model API (no model
@@ -93,6 +93,8 @@ describe('codex adapter', () => {
     expect(config).toContain('project_doc_max_bytes = 0')
     for (const feature of ['memories', 'plugins', 'apps', 'hooks', 'multi_agent']) expect(config).toContain(`\n${feature} = false`)
     expect(config).toMatch(/\[features\.multi_agent_v2\]\ndisable_native_tools = true/)
+    // Without these Codex still tells the model it's one of "a team of agents" that may delegate.
+    expect(config).toMatch(/\nroot_agent_usage_hint_text = ""\nmulti_agent_mode_hint_text = ""\n/)
     expect(config).toMatch(/\[skills\.bundled\]\nenabled = false/)
     expect(config).toContain('[mcp_servers."kothar"]\nurl = "http://127.0.0.1:4317/mcp"\nbearer_token_env_var = "KOTHAR_MCP_TOKEN"')
     expect(config).toContain('[mcp_servers."browser"]\ncommand = "/bin/node"\nargs = ["cli.js"]\nenv = { "TMPDIR" = "/t" }')
@@ -274,9 +276,27 @@ describe('codex adapter', () => {
     expect(s.events.filter((e) => e.type === 'steer.landed')).toEqual([{ type: 'steer.landed', id: 's1' }])
     // Where Codex took it in: before the reply it led to.
     expect(types(s.events).indexOf('steer.landed')).toBeLessThan(types(s.events).indexOf('text.delta'))
-    // The steer cut the command's wait short; Codex never finishes it, so the turn's end does.
-    expect(s.events.find((e) => e.type === 'tool.completed')).toMatchObject({ output: 'Still running when the turn ended.' })
+    // The steer cut the command's wait short and Codex never finishes it, so it shows stopped from the moment the steer
+    // lands.
+    const closed = s.events.find((e) => e.type === 'tool.completed')
+    expect(closed).toMatchObject({ stopped: true, isError: false, output: expect.stringContaining('Cut short by your message') })
+    expect(types(s.events).indexOf('tool.completed')).toBeLessThan(types(s.events).indexOf('steer.landed'))
     expect(types(s.events).at(-1)).toBe('turn.completed')
+  })
+
+  it("doesn't cut short a command still waiting on the user's approval when a steer lands", async () => {
+    const s = await replay('steer')
+    const approval = s.lines.findIndex((l) => l.includes('requestApproval'))
+    s.feed(0, approval + 1)
+    s.session.steer!('s1', 'Also check the tests')
+    await s.pump()
+    const landed = s.lines.findIndex((l) => l.includes('"clientId":"s1"'))
+    // Without Codex's note that the request was resolved, the approval is still open.
+    for (const line of s.lines.slice(approval + 1, landed + 1)) {
+      if (!line.includes('serverRequest/resolved')) s.fake.stdout(line + '\n')
+    }
+    expect(s.events.some((e) => e.type === 'steer.landed')).toBe(true)
+    expect(s.events.filter((e) => e.type === 'tool.completed' && e.stopped)).toEqual([])
   })
 
   it('hands back a steer Codex refuses, and one sent with no turn running', async () => {
@@ -357,6 +377,8 @@ describe('codex adapter', () => {
       const fake = fakeMachine({
         'codex --version': { code: 0, stdout: 'codex-cli 0.167.0\n', stderr: '' },
         'codex login status': { code: 0, stdout: '', stderr: 'Logged in using ChatGPT\n' },
+        // auth.json is there: the login is in a file sessions can link.
+        '/bin/sh': { code: 0, stdout: '', stderr: '' },
       })
       const detecting = codex.detect(fake.machine)
       await tick()
@@ -395,6 +417,19 @@ describe('codex adapter', () => {
       expect(await codex.accounts!.status(out.machine, '/acc')).toEqual({ signedIn: false })
     })
 
+    it("says so when the user's own Codex keeps its login in the Keychain, where sessions can't reach it", async () => {
+      const status = { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
+      const keychain = fakeMachine({ 'codex login status': status, '/bin/sh': { code: 1, stdout: '', stderr: '' } })
+      expect(await codex.accounts!.status(keychain.machine)).toEqual({ signedIn: false, note: KEYCHAIN_NOTE })
+      expect(keychain.ran[1]!.args.at(-1)).toMatch(/\/auth\.json$/)
+      const file = fakeMachine({ 'codex login status': status, '/bin/sh': { code: 0, stdout: '', stderr: '' } })
+      expect(await codex.accounts!.status(file.machine)).toEqual({ signedIn: true })
+      // An account added in Kothar always keeps its login in its own auth.json.
+      const added = fakeMachine({ 'codex login status': status })
+      expect(await codex.accounts!.status(added.machine, '/acc')).toEqual({ signedIn: true })
+      expect(added.ran).toHaveLength(1)
+    })
+
     it('signs in with the browser flow in the account folder, passing its link on', () => {
       const fake = fakeMachine()
       const login: any[] = []
@@ -403,7 +438,9 @@ describe('codex adapter', () => {
       expect(fake.spawned[0]!.args[1]).toContain('codex login')
       fake.stdout('Starting local login server on http://localhost:1455.\nIf your browser did not open, navigate to this URL to authenticate:\n\nhttps://auth.openai.com/oauth/authorize?client_id=x&state=y\n')
       fake.exit(0)
-      expect(login).toEqual([{ type: 'url', url: 'https://auth.openai.com/oauth/authorize?client_id=x&state=y' }, { type: 'done' }])
+      // Codex opens the link itself and finishes on the redirect, so Kothar asks for no code.
+      const url = 'https://auth.openai.com/oauth/authorize?client_id=x&state=y'
+      expect(login).toEqual([{ type: 'url', url, noCode: true }, { type: 'done' }])
     })
 
     it('signs out with codex logout', async () => {

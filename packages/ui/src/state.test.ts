@@ -335,6 +335,15 @@ describe('reduce', () => {
     expect(items(ended)[0]).toMatchObject({ toolId: 't1', state: 'stopped', permission: { outcome: 'cancelled' } })
   })
 
+  it('shows a call the engine never finished as stopped, not done or failed', () => {
+    const state = run(
+      snapshot([chat('a')]),
+      entry('a', { type: 'tool.started', toolId: 't1', name: 'shell', kind: 'shell', summary: 'sleep 9', input: {} }),
+      entry('a', { type: 'tool.completed', toolId: 't1', output: 'Cut short', isError: false, stopped: true }),
+    )
+    expect(items(state)[0]).toMatchObject({ toolId: 't1', state: 'stopped', output: 'Cut short' })
+  })
+
   it('appends entries to the right chat', () => {
     const state = run(
       snapshot([chat('a'), chat('b')]),

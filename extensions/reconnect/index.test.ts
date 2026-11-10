@@ -111,6 +111,62 @@ it('tells network failures and an unavailable service from everything else', () 
   }
 })
 
+// The wording each engine really uses, read from its own build: Claude Code 2.1, pi 1.1 (pi-ai), Codex 0.167 and
+// OpenCode 1.17.
+it("knows each engine's own network and overload errors", () => {
+  const network = {
+    'claude-code': [
+      'Unable to connect to API. Check your internet connection',
+      'Unable to connect to API (ECONNRESET)',
+      'Network error. Please check your internet connection.',
+    ],
+    pi: ['terminated', 'Connection error.', 'other side closed', 'upstream connect error or disconnect/reset before headers', 'Anthropic stream ended before message_stop'],
+    codex: [
+      'Connection failed: error sending request for url (https://chatgpt.com/backend-api/codex/responses)',
+      'stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)',
+      'stream disconnected before completion: idle timeout waiting for SSE',
+      'stream disconnected before completion: stream closed before response.completed',
+      'error sending request: client error (Connect): dns error: failed to lookup address information',
+      'tcp connect error: Network unreachable',
+    ],
+    opencode: [
+      'Cannot connect to API: Unable to connect. Is the computer able to access the url?',
+      'Cannot connect to API: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
+      'ConnectionRefused',
+    ],
+  }
+  const service = {
+    'claude-code': [
+      'Repeated 529 Overloaded errors',
+      'Opus is experiencing high load, please use /model to switch to Sonnet',
+      'Server is temporarily limiting requests (not your usage limit)',
+    ],
+    pi: ['servers are currently busy', '{"type":"error","error":{"type":"server_busy"}}'],
+    codex: [
+      'Selected model is at capacity. Please try a different model.',
+      "We're currently experiencing high demand, which may cause temporary errors.",
+      'exceeded retry limit, last status: 503 Service Unavailable',
+    ],
+    opencode: ['Provider is overloaded'],
+  }
+  for (const [engine, errors] of Object.entries(network)) {
+    for (const error of errors) expect(classify(error), `${engine}: ${error}`).toBe('network')
+  }
+  for (const [engine, errors] of Object.entries(service)) {
+    for (const error of errors) expect(classify(error), `${engine}: ${error}`).toBe('service')
+  }
+  for (const error of [
+    // Waiting fixes none of these.
+    'Unable to connect to API: SSL certificate has expired',
+    'stream disconnected before completion: Incomplete response returned, reason: content_filter',
+    'Policy-restricted capacity is unavailable. Please try again later.',
+    'Too Many Requests',
+    'Process terminated by the user before it finished',
+  ]) {
+    expect(classify(error), error).toBeUndefined()
+  }
+})
+
 it('backs off from the first delay, doubling, up to the cap', () => {
   expect([0, 1, 2, 3, 10].map((n) => delayOf(n))).toEqual([5_000, 10_000, 20_000, 40_000, 300_000])
 })

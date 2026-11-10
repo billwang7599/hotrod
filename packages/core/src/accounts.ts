@@ -96,7 +96,10 @@ export function openAccounts(options: {
     update(engine, { login: { name } })
     attempt.flow = engine.adapter.accounts.login(machine, dir, (event) => {
       if (!current()) return
-      if (event.type === 'url') return update(engine, { login: { ...engine.state.login!, url: event.url } })
+      if (event.type === 'url') {
+        const noCode = event.noCode && { noCode: true }
+        return update(engine, { login: { ...engine.state.login!, url: event.url, ...noCode } })
+      }
       if (event.type === 'failed') return fail(event.error)
       void engine.adapter.accounts
         .status(machine, dir)
@@ -171,7 +174,11 @@ export function openAccounts(options: {
               }),
             ),
           )
-          update(engine, { accounts: engine.state.accounts.map((a) => ({ ...a, ...statuses.get(a.id) })) })
+          const fresh = (a: Account) => {
+            const { note: _, ...rest } = a
+            return { ...rest, ...statuses.get(a.id) }
+          }
+          update(engine, { accounts: engine.state.accounts.map(fresh) })
         }),
       )
     },

@@ -136,9 +136,14 @@ export interface Session {
   close(): void
 }
 
-export type AccountStatus = { signedIn: boolean; label?: string }
+// note: why a login the engine has can't be used by Kothar's sessions, shown on its account row.
+export type AccountStatus = { signedIn: boolean; label?: string; note?: string }
 
-export type LoginEvent = { type: 'url'; url: string } | { type: 'done' } | { type: 'failed'; error: string }
+// noCode: the sign-in finishes on its own once the browser redirects back, with no code for the user to paste.
+export type LoginEvent =
+  | { type: 'url'; url: string; noCode?: boolean }
+  | { type: 'done' }
+  | { type: 'failed'; error: string }
 
 export interface LoginFlow {
   submitCode(code: string): void
@@ -163,14 +168,14 @@ export interface Adapter {
   }
 }
 
-export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean }
+export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean; note?: string }
 
 export type EngineAccounts = {
   engine: string
   active: string
   apiKeys: boolean
   accounts: Account[]
-  login?: { name: string; url?: string; error?: string }
+  login?: { name: string; url?: string; noCode?: boolean; error?: string }
 }
 
 export const PERMISSION_DEFAULTS = {

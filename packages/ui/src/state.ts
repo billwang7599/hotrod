@@ -180,7 +180,7 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
     case 'tool.completed':
       return items.map((i) =>
         i.kind === 'tool' && i.toolId === entry.toolId
-          ? { ...i, state: entry.isError ? 'error' : 'done', output: entry.output }
+          ? { ...i, state: entry.stopped ? 'stopped' : entry.isError ? 'error' : 'done', output: entry.output }
           : i,
       )
     case 'permission.requested': {
