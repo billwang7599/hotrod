@@ -7,7 +7,7 @@ import type { ExtensionStorage, ExtensionView } from '@kothar/extension-api'
 import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import { createSkillsExtension, MAX_INDEXED, skillIndex } from './index.ts'
+import { createSkillsExtension, MAX_INDEXED, skillIndex, sourceBadge } from './index.ts'
 import { createLibrary, type Skill } from './library.ts'
 import { frontMatter, parseSkill, skillId, skillText } from './skill-md.ts'
 import { engineSources, importAny, importEngine, importGitHub, parseGitHub, type Fetch } from './sources.ts'
@@ -308,6 +308,17 @@ it("copies the skills of engines' own folders, following a linked skill folder",
 })
 
 // The index
+
+it('badges a skill by where it came from', () => {
+  expect(['Claude Code', 'GitHub a/b (main)', 'Folder /x', 'File /x.zip', 'Made by an agent in Work', 'Added by hand'].map(sourceBadge)).toEqual([
+    'Claude Code',
+    'GitHub',
+    'Folder',
+    'File',
+    'Agent',
+    'By hand',
+  ])
+})
 
 it('lists only skills that are on, one short line each, capped', () => {
   const skill = (id: string, on = true, description = `Use for ${id}`): Skill => ({ id, name: id, description, dir: '/x', on, source: 's' })

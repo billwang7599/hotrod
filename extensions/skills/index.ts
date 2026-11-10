@@ -31,6 +31,14 @@ export function skillIndex(skills: Skill[]) {
   ].join('\n')
 }
 
+// A short word for where a skill came from, for its badge: the engine's name, or GitHub, Folder, File, Agent, By hand.
+export function sourceBadge(source: string) {
+  for (const word of ['GitHub', 'Folder', 'File']) if (source.startsWith(`${word} `)) return word
+  if (source.startsWith('Made by an agent')) return 'Agent'
+  if (source === 'Added by hand') return 'By hand'
+  return source
+}
+
 const looksBinary = (data: Buffer) => data.subarray(0, 8000).includes(0)
 
 export type SkillsOptions = { home?: string; env?: Record<string, string | undefined>; fetch?: Fetch }
@@ -74,9 +82,10 @@ export function createSkillsExtension(options: SkillsOptions = {}): Extension {
   const skillCard = (skill: Skill): ExtensionView => ({
     type: 'card',
     title: skill.id,
+    open: false,
     badges: [
       ...(skill.on ? [] : [{ text: 'Off', tone: 'warning' as const, hint: "Agents don't see it" }]),
-      { text: skill.source.startsWith('GitHub') ? 'GitHub' : skill.source.split(' ')[0]!, tone: 'muted' as const, hint: skill.source },
+      { text: sourceBadge(skill.source), tone: 'muted' as const, hint: skill.source },
     ],
     children: [
       { type: 'text', text: skill.description },
