@@ -6,7 +6,7 @@ import { createFakeAdapter, type FakeStep } from '@kothar/core/fake'
 import { startCore } from '@kothar/core/main'
 import type { SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import rotation, { CONTINUE_PROMPT, createAccountRotation, resetText, UNKNOWN_RESET_MS } from './index.ts'
+import rotation, { CONTINUE_PROMPT, createAccountRotation, providerOf, resetText, UNKNOWN_RESET_MS } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -228,6 +228,7 @@ it('rotates only to accounts of the same provider, or ones whose provider is unk
     note: () => {},
     retry: () => {},
     continue: () => {},
+    chat: () => undefined,
   }
   const extension = createAccountRotation(() => Date.parse('2026-11-08T09:00:00Z'))
   const hit = (account: string) =>
@@ -256,6 +257,7 @@ it('from an account whose provider is unknown, rotates only to others whose prov
     note: (_chat: string, text: string) => void notes.push(text),
     retry: () => {},
     continue: () => {},
+    chat: () => undefined,
   }
   const extension = createAccountRotation(() => Date.parse('2026-11-08T09:00:00Z'))
   const hit = (account: string) =>
@@ -272,4 +274,65 @@ it('from an account whose provider is unknown, rotates only to others whose prov
   accounts.push({ id: 'default-2', name: 'Default 2', signedIn: true })
   hit('default')
   expect(used).toEqual(['default-2'])
+})
+
+// A Default login and one saved account per provider, on OpenCode. `chatModel` is what host.chat says the chat runs.
+function onDefault(chatModel?: string) {
+  const used: string[] = []
+  const notes: string[] = []
+  const accounts = [
+    { id: 'default', name: 'Default', signedIn: true },
+    { id: 'oa-1', name: 'OpenAI 1', signedIn: true, provider: 'openai' },
+    { id: 'an-1', name: 'Anthropic 1', signedIn: true, provider: 'anthropic' },
+  ]
+  let active = 'default'
+  const host = {
+    accounts: () => ({ engine: 'opencode', active, accounts }),
+    useAccount: (_engine: string, id: string) => void used.push((active = id)),
+    note: (_chat: string, text: string) => void notes.push(text),
+    retry: () => {},
+    continue: () => {},
+    chat: (id: string) => ({ id, name: 'Space', engine: 'opencode', ...(chatModel && { model: chatModel }) }),
+  }
+  const extension = createAccountRotation(() => Date.parse('2026-11-08T09:00:00Z'))
+  const hit = (model?: string) => {
+    active = 'default'
+    extension.onLimitReached!(
+      { engine: 'opencode', account: 'default', ...(model && { model }), chat: { id: 'c1' }, message: 'Out of usage', output: false } as never,
+      { values: { accounts: '' }, host } as never,
+    )
+  }
+  return { used, notes, hit }
+}
+
+it("from an account whose provider is unknown, keeps to the provider of the model the turn ran on", () => {
+  const t = onDefault()
+  t.hit('anthropic/claude-sonnet-4-5')
+  expect(t.used).toEqual(['an-1'])
+  t.hit('openai/gpt-5.6')
+  expect(t.used).toEqual(['an-1', 'oa-1'])
+})
+
+it("takes the chat's model from host.chat when the limit doesn't name one", () => {
+  const t = onDefault('openai/gpt-5.6')
+  t.hit()
+  expect(t.used).toEqual(['oa-1'])
+})
+
+it("doesn't guess from a model id without a provider, or with one no account has", () => {
+  for (const model of ['claude-sonnet-5-5', 'google/gemini-3', '/odd']) {
+    const t = onDefault()
+    t.hit(model)
+    expect(t.used).toEqual([])
+    expect(t.notes).toEqual(["Default hit its usage limit, and there's no other account to switch to"])
+  }
+})
+
+it('reads a provider only from a provider/model id that a saved account signs in to', () => {
+  const accounts = [{ id: 'a', name: 'A', provider: 'anthropic' }]
+  expect(providerOf('anthropic/claude-sonnet-4-5', accounts)).toBe('anthropic')
+  expect(providerOf('anthropic/nested/model', accounts)).toBe('anthropic')
+  expect(providerOf('openai/gpt-5.6', accounts)).toBeUndefined()
+  expect(providerOf('claude-sonnet-5-5', accounts)).toBeUndefined()
+  expect(providerOf(undefined, accounts)).toBeUndefined()
 })

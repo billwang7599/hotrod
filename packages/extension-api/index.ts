@@ -66,8 +66,10 @@ export type ChatStatus = 'idle' | 'running' | 'waiting' | 'stopping'
 export type ChatSummary = { id: string; name: string; engine: string; parentId?: string; worker?: boolean }
 
 // What an extension can know about any chat. A space is a top-level chat; extension is set on an extension's own chat
-// (Home).
+// (Home). model: the model its next message runs on, as Kothar picks it (the chat's own pick, its setup's, or its model
+// list's), in the engine's own id; absent when nothing can run on its engine.
 export type ChatDetail = ChatSummary & {
+  model?: string
   status: ChatStatus
   archived: boolean
   extension?: string
@@ -295,12 +297,13 @@ export type ExtensionProcessRow = {
 export type ExtensionContext = { values: ExtensionValues; host: ExtensionHost }
 
 // account is the one the turn ran on, absent if the engine keeps no accounts; the active account may have changed
-// since. resetsAt is ISO, if the engine said. output: the engine had written, thought or called a tool since the
+// since. model is the one the turn ran on, in the engine's own id, absent if Kothar didn't pick one. resetsAt is ISO, if the engine said. output: the engine had written, thought or called a tool since the
 // chat's last message (across continuations), so sending that message again would redo work.
 export type LimitReached = {
   chat: ChatSummary
   engine: string
   account?: string
+  model?: string
   message: string
   resetsAt?: string
   output: boolean

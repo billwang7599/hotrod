@@ -115,6 +115,7 @@ Kothar stops the turn before calling it, so the chat is idle. `limit` has:
 | `chat` | The chat, as a [`ChatSummary`](types.md#chats). |
 | `engine` | The engine's id. |
 | `account` | The account the turn ran on, if the engine keeps accounts. The active account may have changed since. |
+| `model` | The model the turn ran on, in the engine's own id, if Kothar picked one. It can differ from the chat's `model` now, if Settings changed since. |
 | `message` | The engine's message. |
 | `resetsAt` | When the limit lifts (ISO time), if the engine said. |
 | `output` | `true` if the agent had already written, thought or called a tool since the chat's last message. Sending that message again would redo work, so [`host.continue`](host.md#sending-messages) fits better than `host.retry`. |

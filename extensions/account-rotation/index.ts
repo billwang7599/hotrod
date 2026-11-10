@@ -24,6 +24,15 @@ function ringOf(accounts: ExtensionAccount[], picked: string) {
   return [...new Set(named.filter((account) => account !== undefined))]
 }
 
+// The provider in a model id of the form `provider/model`, when it's one a saved account signs in to. Engines whose ids
+// don't have that form, or name a provider no account has, give none.
+export function providerOf(model: string | undefined, accounts: ExtensionAccount[]) {
+  const slash = model?.indexOf('/') ?? -1
+  if (slash <= 0) return undefined
+  const prefix = model!.slice(0, slash)
+  return accounts.some((a) => a.provider === prefix) ? prefix : undefined
+}
+
 export function createAccountRotation(now = () => Date.now()): Extension {
   // `${engine}\n${account}` → when its limit lifts, in ms.
   const limitedUntil = new Map<string, number>()
@@ -61,9 +70,10 @@ export function createAccountRotation(now = () => Date.now()): Extension {
       const nameOf = (id: string) => saved.accounts.find((a) => a.id === id)?.name ?? id
       // On engines with providers, only an account of the same provider can run the chat's model. One whose provider
       // isn't known (the engine's own login) may hold any, so it stays a fallback for every provider. From such an
-      // account the chat's provider can't be told (extensions don't see a chat's model), so the ring keeps only other
+      // account the provider comes from the model the turn ran on; when that can't tell it, the ring keeps only other
       // accounts without one rather than guess: on engines without providers that's every account.
-      const provider = saved.accounts.find((a) => a.id === account)?.provider
+      const model = limit.model ?? host.chat(limit.chat.id)?.model
+      const provider = saved.accounts.find((a) => a.id === account)?.provider ?? providerOf(model, saved.accounts)
       const runs = (a: ExtensionAccount) => a.id === account || !a.provider || a.provider === provider
       const ring = ringOf(saved.accounts, String(values.accounts ?? '')).filter(runs)
       const chatId = limit.chat.id

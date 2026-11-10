@@ -146,8 +146,9 @@ type Chat = {
   mcpToken?: string
   queue: QueuedMessage[]
   turns: number
-  // The account the running turn started on, and the limit it ran into, if any.
+  // The account and model the running turn started on, and the limit it ran into, if any.
   account?: string
+  runModel?: string
   limit?: { message: string; resetsAt?: string }
   // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
   produced?: boolean
@@ -790,7 +791,7 @@ function openLockedCore(options: {
   const allStopped = () => [...chats.values()].every((chat) => !chat.session)
 
   const endTurn = (chat: Chat, ended: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
-    const { limit, account } = chat
+    const { limit, account, runModel } = chat
     chat.limit = undefined
     // A turn the core stopped for its limit shows the limit, not "Interrupted".
     const end = limit && ended.error ? { ...ended, error: limit.message } : ended
@@ -821,7 +822,7 @@ function openLockedCore(options: {
       chat.ending = false
     }
     if (chat.held) chat.held.error = end.error
-    if (limit) reportLimit(chat, account, limit)
+    if (limit) reportLimit(chat, account, runModel, limit)
     // An extension sent the message again, so the turn goes on, or holds the chat until it does or lets go.
     if (chat.status !== 'idle') return
     finishTurn(chat, end.error)
@@ -877,12 +878,18 @@ function openLockedCore(options: {
 
   const limitWatchers = () => extensions.filter((extension) => isOn(extension) && extension.onLimitReached)
 
-  const reportLimit = (chat: Chat, account: string | undefined, { message, resetsAt }: NonNullable<Chat['limit']>) => {
+  const reportLimit = (
+    chat: Chat,
+    account: string | undefined,
+    model: string | undefined,
+    { message, resetsAt }: NonNullable<Chat['limit']>,
+  ) => {
     const { engine } = chat.info
     const limit = {
       chat: summaryOf(chat.info),
       engine,
       ...(account !== undefined && { account }),
+      ...(model !== undefined && { model }),
       message,
       output: chat.produced === true,
       ...(resetsAt && { resetsAt }),
@@ -923,16 +930,21 @@ function openLockedCore(options: {
     send(chat, '', [], [], text)
   }
 
-  const detailOf = (chat: Chat): ChatDetail => ({
-    ...summaryOf(chat.info),
-    status: chat.status,
-    archived: chat.info.archived,
-    ...(chat.info.extension && { extension: chat.info.extension, mod: chat.info.extension }),
-    folders: chat.info.folders,
-    files: chat.info.files,
-    createdAt: chat.info.createdAt,
-    ...(chat.info.parentMessages !== undefined && { parentMessages: chat.info.parentMessages }),
-  })
+  // model: what its next message runs on, as model choice works it out (models.runOf), while that's on its engine.
+  const detailOf = (chat: Chat): ChatDetail => {
+    const run = models.runOf(choosesOf(chat))
+    return {
+      ...summaryOf(chat.info),
+      ...(run && run.engine === chat.info.engine && { model: run.model }),
+      status: chat.status,
+      archived: chat.info.archived,
+      ...(chat.info.extension && { extension: chat.info.extension, mod: chat.info.extension }),
+      folders: chat.info.folders,
+      files: chat.info.files,
+      createdAt: chat.info.createdAt,
+      ...(chat.info.parentMessages !== undefined && { parentMessages: chat.info.parentMessages }),
+    }
+  }
 
   const spaceOf = (chat: Chat): SpaceDetail => {
     const { id, name, workDir, folders, worktrees = {} } = chainOf(chat)[0]!.info
@@ -2244,6 +2256,7 @@ function openLockedCore(options: {
           ...(jail && { sandbox: jail }),
         }
         chat.account = accounts.activeOf(adapter.id)
+        chat.runModel = model
         session = adapter.start(machine, options, emit)
         if (chat.status === 'idle') return session.close()
         chat.session = session

@@ -24,6 +24,7 @@ All of these come from the extension API's types. The full source is
 
 | Field | What it is |
 |---|---|
+| `model` | The model its next message runs on, as Kothar picks it (the chat's own pick, then its setup's, then its model list's), in the engine's own id, such as `claude-sonnet-5-5` or `anthropic/claude-sonnet-4-5`. Absent when nothing can run on its engine. |
 | `status` | `idle`, `running`, `waiting` (on the user) or `stopping`. |
 | `archived` | Whether it's archived. |
 | `extension` | Set on an extension's own chat, such as Home: the extension's id. |
