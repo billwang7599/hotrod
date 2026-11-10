@@ -18,13 +18,11 @@ import type {
   ExtensionAction,
   ExtensionContext,
   ExtensionManifest,
-  ExtensionHost,
   ExtensionInstructionsFor,
   ExtensionPanel,
   ExtensionView,
   ExtensionWait,
   ExtensionWaitAnswer,
-  ExtensionStorage,
   ExtensionRun,
   ExtensionUse,
   PermissionRequest,
@@ -38,7 +36,7 @@ import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './
 import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
 import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
-import { type CommunityExtension, guardHost, valuesOf } from './extensions.ts'
+import { type CommunityExtension, valuesOf } from './extensions.ts'
 import {
   bySpaceOrder,
   CONTEXT_SECTIONS,
@@ -99,6 +97,7 @@ import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 import { verdictOf } from './permissions.ts'
 import { buildInstructions } from './instructions.ts'
 import { type Checkout, openCheckouts } from './checkouts.ts'
+import { openExtensionHosts } from './extension-host.ts'
 
 // Kept here too, for code that imports them from the core.
 export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
@@ -108,9 +107,6 @@ const PARENT_VIEW_FILE = 'parent-view.md'
 // A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
 const WORKER_SETUP = "A worker uses its space's setup and can't have its own"
-// An extension's notification (host.notify), cut to what a system notification shows anyway.
-const NOTIFY_TITLE_CHARS = 120
-const NOTIFY_BODY_CHARS = 400
 const REVEAL_TIMEOUT_MS = 10_000
 // Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
 const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
@@ -1088,35 +1084,6 @@ function openLockedCore(options: {
     if (code !== 0) throw new Error(stderr.trim() || `Couldn't show ${path} in Finder`)
   }
 
-  // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.
-  const storageAt = (dir: string, what: string, reserved: string[] = []): ExtensionStorage => {
-    const fileOf = (name: string) => {
-      const path = resolve(dir, String(name))
-      const top = path.slice(dir.length + 1).split(sep)[0]!
-      if (path === dir || !within(path, dir) || reserved.some((own) => own.toLowerCase() === top.toLowerCase())) throw new Error(`"${name}" is outside ${what}`)
-      return path
-    }
-    const writable = (name: string) => {
-      const path = fileOf(name)
-      mkdirSync(dirname(path), { recursive: true })
-      return path
-    }
-    return {
-      dir,
-      read(name) {
-        try {
-          return readFileSync(fileOf(name), 'utf8')
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-          throw error
-        }
-      },
-      write: (name, text) => writeFileSync(writable(name), text),
-      append: (name, text) => appendFileSync(writable(name), text),
-      remove: (name) => rmSync(fileOf(name), { force: true }),
-    }
-  }
-
   const seesAll = (chatId: string) => extensionChats.some((chat) => chat.id === chatId && chat.seesAll)
   // Whether caller may reach chat, by the rule the core's own reach tools use; both must be chats the user can see.
   const reachable = (callerId: string, chat: Chat) => {
@@ -1124,129 +1091,50 @@ function openLockedCore(options: {
     return !!caller && shown(caller) && shown(chat) && reaches(caller.info, chat.info, seesAll(callerId))
   }
 
-  const hosts = new Map<string, ExtensionHost>()
-  const contextOf = (extension: Extension): ExtensionContext => ({ values: extensionValues(extension), host: hostFor(extension) })
-  const hostFor = (extension: Extension): ExtensionHost => {
-    const known = hosts.get(extension.id)
-    if (known) return known
-    const dir = join(garage, 'extensions', extension.id)
-    const host: ExtensionHost = {
-      createChat({ name, folders, files, engine, parentId, role }) {
-        if (parentId === undefined) {
-          if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
-          return createChat({ name, folders, files, engine })
-        }
-        return createChild(String(parentId), { name, engine, role, folders, files })
-      },
-      send: (chatId, text) => enqueue(chatFor(chatId), { text }),
-      chats: () => shownChats().map(detailOf),
-      chat(chatId) {
-        const chat = chats.get(chatId)
-        return chat && shown(chat) ? detailOf(chat) : undefined
-      },
-      read(chatId, options) {
-        const { entries } = chatFor(chatId)
-        const last = options?.last
-        return last === undefined ? [...entries] : last > 0 ? entries.slice(-last) : []
-      },
-      space(chatId) {
-        const chat = chats.get(chatId)
-        return chat && shown(chat) ? spaceOf(chat) : undefined
-      },
-      spaceValues: (chatId) => spaceValuesOf(extension, chatFor(chatId)),
-      setSpaceValue: (chatId, key, value) => setSpaceValue(extension, chatFor(chatId), String(key), value),
-      reaches(callerId, chatId) {
-        const chat = chats.get(String(chatId))
-        return !!chat && reachable(String(callerId), chat)
-      },
-      reachable: (callerId) => shownChats().filter((chat) => reachable(String(callerId), chat)).map(detailOf),
-      interrupt: (chatId) => interrupt(chatFor(chatId), false),
-      accounts(engine) {
-        const found = accounts.list().find((state) => state.engine === engine)
-        if (!found) return undefined
-        const list = found.accounts.map(({ id, name, signedIn, provider }) => ({
-          id,
-          name,
-          ...(signedIn !== undefined && { signedIn }),
-          ...(provider !== undefined && { provider }),
-        }))
-        return { engine, active: found.active, accounts: list }
-      },
-      useAccount: (engine, accountId) => accounts.use(engine, accountId, true),
-      retry: (chatId) => retry(chatFor(chatId)),
-      continue: (chatId, text) => continueTurn(chatFor(chatId), text),
-      note(chatId, text, options) {
-        const panel = options?.panel
-        if (panel !== undefined && !extension.panels?.some((p) => p.id === panel)) {
-          throw new Error(`${extension.name} has no panel "${panel}"`)
-        }
-        const at = new Date().toISOString()
-        append(chatFor(chatId), { at, type: 'extension.note', text, ...(panel !== undefined && { extension: extension.id, panel }) })
-      },
-      error: (text) => extensionError(extension, String(text)),
-      // The UI decides whether it shows (Settings → Appearance → Notifications) and draws it as the system's notification.
-      notify({ chatId, title, body }) {
-        const chat = chatId === undefined ? undefined : chatFor(String(chatId))
-        broadcast({
-          type: 'notify',
-          extension: extension.id,
-          title: String(title).slice(0, NOTIFY_TITLE_CHARS),
-          body: String(body ?? '').slice(0, NOTIFY_BODY_CHARS),
-          ...(chat && { chatId: chat.info.id }),
-        })
-      },
-      run: runFor(),
-      // Lazily: hosts can be made before the spawning code below is set up.
-      spawn: (command, args, options) => spawnFor(extension)(command, args, options),
-      storage: storageAt(dir, `${extension.name}'s storage`),
-      chatStorage: (chatId) => storageAt(chatFor(chatId).dir, `${extension.name}'s files in this chat`, CHAT_OWN_FILES),
-      messages: (chatId) => messagesOf(chatFor(chatId).entries),
-      complete: (request) => completeFor(request),
-      refresh: (chatId) => refreshExtension(extension, chatId),
-      wait(chatId, wait) {
-        const chat = chatFor(chatId)
-        if (!['running', 'waiting'].includes(chat.status) && !chat.ending) {
-          throw new Error('A chat waits for the user only while its turn runs, or as it ends (onTurnCompleted)')
-        }
-        setWait(chat, extension.id, checkWait(wait))
-      },
-      endWait: (chatId) => setWait(chatFor(chatId), extension.id, undefined),
-      processes: (spaceId) =>
-        extensions
-          .filter((other) => other !== extension && isOn(other) && other.processes)
-          .flatMap((other) => {
-            try {
-              return other.processes!(String(spaceId), contextOf(other)).map((row) => ({ ...row, extension: other.id }))
-            } catch (error) {
-              extensionError(other, error)
-              return []
-            }
-          }),
-      async processAction(spaceId, extensionId, key, action) {
-        const other = extensionFor(String(extensionId))
-        if (!isOn(other)) throw new Error(`${other.name} is off`)
-        await other.onProcessAction?.(String(spaceId), String(key), String(action), contextOf(other))
-      },
-      processesChanged: (spaceId) =>
-        callExtensions('onProcessesChanged', (other, context) =>
-          other === extension ? undefined : other.onProcessesChanged!(String(spaceId), context),
-        ),
-      // Only inside a folder some chat could open: an extension can't open a terminal anywhere it likes.
-      async openTerminal(path) {
-        const real = realOr(String(path))
-        const roots = shownChats().flatMap(terminalRoots).map(realOr)
-        if (!isAbsolute(String(path)) || !roots.some((root) => within(real, root))) {
-          throw new Error(`${path} isn't inside a space's folders, work folder or checkouts`)
-        }
-        await openTerminalAt(real)
-      },
-      reveal: (path) => reveal(path),
-    }
-    const uses = community.get(extension.id)?.manifest.uses
-    const given = uses ? guardHost(host, extension, uses) : host
-    hosts.set(extension.id, given)
-    return given
-  }
+  const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
+    garage,
+    machine,
+    chatOwnFiles: CHAT_OWN_FILES,
+    isQuitting: () => quitting,
+    extensions,
+    extensionFor,
+    isOn,
+    valuesOf: extensionValues,
+    usesOf: (extension) => community.get(extension.id)?.manifest.uses,
+    extensionError,
+    processesChanged: (from, spaceId) =>
+      callExtensions('onProcessesChanged', (other, context) =>
+        other === from ? undefined : other.onProcessesChanged!(spaceId, context),
+      ),
+    refresh: (extension, chatId) => refreshExtension(extension, chatId),
+    chat: (chatId) => chats.get(chatId),
+    chatFor,
+    shown,
+    shownChats,
+    detailOf,
+    spaceOf,
+    reachable,
+    createChat: (spec) => createChat(spec),
+    createChild: (parentId, spec) => createChild(parentId, spec),
+    enqueue: (chat, message) => enqueue(chat, message),
+    interrupt: (chat) => interrupt(chat, false),
+    retry,
+    continueTurn,
+    append,
+    setWait,
+    checkWait: (wait) => checkWait(wait),
+    spaceValuesOf,
+    setSpaceValue,
+    commandPlaceOf: (chat) => commandPlaceOf(chat),
+    accounts,
+    run: () => runFor(),
+    complete: completeFor,
+    broadcast,
+    terminalRoots,
+    openTerminalAt,
+    reveal,
+    realOr,
+  })
 
   // Extension panels and commands: which a chat gets, and the views of panels the UI has asked for.
   type Offered = { shown?(chat: ChatDetail, context: ExtensionContext): boolean }
@@ -1745,7 +1633,7 @@ function openLockedCore(options: {
     settings.extensions = { ...settings.extensions, [id]: kept }
     saveSettings()
     community.delete(id)
-    hosts.delete(id)
+    forgetHost(id)
     extensions.splice(extensions.indexOf(extension), 1)
     broadcast({ type: 'extension.removed', extensionId: id })
     restartChanged()
@@ -1893,36 +1781,6 @@ function openLockedCore(options: {
     }
     return { workDir, sandbox: jail }
   }
-
-  // What each extension has running from host.spawn, so turning the extension off stops it.
-  const spawned = new Map<string, Set<{ kill(): void }>>()
-  const stopSpawned = (extension: Extension) => {
-    for (const proc of spawned.get(extension.id) ?? []) proc.kill()
-  }
-  const spawnFor =
-    (extension: Extension): ExtensionHost['spawn'] =>
-    async (command, args, options = {}) => {
-      if (quitting) throw new Error('Kothar is quitting')
-      if (!isOn(extension)) throw new Error(`${extension.name} is off`)
-      const chat = options.chat === undefined ? undefined : chatFor(options.chat)
-      const place = chat ? await commandPlaceOf(chat) : undefined
-      const cwd = options.cwd ?? place?.workDir ?? '/'
-      const proc = machine.spawn(command, args, {
-        cwd,
-        ...(options.env && { env: options.env }),
-        ...(place?.sandbox && { sandbox: place.sandbox }),
-      })
-      const running = spawned.get(extension.id) ?? new Set()
-      spawned.set(extension.id, running)
-      running.add(proc)
-      proc.onExit(() => running.delete(proc))
-      // Nothing reads its stdin, but some watchers stop when it closes, so it stays open.
-      return {
-        onOutput: (listener) => proc.onStdout(listener),
-        onExit: (listener) => proc.onExit(listener),
-        stop: () => proc.kill(),
-      }
-    }
 
   // A continuation is a prompt from Kothar, not the user: it isn't logged, and the turn it starts carries on the last.
   const send = (
