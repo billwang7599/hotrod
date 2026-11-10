@@ -114,3 +114,35 @@ test('text with reveal gets a Show in Finder button that asks for its path', () 
   expect(revealed).toEqual(['/garage/chats'])
   expect(host.querySelector('button[aria-label="Copy /garage/chats"]')).not.toBeNull()
 })
+
+test('a form keeps what is typed and sends every field on submit; cancel sends its own action', () => {
+  const acted: unknown[] = []
+  const view: ExtensionView = {
+    type: 'form',
+    key: 'new',
+    fields: [
+      { name: 'name', label: 'Name', value: 'Tests' },
+      { name: 'body', label: 'Note', rows: 6 },
+    ],
+    submit: { label: 'Save', action: 'save' },
+    cancel: { label: 'Cancel', action: { name: 'cancel' } },
+  }
+  act(() =>
+    root.render(
+      <Tooltip.Provider>
+        <ExtensionViewer view={view} act={(action) => acted.push(action)} />
+      </Tooltip.Provider>,
+    ),
+  )
+  const box = host.querySelector('textarea[aria-label="Note"]') as HTMLTextAreaElement
+  expect((host.querySelector('input[aria-label="Name"]') as HTMLInputElement).value).toBe('Tests')
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(box, 'npm test')
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  const buttons = [...host.querySelectorAll('button')]
+  act(() => buttons.find((b) => b.textContent === 'Save')!.click())
+  act(() => buttons.find((b) => b.textContent === 'Cancel')!.click())
+  expect(acted).toEqual([{ name: 'save', value: { name: 'Tests', body: 'npm test' } }, { name: 'cancel' }])
+})

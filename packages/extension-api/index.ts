@@ -433,6 +433,17 @@ export type ExtensionView =
   // A card with a title that folds; open says how it starts.
   | { type: 'card'; title: string; badges?: ExtensionListItem['badges']; open?: boolean; children: ExtensionView[] }
   | { type: 'divider' }
+  // Text fields the user fills in, such as a note to save. The UI keeps what's typed until submit, which sends the
+  // action named submit.action with value { [field name]: text }; cancel sends its action as a button does. value is a
+  // field's starting text; rows above 1 make it a multi-line box. A form with a new key (or new starting values) starts
+  // over.
+  | {
+      type: 'form'
+      key?: string
+      fields: { name: string; label: string; value?: string; placeholder?: string; rows?: number; mono?: boolean; hint?: string }[]
+      submit: { label: string; action: string }
+      cancel?: { label: string; action: ExtensionAction }
+    }
   | { type: 'empty'; text: string }
   // Controls for one of the extension's spaceSettings in the panel's space (a worker's panel shows its space's): a
   // switch for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws

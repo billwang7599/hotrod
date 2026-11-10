@@ -31,6 +31,7 @@ The built-in extensions today:
 | Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
+| Notes | Yes | Saved Markdown notes that agents find and read when they're relevant, global or per space. Adds a Notes tab. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 
 ### Where Memory keeps its summaries, and cleaning up
@@ -53,6 +54,23 @@ a copy button and **Show in Finder**, and how much disk each mode's summaries ta
 - **Delete summaries**, on Memory's page, deletes one mode's files from every chat, workers' and Home's included. It
   works only for a mode that isn't in use, or for either while Memory is off, and asks first. Chat logs stay. If you
   switch back to that mode later, Kothar writes the summaries again with model calls on your own logins.
+
+### Notes
+
+A note is a Markdown file with a name and a one-line description, for something worth keeping across sessions, such as
+how to run a repo's tests. Each session's instructions list the notes that apply (name, description and file, never the
+text), and the agent reads one in full when it fits the task.
+
+- **Global notes** go to every chat. They're in `<data folder>/extensions/notes/<name>.md`.
+- **A space's notes** go to that space and its workers. They're in `<data folder>/chats/<space id>/notes/<name>.md`, so
+  they go when the space is deleted. Home keeps no notes of its own: it sees and writes global ones.
+- **The Notes tab** lists them, and makes, edits and deletes them. **Turn off here** leaves a note out of one chat and
+  its workers.
+- **Agents** have `list_notes`, `read_note` and `write_note`. They save a note when you ask, or when what they learned is
+  clearly worth keeping. A note of the same name in the same place is replaced.
+
+Notes are plain files: you can also edit them in any editor, or add a `.md` file to either folder. A file without the
+`---` front matter is named after the file.
 
 ### When the connection drops
 

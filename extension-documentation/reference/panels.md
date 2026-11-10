@@ -105,11 +105,34 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `list` | `items`, `empty?`, `label?` | A list of rows. `empty` is shown when there are none. |
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |
 | `divider` | none | A line. |
+| `form` | `fields`, `submit`, `cancel?`, `key?` | Text fields the user fills in. See below. |
 | `empty` | `text` | A quiet placeholder, such as "No processes". |
 | `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the extension's boolean `spaceSettings`. See below. |
 | `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the extension's select `spaceSettings`. See below. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
+
+### Forms
+
+A `form` takes text from the user, such as a note to save. Each field is
+`{ name, label, value?, placeholder?, rows?, mono?, hint? }`: `value` is its starting text, and `rows` above 1 makes it a
+multi-line box. Kothar keeps what's typed in the window until the user submits, then sends your `onAction` the action
+`{ name: submit.action, value: { [field name]: text } }`. `cancel: { label, action }` adds a button that sends its action
+as any button does. A form whose `key` or starting values change starts over, so give an edit form the key of what it
+edits.
+
+```ts
+{
+  type: 'form',
+  key: 'new-note',
+  fields: [
+    { name: 'name', label: 'Name' },
+    { name: 'body', label: 'Note', rows: 8, mono: true },
+  ],
+  submit: { label: 'Save', action: 'save' },
+  cancel: { label: 'Cancel', action: { name: 'cancel' } },
+}
+```
 
 **Tones** colour text, badges and dots: `normal`, `muted`, `faint`, `accent`, `success`, `warning`, `error`. They follow
 the user's theme.

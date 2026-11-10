@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { Button, Chevron, confirm, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
@@ -235,6 +235,62 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
   )
 }
 
+type FormNode = Extract<ExtensionView, { type: 'form' }>
+
+const startOf = (node: FormNode) => Object.fromEntries(node.fields.map((f) => [f.name, f.value ?? '']))
+
+// Fields keep what's typed until submit; a form with a new key or new starting values starts over.
+function Form({ node, act }: { node: FormNode; act: Act }) {
+  const start = JSON.stringify([node.key, startOf(node)])
+  const [typed, setTyped] = useState<{ start: string; values: Record<string, string> }>({ start, values: startOf(node) })
+  const values = typed.start === start ? typed.values : startOf(node)
+  const set = (name: string, text: string) => setTyped({ start, values: { ...values, [name]: text } })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    act({ name: node.submit.action, value: values })
+  }
+  return (
+    <form className="flex min-w-0 flex-col gap-8" onSubmit={submit}>
+      {node.fields.map((field) => {
+        const shared = {
+          'aria-label': field.label,
+          value: values[field.name] ?? '',
+          placeholder: field.placeholder,
+          spellCheck: false,
+          onChange: (e: { target: { value: string } }) => set(field.name, e.target.value),
+        }
+        const mono = field.mono ? 'font-mono' : ''
+        return (
+          <label key={field.name} className="flex min-w-0 flex-col gap-4">
+            <Hinted hint={field.hint}>
+              <span className="text-sm text-muted">{field.label}</span>
+            </Hinted>
+            {(field.rows ?? 1) > 1 ? (
+              <textarea
+                className={`min-h-96 resize-y px-8 py-6 text-sm leading-[1.5] focus:border-accent ${mono}`}
+                rows={field.rows}
+                {...shared}
+              />
+            ) : (
+              <input className={`min-w-0 text-sm ${mono}`} {...shared} />
+            )}
+          </label>
+        )
+      })}
+      <div className="flex items-center gap-8">
+        <Button size="small" variant="primary">
+          {node.submit.label}
+        </Button>
+        {node.cancel && (
+          <Button type="button" size="small" variant="ghost" onClick={() => act(node.cancel!.action)}>
+            {node.cancel.label}
+          </Button>
+        )}
+      </div>
+    </form>
+  )
+}
+
 function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   switch (node.type) {
     case 'stack':
@@ -320,6 +376,8 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       return <hr className="border-border" />
     case 'empty':
       return <p className="text-sm text-faint">{node.text}</p>
+    case 'form':
+      return <Form node={node} act={act} />
     case 'switch':
       return <SettingSwitch node={node} />
     case 'picker':
