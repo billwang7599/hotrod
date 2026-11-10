@@ -14,6 +14,9 @@ const MAX_RECENT = 12
 /** A message match the chat view scrolls to once it opens: the nth message in the chat whose text holds the query. */
 export type Reveal = { chatId: string; query: string; nth: number }
 let pendingReveal: Reveal | null = null
+const revealLater = (reveal: Reveal) => {
+  pendingReveal = reveal
+}
 export const takeReveal = (chatId: string): Reveal | null => {
   if (pendingReveal?.chatId !== chatId) return null
   const reveal = pendingReveal
@@ -81,31 +84,40 @@ export function SearchPalette({ open, close, chats, selectedId, search, connecte
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const requestId = useRef(0)
+  // The latest request sent, so render can tell its answer from an older one.
+  const [latest, setLatest] = useState(0)
   const focus = useReturnFocus()
   const keys = useBindings()
 
-  useEffect(() => {
-    if (!open) return
-    setQuery('')
-    setActive(0)
-  }, [open])
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setQuery('')
+      setActive(0)
+    }
+  }
 
   const trimmed = query.trim()
   useEffect(() => {
     if (!open || !trimmed || !connected) return
-    const timer = setTimeout(() => send({ type: 'search', id: ++requestId.current, query: trimmed }), SEARCH_DEBOUNCE_MS)
+    const timer = setTimeout(() => {
+      const id = ++requestId.current
+      setLatest(id)
+      send({ type: 'search', id, query: trimmed })
+    }, SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [open, trimmed, connected, send])
 
   // Only the answer to the latest request counts; an older one still in flight is dropped.
-  const hits = search && search.id === requestId.current && search.query === trimmed ? search.hits : undefined
+  const hits = search && search.id === latest && search.query === trimmed ? search.hits : undefined
   const searching = !!trimmed && connected && !hits
   const results = paletteResults(chats, selectedId, query, hits)
   const at = Math.min(active, Math.max(0, results.length - 1))
 
   const choose = (result: Result | undefined) => {
     if (!result) return
-    if (result.hit) pendingReveal = { chatId: result.chat.id, query: trimmed, nth: result.hit.nth }
+    if (result.hit) revealLater({ chatId: result.chat.id, query: trimmed, nth: result.hit.nth })
     select(result.chat.id)
     close()
   }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react'
 
 /**
  * Keyboard shortcuts: one registry of actions, each with a default binding the user can remap in Settings → Shortcuts.
@@ -271,7 +271,9 @@ export function actionFor(e: KeyLike, handlers: ShortcutHandlers, all = current,
  */
 export function useShortcuts(handlers: ShortcutHandlers) {
   const latest = useRef(handlers)
-  latest.current = handlers
+  useLayoutEffect(() => {
+    latest.current = handlers
+  })
   useEffect(() => {
     // The page and the desktop menu can both see one key press; whichever is second is dropped.
     let last = { id: '', at: 0, from: '' }

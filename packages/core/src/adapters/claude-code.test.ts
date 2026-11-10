@@ -741,7 +741,7 @@ describe('claudeCode accounts', () => {
   })
 
   it('logs in with the account config folder, passes on the sign-in link and a pasted code', () => {
-    const { fake, events, flow } = startLogin()
+    const { fake, events } = startLogin()
     expect(fake.spawned).toEqual([
       { command: 'claude', args: ['auth', 'login', '--claudeai'], cwd: dir, env: { CLAUDE_CONFIG_DIR: dir } },
     ])

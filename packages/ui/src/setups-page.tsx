@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import {
   levelsOf,
   THINKING_LABELS,
@@ -47,12 +47,18 @@ export function SetupsPage({ setups, engines, extensions, connected, send, saved
     setWaiting(undefined)
     setRefused(undefined)
   }
-  useEffect(() => {
-    if (waiting === undefined || !saved || saved.count <= waiting) return
-    if (saved.error === undefined) return close()
-    setWaiting(undefined)
-    setRefused(saved.error)
-  }, [saved, waiting])
+  // A new answer from the core: the save waited for is done or refused.
+  const [answered, setAnswered] = useState(saved?.count)
+  if (saved?.count !== answered) {
+    setAnswered(saved?.count)
+    if (waiting !== undefined && saved && saved.count > waiting) {
+      if (saved.error === undefined) close()
+      else {
+        setWaiting(undefined)
+        setRefused(saved.error)
+      }
+    }
+  }
   const save = (draft: Draft) => {
     send({ type: 'setup.save', setup: draft })
     setWaiting(saved?.count ?? 0)

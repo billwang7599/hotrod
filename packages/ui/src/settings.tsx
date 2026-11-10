@@ -1133,7 +1133,11 @@ type ExtensionSettingProps = {
 
 function ExtensionSettingRow({ setting, value, disabled, save }: ExtensionSettingProps) {
   const [draft, setDraft] = useState(String(value))
-  useEffect(() => setDraft(String(value)), [value])
+  const [was, setWas] = useState(value)
+  if (value !== was) {
+    setWas(value)
+    setDraft(String(value))
+  }
   const row = (control: ReactNode, below?: ReactNode) => (
     <SettingRow name={setting.label} description={setting.description && linked(setting.description)} below={below}>
       {control}

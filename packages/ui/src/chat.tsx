@@ -250,6 +250,7 @@ function SentAttachment({ chat, attachment, contextItems, connected, send }: Sen
   useEffect(() => {
     if (!open || kind !== 'file') return
     const abort = new AbortController()
+    // oxlint-disable-next-line react/set-state-in-effect -- shows loading while a fresh fetch starts
     setText(undefined)
     void (async () => {
       try {
@@ -1007,7 +1008,8 @@ export function Chat(props: ChatProps) {
     if (!reveal || !list || !revealIn(list, reveal)) return
     following.current = false
     measure()
-  }, [])
+    // The view is keyed by chat id (main.tsx), so this still runs once per view.
+  }, [chat.id])
 
   useLayoutEffect(() => {
     const list = listRef.current

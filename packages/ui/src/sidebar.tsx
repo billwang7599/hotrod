@@ -224,6 +224,7 @@ export function ChatNav({
     const group = spacesIn(!!chat.pinned)
     const index = group.findIndex((c) => c.id === chat.id) + by
     if (index < 0 || index >= group.length) return
+    // oxlint-disable-next-line react/purity -- step runs only from key and menu handlers, never during render
     if (keyboard) refocus.current = { id: chat.id, until: Date.now() + REFOCUS_MS }
     move(chat, !!chat.pinned, index)
   }

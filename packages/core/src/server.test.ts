@@ -827,7 +827,7 @@ it("tells an extension's tool who called it and what that caller may reach, by t
 })
 
 it("gives a worker its parent's latest messages frozen at launch when no memory extension is on", async () => {
-  const { core, garage, json, tool, send, sessionOf } = await startHeld()
+  const { core, garage, json, send, sessionOf } = await startHeld()
   workersOn(core, -1)
   const parent = send('main', 'Plan the release')
   const { chatId } = await json(parent.options.kotharMcp!.token, 'spawn_worker', { task: 'Check the changelog' })

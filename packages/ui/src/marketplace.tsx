@@ -153,10 +153,11 @@ function Source({ item }: { item: InstalledItem }) {
 
 // Sends installs and keeps each one's button busy until the core answers: installed at the latest version, or failed.
 function usePending(market: Market) {
-  const { marketFailures, installed, catalog } = market
+  const { marketFailures } = market
   // Installs sent and not yet answered, with how many failures the item had when it was sent.
   const [pending, setPending] = useState<Record<string, number>>({})
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- drops installs the core has answered; deriving it instead would bring a finished install back as pending once it's outdated again
     setPending((was) => {
       const still = Object.entries(was).filter(([key, failures]) => {
         const [kind, id] = key.split(':') as [MarketKind, string]
@@ -166,7 +167,7 @@ function usePending(market: Market) {
       })
       return still.length === Object.keys(was).length ? was : Object.fromEntries(still)
     })
-  }, [installed, marketFailures, catalog])
+  }, [market, marketFailures])
   const start = (key: string) => setPending((was) => ({ ...was, [key]: marketFailures[key]?.count ?? 0 }))
   return { pending, start }
 }
@@ -423,7 +424,9 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
   }
   // Each time it opens: asked once, and again after a failure.
   useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- asking marks the shown catalog as being replaced, once per open or reconnect
     if (open && connected && (catalog === undefined || catalog.error)) list()
+    // oxlint-disable-next-line react/exhaustive-deps -- with catalog or list as deps, each failed answer would ask again, in a loop
   }, [open, connected])
 
   const rows = shownRows(market, kind, show, query)

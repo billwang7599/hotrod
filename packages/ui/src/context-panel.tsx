@@ -190,7 +190,11 @@ function CardBody({ collapsed, className, children }: { collapsed: boolean; clas
 
 function AgentsCard({ item, chatId, source, readOnly, send }: ItemProps) {
   const [text, setText] = useState(item.text)
-  useEffect(() => setText(item.text), [item.text])
+  const [was, setWas] = useState(item.text)
+  if (item.text !== was) {
+    setWas(item.text)
+    setText(item.text)
+  }
   const { collapsed, toggle } = useCollapsed(item)
   const paths = usePathsShown()
   const own = item.from === chatId
@@ -687,9 +691,12 @@ export function ContextPanel(props: ContextPanelProps) {
   const known = tab === 'general' || extensionTab
   const shown: PanelTabId = chat && known ? tab : 'context'
   const panelView = extensionTab && props.panelViews?.[panelKey(chatId, extensionTab.extension, extensionTab.id)]
+  // By the tab's names, not the tab object, which is new on every render.
+  const tabExtension = extensionTab?.extension
+  const tabPanel = extensionTab?.id
   useEffect(() => {
-    if (connected && extensionTab) send({ type: 'extension.panel.get', chatId, extension: extensionTab.extension, panel: extensionTab.id })
-  }, [chatId, connected, extensionTab?.extension, extensionTab?.id, send])
+    if (connected && tabExtension && tabPanel) send({ type: 'extension.panel.get', chatId, extension: tabExtension, panel: tabPanel })
+  }, [chatId, connected, tabExtension, tabPanel, send])
   const width = usePanelWidth('context')
   const canAdd = shown === 'context' && !locked && sections.includes('folders')
   const drop = useDropPaths(

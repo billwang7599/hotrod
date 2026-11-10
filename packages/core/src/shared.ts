@@ -745,6 +745,7 @@ function onlyKeys(value: unknown, what: string, required: readonly string[], opt
 }
 
 function text(value: unknown, what: string, max: number) {
+  // oxlint-disable-next-line no-control-regex -- rejects control characters on purpose
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
     throw new Error(`${what} must be text of 1 to ${max} characters`)
   }

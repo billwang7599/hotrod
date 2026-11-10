@@ -58,6 +58,7 @@ const ready = fs.existsSync(marker) && fs.existsSync(path)
 console.log(JSON.stringify({ ready, name: chromium.title + ' ' + chromium.browserVersion, path }))
 `
 
+// oxlint-disable-next-line no-control-regex -- strips terminal escape codes on purpose
 const ANSI = /\x1b\[[0-9;]*m/g
 
 export const HAND_OFF_TOOL = 'ask_user_in_browser'

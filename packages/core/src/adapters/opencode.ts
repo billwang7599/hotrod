@@ -204,6 +204,7 @@ export function parseModels(stdout: string) {
 // the account's folder, linked into each run. `opencode auth login -p <provider> [-m <method>]` adds a login to it,
 // reading the key or code from stdin.
 
+// oxlint-disable-next-line no-control-regex -- strips terminal escape codes on purpose
 const ANSI = /\x1b\[[0-9;?]*[a-zA-Z]/g
 const strip = (text: string) => text.replace(ANSI, '').replace(/\r/g, '')
 

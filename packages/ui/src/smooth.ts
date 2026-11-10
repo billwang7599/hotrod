@@ -59,6 +59,7 @@ export function resetReveals() {
 export function useReveal(key: string, text: string, from: RevealFrom, enabled = true): string {
   const [, setFrame] = useState(0)
   const firstRender = useRef(true)
+  // oxlint-disable-next-line react/purity -- the reveal is a clock kept outside React on purpose (see reveals above)
   const now = performance.now()
   let reveal = reveals.get(key)
   if (enabled && reveal && !text.startsWith(reveal.text.slice(0, cut(reveal.text, reveal.shown)))) {
@@ -72,11 +73,13 @@ export function useReveal(key: string, text: string, from: RevealFrom, enabled =
   }
   if (reveal) {
     // Coming back to a reveal nobody was showing: it's caught up, not replayed.
+    // oxlint-disable-next-line react/refs -- only the first render of this element counts, and that's render-time state
     if (known && firstRender.current && reveal.mounted === 0) reveal.shown = text.length
     // A caught-up reveal's clock stands still, so text arriving after a pause types out rather than jumping.
     if (reveal.shown >= reveal.text.length) reveal.last = now
     reveal.text = text
   }
+  // oxlint-disable-next-line react/refs -- see above
   firstRender.current = false
   const done = !reveal || reveal.shown >= text.length
 

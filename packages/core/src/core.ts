@@ -2372,6 +2372,7 @@ function openLockedCore(options: {
     const dir = attachmentsDirOf(chat)
     if (files.length) mkdirSync(dir, { recursive: true })
     const attachments = files.map(({ name, mimeType, bytes }): Attachment => {
+      // oxlint-disable-next-line no-control-regex -- strips control characters from file names on purpose
       const clean = basename(name).replace(/[\x00-\x1f\x7f\\]/g, '').replace(/^[.\s]+/, '').trim() || 'attachment'
       const dot = clean.lastIndexOf('.')
       const [stem, extension] = dot > 0 ? [clean.slice(0, dot), clean.slice(dot)] : [clean, '']

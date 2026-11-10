@@ -76,7 +76,9 @@ const OUTPUT_TAIL_CHARS = 2000
 // Anthropic's API refuses an image whose base64 is over 5 MB; the prompt still names it by path.
 export const MAX_IMAGE_BASE64_CHARS = 5 * 1024 * 1024
 // The login prints its manual sign-in link inside an OSC 8 hyperlink, ended by BEL or ESC.
+// oxlint-disable-next-line no-control-regex -- the link ends at BEL or ESC on purpose
 const LOGIN_URL = /https:\/\/[^\s\x07\x1b]+(?=[\s\x07\x1b])/
+// oxlint-disable-next-line no-control-regex -- strips terminal escape codes on purpose
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 
 // Each account is its own config folder; Claude Code keys its keychain login by that folder's path.

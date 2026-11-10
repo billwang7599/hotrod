@@ -1,6 +1,6 @@
 // First, so preferences saved before the rename move to their new keys before any module reads them.
 import './renamed-storage.ts'
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -86,9 +86,12 @@ function App() {
   }))
   // Notifications see each message with what the user saw before it (notifications.ts).
   const seenRef = useRef({ chats: state.chats, selectedId: state.selectedId })
-  seenRef.current = { chats: state.chats, selectedId: state.selectedId }
+  useLayoutEffect(() => {
+    seenRef.current = { chats: state.chats, selectedId: state.selectedId }
+  })
   const openRef = useRef((_chatId: string) => {})
-  const notifier = useMemo(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))), [])
+  // oxlint-disable-next-line react/refs -- read when a notification is clicked, never during render
+  const [notifier] = useState(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))))
   const receive = useCallback(
     (action: Action) => {
       if (action.type !== 'connection' && action.type !== 'select' && action.type !== 'toast.dismiss') {
@@ -110,7 +113,11 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [settingsPage, setSettingsPage] = useState<SettingsPage>('engines')
   const [changingWorkFolder, setChangingWorkFolder] = useState(false)
-  useEffect(() => setChangingWorkFolder(false), [state.workFolder.path])
+  const [workPath, setWorkPath] = useState(state.workFolder.path)
+  if (state.workFolder.path !== workPath) {
+    setWorkPath(state.workFolder.path)
+    setChangingWorkFolder(false)
+  }
   useEffect(() => state.themes && setInstalledThemes(state.themes), [state.themes])
   const firstRun = state.loaded && !state.workFolder.path
   const openSettings = useCallback((page?: SettingsPage) => {

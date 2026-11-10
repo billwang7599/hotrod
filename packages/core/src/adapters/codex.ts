@@ -11,7 +11,6 @@ import {
   type Sandbox,
   type SessionOptions,
   type ThinkingLevel,
-  type ToolKind,
 } from '../shared.ts'
 
 // Codex, driven through `codex app-server`: JSON-RPC 2.0 (without the "jsonrpc" field) over stdio, one message a line.
@@ -36,6 +35,7 @@ const OUTPUT_TAIL_CHARS = 2000
 const MCP_CALL_TIMEOUT_S = 24 * 60 * 60
 const DETECT_TIMEOUT_MS = 20_000
 const LOGIN_URL = /https:\/\/auth\.openai\.com\/\S+/
+// oxlint-disable-next-line no-control-regex -- strips terminal escape codes on purpose
 const ANSI = /\x1b\][^\x07]*\x07|\x1b\[[0-9;]*[A-Za-z]/g
 
 // Codex reads its config, login and state from CODEX_HOME. Each run gets a fresh one, made by the launched process so

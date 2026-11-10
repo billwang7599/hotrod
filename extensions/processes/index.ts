@@ -64,6 +64,7 @@ export type Proc = {
   end: () => void
 }
 
+// oxlint-disable-next-line no-control-regex -- strips terminal escape codes on purpose
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g
 export const plain = (text: string) => text.replace(ANSI, '').replace(/\r(?!\n)/g, '\n')
 

@@ -228,7 +228,14 @@ test('followed output shows its last lines and stays at the end as it grows, unl
     Object.defineProperties(el, {
       scrollHeight: { configurable: true, get: () => 1000 },
       clientHeight: { configurable: true, get: () => 200 },
-      scrollTop: { configurable: true, get: () => top, set: (value: number) => (scrolls.push(value), (top = value)) },
+      scrollTop: {
+        configurable: true,
+        get: () => top,
+        set: (value: number) => {
+          scrolls.push(value)
+          top = value
+        },
+      },
     })
   }
   render({ [key]: { view: log(5) } })
