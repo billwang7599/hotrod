@@ -49,7 +49,7 @@ type Hub = {
   chats(): ChatState[]
   seesAll(chatId: string): boolean
   // A worker below parentId: the same call an extension's host.createChat makes with a parentId.
-  createChild(parentId: string, spec: { name: string; role?: ModelRole; setup?: string }): ChatInfo
+  createChild(parentId: string, spec: { name: string; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
   deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
@@ -147,21 +147,19 @@ const TOOLS: Record<string, Tool> = {
     description:
       'Start a worker: a new chat below this one that works on the task, in this folder, on the models the ' +
       'user picked for workers. Its final reply comes back to you as a message when its turn ends, so ' +
-      "don't poll it. Give a role to run it on that role's models instead, or the name of one of the user's " +
-      'setups (only when the user asked for it) to run it with that setup. Returns its id.',
+      "don't poll it. Give a role to run it on that role's models instead. It uses this chat's setup. Returns its id.",
     input: z.object({
       task: z.string().min(1),
       role: z.enum(['planning', 'searching']).optional(),
-      setup: z.string().min(1).optional(),
     }),
-    run({ hub, caller }: Context, { task, role, setup }: { task: string; role?: ModelRole; setup?: string }) {
+    run({ hub, caller }: Context, { task, role }: { task: string; role?: ModelRole }) {
       const { limit } = hub.workers()
       const running = hub.chats().filter((c) => c.parentId === caller.id && c.worker && c.status !== 'idle').length
       if (limit !== -1 && running >= limit) {
         throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
       }
       const name = workerName(task)
-      const chat = hub.createChild(caller.id, { name, ...(role && { role }), ...(setup && { setup }) })
+      const chat = hub.createChild(caller.id, { name, ...(role && { role }) })
       hub.send(chat.id, task)
       return { chatId: chat.id }
     },

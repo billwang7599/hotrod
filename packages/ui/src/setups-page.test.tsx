@@ -209,3 +209,8 @@ test("shows the chat's setup in its General tab, with a way to Settings → Setu
   expect(host.querySelector<HTMLButtonElement>('button[aria-label="Setup"]')!.disabled).toBe(true)
   expect(button('Make a setup…')).toBeDefined()
 })
+
+test('shows no setup picker for a worker, which uses its space’s setup', () => {
+  renderPanel({ ...space, id: 'w1', name: 'Worker', parentId: 'space', worker: true }, [reviewer])
+  expect(host.querySelector('button[aria-label="Setup"]')).toBeNull()
+})

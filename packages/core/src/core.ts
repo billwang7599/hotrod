@@ -87,6 +87,7 @@ import {
   type RestartChange,
   type RestartState,
   type Session,
+  type Setup,
   type SetupState,
   type Upload,
   type WorkFolder,
@@ -107,6 +108,7 @@ const PARENT_VIEW_FILE = 'parent-view.md'
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
+const WORKER_SETUP = "A worker uses its space's setup and can't have its own"
 const OUTSIDE_EDIT_ADVICE = 'Work there, or ask the user to allow edits outside the work folder for this chat.'
 export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
@@ -437,7 +439,12 @@ function openLockedCore(options: {
       if (unknown !== undefined) throw new Error(`Unknown extension "${unknown}"`)
     },
   })
-  const setupOf = (chat: Chat) => jobSetups.get(chat.info.setup)
+  // A worker always uses its closest parent's setup, which is its space's: a worker can't pick one of its own, and one
+  // saved by an older Kothar is ignored. It follows the space live, from its next message.
+  const setupOf = (chat: Chat): Setup | undefined => {
+    const parent = parentOf(chat)
+    return parent ? setupOf(parent) : jobSetups.get(chat.info.setup)
+  }
   // What model choice needs about a chat: its own picks, its role and its setup's.
   const choosesOf = (chat: Chat) => ({ ...chat.info, setup: setupOf(chat) })
   // Whether an extension shapes this chat's sessions: on in Settings, and not left out by the chat's setup. An
@@ -1492,12 +1499,13 @@ function openLockedCore(options: {
 
   const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string }) => {
     const name = checkName(spec.name)
-    const setup = spec.setup === undefined ? undefined : setupNamed(spec.setup)
+    const parent = spec.worker ? chatFor(spec.parentId ?? '') : undefined
+    if (parent && spec.setup !== undefined) throw new Error(WORKER_SETUP)
+    const setup = parent ? setupOf(parent) : spec.setup === undefined ? undefined : setupNamed(spec.setup)
     if (spec.engine !== undefined) {
       checkEngine(spec.engine)
       checkEnabled(spec.engine)
     }
-    const parent = spec.worker ? chatFor(spec.parentId ?? '') : undefined
     const role = parent ? (spec.role ?? 'workers') : undefined
     // Named engine: the chat's own pick of that engine's first model in its list, else the engine's default model.
     // Otherwise it follows its list (a worker: its role's, else Workers', else Chat's).
@@ -1525,7 +1533,7 @@ function openLockedCore(options: {
       archived: false,
       createdAt: new Date().toISOString(),
       ...pin,
-      ...(setup && { setup: setup.id }),
+      ...(!parent && setup && { setup: setup.id }),
     }
     const chat = loadChat(join(chatsDir, id), info)
     if (parent && parentMessages?.length) {
@@ -1537,10 +1545,10 @@ function openLockedCore(options: {
   }
 
   // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
-  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole; setup?: string }) => {
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
     if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
     if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
-    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role, setup: spec.setup })
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
   }
 
   // A setup by id or name, for a spawn or a picker.
@@ -1553,10 +1561,11 @@ function openLockedCore(options: {
 
   // The setup a chat uses from its next message, or none.
   const setChatSetup = (chat: Chat, name: unknown) => {
+    if (chat.info.worker) throw new Error(WORKER_SETUP)
     const setup = name === undefined || name === '' ? undefined : setupNamed(name)
     updateChat(chat, { setup: setup?.id })
     followModels()
-    broadcast(extensionsOf(chat))
+    familyOf(chat).forEach((c) => broadcast(extensionsOf(c)))
   }
 
   const saveSetup = (input: unknown) => {
@@ -1572,12 +1581,12 @@ function openLockedCore(options: {
     const using = [...chats.values()].filter((chat) => chat.info.setup === id)
     for (const chat of using) updateChat(chat, { setup: undefined })
     followModels()
-    using.forEach((chat) => broadcast(extensionsOf(chat)))
+    using.flatMap(familyOf).forEach((chat) => broadcast(extensionsOf(chat)))
   }
 
   // A setup's extensions changed: the chats using it get their panels and commands again.
   const setupChanged = (id: string) => {
-    for (const chat of chats.values()) if (chat.info.setup === id) broadcast(extensionsOf(chat))
+    for (const chat of chats.values()) if (setupOf(chat)?.id === id) broadcast(extensionsOf(chat))
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {

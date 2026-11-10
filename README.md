@@ -32,8 +32,8 @@ folder…** in the Marketplace window (**Browse…** in Settings → Community h
 ## Setups
 
 A setup is a saved choice for a kind of job: an engine and model with its thinking level, extensions to leave out, and
-extra instructions. Make them in Settings → Setups and pick one for a space in its General tab. A lead can also start a
-worker with a setup by name. A setup applies from the chat's next message. A model or thinking level picked for the chat
+extra instructions. Make them in Settings → Setups and pick one for a space in its General tab. A worker always uses its
+closest parent's setup, which is its space's, and can't pick its own. A setup applies from the chat's next message. A model or thinking level picked for the chat
 itself still wins, and anything the setup leaves out follows Settings. Each setup is a plain JSON file in
 `<garage>/setups/`.
 

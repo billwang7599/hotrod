@@ -772,7 +772,7 @@ export function ContextPanel(props: ContextPanelProps) {
               </section>
             )
           })}
-        {shown === 'general' && chat && (
+        {shown === 'general' && chat && !chat.worker && (
           <SetupPicker chat={chat} setups={props.setups ?? []} disabled={locked} send={send} openSetups={props.openSetups} />
         )}
         {shown === 'general' && chat && <ViewPickers chatId={chatId} />}
