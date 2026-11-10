@@ -8,6 +8,7 @@ import type { ExtensionView } from '@kothar/extension-api'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { ContextPanel } from './context-panel.tsx'
 import { ExtensionViewer, SEARCH_VIEW_MS } from './extension-view.tsx'
+import { ConfirmDialog } from './controls.tsx'
 import { ExtensionPopup, panelDefaultKeys, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
 import { currentPopup, openPopup, usePanelTab } from './panel-tab.ts'
 import { reloadShortcuts, setBinding, shortcutActions } from './shortcuts.ts'
@@ -188,4 +189,34 @@ test("an editor view sends its text as the extension's change action, and links 
     { name: 'open', value: 'Plan' },
     { name: 'tag', value: 'idea' },
   ])
+})
+
+test("a popup button's confirm opens above the popup, so its own buttons take the click", async () => {
+  const view: ExtensionView = {
+    type: 'button',
+    label: 'Delete',
+    action: { name: 'delete' },
+    confirm: { text: 'Delete it?', ok: 'Delete', danger: true },
+  }
+  act(() =>
+    root.render(
+      wrap(
+        <>
+          <ExtensionPopup chatId="space" panels={[notes]} panelViews={{ [panelKey('space', 'notes', 'notes')]: { view } }} connected send={(m) => sent.push(m)} />
+          <ConfirmDialog />
+        </>,
+      ),
+    ),
+  )
+  act(() => openPopup('extension:notes/notes'))
+  await act(async () => [...dialog()!.querySelectorAll('button')].find((b) => b.textContent === 'Delete')!.click())
+  const layer = (el: Element | null) => Number(/(?:^|\s)z-(\d+)/.exec(el?.className ?? '')?.[1] ?? 0)
+  const alert = document.querySelector('[role="alertdialog"]')!
+  // Fixed layers: the popup's backdrop and window, then the confirm's backdrop and window.
+  const popupLayers = [...document.querySelectorAll('.fixed')].filter((el) => !alert.contains(el) && el !== alert && !el.className.includes('z-30'))
+  expect(Math.max(...popupLayers.map(layer))).toBe(20)
+  expect(layer(alert)).toBeGreaterThan(20)
+  expect(layer(alert.previousElementSibling)).toBeGreaterThan(20)
+  await act(async () => [...alert.querySelectorAll('button')].find((b) => b.textContent === 'Delete')!.click())
+  expect(sent).toContainEqual(expect.objectContaining({ type: 'extension.panel.action', action: { name: 'delete' } }))
 })
