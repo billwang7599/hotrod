@@ -59,7 +59,7 @@ them only through their headless mode. That limit is what lets one extension wor
 
 | Word | Meaning |
 |---|---|
-| **Engine** | A coding agent Kothar drives, such as Claude Code or pi. |
+| **Engine** | A coding agent Kothar drives, such as Claude Code, pi or Codex. |
 | **Chat** | A conversation in Kothar. Each message starts a fresh engine session, and Kothar gives it the chat's memory. |
 | **Space** | A top-level chat with its own context: folders, files and instructions. Its agent works in the space's own work folder. |
 | **Lead** | The agent behind a space. It plans, does small tasks itself and hands bigger ones to workers. |

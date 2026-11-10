@@ -20,7 +20,8 @@ import {
 // summary runs on. Adapters only say what they offer (EngineStatus) and run what they're handed (SessionOptions). The
 // Kothar MCP server and the UI never choose: they name a role at most, and the UI shows the Run the core sends.
 
-export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5']
+// Each engine's cheap model, newest first: Claude's Haikus, then Codex's Lunas.
+export const SUMMARY_MODELS = ['claude-haiku-5-5', 'claude-haiku-4-5', 'gpt-6-luna', 'gpt-5.6-luna']
 
 type Chooses = Pick<ChatInfo, 'engine' | 'model' | 'thinking' | 'role'>
 

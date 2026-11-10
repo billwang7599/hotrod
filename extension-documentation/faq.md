@@ -11,7 +11,7 @@ description: Answers to common questions, and what to do when an extension won't
   runs.
 - Did you restart Kothar? Extensions load when Kothar starts. The row says **Starts when Kothar restarts** until you do.
 - Does the extension's row show **Couldn't load**? It says why. See below.
-- Is your hook in the right place? For example, `tools` only reach engines that take MCP servers (Claude Code and pi),
+- Is your hook in the right place? For example, `tools` only reach engines that take MCP servers (Claude Code, pi and Codex),
   and `onPermissionRequested` never fires for pi, which doesn't ask.
 
 ## "Couldn't load" errors
