@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   ChatDetail,
@@ -203,14 +203,103 @@ export function setNoteOn(host: ExtensionHost, chatId: string, key: string, on: 
   else storage.remove(OFF_FILE)
 }
 
+// Finds the note delete_note names, among the notes the caller can see. scope picks between a global note and a space
+// note of the same name; without it, that case is refused rather than guessed.
+export function noteToDelete(notes: Note[], name: unknown, scope?: unknown): Note {
+  const wanted = scope === 'global' || scope === 'space' ? notes.filter((note) => note.scope === scope) : notes
+  const label = oneLine(name)
+  const exact = wanted.filter((note) => note.name.toLowerCase() === label.toLowerCase())
+  if (exact.length > 1) throw new Error(`There's a global note and a space note named "${label}": say which with scope`)
+  const note = exact[0] ?? find(wanted, name)
+  if (!note) throw new Error(`No note named "${label}"${scope === 'global' || scope === 'space' ? ` in ${scope} notes` : ''}; list_notes lists them`)
+  return note
+}
+
+// Watches the note folders a Notes tab has shown, so a note added, edited or deleted outside Kothar (in an editor, by
+// git, by an agent's own file tools) shows in an open tab without reopening it. owner is 'global' or a space id. It
+// polls each folder's file names, sizes and times rather than using fs.watch, whose events don't arrive everywhere
+// (they didn't under a sandboxed parent on macOS); a few stats every couple of seconds is cheap.
+export function noteWatcher(onChange: (owner: string) => void, intervalMs = 2000) {
+  const watched = new Map<string, { owner: string; seen: string }>()
+  let timer: ReturnType<typeof setInterval> | undefined
+  const signature = (dir: string) => {
+    try {
+      return filesIn(dir)
+        .map((file) => {
+          const stat = statSync(join(dir, file))
+          return `${file}:${stat.size}:${stat.mtimeMs}`
+        })
+        .sort()
+        .join('\n')
+    } catch {
+      return ''
+    }
+  }
+  const check = () => {
+    const owners = new Set<string>()
+    for (const [dir, entry] of watched) {
+      const now = signature(dir)
+      if (now === entry.seen) continue
+      entry.seen = now
+      owners.add(entry.owner)
+    }
+    for (const owner of owners) onChange(owner)
+  }
+  const stopIfIdle = () => {
+    if (watched.size || !timer) return
+    clearInterval(timer)
+    timer = undefined
+  }
+  return {
+    add(dir: string, owner: string) {
+      if (watched.has(dir)) return
+      watched.set(dir, { owner, seen: signature(dir) })
+      if (timer) return
+      timer = setInterval(check, intervalMs)
+      timer.unref?.()
+    },
+    // Stops watching what belongs to the owner: a space that was deleted.
+    forget(owner: string) {
+      for (const [dir, entry] of watched) if (entry.owner === owner) watched.delete(dir)
+      stopIfIdle()
+    },
+    closeAll() {
+      watched.clear()
+      stopIfIdle()
+    },
+  }
+}
+
 // What the panel is showing per chat: the list, or a form for a new note or one being edited, with why its last save
 // was refused.
 type Editing = ({ scope: NoteScope } | { key: string }) & { error?: string }
 
 const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path, on: note.on })
 
-export function createNotesExtension(): Extension {
+// pollMs: how often an open tab looks for notes changed outside Kothar (tests shorten it).
+export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}): Extension {
   const editing = new Map<string, Editing>()
+  let hostOf: ExtensionHost | undefined
+  // A global note changed: every chat's tab. A space's: the space's and its workers'.
+  const watcher = noteWatcher((owner) => {
+    const host = hostOf
+    if (!host) return
+    if (owner === 'global') return host.refresh()
+    for (const chat of host.chats()) {
+      if (chainOf(host, chat.id)[0]?.id !== owner) continue
+      try {
+        host.refresh(chat.id)
+      } catch {
+        // Removed meanwhile.
+      }
+    }
+  }, pollMs)
+  const watchFor = (host: ExtensionHost, chat: ChatDetail) => {
+    hostOf = host
+    watcher.add(host.storage.dir, 'global')
+    const space = chainOf(host, chat.id)[0]
+    if (hasSpaceNotes(space)) watcher.add(join(host.chatStorage(space!.id).dir, NOTES_DIR), space!.id)
+  }
 
   const noteCard = (note: Note, chat: ChatDetail, editable: boolean, off: boolean): ExtensionView => ({
     type: 'card',
@@ -343,12 +432,33 @@ export function createNotesExtension(): Extension {
           return { saved: listedNote(saved), replaced: !!before.find((note) => note.key === saved.key) }
         },
       },
+      {
+        name: 'delete_note',
+        description:
+          'Deletes a saved note, by name: only when the user asks, or a note you saved is wrong or no longer true ' +
+          '(to correct one, write_note it again instead). Reaches the notes this chat can read: its space’s (a worker ' +
+          'deletes from its space) and global ones, which go from every chat. scope ("space" or "global") picks one ' +
+          'when both have a note of that name.',
+        inputSchema: {
+          type: 'object',
+          properties: { name: { type: 'string', minLength: 1 }, scope: { type: 'string', enum: ['space', 'global'] } },
+          required: ['name'],
+        },
+        offered: () => true,
+        run({ name, scope }, { caller, host }) {
+          const note = noteToDelete(notesFor(host, caller.id), name, scope)
+          removeNote(host, note)
+          host.refresh()
+          return { deleted: listedNote(note) }
+        },
+      },
     ],
     panels: [
       {
         id: 'notes',
         title: 'Notes',
         render(chat, { host }) {
+          watchFor(host, chat)
           const notes = notesFor(host, chat.id)
           const what = editing.get(chat.id)
           // A worker follows its space, and its panel is read-only, as the rest of its sidebar is.
@@ -454,8 +564,14 @@ export function createNotesExtension(): Extension {
         },
       },
     ],
+    // onStop is only called for an extension that started.
+    onStart() {},
+    onStop() {
+      watcher.closeAll()
+    },
     onChatRemoved(chat: ChatSummary) {
       editing.delete(chat.id)
+      watcher.forget(chat.id)
     },
   }
 }

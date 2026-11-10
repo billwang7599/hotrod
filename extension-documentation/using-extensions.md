@@ -66,13 +66,15 @@ text), and the agent reads one in full when it fits the task.
   they go when the space is deleted. Home keeps no notes of its own: it sees and writes global ones.
 - **The Notes tab** lists them, and makes, edits and deletes them. **Turn off here** leaves a note out of one chat and
   its workers.
-- **Agents** have `list_notes`, `read_note` and `write_note`. They save a note when you ask, or when what they learned is
+- **Agents** have `list_notes`, `read_note`, `write_note` and `delete_note`. They save a note when you ask, or when what they learned is
   clearly worth keeping. A note of the same name in the same place is replaced. A note's file is named from its name,
   so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is refused, from the
   panel too, rather than overwriting the first. The panel also refuses a new note or a rename to a name already taken.
+  They delete a note when you ask, or when one they saved turned out wrong: from their space (a worker's is its space's)
+  or global notes. When both have a note of that name, they must say which.
 
 Notes are plain files: you can also edit them in any editor, or add a `.md` file to either folder. A file without the
-`---` front matter is named after the file.
+`---` front matter is named after the file. An open Notes tab shows such changes within a couple of seconds.
 
 ### When the connection drops
 

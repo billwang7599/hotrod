@@ -7,7 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
-import { createNotesExtension, noteIndex, noteText, parseNote, slugOf, type Note } from './index.ts'
+import { createNotesExtension, noteIndex, noteText, noteToDelete, noteWatcher, parseNote, slugOf, type Note } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -44,7 +44,7 @@ async function start() {
   const kothar = await startCore({
     env,
     adapters: [held],
-    extensions: [home, createNotesExtension()],
+    extensions: [home, createNotesExtension({ pollMs: 50 })],
     machine: sandboxingMachine,
   })
   cleanups.push(async () => {
@@ -101,7 +101,7 @@ async function start() {
     if (shown?.type !== 'extension.panel' || !shown.view) throw new Error(shown?.type === 'extension.panel' ? shown.error : 'no view')
     return shown.view
   }
-  return { core, garage, sessions, handle, create, session, tool, panel }
+  return { core, garage, sessions, handle, create, session, tool, panel, views }
 }
 
 const note = (over: Partial<Note>): Note => ({
@@ -271,4 +271,101 @@ it('never lets one note overwrite another whose name makes the same file', async
   const kept = JSON.stringify(await panel(app, { name: 'save', value: { name: 'DEPLOYS', description: '', body: 'ship it' } }))
   expect(kept).not.toContain('"type":"form"')
   expect(readFileSync(join(dir, 'deploys.md'), 'utf8')).toContain('ship it')
+})
+
+it('deletes a note by name, from the caller’s space or global notes, asking which when both have the name', async () => {
+  const { garage, create, tool, sessions } = await start()
+  const app = create('App')
+  const other = create('Other')
+  const spaceDir = join(garage, 'chats', app, 'notes')
+  const globalDir = join(garage, 'extensions', 'notes')
+  await tool(app, 'write_note', { name: 'Tests', description: 'x', body: 'space' })
+  await tool(app, 'write_note', { name: 'Tests', description: 'x', body: 'global', scope: 'global' })
+  await tool(app, 'write_note', { name: 'Deploys', description: 'x', body: 'ship' })
+
+  const both = await tool(app, 'delete_note', { name: 'Tests' })
+  expect(both).toMatchObject({ isError: true })
+  expect(both.text).toContain('say which with scope')
+  expect(existsSync(join(spaceDir, 'tests.md'))).toBe(true)
+  expect(existsSync(join(globalDir, 'tests.md'))).toBe(true)
+
+  const gone = await tool(app, 'delete_note', { name: 'tests', scope: 'space' })
+  expect(gone.isError).toBe(false)
+  expect(JSON.parse(gone.text)).toMatchObject({ deleted: { name: 'Tests', scope: 'space' } })
+  expect(existsSync(join(spaceDir, 'tests.md'))).toBe(false)
+  expect(existsSync(join(globalDir, 'tests.md'))).toBe(true)
+
+  // Another space can't reach this space's notes.
+  expect(await tool(other, 'delete_note', { name: 'Deploys' })).toMatchObject({ isError: true })
+  expect(existsSync(join(spaceDir, 'deploys.md'))).toBe(true)
+
+  // A worker deletes from its space; Home reaches global notes only.
+  const spawned = await tool(app, 'spawn_worker', { task: 'Look' })
+  await until(() => sessions.at(-1)!.prompt === 'Look')
+  const worker = JSON.parse(spawned.text).chatId as string
+  expect((await tool(worker, 'delete_note', { name: 'Deploys' })).isError).toBe(false)
+  expect(existsSync(join(spaceDir, 'deploys.md'))).toBe(false)
+  expect(await tool('main', 'delete_note', { name: 'Tests', scope: 'space' })).toMatchObject({ isError: true })
+  expect((await tool('main', 'delete_note', { name: 'Tests' })).isError).toBe(false)
+  expect(existsSync(join(globalDir, 'tests.md'))).toBe(false)
+})
+
+it('picks the note to delete by exact name first, then by file', () => {
+  const notes = [
+    note({ key: 'global:c-tests.md', name: 'C tests', file: 'c-tests.md' }),
+    note({ key: 's:deploys.md', name: 'Deploys', scope: 'space', spaceId: 's', file: 'deploys.md' }),
+  ]
+  expect(noteToDelete(notes, 'c++ tests').name).toBe('C tests')
+  expect(noteToDelete(notes, 'deploys', 'space').name).toBe('Deploys')
+  expect(() => noteToDelete(notes, 'deploys', 'global')).toThrow('No note named "deploys" in global notes')
+})
+
+it('shows notes changed outside Kothar in an open Notes tab', async () => {
+  const { garage, create, panel, views } = await start()
+  const app = create('App')
+  const shows = (text: string) => views(app).some((m) => m.type === 'extension.panel' && JSON.stringify(m.view).includes(text))
+  // The space has no notes folder yet: it's waited for.
+  expect(JSON.stringify(await panel(app))).toContain('No notes for this space yet')
+  const dir = join(garage, 'chats', app, 'notes')
+  mkdirSync(dir)
+  writeFileSync(join(dir, 'deploys.md'), noteText('Deploys', 'Shipping', 'ship'))
+  await until(() => shows('"title":"Deploys"'))
+
+  writeFileSync(join(dir, 'deploys.md'), noteText('Deploys', 'Shipping', 'ship on Fridays'))
+  await until(() => shows('ship on Fridays'))
+
+  const global = join(garage, 'extensions', 'notes')
+  mkdirSync(global, { recursive: true })
+  writeFileSync(join(global, 'style.md'), noteText('Style', '', 'short'))
+  await until(() => shows('"title":"Style"'))
+
+  rmSync(join(dir, 'deploys.md'))
+  await until(() => {
+    const last = views(app).at(-1)
+    return last?.type === 'extension.panel' && !JSON.stringify(last.view).includes('"title":"Deploys"')
+  })
+})
+
+it('stops watching a space’s notes when told to forget it, and everything on close', async () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-notes-watch-')))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  const seen: string[] = []
+  const watcher = noteWatcher((owner) => seen.push(owner), 20)
+  cleanups.push(() => watcher.closeAll())
+  mkdirSync(join(dir, 'a'))
+  watcher.add(join(dir, 'a'), 'a')
+  watcher.add(join(dir, 'b'), 'b')
+  writeFileSync(join(dir, 'a', 'x.md'), 'x')
+  await until(() => seen.includes('a'))
+  // A folder that didn't exist is watched for notes appearing in it.
+  mkdirSync(join(dir, 'b'))
+  writeFileSync(join(dir, 'b', 'x.md'), 'x')
+  await until(() => seen.includes('b'))
+  watcher.forget('a')
+  seen.length = 0
+  writeFileSync(join(dir, 'a', 'y.md'), 'y')
+  writeFileSync(join(dir, 'b', 'y.md'), 'y')
+  await until(() => seen.includes('b'))
+  await new Promise((r) => setTimeout(r, 100))
+  expect(seen).not.toContain('a')
 })
