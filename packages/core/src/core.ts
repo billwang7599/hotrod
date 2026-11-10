@@ -99,17 +99,16 @@ import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
 import { verdictOf } from './permissions.ts'
+import { buildInstructions } from './instructions.ts'
+
+// Kept here too, for code that imports them from the core.
+export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
 // A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
-export const WRITE_RULES =
-  'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
 const WORKER_SETUP = "A worker uses its space's setup and can't have its own"
-export const CHECKOUT_RULES =
-  'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
-  "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
 const GIT_TIMEOUT_MS = 120_000
 const BRANCH_SLUG_MAX_CHARS = 40
 // An extension's notification (host.notify), cut to what a system notification shows anyway.
@@ -2078,26 +2077,14 @@ function openLockedCore(options: {
     callExtensions('onTurnStarted', (extension, context) => extension.onTurnStarted!(started, context))
 
     const items = contextItems(chat).filter((item) => item.enabled)
-    const contextText = items.flatMap(({ section, path, text, binary }) => {
-      if (binary) {
-        return [`The file ${path} is not text, so it isn't pasted here. Open it with your tools when you need it.`]
-      }
-      if (!text.trim()) return []
-      return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
-    })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
-    // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.
     const setup = setupOf(chat)
-    const setupText = setup?.instructions ? [`Instructions from the setup "${setup.name}":\n\n${setup.instructions}`] : []
     const role = extensionChatOf(chat)?.instructions
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
     const spawns = zoomable && !chat.info.worker && isOnFor(WORKERS_EXTENSION, chat)
     const forSession = { chat: detailOf(chat), tools: zoomable }
-    const memory = [
-      ...(spawns ? [String(extensionValues(WORKERS_EXTENSION).instructions)] : []),
-      ...memoryInstructions(forSession, chat),
-      ...(parentView ? [`Your parent chat's memory when it started you:\n\n${parentView}`] : []),
-    ]
+    const workers = spawns ? String(extensionValues(WORKERS_EXTENSION).instructions) : undefined
+    const memory = memoryInstructions(forSession, chat)
     const extensionInstructions = watchersOf('instructions', chat).flatMap((extension) => {
       try {
         const text = extension.instructions!(forSession, contextOf(extension))
@@ -2116,17 +2103,17 @@ function openLockedCore(options: {
 
     const start = (checkouts: Checkout[]) => {
       const cwd = checkouts[0]?.worktree.path ?? workDir
-      const rules = [
-        ...(sandbox ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []),
-        ...(checkouts.length
-          ? [
-              [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.worktree.path} (branch ${c.worktree.branch})`)]
-                .join('\n'),
-            ]
-          : []),
-      ]
-      const parts = [...(role ? [role] : []), ...rules, ...extensionInstructions, ...memory, ...setupText, ...contextText]
-      const instructions = parts.join('\n\n')
+      const instructions = buildInstructions({
+        role,
+        ...(sandbox && { workDir }),
+        checkouts: checkouts.map(({ folder, worktree }) => ({ folder, path: worktree.path, branch: worktree.branch })),
+        extensions: extensionInstructions,
+        workers,
+        memory,
+        parentView,
+        setup,
+        items,
+      })
       const extraDirs = [
         ...(cwd === workDir ? [] : [workDir]),
         ...checkouts.slice(1).map((c) => c.worktree.path),
