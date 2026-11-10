@@ -444,6 +444,9 @@ export type ChatState = ChatInfo & {
   run?: Run
   status: ChatStatus
   entries: ChatEntry[]
+  // Where entries starts in the chat's log: the UI gets the latest page, and asks for older ones (chat.history).
+  // Absent: from the start.
+  from?: number
   draft: string
   queue: QueuedMessage[]
   // What extensions are waiting on the user for, while the turn runs (ExtensionHost.wait).
@@ -462,6 +465,8 @@ export type ClientMessage =
   | { type: 'chat.delete'; chatId: string }
   // The user has seen the chat's latest turn.
   | { type: 'chat.read'; chatId: string }
+  // The page of the chat's log before entry `before`, reaching back to entry `to` if given.
+  | { type: 'chat.history'; chatId: string; before: number; to?: number }
   // A model of the chat's own (on `engine`, else its current one), or none to follow its model list again; and a
   // thinking level of its own, or none to take the list's.
   | { type: 'chat.setModel'; chatId: string; engine?: string; model?: string; thinking?: ThinkingLevel }
@@ -544,6 +549,8 @@ export type SearchHit = {
   snippet: string
   match: { start: number; length: number }
   nth: number
+  // Where the message is in the chat's log.
+  entry: number
 }
 
 export const BAD_TOKEN_CLOSE_CODE = 4401
@@ -571,6 +578,8 @@ export type CoreMessage =
   | { type: 'chat.updated'; chat: ChatInfo & { run?: Run } }
   | { type: 'chat.removed'; chatId: string }
   | { type: 'chat.entry'; chatId: string; entry: ChatEntry }
+  // The answer to chat.history: the log's entries from `from` up to `before`.
+  | { type: 'chat.history'; chatId: string; before: number; from: number; entries: ChatEntry[] }
   | { type: 'chat.delta'; chatId: string; text: string }
   | { type: 'chat.thinking'; chatId: string; text: string }
   | { type: 'chat.status'; chatId: string; status: ChatStatus }

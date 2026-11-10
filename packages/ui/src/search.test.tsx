@@ -37,6 +37,7 @@ const hit = (chatId: string, nth = 0): SearchHit => ({
   snippet: 'the web deploy is done',
   match: { start: 4, length: 3 },
   nth,
+  entry: nth,
 })
 
 test('with no query it lists recent chats, the open one last, and never workers', () => {
@@ -147,7 +148,7 @@ test('typing searches the core once, after a pause, and shows its hits with the 
   key('ArrowDown')
   key('Enter')
   expect(selected).toEqual(['api'])
-  expect(takeReveal('api')).toEqual({ chatId: 'api', query: 'web', nth: 2 })
+  expect(takeReveal('api')).toEqual({ chatId: 'api', query: 'web', nth: 2, entry: 2 })
   expect(takeReveal('api')).toBeNull()
 })
 

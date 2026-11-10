@@ -29,12 +29,13 @@ export function searchChats(chats: readonly Searchable[], query: string, limit =
   const hits: SearchHit[] = []
   for (const chat of chats) {
     let nth = 0
-    for (const entry of chat.entries) {
+    for (const [index, entry] of chat.entries.entries()) {
       const found = textOf(entry)
       if (!found) continue
       const match = pattern.exec(found.text)
       if (!match) continue
-      hits.push({ chatId: chat.id, at: entry.at, kind: found.kind, nth: nth++, ...snippet(found.text, match.index, match[0].length) })
+      const { at, ...rest } = { at: entry.at, ...snippet(found.text, match.index, match[0].length) }
+      hits.push({ chatId: chat.id, at, kind: found.kind, nth: nth++, entry: index, ...rest })
     }
   }
   return hits.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit)

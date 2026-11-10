@@ -11,10 +11,13 @@ export const SEARCH_DEBOUNCE_MS = 150
 const MAX_NAMES = 8
 const MAX_RECENT = 12
 
-/** A message match the chat view scrolls to once it opens: the nth message in the chat whose text holds the query. */
-export type Reveal = { chatId: string; query: string; nth: number }
+/**
+ * A message match the chat view scrolls to once it opens: the nth message in the chat whose text holds the query, at
+ * `entry` in its log (which the view loads back to first, if it's older than what's loaded).
+ */
+export type Reveal = { chatId: string; query: string; nth: number; entry?: number }
 let pendingReveal: Reveal | null = null
-const revealLater = (reveal: Reveal) => {
+export const revealLater = (reveal: Reveal) => {
   pendingReveal = reveal
 }
 export const takeReveal = (chatId: string): Reveal | null => {
@@ -117,7 +120,7 @@ export function SearchPalette({ open, close, chats, selectedId, search, connecte
 
   const choose = (result: Result | undefined) => {
     if (!result) return
-    if (result.hit) revealLater({ chatId: result.chat.id, query: trimmed, nth: result.hit.nth })
+    if (result.hit) revealLater({ chatId: result.chat.id, query: trimmed, nth: result.hit.nth, entry: result.hit.entry })
     select(result.chat.id)
     close()
   }
@@ -251,6 +254,15 @@ function PaletteRow({ index, result, active, heading, hover, choose }: RowProps)
       </li>
     </>
   )
+}
+
+/** Which match on screen the reveal's message is: how many loaded messages before it (from `from` on) match too. */
+export function localNth(entries: readonly { type: string; text?: string }[], from: number, reveal: Reveal) {
+  const q = reveal.query.toLowerCase()
+  const message = (e: { type: string }) => ['user.message', 'text.completed', 'worker.report'].includes(e.type)
+  return entries
+    .slice(0, Math.max(0, (reveal.entry ?? 0) - from))
+    .filter((e) => message(e) && (e.text ?? '').toLowerCase().includes(q)).length
 }
 
 /**

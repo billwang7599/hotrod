@@ -94,6 +94,7 @@ describe('the core', () => {
             snippet: 'deploy the widget',
             match: { start: 11, length: 6 },
             nth: 0,
+            entry: 0,
           },
         ],
       },

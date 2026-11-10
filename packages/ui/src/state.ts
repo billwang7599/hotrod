@@ -68,11 +68,19 @@ export type Item =
   // extension and panel: clicking the note opens that extension's panel.
   | { kind: 'note'; text: string; extension?: string; panel?: string }
 
+// Thinking as it streams in: never logged, but kept with the entries so items can be rebuilt from them.
+type Shown = ChatEntry | { type: 'thinking.shown'; text: string }
+
 export type ChatView = ChatInfo & {
   // What the chat runs now, as the core picked it; absent when nothing can run.
   run?: Run
   status: ChatStatus
   items: Item[]
+  // The part of the log loaded so far (the latest page, and older ones as the view scrolls up), where it starts in
+  // the log, and how many items older pages have added in front, so the items shown before keep their place.
+  entries?: Shown[]
+  from?: number
+  shift?: number
   draft: string
   queue: QueuedMessage[]
   waits?: ChatWait[]
@@ -152,8 +160,14 @@ const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pendi
 const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
 const NO_REPLY = '(No reply)'
 
-function applyEntry(items: Item[], entry: ChatEntry): Item[] {
+function applyEntry(items: Item[], entry: Shown): Item[] {
   switch (entry.type) {
+    case 'thinking.shown': {
+      const last = items.at(-1)
+      return last?.kind === 'thinking'
+        ? [...items.slice(0, -1), { kind: 'thinking', text: last.text + entry.text }]
+        : [...items, { kind: 'thinking', text: entry.text }]
+    }
     case 'user.message': {
       const { text, attachments } = entry
       const old = attachments ? null : OLD_REPORT.exec(text)
@@ -248,10 +262,33 @@ function applyEntry(items: Item[], entry: ChatEntry): Item[] {
   }
 }
 
-const toView = ({ entries, ...chat }: ChatState): ChatView => ({ ...chat, items: entries.reduce(applyEntry, []) })
+const toView = ({ entries, from, ...chat }: ChatState): ChatView => ({
+  ...chat,
+  items: entries.reduce(applyEntry, []),
+  entries,
+  from: from ?? 0,
+  shift: 0,
+})
 
-type Shown = { at: number; item: Item }
-type TranscriptRow = Shown | { at: number; steps: Item[] }
+// Streamed thinking joins the last thinking entry, as it joins the last thinking item.
+const withThinking = (entries: Shown[], text: string): Shown[] => {
+  const last = entries.at(-1)
+  return last?.type === 'thinking.shown'
+    ? [...entries.slice(0, -1), { type: 'thinking.shown', text: last.text + text }]
+    : [...entries, { type: 'thinking.shown', text }]
+}
+
+// An older page goes in front, and the items are built again from all the entries: a turn the page cut in two
+// joins up again.
+function withOlder(chat: ChatView, page: Extract<CoreMessage, { type: 'chat.history' }>): ChatView {
+  if (page.before !== chat.from || page.from >= page.before) return chat
+  const entries = [...page.entries, ...(chat.entries ?? [])]
+  const items = entries.reduce(applyEntry, [])
+  return { ...chat, entries, items, from: page.from, shift: (chat.shift ?? 0) + items.length - chat.items.length }
+}
+
+type ShownItem = { at: number; item: Item }
+type TranscriptRow = ShownItem | { at: number; steps: Item[] }
 
 const waiting = (item: Item) =>
   (item.kind === 'permission' && item.outcome === 'pending') ||
@@ -263,7 +300,7 @@ const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pen
 // waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
-  let turn: Shown[] = []
+  let turn: ShownItem[] = []
   const endTurn = (live: boolean) => {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
@@ -355,19 +392,19 @@ export function reduce(state: State, action: Action): State {
       return updateChat(state, action.chatId, (c) => ({
         ...c,
         items: applyEntry(c.items, action.entry),
+        ...(c.entries && { entries: [...c.entries, action.entry] }),
         draft: endsText(action.entry) ? '' : c.draft,
       }))
+    case 'chat.history':
+      return updateChat(state, action.chatId, (c) => withOlder(c, action))
     case 'chat.delta':
       return updateChat(state, action.chatId, (c) => ({ ...c, draft: c.draft + action.text }))
     case 'chat.thinking':
-      return updateChat(state, action.chatId, (c) => {
-        const last = c.items.at(-1)
-        const items: Item[] =
-          last?.kind === 'thinking'
-            ? [...c.items.slice(0, -1), { kind: 'thinking', text: last.text + action.text }]
-            : [...c.items, { kind: 'thinking', text: action.text }]
-        return { ...c, items }
-      })
+      return updateChat(state, action.chatId, (c) => ({
+        ...c,
+        items: applyEntry(c.items, { type: 'thinking.shown', text: action.text }),
+        ...(c.entries && { entries: withThinking(c.entries, action.text) }),
+      }))
     case 'chat.status':
       return updateChat(state, action.chatId, (c) => ({ ...c, status: action.status }))
     case 'chat.queue':

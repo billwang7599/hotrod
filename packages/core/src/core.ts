@@ -95,6 +95,7 @@ import {
 import { openModels, type ModelSettings } from './models.ts'
 import { moveExtensionsDir, renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
+import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
@@ -617,6 +618,11 @@ function openLockedCore(options: {
     queue: chat.queue,
     ...(chat.waits.size && { waits: waitsOf(chat) }),
   })
+  // A chat as the UI's views get it: only the latest page of its log, which the UI pages back through (chat.history).
+  const shownState = (chat: Chat): ChatState => {
+    const { from, entries } = pageOf(chat.entries)
+    return { ...state(chat), entries, ...(from > 0 && { from }) }
+  }
 
   const waitsOf = (chat: Chat): ChatWait[] => [...chat.waits].map(([extension, wait]) => ({ extension, ...wait }))
   // An extension's wait, or none: the chat waits while any extension or request does, and runs again once none does.
@@ -1523,7 +1529,7 @@ function openLockedCore(options: {
     if (parent && parentMessages?.length) {
       writeFileSync(join(chat.dir, PARENT_VIEW_FILE), viewOf(parent, parentMessages, takesMcp(engine)))
     }
-    broadcast({ type: 'chat.added', chat: state(chat) })
+    broadcast({ type: 'chat.added', chat: shownState(chat) })
     callExtensions('onChatCreated', (extension, context) => extension.onChatCreated!(detailOf(chat), context))
     return chat.info
   }
@@ -1647,7 +1653,7 @@ function openLockedCore(options: {
     if (!enabled) chats.forEach((chat) => setWait(chat, extension.id, undefined))
     if (enabled) startExtension(extension)
     else stopExtension(extension)
-    if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
+    if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: shownState(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
     if (extension.panels?.length || extension.commands?.length) shownChats().forEach((chat) => broadcast(extensionsOf(chat)))
   }
@@ -2509,7 +2515,7 @@ function openLockedCore(options: {
     modelLists: models.lists,
     setups: jobSetups.list,
     memory: () => settings.memory ?? {},
-    chats: () => shownChats().map(state),
+    chats: () => shownChats().map(shownState),
     workFolder,
     setWorkFolder,
     themes: marketplace.themes,
@@ -2552,6 +2558,11 @@ function openLockedCore(options: {
         case 'chat.read': {
           const chat = chatFor(message.chatId)
           return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
+        }
+        case 'chat.history': {
+          const { chatId, before, to } = message
+          const page = pageOf(chatFor(chatId).entries, Number(before), to === undefined ? undefined : Number(to))
+          return reply({ type: 'chat.history', chatId, before: page.from + page.entries.length, ...page })
         }
         case 'setup.save': {
           let answer: CoreMessage
