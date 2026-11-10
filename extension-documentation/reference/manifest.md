@@ -79,7 +79,8 @@ List only what you use. Every entry is something people have to agree to, and a 
 Before it imports `main.mjs`, Kothar reads its text for Node's own APIs: `run` for `child_process`, `network` for
 `fetch` or `node:https`, `files` for `node:fs`. Calls that load Node modules by name (`process.getBuiltinModule`,
 `createRequire`, `process.binding`) need all three. An extension that uses one without listing it doesn't start, and
-its row says which.
+its row says which. Comments don't count, nor does a method that happens to be named `fetch` (`cache.fetch(key)`) or a
+module name outside `import`, `from` or `require` (`['fs', 'net']`).
 
 This catches a forgotten entry. It isn't a sandbox: community extensions still run inside Kothar, and code can reach
 Node in ways a text check can't see. Reviewers check that an extension's `uses` is honest when it joins the

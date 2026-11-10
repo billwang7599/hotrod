@@ -190,7 +190,7 @@ Kothar keeps this record as plain files in your garage:
   and hashes.
 
 Extensions that were already on when Kothar started keeping approvals are approved as they were, once, and marked
-`carriedOver`.
+`carriedOver`. That includes ones whose own switch was on while **Community extensions** was off.
 
 ### Install from a folder
 

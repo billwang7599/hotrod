@@ -65,7 +65,11 @@ export async function startCore(
   const defaultEngine = engine ?? adapters[0]?.id ?? ''
   const marketplaceUrl = envVar(env, 'MARKETPLACE_URL')
   const githubToken = envVar(env, 'GITHUB_TOKEN')
-  const community = options.extensions ? [] : await loadCommunityExtensions(garage, (id) => savedOn(garage, id))
+  const community = options.extensions ? [] : await loadCommunityExtensions(
+    garage,
+    (id) => savedOn(garage, id),
+    (id) => savedSwitch(garage, id),
+  )
   const core = openCore({
     garage,
     adapters,
@@ -101,12 +105,21 @@ export async function startCore(
 // Whether settings.json has community extensions on and this one turned on, read before the core opens so only
 // extensions that are on get imported. Settings saved when extensions were mods are read under the new names.
 export function savedOn(garage: string, id: string) {
+  return savedSettings(garage)?.communityExtensions === true && savedSwitch(garage, id)
+}
+
+// The extension's own switch in settings.json, whatever the Community extensions switch says.
+export function savedSwitch(garage: string, id: string) {
+  return savedSettings(garage)?.extensions?.[id]?.enabled === true
+}
+
+function savedSettings(garage: string) {
   try {
     const settings = JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))
     renameSettings(settings)
-    return settings.communityExtensions === true && settings.extensions?.[id]?.enabled === true
+    return settings
   } catch {
-    return false
+    return undefined
   }
 }
 

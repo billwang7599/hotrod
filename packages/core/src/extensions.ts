@@ -119,17 +119,75 @@ export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check
-// sees). The escape hatches that load Node modules by name need all three.
-const NODE_USES: [RegExp, ExtensionUse[]][] = [
-  [/['"`](?:node:)?(?:child_process|worker_threads|cluster)['"`]/, ['run']],
-  [/['"`](?:node:)?(?:https?|http2|net|tls|dgram|dns(?:\/promises)?|undici)['"`]/, ['network']],
-  [/\b(?:fetch|WebSocket|EventSource|XMLHttpRequest)\s*\(|\bnew\s+(?:WebSocket|EventSource|XMLHttpRequest)\b/, ['network']],
-  [/['"`](?:node:)?fs(?:\/promises)?['"`]/, ['files']],
-  [/\b(?:getBuiltinModule|createRequire)\s*\(|process\s*\.\s*(?:binding|_linkedBinding|dlopen)\b/, ['run', 'network', 'files']],
+// sees). Module names count only where they're loaded (import, from, require), and calls only outside strings and
+// comments, so a method named fetch, a comment or a plain list of names isn't a use. The escape hatches that load Node
+// modules by name need all three.
+const MODULE = (names: string) => new RegExp(`(?:\\bimport\\s*\\(?|\\bfrom|\\brequire\\s*\\()\\s*['"\`](?:node:)?(?:${names})['"\`]`)
+const NODE_MODULES: [RegExp, ExtensionUse[]][] = [
+  [MODULE('child_process|worker_threads|cluster'), ['run']],
+  [MODULE('https?|http2|net|tls|dgram|dns(?:/promises)?|undici'), ['network']],
+  [MODULE('fs(?:/promises)?'), ['files']],
+]
+const NODE_CALLS: [RegExp, ExtensionUse[]][] = [
+  [
+    /(?:(?<![\w$.])|\b(?:globalThis|global|self|window)\s*\.\s*)(?:fetch|WebSocket|EventSource|XMLHttpRequest)\s*\(|\bnew\s+(?:WebSocket|EventSource|XMLHttpRequest)\b/,
+    ['network'],
+  ],
+  [/\b(?:getBuiltinModule|createRequire)\s*\(|\bprocess\s*\.\s*(?:binding|_linkedBinding|dlopen)\b/, ['run', 'network', 'files']],
 ]
 
+// The source without its comments (code), and without the text inside its strings too (bare). Escapes are skipped, so
+// a regex like /https?:\/\// isn't read as a comment; a regex holding a quote can blank a little code, which only
+// misses a use.
+export function codeOf(source: string): { code: string; bare: string } {
+  let code = ''
+  let bare = ''
+  let quote = ''
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]!
+    if (quote) {
+      if (char === '\\') {
+        code += source.slice(i, i + 2)
+        bare += '  '
+        i++
+      } else if (char === quote) {
+        quote = ''
+        code += char
+        bare += char
+      } else {
+        code += char
+        bare += char === '\n' ? char : ' '
+      }
+      continue
+    }
+    const next = source[i + 1]
+    if (char === '/' && next === '/') {
+      const end = source.indexOf('\n', i)
+      i = (end < 0 ? source.length : end) - 1
+      continue
+    }
+    if (char === '/' && next === '*') {
+      const end = source.indexOf('*/', i + 2)
+      i = (end < 0 ? source.length : end + 2) - 1
+      code += ' '
+      bare += ' '
+      continue
+    }
+    if (char === "'" || char === '"' || char === '`') quote = char
+    const kept = char === '\\' ? source.slice(i, i + 2) : char
+    if (char === '\\') i++
+    code += kept
+    bare += kept
+  }
+  return { code, bare }
+}
+
 export function nodeUsesOf(source: string): ExtensionUse[] {
-  return sortUses(NODE_USES.flatMap(([pattern, uses]) => (pattern.test(source) ? uses : [])))
+  const { code, bare } = codeOf(source)
+  return sortUses([
+    ...NODE_MODULES.flatMap(([pattern, uses]) => (pattern.test(code) ? uses : [])),
+    ...NODE_CALLS.flatMap(([pattern, uses]) => (pattern.test(bare) ? uses : [])),
+  ])
 }
 
 // The Extension fields an extension sets, as uses. Empty lists count as unset.
@@ -166,10 +224,16 @@ export type CommunityExtension = CommunityInstall & { extension?: Extension; loa
 
 // Loads <garage>/community/<id>/main.mjs for each extension that's on, and only while its files are the ones the user
 // turned on (see approvals.ts). An extension that's off is never imported, so installing one runs none of its code.
-export async function loadCommunityExtensions(garage: string, isOn: (id: string) => boolean): Promise<CommunityExtension[]> {
+// switchedOn is the extension's own switch alone (isOn also needs the Community extensions switch); it decides which
+// extensions a garage without approvals yet carries over.
+export async function loadCommunityExtensions(
+  garage: string,
+  isOn: (id: string) => boolean,
+  switchedOn: (id: string) => boolean = isOn,
+): Promise<CommunityExtension[]> {
   const loaded: CommunityExtension[] = []
   const installs = installedExtensions(garage)
-  const approvals = approvalsFor(garage, installs, isOn)
+  const approvals = approvalsFor(garage, installs, switchedOn)
   for (const install of installs) {
     const { manifest, dir } = install
     if (!isOn(manifest.id)) {

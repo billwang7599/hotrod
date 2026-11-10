@@ -128,13 +128,15 @@ export function logInstall(garage: string, install: CommunityInstall, updated: b
 }
 
 // The approval for each extension that's on, starting approvals in a garage that has none: an extension the user had
-// already turned on is approved as it is, once, so updating Kothar doesn't turn everything off.
-export function approvalsFor(garage: string, installs: CommunityInstall[], isOn: (id: string) => boolean) {
+// already turned on is approved as it is, once, so updating Kothar doesn't turn everything off. switchedOn is the
+// extension's own switch, whatever the Community extensions switch says: one that's on while that switch is off is
+// still the user's choice, and would otherwise be held the day they turn community extensions on again.
+export function approvalsFor(garage: string, installs: CommunityInstall[], switchedOn: (id: string) => boolean) {
   const kept = readApprovals(garage)
   if (kept) return kept
   const approvals: Record<string, Approval> = {}
   for (const install of installs) {
-    if (isOn(install.manifest.id)) approvals[install.manifest.id] = approve(garage, install, true)
+    if (switchedOn(install.manifest.id)) approvals[install.manifest.id] = approve(garage, install, true)
   }
   if (!Object.keys(approvals).length && installs.length) writeApprovals(garage, {})
   return readApprovals(garage) ?? approvals

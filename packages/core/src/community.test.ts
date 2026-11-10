@@ -11,7 +11,7 @@ import { FREE_HOST_CALLS, guardHost, HOST_USES, loadCommunityExtensions, nodeUse
 import { approvalsFile, historyFile } from './approvals.ts'
 import { checkExtensionManifest, type CatalogEntry, type CoreMessage } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
-import { runRestartable, savedOn } from './main.ts'
+import { runRestartable, savedOn, savedSwitch } from './main.ts'
 
 let dirs: string[] = []
 let cores: Core[] = []
@@ -127,6 +127,22 @@ describe('the manifest', () => {
     expect(nodeUsesOf(`import https from 'node:https'`)).toEqual(['network'])
     expect(nodeUsesOf(`process.getBuiltinModule('fs')`)).toEqual(['run', 'network', 'files'])
     expect(nodeUsesOf(`prefetch(x); const fsName = 'fsx'; host.run('ls', [])`)).toEqual([])
+    expect(nodeUsesOf(`const { exec } = require('child_process')`)).toEqual(['run'])
+    expect(nodeUsesOf(`import 'node:net'`)).toEqual(['network'])
+    expect(nodeUsesOf(`export { readFile } from 'fs'`)).toEqual(['files'])
+    expect(nodeUsesOf('const fs = await import(`node:fs`)')).toEqual(['files'])
+    expect(nodeUsesOf(`const page = await globalThis.fetch(url)`)).toEqual(['network'])
+    expect(nodeUsesOf(`const x = 1 /* fine */; fetch(url)`)).toEqual(['network'])
+  })
+
+  it("doesn't count method names, comments or plain strings as Node use", () => {
+    expect(nodeUsesOf(`const hit = cache.fetch(key)`)).toEqual([])
+    expect(nodeUsesOf(`// we never call fetch() here\nconst a = 1`)).toEqual([])
+    expect(nodeUsesOf(`/* import fs from 'node:fs' */ const a = 1`)).toEqual([])
+    expect(nodeUsesOf(`const kinds = ['fs', 'net', 'child_process']`)).toEqual([])
+    expect(nodeUsesOf(`host.note('call fetch(url) yourself')`)).toEqual([])
+    expect(nodeUsesOf(`const url = /https?:\\/\\//; fetch(url)`)).toEqual(['network'])
+    expect(nodeUsesOf(`const s = 'it\\'s fine'; require('node:fs')`)).toEqual(['files'])
   })
 })
 
@@ -684,6 +700,22 @@ describe('reviewed versions', () => {
     install(garage, 'gone')
     const again = await loadCommunityExtensions(garage, () => true)
     expect(again[0]).toMatchObject({ held: 'it was never turned on in this Kothar' })
+  })
+
+  it('carries over extensions that are on while the Community extensions switch is off', async () => {
+    const garage = tempGarage()
+    install(garage, 'kept')
+    install(garage, 'idle')
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityExtensions: false, extensions: { kept: { enabled: true } } }))
+    // The first launch after the upgrade, with community extensions off: nothing runs, but the user's choice is kept.
+    const first = await loadCommunityExtensions(garage, (id) => savedOn(garage, id), (id) => savedSwitch(garage, id))
+    expect(first.every((c) => !c.extension && !c.held)).toBe(true)
+    expect(Object.keys(JSON.parse(readFileSync(approvalsFile(garage), 'utf8')))).toEqual(['kept'])
+    // Turned on again later: it runs instead of being held.
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ communityExtensions: true, extensions: { kept: { enabled: true } } }))
+    const next = await loadCommunityExtensions(garage, (id) => savedOn(garage, id), (id) => savedSwitch(garage, id))
+    expect(next.find((c) => c.manifest.id === 'kept')!.extension?.id).toBe('kept')
+    expect(next.find((c) => c.manifest.id === 'kept')).not.toHaveProperty('held')
   })
 
   it('approves nothing when the approvals file is unreadable', async () => {
