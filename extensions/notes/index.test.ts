@@ -310,14 +310,48 @@ it('deletes a note by name, from the caller’s space or global notes, asking wh
   expect(existsSync(join(globalDir, 'tests.md'))).toBe(false)
 })
 
-it('picks the note to delete by exact name first, then by file', () => {
+it('picks the note to delete by exact name only, naming the closest note otherwise', () => {
   const notes = [
     note({ key: 'global:c-tests.md', name: 'C tests', file: 'c-tests.md' }),
     note({ key: 's:deploys.md', name: 'Deploys', scope: 'space', spaceId: 's', file: 'deploys.md' }),
   ]
-  expect(noteToDelete(notes, 'c++ tests').name).toBe('C tests')
+  expect(noteToDelete(notes, 'c tests').name).toBe('C tests')
   expect(noteToDelete(notes, 'deploys', 'space').name).toBe('Deploys')
-  expect(() => noteToDelete(notes, 'deploys', 'global')).toThrow('No note named "deploys" in global notes')
+  // "C++ tests" shares c-tests.md with "C tests", but isn't its name: refused, and the error names it.
+  expect(() => noteToDelete(notes, 'C++ tests')).toThrow('No note named "C++ tests"; the closest is "C tests" (global)')
+  expect(() => noteToDelete(notes, 'deploys', 'global')).toThrow(
+    'No note named "deploys" in global notes; the closest is "Deploys" (space)',
+  )
+  expect(() => noteToDelete(notes, 'Release')).toThrow('No note named "Release"; list_notes lists them')
+
+  // A global and a space note sharing a file but not a name: neither is picked for a third name with that file.
+  const shared = [
+    note({ key: 'global:c-tests.md', name: 'C tests', file: 'c-tests.md' }),
+    note({ key: 's:c-tests.md', name: 'C# tests', scope: 'space', spaceId: 's', file: 'c-tests.md' }),
+  ]
+  expect(() => noteToDelete(shared, 'C++ tests')).toThrow('No note named "C++ tests"')
+  expect(noteToDelete(shared, 'C# tests').scope).toBe('space')
+  expect(noteToDelete(shared, 'c tests').scope).toBe('global')
+})
+
+it('never deletes a note whose name only shares the file of the name asked for', async () => {
+  const { garage, create, tool } = await start()
+  const app = create('App')
+  const spaceDir = join(garage, 'chats', app, 'notes')
+  const globalDir = join(garage, 'extensions', 'notes')
+  await tool(app, 'write_note', { name: 'C++ tests', description: 'x', body: 'global', scope: 'global' })
+  await tool(app, 'write_note', { name: 'C# tests', description: 'x', body: 'space' })
+
+  const refused = await tool(app, 'delete_note', { name: 'C tests' })
+  expect(refused).toMatchObject({ isError: true })
+  expect(refused.text).toContain('No note named "C tests"; the closest is "C++ tests" (global)')
+  expect(existsSync(join(globalDir, 'c-tests.md'))).toBe(true)
+  expect(existsSync(join(spaceDir, 'c-tests.md'))).toBe(true)
+
+  // The exact name still deletes, from the scope that has it.
+  expect((await tool(app, 'delete_note', { name: 'c# tests' })).isError).toBe(false)
+  expect(existsSync(join(spaceDir, 'c-tests.md'))).toBe(false)
+  expect(existsSync(join(globalDir, 'c-tests.md'))).toBe(true)
 })
 
 it('shows notes changed outside Kothar in an open Notes tab', async () => {

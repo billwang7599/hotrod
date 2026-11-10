@@ -240,3 +240,36 @@ it('rotates only to accounts of the same provider, or ones whose provider is unk
   hit('oa-2')
   expect(used).toEqual(['oa-2', 'default'])
 })
+
+it('from an account whose provider is unknown, rotates only to others whose provider is unknown', () => {
+  const used: string[] = []
+  const notes: string[] = []
+  const accounts = [
+    { id: 'default', name: 'Default', signedIn: true },
+    { id: 'oa-1', name: 'OpenAI 1', signedIn: true, provider: 'openai' },
+    { id: 'an-1', name: 'Anthropic 1', signedIn: true, provider: 'anthropic' },
+  ]
+  let active = 'default'
+  const host = {
+    accounts: () => ({ engine: 'opencode', active, accounts }),
+    useAccount: (_engine: string, id: string) => void used.push((active = id)),
+    note: (_chat: string, text: string) => void notes.push(text),
+    retry: () => {},
+    continue: () => {},
+  }
+  const extension = createAccountRotation(() => Date.parse('2026-11-08T09:00:00Z'))
+  const hit = (account: string) =>
+    extension.onLimitReached!(
+      { engine: 'opencode', account, chat: { id: 'c1' }, message: 'Out of usage', output: false } as never,
+      { values: { accounts: '' }, host } as never,
+    )
+  // The chat's model could be either provider's, so neither saved account is guessed at.
+  hit('default')
+  expect(used).toEqual([])
+  expect(notes).toEqual(["Default hit its usage limit, and there's no other account to switch to"])
+
+  // Another account without a provider is still a fair switch.
+  accounts.push({ id: 'default-2', name: 'Default 2', signedIn: true })
+  hit('default')
+  expect(used).toEqual(['default-2'])
+})

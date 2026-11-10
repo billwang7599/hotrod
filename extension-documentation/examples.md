@@ -92,7 +92,10 @@ Account rotation switches to the next saved account when a turn hits its usage l
 
 1. `host.accounts(limit.engine)` lists the engine's saved accounts.
 2. It picks the next account that isn't limited, and calls `host.useAccount`. On engines where each account signs in
-   to one provider (OpenCode), it skips accounts of another `provider`, since the chat's model won't run there.
+   to one provider (OpenCode), it skips accounts of another `provider`, since the chat's model won't run there. An
+   account with no `provider` (the engine's own login) is a fallback for every provider, but from one the chat's
+   provider can't be told: extensions don't see a chat's model. So it then rotates only to other accounts without a
+   `provider` rather than guess.
 3. If the turn hadn't produced anything yet (`limit.output` is `false`), `host.retry` sends the message again.
    Otherwise `host.continue` carries on the turn, with a prompt that tells the agent not to redo finished work.
 4. `host.note` tells you what happened.

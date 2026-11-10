@@ -70,6 +70,8 @@ text), and the agent reads one in full when it fits the task.
   clearly worth keeping. A note of the same name in the same place is replaced. A note's file is named from its name,
   so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is refused, from the
   panel too, rather than overwriting the first. The panel also refuses a new note or a rename to a name already taken.
+  `delete_note` deletes only a note with exactly the name given (letter case aside), never one that merely shares its
+  file; otherwise it refuses and names the closest note.
   They delete a note when you ask, or when one they saved turned out wrong: from their space (a worker's is its space's)
   or global notes. When both have a note of that name, they must say which.
 

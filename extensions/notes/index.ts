@@ -203,16 +203,30 @@ export function setNoteOn(host: ExtensionHost, chatId: string, key: string, on: 
   else storage.remove(OFF_FILE)
 }
 
-// Finds the note delete_note names, among the notes the caller can see. scope picks between a global note and a space
-// note of the same name; without it, that case is refused rather than guessed.
+// The note whose name is closest to a name no note has, for an error: one sharing its file (names that differ only in
+// punctuation, such as "C++ tests" and "C tests"), else one whose name contains it or is contained in it.
+const closestTo = (notes: Note[], label: string) => {
+  const wanted = label.toLowerCase()
+  const slug = slugOf(label)
+  return (
+    notes.find((note) => slug && note.file.toLowerCase() === `${slug}.md`) ??
+    notes.find((note) => wanted && (note.name.toLowerCase().includes(wanted) || wanted.includes(note.name.toLowerCase())))
+  )
+}
+
+// Finds the note delete_note names, among the notes the caller can see, by exact name only (letter case aside): a
+// deletion never falls back to a note that merely shares the name's file. scope picks between a global note and a
+// space note of the same name; without it, that case is refused rather than guessed.
 export function noteToDelete(notes: Note[], name: unknown, scope?: unknown): Note {
-  const wanted = scope === 'global' || scope === 'space' ? notes.filter((note) => note.scope === scope) : notes
+  const scoped = scope === 'global' || scope === 'space'
+  const wanted = scoped ? notes.filter((note) => note.scope === scope) : notes
   const label = oneLine(name)
   const exact = wanted.filter((note) => note.name.toLowerCase() === label.toLowerCase())
   if (exact.length > 1) throw new Error(`There's a global note and a space note named "${label}": say which with scope`)
-  const note = exact[0] ?? find(wanted, name)
-  if (!note) throw new Error(`No note named "${label}"${scope === 'global' || scope === 'space' ? ` in ${scope} notes` : ''}; list_notes lists them`)
-  return note
+  if (exact[0]) return exact[0]
+  const closest = closestTo(notes, label)
+  const hint = closest ? `; the closest is "${closest.name}" (${closest.scope === 'global' ? 'global' : 'space'})` : ''
+  throw new Error(`No note named "${label}"${scoped ? ` in ${scope} notes` : ''}${hint}; list_notes lists them`)
 }
 
 // Watches the note folders a Notes tab has shown, so a note added, edited or deleted outside Kothar (in an editor, by
@@ -437,8 +451,8 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
         description:
           'Deletes a saved note, by name: only when the user asks, or a note you saved is wrong or no longer true ' +
           '(to correct one, write_note it again instead). Reaches the notes this chat can read: its space’s (a worker ' +
-          'deletes from its space) and global ones, which go from every chat. scope ("space" or "global") picks one ' +
-          'when both have a note of that name.',
+          'deletes from its space) and global ones, which go from every chat. The name must be the note\u2019s exact name ' +
+          '(letter case aside). scope ("space" or "global") picks one when both have a note of that name.',
         inputSchema: {
           type: 'object',
           properties: { name: { type: 'string', minLength: 1 }, scope: { type: 'string', enum: ['space', 'global'] } },

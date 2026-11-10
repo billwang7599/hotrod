@@ -60,9 +60,11 @@ export function createAccountRotation(now = () => Date.now()): Extension {
       const free = (account: ExtensionAccount) => until(account) <= at
       const nameOf = (id: string) => saved.accounts.find((a) => a.id === id)?.name ?? id
       // On engines with providers, only an account of the same provider can run the chat's model. One whose provider
-      // isn't known (the engine's own login) may hold any.
+      // isn't known (the engine's own login) may hold any, so it stays a fallback for every provider. From such an
+      // account the chat's provider can't be told (extensions don't see a chat's model), so the ring keeps only other
+      // accounts without one rather than guess: on engines without providers that's every account.
       const provider = saved.accounts.find((a) => a.id === account)?.provider
-      const runs = (a: ExtensionAccount) => a.id === account || !provider || !a.provider || a.provider === provider
+      const runs = (a: ExtensionAccount) => a.id === account || !a.provider || a.provider === provider
       const ring = ringOf(saved.accounts, String(values.accounts ?? '')).filter(runs)
       const chatId = limit.chat.id
 
