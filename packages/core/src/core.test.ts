@@ -2867,6 +2867,72 @@ describe('one core per garage', () => {
     await until(() => emits.length === 2)
     expect(statusOf(t.core, other.id)).toBe('running')
   })
+
+  // A space with a worker saved on disk, on an engine whose sessions only end when the test says so.
+  const withWorker = () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const prompts: string[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt: (text) => prompts.push(String(text)), interrupt() {}, respond() {}, close() {} }
+    })
+    const first = setup(adapter)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    mkdirSync(join(first.garage, 'chats', 'sub'), { recursive: true })
+    const saved = { id: 'sub', name: 'Sub', parentId: space.id, worker: true, engine: 'stub', createdAt: at }
+    writeFileSync(join(first.garage, 'chats', 'sub', 'chat.json'), JSON.stringify(saved))
+    const t = setup(adapter, first.garage)
+    return { t, space, emits, prompts }
+  }
+
+  it('takes a worker whose folder is deleted mid-turn off the list at once, and tells its lead why', async () => {
+    const { t, space, emits, prompts } = withWorker()
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'go' })
+    await until(() => emits.length === 1)
+    rmSync(join(t.garage, 'chats', 'sub'), { recursive: true, force: true })
+
+    expect(() => emits[0]!({ type: 'text.delta', text: 'hi' })).not.toThrow()
+    expect(() => emits[0]!({ type: 'turn.completed' })).not.toThrow()
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringContaining('is gone') })
+    expect(t.messages).toContainEqual({ type: 'chat.removed', chatId: 'sub' })
+    expect(chatOf(t.core, 'sub')).toBeUndefined()
+    // The lead wakes with the worker's report, which says what happened.
+    await until(() => emits.length === 2)
+    expect(prompts.at(-1)).toContain('is gone')
+    expect(statusOf(t.core, space.id)).toBe('running')
+  })
+
+  it('never leaves a stopped worker stopping when its folder is gone and its session never ends', async () => {
+    const { t, emits } = withWorker()
+    t.handle({ type: 'chat.send', chatId: 'sub', text: 'go' })
+    await until(() => emits.length === 1)
+    rmSync(join(t.garage, 'chats', 'sub'), { recursive: true, force: true })
+    t.handle({ type: 'chat.interrupt', chatId: 'sub' })
+    expect(statusOf(t.core, 'sub')).toBe('stopping')
+    // Stop's grace runs out; the forced stop can't write to the log, and the worker leaves anyway.
+    await until(() => chatOf(t.core, 'sub') === undefined)
+    expect(t.messages).toContainEqual({ type: 'chat.removed', chatId: 'sub' })
+  })
+
+  it('keeps a stopped space whose folder is gone listed, idle, so it can be deleted', async () => {
+    const emits: ((event: EngineEvent) => void)[] = []
+    const adapter = stubAdapter((_machine, _options, emit) => {
+      emits.push(emit)
+      return { prompt() {}, interrupt() {}, respond() {}, close() {} }
+    })
+    const t = setup(adapter)
+    const chat = createChat(t, { name: 'Gone' })
+    t.handle({ type: 'chat.send', chatId: chat.id, text: 'go' })
+    await until(() => emits.length === 1)
+    rmSync(join(t.garage, 'chats', chat.id), { recursive: true, force: true })
+    t.handle({ type: 'chat.interrupt', chatId: chat.id })
+    await until(() => statusOf(t.core, chat.id) === 'idle')
+    expect(t.messages).toContainEqual({ type: 'error', message: expect.stringContaining('is gone') })
+    expect(t.messages).not.toContainEqual({ type: 'chat.removed', chatId: chat.id })
+    t.handle({ type: 'chat.delete', chatId: chat.id })
+    expect(chatOf(t.core, chat.id)).toBeUndefined()
+  })
 })
 
 describe('engine failures', () => {

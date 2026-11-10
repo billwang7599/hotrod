@@ -14,7 +14,8 @@ const DOTS: Record<ChatStatus, string> = {
   idle: 'bg-faint',
   running: 'bg-green animate-blink',
   waiting: 'bg-amber',
-  stopping: 'bg-amber',
+  // Amber means only "waiting on you": a chat on its way to idle blinks grey.
+  stopping: 'bg-muted animate-blink',
 }
 /** A folded row shows the busiest status among the workers it hides. */
 const BUSIEST: ChatStatus[] = ['waiting', 'stopping', 'running', 'idle']

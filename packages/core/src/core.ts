@@ -706,7 +706,8 @@ function openLockedCore(options: {
   }
 
   // A write for an engine event failed. If the chat's folder is gone, its session stops and it goes idle; either way
-  // the user sees why, and the core runs on.
+  // the user sees why, and the core runs on. A worker with no folder can do nothing more, so it leaves the way a
+  // finished one does, with its lead told why. A space or Home stays listed, idle, so the user decides what to do.
   const lostChat = (chat: Chat, error: unknown) => {
     const gone = !existsSync(chat.dir)
     broadcast({
@@ -721,6 +722,10 @@ function openLockedCore(options: {
     chat.turn = undefined
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
+    if (!chat.info.worker || !chats.has(chat.info.id)) return
+    const parent = parentOf(chat)
+    if (parent) reportErrors(() => enqueue(parent, reportOf(chat, `its folder ${chat.dir} is gone`)))
+    removeChats(familyOf(chat))
   }
 
   const reportErrors = (run: () => void) => {
@@ -1188,8 +1193,15 @@ function openLockedCore(options: {
     }
   }
 
-  const forceStop = (chat: Chat) =>
-    endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' })
+  // Runs from Stop's grace timer too, where a throw would leave the chat stopping for good: a chat whose folder is
+  // gone goes the way lostChat sends it.
+  const forceStop = (chat: Chat) => {
+    try {
+      endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' })
+    } catch (error) {
+      lostChat(chat, error)
+    }
+  }
 
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
@@ -2165,7 +2177,7 @@ function openLockedCore(options: {
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
-    if (!chat.session && chat.status === 'running') return forceStop(chat)
+    if (!chat.session && (chat.status === 'running' || chat.status === 'stopping')) return forceStop(chat)
     if (!chat.session) return
     if (force) return forceStop(chat)
     if (chat.status === 'stopping') return
