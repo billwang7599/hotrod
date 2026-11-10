@@ -16,7 +16,7 @@ All of these come from the extension API's types. The full source is
 |---|---|
 | `id` | The chat's id. |
 | `name` | Its name. |
-| `engine` | The engine it runs on, such as `claude-code`, `pi` or `codex`. |
+| `engine` | The engine it runs on, such as `claude-code`, `pi`, `codex` or `opencode`. |
 | `parentId` | Set for a worker: the chat that started it. |
 | `worker` | `true` for a worker. |
 

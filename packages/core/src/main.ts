@@ -7,6 +7,7 @@ import type { Extension } from '@kothar/extension-api'
 import { claudeCode } from './adapters/claude-code.ts'
 import { codex } from './adapters/codex.ts'
 import { createFakeAdapter } from './adapters/fake.ts'
+import { opencode } from './adapters/opencode.ts'
 import { pi } from './adapters/pi.ts'
 import { openCore } from './core.ts'
 import { loadCommunityExtensions, loadExtensions } from './extensions.ts'
@@ -16,7 +17,7 @@ import { startServer } from './server.ts'
 import type { Adapter, Machine } from './shared.ts'
 import { renameSettings } from './vocab-move.ts'
 
-const registered: Adapter[] = [claudeCode, pi, codex, createFakeAdapter(undefined, undefined, { steering: true })]
+const registered: Adapter[] = [claudeCode, pi, codex, opencode, createFakeAdapter(undefined, undefined, { steering: true })]
 const STOCK_EXTENSIONS_DIR = fileURLToPath(new URL('../../../extensions/', import.meta.url))
 
 // Kothar was called Hotrod; installs from then keep working, so every KOTHAR_ variable falls back to its HOTROD_ name.

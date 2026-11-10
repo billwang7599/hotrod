@@ -6,7 +6,7 @@
 
 <p align="center">A desktop app for running coding agents.</p>
 
-Bring your own engines (coding-agent CLIs like Claude Code, Codex and pi) and drive them all from one place. Kothar
+Bring your own engines (coding-agent CLIs like Claude Code, Codex, OpenCode and pi) and drive them all from one place. Kothar
 keeps a small core and lets you customize the rest with extensions, which work with every engine.
 
 ## Extensions
