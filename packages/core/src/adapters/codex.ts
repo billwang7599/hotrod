@@ -4,7 +4,6 @@ import {
   type AccountStatus,
   type Adapter,
   type EngineEvent,
-  type EngineProcess,
   type ImageInput,
   type Machine,
   type Question,
@@ -12,6 +11,8 @@ import {
   type SessionOptions,
   type ThinkingLevel,
 } from '../shared.ts'
+import { onJsonLines } from './jsonl.ts'
+import { rpcClient } from './rpc.ts'
 
 // Codex, driven through `codex app-server`: JSON-RPC 2.0 (without the "jsonrpc" field) over stdio, one message a line.
 // Written against codex-cli 0.167's own schema (`codex app-server generate-ts`).
@@ -159,26 +160,6 @@ export const commandOf = (wrapped: string) => {
   return inner === undefined ? wrapped : inner.replace(/'\\''/g, "'")
 }
 
-function lines(proc: EngineProcess, handle: (msg: any) => void) {
-  let buffer = ''
-  proc.onStdout((chunk) => {
-    buffer += chunk
-    let newline
-    while ((newline = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, newline).replace(/\r$/, '')
-      buffer = buffer.slice(newline + 1)
-      if (!line.trim()) continue
-      let msg
-      try {
-        msg = JSON.parse(line)
-      } catch {
-        continue
-      }
-      handle(msg)
-    }
-  })
-}
-
 const CLIENT_INFO = { name: 'kothar', title: 'Kothar', version: '1' }
 
 // What `model/list` says about one model, as Kothar offers it.
@@ -223,7 +204,8 @@ function listModels(machine: Machine): Promise<any[] | undefined> {
     }
     const timer = setTimeout(() => finish(models.length ? models : undefined), DETECT_TIMEOUT_MS)
     const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
-    lines(proc, (msg) => {
+    // Answers are read as they come, not through rpcClient: each page is asked for in the same tick its answer lands.
+    const lines = onJsonLines(proc, (msg) => {
       if (msg.id === 1) {
         send({ method: 'initialized' })
         return send({ id: 2, method: 'model/list', params: {} })
@@ -235,7 +217,10 @@ function listModels(machine: Machine): Promise<any[] | undefined> {
       if (cursor) send({ id: msg.id + 1, method: 'model/list', params: { cursor } })
       else finish(models)
     })
-    proc.onExit(() => finish(models.length ? models : undefined))
+    proc.onExit(() => {
+      lines.flush()
+      finish(models.length ? models : undefined)
+    })
     send({ id: 1, method: 'initialize', params: { clientInfo: CLIENT_INFO, capabilities: null } })
   })
 }
@@ -442,20 +427,18 @@ export const codex: Adapter = {
       env,
       ...(sandbox && { sandbox: jailed(sandbox, accountDir) }),
     })
-    const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
-
-    let nextId = 1
-    const waiting = new Map<number, { resolve: (result: any) => void; reject: (error: Error) => void }>()
+    // JSON-RPC without the "jsonrpc" field; a request after Codex exits fails at once.
+    const client = rpcClient(proc, {
+      jsonrpc: false,
+      errorText: (error) => String(error.message ?? 'Codex refused the request'),
+      onRequest: (id, method, params) => serverRequest(id, method, params),
+      onNotification: (method, params) => notify(method, params),
+    })
     const request = (method: string, params: unknown) =>
-      new Promise<any>((resolve, reject) => {
-        if (exited) return reject(new Error('Codex has stopped'))
-        const id = nextId++
-        waiting.set(id, { resolve, reject })
-        send({ id, method, params })
-      })
+      exited ? Promise.reject(new Error('Codex has stopped')) : client.request(method, params)
     // Server requests Kothar answers later: the request's JSON-RPC id and how to answer it, by Kothar's request id.
     const asked = new Map<string, { id: unknown; method: string; params: any }>()
-    const reply = (id: unknown, result: unknown) => send({ id, result })
+    const reply = client.respond
 
     let exited = false
     let closed = false
@@ -646,22 +629,13 @@ export const codex: Adapter = {
           return emit({ type: 'question.asked', requestId, ...toolId, questions: questionsOf(params.questions ?? []) })
       }
       // Anything else (a login refresh Codex wants from its client, the v1 approvals) Kothar doesn't do.
-      send({ id, error: { code: -32601, message: `Kothar doesn't handle ${method}` } })
+      client.fail(id, { code: -32601, message: `Kothar doesn't handle ${method}` })
     }
 
-    lines(proc, (msg) => {
-      if (msg.method !== undefined && msg.id !== undefined) return serverRequest(msg.id, msg.method, msg.params)
-      if (msg.method !== undefined) return notify(msg.method, msg.params)
-      const pending = waiting.get(msg.id)
-      if (!pending) return
-      waiting.delete(msg.id)
-      if (msg.error) pending.reject(new Error(String(msg.error.message ?? 'Codex refused the request')))
-      else pending.resolve(msg.result)
-    })
     proc.onExit((code, stderrTail) => {
+      client.flush()
       exited = true
-      for (const { reject } of waiting.values()) reject(new Error('Codex has stopped'))
-      waiting.clear()
+      client.abandon('Codex has stopped')
       if (code === 0 || closed) return emit({ type: 'session.ended' })
       const tail = stderrTail.replace(ANSI, '').split('\n').filter((l) => l.trim() && !/^WARNING:/.test(l)).slice(-3).join('\n')
       emit({ type: 'session.ended', error: tail.trim() || `Codex exited with code ${code}` })
@@ -671,7 +645,7 @@ export const codex: Adapter = {
     const developerInstructions = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean).join('\n\n')
     const ready = (async () => {
       await request('initialize', { clientInfo: CLIENT_INFO, capabilities: null })
-      send({ method: 'initialized' })
+      client.notify('initialized')
       // Skills in the user's own folders and the project's load whatever the config says; switch each one off.
       const listed = await request('skills/list', { cwds: [cwd] }).catch(() => undefined)
       const skills = (listed?.data ?? []).flatMap((entry: any) => entry.skills ?? [])

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
+import { onJsonLines } from './jsonl.ts'
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -285,7 +286,6 @@ export const claudeCode: Adapter = {
       pendingInputs.delete(requestId)
       send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
     }
-    let buffer = ''
     let interrupted = false
     let closed = false
     let interruptCount = 0
@@ -416,23 +416,9 @@ export const claudeCode: Adapter = {
       }
     }
 
-    proc.onStdout((chunk) => {
-      buffer += chunk
-      let newline
-      while ((newline = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, newline)
-        buffer = buffer.slice(newline + 1)
-        if (!line.trim()) continue
-        let msg
-        try {
-          msg = JSON.parse(line)
-        } catch {
-          continue
-        }
-        handle(msg)
-      }
-    })
+    const lines = onJsonLines(proc, handle)
     proc.onExit((code, stderrTail) => {
+      lines.flush()
       if (code === 0 || closed) return emit({ type: 'session.ended' })
       emit({ type: 'session.ended', error: stderrTail.trim() || `Claude Code exited with code ${code}` })
     })

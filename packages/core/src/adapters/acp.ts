@@ -1,82 +1,15 @@
 import type { McpServer } from '@kothar/extension-api'
 import type { EngineEvent, EngineProcess, ImageInput, Session, ThinkingLevel, ToolKind } from '../shared.ts'
+import { type RpcError, rpcClient } from './rpc.ts'
 
 // The Agent Client Protocol (agentclientprotocol.com): JSON-RPC 2.0 over an agent's stdio, one message per line. This
-// module is the protocol half any ACP engine needs: the client (requests, notifications, the agent's own requests) and
-// one session mapped to Kothar's events. What differs between agents (how a tool is named and classed, what an agent
-// reports outside the protocol) comes in as hooks; the OpenCode adapter is the first user.
+// module is the protocol half any ACP engine needs: one session mapped to Kothar's events, over the JSON-RPC client in
+// rpc.ts. What differs between agents (how a tool is named and classed, what an agent reports outside the protocol)
+// comes in as hooks; the OpenCode adapter is the first user.
 
 export const ACP_PROTOCOL_VERSION = 1
 
-type JsonRpcError = { code: number; message: string; data?: unknown }
-
-// The client half: framing, request ids and answers. Lines that aren't JSON-RPC go to onLine (an agent's logs).
-export function acpClient(
-  proc: EngineProcess,
-  handlers: {
-    onRequest(id: string | number, method: string, params: any): void
-    onNotification(method: string, params: any): void
-    onLine?(line: string): void
-  },
-) {
-  const pending = new Map<string | number, { resolve(result: any): void; reject(error: Error): void }>()
-  let nextId = 1
-  let buffer = ''
-  const write = (message: object) => proc.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n')
-
-  const handle = (msg: any) => {
-    if (msg?.jsonrpc !== '2.0') return false
-    if (msg.method !== undefined && msg.id !== undefined) handlers.onRequest(msg.id, msg.method, msg.params)
-    else if (msg.method !== undefined) handlers.onNotification(msg.method, msg.params)
-    else if (msg.id !== undefined) {
-      const waiting = pending.get(msg.id)
-      if (!waiting) return true
-      pending.delete(msg.id)
-      if (msg.error) waiting.reject(new Error(errorText(msg.error)))
-      else waiting.resolve(msg.result)
-    }
-    return true
-  }
-
-  // JSON strings can hold U+2028 and U+2029, so lines split on \n only.
-  proc.onStdout((chunk) => {
-    buffer += chunk
-    let newline
-    while ((newline = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, newline).replace(/\r$/, '')
-      buffer = buffer.slice(newline + 1)
-      if (!line.trim()) continue
-      let msg
-      try {
-        msg = JSON.parse(line)
-      } catch {
-        handlers.onLine?.(line)
-        continue
-      }
-      if (!handle(msg)) handlers.onLine?.(line)
-    }
-  })
-
-  return {
-    request(method: string, params: object): Promise<any> {
-      const id = nextId++
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject })
-        write({ id, method, params })
-      })
-    },
-    notify: (method: string, params: object) => write({ method, params }),
-    respond: (id: string | number, result: object) => write({ id, result }),
-    fail: (id: string | number, error: JsonRpcError) => write({ id, error }),
-    // Requests still waiting when the agent exits never get an answer.
-    abandon(reason: string) {
-      for (const waiting of pending.values()) waiting.reject(new Error(reason))
-      pending.clear()
-    },
-  }
-}
-
-const errorText = (error: JsonRpcError) => {
+const errorText = (error: RpcError) => {
   const data = error.data as any
   const detail = typeof data === 'string' ? data : (data?.message ?? (data && JSON.stringify(data)))
   return [error.message, typeof detail === 'string' && detail !== error.message ? detail : '']
@@ -321,7 +254,10 @@ export function startAcpSession(
     })
   }
 
-  const client = acpClient(proc, {
+  // Lines that aren't JSON-RPC (an agent's logs) go to onOther.
+  const client = rpcClient(proc, {
+    jsonrpc: true,
+    errorText,
     onRequest(rpcId, method, params) {
       if (method === 'session/request_permission') return onPermission(rpcId, params)
       // Kothar offers no file system or terminal to the agent; it uses its own tools.
@@ -330,7 +266,7 @@ export function startAcpSession(
     onNotification(method, params) {
       if (method === 'session/update' && params?.sessionId === sessionId) onUpdate(params.update)
     },
-    onLine(line) {
+    onOther(line) {
       otherLines = [...otherLines, line].slice(-LINES_KEPT)
       hooks.line?.(line, turn)
     },
@@ -392,6 +328,7 @@ export function startAcpSession(
   void ready
 
   proc.onExit((code, stderrTail) => {
+    client.flush()
     client.abandon(`${options.name} exited`)
     const error = code === 0 || closed ? undefined : stderrTail.trim() || otherLines.join('\n').trim() || `${options.name} exited with code ${code}`
     if (running) endTurn(error ?? `${options.name} exited`)
