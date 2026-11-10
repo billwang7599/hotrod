@@ -142,9 +142,15 @@ const BODY = 'max-h-320 overflow-y-auto py-8 pr-10 text-muted'
 const SLIDER =
   'h-12 w-96 appearance-none border-0 bg-transparent p-0 opacity-35 transition-opacity duration-150 hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-offset-0 focus-visible:outline-accent [&::-webkit-slider-runnable-track]:h-2 [&::-webkit-slider-runnable-track]:rounded-full [&::-webkit-slider-runnable-track]:bg-muted [&::-webkit-slider-thumb]:-mt-4 [&::-webkit-slider-thumb]:size-10 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-text'
 const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
+/** The ::after stretches the hit area to 24px tall, the size of the icon buttons, without changing the look. */
 const FILE_ACTION =
-  'rounded px-5 text-sm leading-[1.35] text-muted enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint'
-const REVEAL = 'opacity-0 transition-opacity duration-150 group-focus-within/file:opacity-100 group-hover/file:opacity-100'
+  "relative rounded px-5 text-sm leading-[1.35] text-muted after:absolute after:inset-x-0 after:-inset-y-4 after:content-[''] enabled:hover:bg-raised enabled:hover:text-text disabled:text-faint"
+/**
+ * Shown on hover or focus. While hidden it takes no clicks. Anything below opacity 1 paints above its in-flow
+ * siblings, so whatever is hidden must also be click-through, or it sits invisibly on top of what is shown.
+ */
+const REVEAL =
+  'pointer-events-none opacity-0 transition-opacity duration-150 group-focus-within/file:pointer-events-auto group-focus-within/file:opacity-100 group-hover/file:pointer-events-auto group-hover/file:opacity-100'
 const DOT_STAGGER_MS = 200
 export const JUMP_BELOW_PX = 240
 /** Within this of the bottom, the view follows new output down. */
@@ -216,7 +222,8 @@ function FileLabel({ name, size, actions }: { name: string; size: number; action
     <span className="flex min-w-0 flex-col leading-[1.35]">
       <span className="truncate text-ui">{name}</span>
       <span className="grid text-sm text-faint *:col-start-1 *:row-start-1">
-        <span className="transition-opacity duration-150 group-focus-within/file:opacity-0 group-hover/file:opacity-0">
+        {/* Click-through: faded out it paints above the buttons that share its cell (see REVEAL). */}
+        <span className="pointer-events-none transition-opacity duration-150 group-focus-within/file:opacity-0 group-hover/file:opacity-0">
           {formatBytes(size)}
         </span>
         {actions}
@@ -241,7 +248,7 @@ type SentAttachmentProps = {
   send: (m: ClientMessage) => void
 }
 
-function SentAttachment({ chat, attachment, contextItems, connected, send }: SentAttachmentProps) {
+export function SentAttachment({ chat, attachment, contextItems, connected, send }: SentAttachmentProps) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState<string | null>()
   const { name, size, mimeType, path } = attachment
