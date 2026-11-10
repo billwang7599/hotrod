@@ -57,7 +57,8 @@ type Hub = {
   stop(chatId: string): void
   // With a chat: whether that chat may start workers (its setup can leave the Workers extension out).
   workers(chatId?: string): { enabled: boolean; limit: number }
-  extensionTools(): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost }[]
+  // The tools of the extensions that shape this chat's sessions (its setup can leave some out).
+  extensionTools(chatId: string): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost }[]
 }
 
 const reachesFrom = (hub: Hub, caller: ChatState, chat: ChatState) => reaches(caller, chat, hub.seesAll(caller.id))
@@ -177,7 +178,7 @@ export function openKotharMcp(hub: Hub) {
     if (tool.for === 'workers') return spawns
     return spawns || hub.seesAll(caller.id)
   }
-  const extensionToolsFor = (caller: ChatState) => hub.extensionTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
+  const extensionToolsFor = (caller: ChatState) => hub.extensionTools(caller.id).filter(({ tool }) => tool.offered(summaryOf(caller)))
 
   const serverFor = (callerId: string) => {
     const server = new McpServer({ name: 'kothar', version: '0.0.0' })

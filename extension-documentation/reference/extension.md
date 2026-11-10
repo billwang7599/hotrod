@@ -88,5 +88,5 @@ List `chats` in the manifest's `uses`.
 - Extensions are called in load order: built-in extensions first, then community extensions.
 - A chat's setup (Settings → Setups) can leave an extension that's on out of that chat's sessions. For those chats
   Kothar doesn't call its `mcpServers`, `instructions`, `memory`, `transformMessage`, `transformOutput` or
-  `onPermissionRequested`. Hooks that only report what happened (`onTurnStarted`, `onStatusChanged`, `onEvent` and the
-  rest) still run for every chat, and tools still reach the Kothar MCP server.
+  `onPermissionRequested`, and the Kothar MCP server doesn't offer its `tools`. Hooks that only report what happened
+  (`onTurnStarted`, `onStatusChanged`, `onEvent` and the rest) still run for every chat.

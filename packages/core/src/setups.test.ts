@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
+import { startServer } from './server.ts'
 import type { ClientMessage, CoreMessage, SessionOptions } from './shared.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -22,7 +23,7 @@ const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
 
 // A core on the fake engine (models fake-large and fake-small, thinking low and high) with one extension, `test`,
 // that adds instructions and rewrites messages. Every session's options are kept.
-async function start() {
+async function start({ tools = false } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-setups-')))
   cleanups.push(() => rmSync(garage, { recursive: true, force: true }))
   const extension: Extension = {
@@ -32,12 +33,23 @@ async function start() {
     enabledByDefault: true,
     instructions: () => 'From the test extension',
     transformMessage: (text) => `${text} (rewritten)`,
+    tools: [
+      {
+        name: 'test_tool',
+        description: 'A tool from the test extension',
+        inputSchema: { type: 'object' },
+        offered: () => true,
+        run: () => 'ran',
+      },
+    ],
   }
   const sessions: SessionOptions[] = []
   const prompts: string[] = []
-  const base = createFakeAdapter((options) => (sessions.push(options), replied), 0)
+  // With tools, each step waits a while, so a test can ask a running session's Kothar MCP server for its tools.
+  const base = createFakeAdapter((options) => (sessions.push(options), replied), tools ? 300 : 0)
   const adapter: typeof base = {
     ...base,
+    ...(tools && { kotharMcp: true }),
     start(machine, options, emit) {
       const session = base.start(machine, options, emit)
       return { ...session, prompt: (text, images) => (prompts.push(text), session.prompt(text, images)) }
@@ -45,6 +57,10 @@ async function start() {
   }
   const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [extension] })
   cleanups.push(() => core.close(true))
+  if (tools) {
+    const server = await startServer({ core, port: 0, uiOrigin: 'http://localhost:1', token: 'test-token' })
+    cleanups.push(() => server.close())
+  }
   const messages: CoreMessage[] = []
   core.onMessage((m) => messages.push(m))
   const errors: string[] = []
@@ -71,7 +87,29 @@ async function start() {
     handle({ type: 'setup.save', setup: setup as never })
     return core.setups().find((s) => s.name === setup.name)
   }
-  return { core, garage, messages, errors, handle, create, chat, send, save, sessions, prompts }
+  // The tools the Kothar MCP server lists to a session of the chat, asked while it runs (its grant ends with it).
+  const toolsIn = async (chatId: string) => {
+    const before = sessions.length
+    handle({ type: 'chat.send', chatId, text: 'Go' })
+    await until(() => sessions.length > before)
+    const names = await toolsOf(sessions.at(-1)!)
+    await until(() => chat(chatId).status === 'idle')
+    return names
+  }
+  const toolsOf = async (options: SessionOptions) => {
+    const response = await fetch(options.kotharMcp!.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${options.kotharMcp!.token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    })
+    const { result } = await response.json()
+    return (result.tools as { name: string }[]).map((t) => t.name)
+  }
+  return { core, garage, messages, errors, handle, create, chat, send, save, sessions, prompts, toolsIn }
 }
 
 describe('setups', () => {
@@ -206,5 +244,15 @@ describe('setups', () => {
     await t.send(plain, 'Hello')
     expect(t.sessions.at(-1)!.instructions).toContain('From the test extension')
     expect(t.prompts.at(-1)).toContain('Hello (rewritten)')
+  })
+
+  it("leave the tools of the extensions they switch off out of their chats' Kothar MCP server", async () => {
+    const t = await start({ tools: true })
+    const plain = t.create('Plain')
+    const quiet = t.create('Quiet')
+    t.save({ name: 'Quiet', extensionsOff: ['test'] })
+    t.handle({ type: 'chat.setSetup', chatId: quiet, setup: 'Quiet' })
+    expect(await t.toolsIn(quiet)).not.toContain('test_tool')
+    expect(await t.toolsIn(plain)).toContain('test_tool')
   })
 })

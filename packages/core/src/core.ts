@@ -2392,9 +2392,9 @@ function openLockedCore(options: {
       const chat = chatId === undefined ? undefined : chats.get(chatId)
       return { enabled: enabled && isOnFor(WORKERS_EXTENSION, chat), limit: Number(values.limit) }
     },
-    extensionTools: () =>
+    extensionTools: (chatId: string) =>
       extensions
-        .filter(isOn)
+        .filter((extension) => isOnFor(extension, chats.get(chatId)))
         .flatMap((extension) => (extension.tools ?? []).map((tool) => ({ tool, values: extensionValues(extension), host: hostFor(extension) }))),
   })
 

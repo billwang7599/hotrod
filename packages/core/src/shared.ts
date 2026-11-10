@@ -255,8 +255,8 @@ export type ChatInfo = PermissionSwitches & {
 /**
  * A saved setup for a kind of job (Settings → Setups), kept as `<garage>/setups/<id>.json`. Everything but the name is
  * optional; what a setup leaves out follows Settings. A chat's own model and thinking picks win over the setup's.
- * `extensionsOff`: extensions that are on in Settings but left out of this setup's sessions (their MCP servers,
- * instructions, message and output transforms, permission answers, memory and workers). A setup can't turn on an
+ * `extensionsOff`: extensions that are on in Settings but left out of this setup's sessions (their tools, MCP
+ * servers, instructions, message and output transforms, permission answers, memory and workers). A setup can't turn on an
  * extension that's off in Settings, since it hasn't started. `instructions` join each session's instructions just
  * before the context items.
  */

@@ -224,7 +224,7 @@ function SetupForm({ draft, taken, engines, extensions, connected, save, cancel 
       {listed.length > 0 && (
         <fieldset className="flex flex-col gap-4">
           <legend className="mb-4 text-muted">
-            <Hint text="Turned off here, an extension adds nothing to this setup's chats: no tools from its MCP servers, instructions, rewrites, permission answers or memory. Extensions off in Settings stay off.">
+            <Hint text="Turned off here, an extension adds nothing to this setup's chats: no tools, instructions, rewrites, permission answers or memory. Extensions off in Settings stay off.">
               <span>Extensions</span>
             </Hint>
           </legend>
