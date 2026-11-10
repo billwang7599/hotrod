@@ -1,9 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import {
-  appendFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -77,7 +75,6 @@ import {
   type NewChat,
   type PanelTab,
   type PermissionSwitch,
-  type PermissionSwitches,
   type QueuedMessage,
   type RestartChange,
   type RestartState,
@@ -87,8 +84,8 @@ import {
   type Upload,
   type WorkFolder,
 } from './shared.ts'
-import { openModels, type ModelSettings } from './models.ts'
-import { moveExtensionsDir, renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
+import { openModels } from './models.ts'
+import { moveExtensionsDir } from './vocab-move.ts'
 import { searchChats } from './search.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
@@ -98,6 +95,7 @@ import { verdictOf } from './permissions.ts'
 import { buildInstructions } from './instructions.ts'
 import { type Checkout, openCheckouts } from './checkouts.ts'
 import { openExtensionHosts } from './extension-host.ts'
+import { appendEntry, openSettings, quitMidTurn, readChat, readJson, saveChatFile, storedChatIds } from './chat-store.ts'
 
 // Kept here too, for code that imports them from the core.
 export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
@@ -264,21 +262,7 @@ function openLockedCore(options: {
     token: options.githubToken,
     fetch: options.fetch,
   })
-  const settingsFile = join(garage, 'settings.json')
-  const settings: PermissionSwitches &
-    ModelSettings & {
-      context?: Partial<Record<ContextSection, boolean>>
-      extensions?: Record<string, Record<string, unknown>>
-      // The version of each extension's saved settings (Extension.settingsVersion), once one has been migrated.
-      extensionVersions?: Record<string, number>
-      workFolder?: string
-      // The master switch for community extensions; off unless the user turned it on.
-      communityExtensions?: boolean
-      // The terminal Open in Terminal uses: 'auto' or absent for the system's, else one of MAC_TERMINALS by id.
-      terminal?: string
-    } = { engines: {}, ...readJson(settingsFile) }
-  const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
-  if (renameSettings(settings)) saveSettings()
+  const { settings, save: saveSettings } = openSettings(garage)
   moveExtensionsDir(garage)
   // What the user turned on, per community extension (approvals.ts). One whose files aren't those didn't start; its
   // switch goes off, so turning it on again is the user reviewing the new files.
@@ -589,10 +573,7 @@ function openLockedCore(options: {
     broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
     startExtensions()
   }
-  const saveChat = ({ info, dir, context }: Chat) => {
-    const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
-    writeFileSync(join(dir, 'chat.json'), JSON.stringify(file, null, 2) + '\n')
-  }
+  const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
   const withRun = (chat: Chat) => {
     const run = models.runOf(choosesOf(chat))
@@ -641,7 +622,7 @@ function openLockedCore(options: {
 
   const append = (chat: Chat, entry: ChatEntry) => {
     chat.entries.push(entry)
-    appendFileSync(join(chat.dir, 'log.jsonl'), JSON.stringify(entry) + '\n')
+    appendEntry(chat.dir, entry)
     broadcast({ type: 'chat.entry', chatId: chat.info.id, entry })
   }
 
@@ -1279,25 +1260,12 @@ function openLockedCore(options: {
   }
 
   const loadChat = (dir: string, fallback: ChatInfo) => {
-    mkdirSync(dir, { recursive: true })
-    const file = join(dir, 'chat.json')
-    const raw = readJson(file)
-    const { context = {}, title, parentId, extension, ...saved } = renameChatFile(raw)
     const declared = extensionChats.find((chat) => chat.id === fallback.id)
-    const info: ChatInfo = {
-      ...fallback,
-      ...(title !== undefined && { name: title }),
-      ...saved,
-      id: fallback.id,
-      ...(saved.worker && parentId !== undefined && { parentId }),
-      ...(declared && { name: declared.name, extension: declared.extension.id, folders: [], files: [] }),
-    }
-    const logFile = join(dir, 'log.jsonl')
-    const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
-    const entries: ChatEntry[] = log
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => renameEntry(JSON.parse(line)))
+    const { info, context, entries, resave } = readChat(
+      dir,
+      fallback,
+      declared && { name: declared.name, extension: declared.extension.id },
+    )
     const chat: Chat = {
       info,
       dir,
@@ -1310,12 +1278,9 @@ function openLockedCore(options: {
       queue: [],
       turns: 0,
     }
-    const flipped = 'askNetworkCommands' in raw
-    if (!existsSync(file) || declared || flipped || (parentId !== undefined && !info.parentId)) saveChat(chat)
+    if (resave) saveChat(chat)
     chats.set(info.id, chat)
-    const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
-    const lastType = entries.at(-1)?.type
-    if (lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'worker.report') {
+    if (quitMidTurn(entries)) {
       append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
     }
     return chat
@@ -1332,8 +1297,8 @@ function openLockedCore(options: {
   })
 
   for (const { id, name } of extensionChats) loadChat(join(chatsDir, id), freshInfo(id, name))
-  for (const id of readdirSync(chatsDir)) {
-    if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
+  for (const id of storedChatIds(chatsDir)) {
+    if (chats.has(id)) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
   }
   // Nothing runs yet, so a worker that has worked and is still here (Kothar quit or crashed mid-task, or an older
@@ -2536,8 +2501,6 @@ const within = (inner: string, outer: string) => inner === outer || inner.starts
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
-
-const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})
 
 const readBytes = (file: string) => {
   try {
