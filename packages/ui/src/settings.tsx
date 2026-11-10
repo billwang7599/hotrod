@@ -924,7 +924,9 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             )}
           </SettingRow>
         ))}
-        {!login ? (
+        {!login && accounts.providers ? (
+          <ProviderAccountForm accounts={accounts} connected={connected} send={send} />
+        ) : !login ? (
           <SettingRow name="Add account">
             <form className="flex min-w-0 gap-6" onSubmit={startLogin}>
               <input
@@ -941,6 +943,25 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
         ) : login.error ? (
           <SettingRow name={<ErrorText>{login.error}</ErrorText>}>
             <Button onClick={() => send({ type: 'account.cancelLogin', engine: id })}>Dismiss</Button>
+          </SettingRow>
+        ) : login.adding ? (
+          <SettingRow name={`Adding “${login.name}”…`}>{cancelLogin}</SettingRow>
+        ) : accounts.providers ? (
+          <SettingRow
+            name={`Signing in “${login.name}”`}
+            description={
+              login.url && (
+                <>
+                  Open{' '}
+                  <a className="text-accent underline" href={login.url} target="_blank" rel="noreferrer">
+                    the sign-in page
+                  </a>
+                  {login.instructions ? ` and ${login.instructions.replace(/^Enter/, 'enter')}` : ''}
+                </>
+              )
+            }
+          >
+            {cancelLogin}
           </SettingRow>
         ) : (
           <>
@@ -991,7 +1012,7 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
             )}
           </>
         )}
-        {accounts.apiKeys && (
+        {accounts.apiKeys && !accounts.providers && (
           <SettingRow name="Add API key">
             <form className="flex min-w-0 gap-6" onSubmit={addKey}>
               <input
@@ -1015,6 +1036,76 @@ function EngineAccountsSection({ accounts, connected, send }: EngineAccountsProp
         )}
       </div>
     </section>
+  )
+}
+
+// For engines that sign in to many providers: a name, the provider, how (when it offers more than one way), then a
+// key or a browser sign-in.
+function ProviderAccountForm({ accounts, connected, send }: EngineAccountsProps) {
+  const id = accounts.engine
+  const providers = accounts.providers ?? []
+  const [name, setName] = useState('')
+  const [providerId, setProviderId] = useState('')
+  const [methodId, setMethodId] = useState('')
+  const [key, setKey] = useState('')
+  const provider = providers.find((p) => p.id === providerId)
+  const methods = provider?.methods ?? []
+  const method = methods.length === 1 ? methods[0] : methods.find((m) => m.id === methodId)
+  const pickProvider = (value: string) => {
+    setProviderId(value)
+    setMethodId('')
+  }
+  const ready = connected && name.trim() !== '' && provider !== undefined && method !== undefined
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!ready) return
+    const choice = { engine: id, name: name.trim(), provider: provider.id, method: method.id }
+    if (method.kind === 'apiKey') {
+      if (!key.trim()) return
+      send({ type: 'account.addApiKey', ...choice, key })
+    } else send({ type: 'account.login', ...choice })
+    setName('')
+    setKey('')
+  }
+  return (
+    <SettingRow name="Add account">
+      <form className="flex min-w-0 flex-wrap gap-6" onSubmit={submit}>
+        <input className="w-140" value={name} placeholder="Name, e.g. Work" onChange={(e) => setName(e.target.value)} />
+        <Select
+          label="Provider"
+          value={providerId}
+          placeholder="Provider…"
+          hint="The model provider this account signs in to"
+          disabled={!connected || !providers.length}
+          options={providers.map((p) => ({ value: p.id, label: p.name, group: p.group }))}
+          onChange={pickProvider}
+        />
+        {methods.length > 1 && (
+          <Select
+            label="Sign-in method"
+            value={methodId}
+            placeholder="How…"
+            disabled={!connected}
+            options={methods.map((m) => ({ value: m.id, label: m.kind === 'apiKey' ? 'API key' : m.label }))}
+            onChange={setMethodId}
+          />
+        )}
+        {method?.kind === 'apiKey' && (
+          <input
+            className="w-140"
+            type="password"
+            value={key}
+            placeholder="API key"
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(e) => setKey(e.target.value)}
+          />
+        )}
+        <Button variant="primary" disabled={!ready || (method.kind === 'apiKey' && !key.trim())}>
+          {method?.kind === 'apiKey' ? 'Add' : 'Sign in…'}
+        </Button>
+      </form>
+    </SettingRow>
   )
 }
 

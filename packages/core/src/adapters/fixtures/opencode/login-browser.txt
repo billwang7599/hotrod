@@ -1,0 +1,8 @@
+[0m
+┌  Add credential
+│
+●  Go to: https://auth.openai.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&code_challenge=UcHk3F9KG2wcMJ15VX5vzuDmDTCfYWAYGNssqeh-3Fc&code_challenge_method=S256&id_token_add_organizations=true&codex_cli_simplified_flow=true&state=lv1XjroiCgfnK3Qkk37o9dfnANstkNSW2VJ-nIX1Szg&originator=opencode
+│
+●  Complete authorization in your browser. This window will close automatically.
+[?25l│
+◒  Waiting for authorization[999D[J◐  Waiting for authorization[999D[J◓  Waiting for authorization[999D[J◑  Waiting for authorization[999D[J◒  Waiting for authorization[999D[J◐  Waiting for authorization[999D[J◓  Waiting for authorization[999D[J◑  Waiting for authorization[999D[J◒  Waiting for authorization.[999D[J◐  Waiting for authorization.[999D[J◓  Waiting for authorization.[999D[J◑  Waiting for authorization.[999D[J◒  Waiting for authorization.[999D[J◐  Waiting for authorization.[999D[J◓  Waiting for authorization.[999D[J◑  Waiting for authorization.[999D[J◒  Waiting for authorization..[999D[J◐  Waiting for authorization..[999D[J◓  Waiting for authorization..[999D[J◑  Waiting for authorization..[999D[J◒  Waiting for authorization..[999D[J◐  Waiting for authorization..[999D[J◓  Waiting for authorization..[999D[J◑  Waiting for author

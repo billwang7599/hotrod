@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Account, Adapter, CoreMessage, EngineAccounts, LoginFlow, Machine } from './shared.ts'
+import type { Account, AccountChoice, Adapter, CoreMessage, EngineAccounts, LoginFlow, Machine } from './shared.ts'
 
 const DEFAULT_ID = 'default'
 const MAX_NAME_CHARS = 60
@@ -41,11 +41,18 @@ export function openAccounts(options: {
       mkdirSync(root, { recursive: true })
       const accounts = engine.state.accounts
         .filter((a) => a.id !== DEFAULT_ID)
-        .map(({ id, name, kind, label }) => ({ id, name, kind, label }))
+        .map(({ id, name, kind, label, provider }) => ({ id, name, kind, label, provider }))
       const saved = { active: engine.state.active, accounts }
       writeFileSync(savedFile(engine.state.engine), JSON.stringify(saved, null, 2) + '\n')
     }
     broadcast({ type: 'accounts.updated', accounts: engine.state })
+  }
+
+  // Loaded once; a failed load tries again on the next refresh.
+  const providersOf = async (engine: Engine) => {
+    const load = engine.adapter.accounts.providers
+    if (!load || engine.state.providers?.length) return undefined
+    return load(machine).catch(() => undefined)
   }
 
   const engineFor = (id: string) => {
@@ -59,6 +66,22 @@ export function openAccounts(options: {
     if (!account) throw new Error(`Unknown account "${id}"`)
     return account
   }
+
+  // On engines that offer providers, the provider and method the user picked, checked against what the engine offers.
+  const choiceOf = (engine: Engine, kind: Account['kind'], provider?: string, method?: string) => {
+    if (!engine.adapter.accounts.providers) return undefined
+    const offered = engine.state.providers
+    if (!offered) throw new Error(`${engine.state.engine}'s providers are still loading`)
+    const found = offered.find((p) => p.id === provider)
+    if (!found) throw new Error('Pick a provider')
+    const ways = found.methods.filter((m) => m.kind === kind)
+    const picked = method ? ways.find((m) => m.id === method) : ways.length === 1 ? ways[0] : undefined
+    if (!picked) throw new Error(`Pick how to add the ${found.name} account`)
+    return { provider: found.id, method: picked.id } satisfies AccountChoice
+  }
+
+  // The engine keeps the key itself, in the account's folder, rather than the core's api-key file.
+  const keepsKeys = (engine: Engine) => engine.adapter.accounts.addApiKey !== undefined
 
   const checkIdle = (engine: Engine) => {
     if (isBusy(engine.state.engine)) throw new Error('Wait for the running turn to end before switching accounts')
@@ -79,9 +102,10 @@ export function openAccounts(options: {
     return { id, name, dir }
   }
 
-  const login = (engine: Engine, rawName: string) => {
+  const login = (engine: Engine, rawName: string, provider?: string, method?: string) => {
     if (!rawName.trim()) throw new Error('Give the account a name')
     if (engine.login?.flow) throw new Error('A sign-in is already running for this engine')
+    const choice = choiceOf(engine, 'login', provider, method)
     if (engine.login) cancelLogin(engine)
     const { id, name, dir } = newAccountDir(engine, rawName)
 
@@ -98,7 +122,8 @@ export function openAccounts(options: {
       if (!current()) return
       if (event.type === 'url') {
         const noCode = event.noCode && { noCode: true }
-        return update(engine, { login: { ...engine.state.login!, url: event.url, ...noCode } })
+        const instructions = event.instructions && { instructions: event.instructions }
+        return update(engine, { login: { ...engine.state.login!, url: event.url, ...noCode, ...instructions } })
       }
       if (event.type === 'failed') return fail(event.error)
       void engine.adapter.accounts
@@ -109,21 +134,54 @@ export function openAccounts(options: {
           if (!status.signedIn) return fail('The sign-in finished, but the account is not signed in')
           engine.login = undefined
           const label = status.label && { label: status.label }
-          const account: Account = { id, name, kind: 'login', ...label, signedIn: true }
+          const account: Account = { id, name, kind: 'login', ...label, signedIn: true, ...providerOf(choice) }
           update(engine, { accounts: [...engine.state.accounts, account], login: undefined }, true)
         })
-    })
+    }, choice)
   }
 
-  const addApiKey = (engine: Engine, rawName: string, rawKey: string) => {
-    if (!engine.state.apiKeys) throw new Error(`${engine.state.engine} doesn't take API keys`)
+  const providerOf = (choice?: AccountChoice) => choice && { provider: choice.provider }
+
+  const addApiKey = (engine: Engine, rawName: string, rawKey: string, provider?: string, method?: string) => {
+    const choice = choiceOf(engine, 'apiKey', provider, method)
+    if (!engine.state.apiKeys && !choice) throw new Error(`${engine.state.engine} doesn't take API keys`)
     const key = rawKey.trim()
     if (!key) throw new Error('Paste the API key')
     if (/\s/.test(key)) throw new Error('An API key has no spaces or line breaks')
+    if (keepsKeys(engine)) return saveKeyWithEngine(engine, rawName, key, choice)
     const { id, name, dir } = newAccountDir(engine, rawName)
     writeFileSync(keyFile(dir), key, { mode: 0o600 })
     const account: Account = { id, name, kind: 'apiKey', label: `API key ••••${key.slice(-4)}`, signedIn: true }
     update(engine, { accounts: [...engine.state.accounts, account] }, true)
+  }
+
+  // The engine writes the key into the account's folder (it may take a moment); the login slot shows it meanwhile.
+  const saveKeyWithEngine = (engine: Engine, rawName: string, key: string, choice?: AccountChoice) => {
+    if (!rawName.trim()) throw new Error('Give the account a name')
+    if (engine.login?.flow) throw new Error('A sign-in is already running for this engine')
+    if (engine.login) cancelLogin(engine)
+    const { id, name, dir } = newAccountDir(engine, rawName)
+    const attempt: NonNullable<Engine['login']> = { dir, flow: { submitCode: () => {}, cancel: () => {} } }
+    const current = () => engine.login === attempt
+    engine.login = attempt
+    update(engine, { login: { name, adding: true } })
+    void engine.adapter.accounts.addApiKey!(machine, dir, key, choice)
+      .then(() => engine.adapter.accounts.status(machine, dir))
+      .then((status) => {
+        if (!current()) return
+        if (!status.signedIn) throw new Error('The key was saved, but the engine does not see it')
+        engine.login = undefined
+        const label = { label: status.label ?? `API key ••••${key.slice(-4)}` }
+        const account: Account = { id, name, kind: 'apiKey', ...label, signedIn: true, ...providerOf(choice) }
+        update(engine, { accounts: [...engine.state.accounts, account], login: undefined }, true)
+      })
+      .catch((error) => {
+        if (!current()) return
+        attempt.flow = undefined
+        rmSync(dir, { recursive: true, force: true })
+        const message = error instanceof Error ? error.message : String(error)
+        update(engine, { login: { name, error: `Could not add the key: ${message}` } })
+      })
   }
 
   const cancelLogin = (engine: Engine) => {
@@ -140,7 +198,8 @@ export function openAccounts(options: {
     const account = accountFor(engine, id)
     if (engine.state.active === id) checkIdle(engine)
     const dir = dirOf(engine.state.engine, id)
-    const logout = account.kind === 'apiKey' ? Promise.resolve() : engine.adapter.accounts.logout(machine, dir)
+    const logout =
+      account.kind === 'apiKey' && !keepsKeys(engine) ? Promise.resolve() : engine.adapter.accounts.logout(machine, dir)
     void logout
       .catch((error) => reply({ type: 'error', message: `Could not sign out of "${id}": ${error}` }))
       .finally(() => {
@@ -158,7 +217,7 @@ export function openAccounts(options: {
       const account = state?.accounts.find((a) => a.id === state.active)
       if (!account || account.id === DEFAULT_ID) return {}
       const accountDir = dirOf(engine, account.id)
-      if (account.kind !== 'apiKey') return { accountDir }
+      if (account.kind !== 'apiKey' || keepsKeys(engines.get(engine)!)) return { accountDir }
       return { accountDir, apiKey: readFileSync(keyFile(accountDir), 'utf8') }
     },
     async refresh() {
@@ -168,7 +227,8 @@ export function openAccounts(options: {
             await Promise.all(
               engine.state.accounts.map(async (account) => {
                 const dir = account.id === DEFAULT_ID ? undefined : dirOf(engine.state.engine, account.id)
-                if (account.kind === 'apiKey') return [account.id, { signedIn: existsSync(keyFile(dir!)) }] as const
+                if (account.kind === 'apiKey' && !keepsKeys(engine))
+                  return [account.id, { signedIn: existsSync(keyFile(dir!)) }] as const
                 const status = await engine.adapter.accounts.status(machine, dir).catch(() => ({ signedIn: false }))
                 return [account.id, status] as const
               }),
@@ -178,18 +238,21 @@ export function openAccounts(options: {
             const { note: _, ...rest } = a
             return { ...rest, ...statuses.get(a.id) }
           }
-          update(engine, { accounts: engine.state.accounts.map(fresh) })
+          const providers = await providersOf(engine)
+          update(engine, { accounts: engine.state.accounts.map(fresh), ...(providers && { providers }) })
         }),
       )
     },
-    login: (engine: string, name: string) => login(engineFor(engine), name),
+    login: (engine: string, name: string, provider?: string, method?: string) =>
+      login(engineFor(engine), name, provider, method),
     submitCode(engine: string, code: string) {
       const flow = engineFor(engine).login?.flow
       if (!flow) throw new Error('No sign-in is waiting for a code')
       if (!code.trim()) throw new Error('Paste the code from the sign-in page')
       flow.submitCode(code)
     },
-    addApiKey: (engine: string, name: string, key: string) => addApiKey(engineFor(engine), name, key),
+    addApiKey: (engine: string, name: string, key: string, provider?: string, method?: string) =>
+      addApiKey(engineFor(engine), name, key, provider, method),
     cancelLogin: (engine: string) => cancelLogin(engineFor(engine)),
     // whileBusy: turns already running keep the account they started on.
     use(engineId: string, id: string, whileBusy = false) {

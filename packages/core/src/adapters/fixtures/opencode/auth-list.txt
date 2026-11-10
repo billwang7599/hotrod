@@ -1,0 +1,15 @@
+[0m
+┌  Credentials [90m/tmp/probe/run/data/opencode/auth.json
+│
+●  OpenRouter [90mapi
+│
+●  OpenAI [90mapi
+│
+└  2 credentials
+
+┌  Environment
+│
+●  Anthropic [90mANTHROPIC_API_KEY
+│
+└  1 environment variable
+

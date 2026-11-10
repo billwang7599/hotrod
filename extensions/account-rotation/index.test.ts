@@ -212,3 +212,31 @@ it('continues again when a continued turn hits the next account’s limit', asyn
   ])
   expect(t.prompts.slice(1).every((p) => p.includes(CONTINUE_PROMPT))).toBe(true)
 })
+
+it('rotates only to accounts of the same provider, or ones whose provider is unknown', () => {
+  const used: string[] = []
+  const accounts = [
+    { id: 'default', name: 'Default', signedIn: true },
+    { id: 'oa-1', name: 'OpenAI 1', signedIn: true, provider: 'openai' },
+    { id: 'an-1', name: 'Anthropic 1', signedIn: true, provider: 'anthropic' },
+    { id: 'oa-2', name: 'OpenAI 2', signedIn: true, provider: 'openai' },
+  ]
+  let active = 'oa-1'
+  const host = {
+    accounts: () => ({ engine: 'opencode', active, accounts }),
+    useAccount: (_engine: string, id: string) => void used.push((active = id)),
+    note: () => {},
+    retry: () => {},
+    continue: () => {},
+  }
+  const extension = createAccountRotation(() => Date.parse('2026-11-08T09:00:00Z'))
+  const hit = (account: string) =>
+    extension.onLimitReached!(
+      { engine: 'opencode', account, chat: { id: 'c1' }, message: 'Out of usage', output: false } as never,
+      { values: { accounts: '' }, host } as never,
+    )
+  hit('oa-1')
+  expect(used).toEqual(['oa-2'])
+  hit('oa-2')
+  expect(used).toEqual(['oa-2', 'default'])
+})

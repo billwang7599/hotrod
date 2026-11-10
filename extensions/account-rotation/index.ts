@@ -59,7 +59,11 @@ export function createAccountRotation(now = () => Date.now()): Extension {
       const until = (account: ExtensionAccount) => limitedUntil.get(keyOf(limit.engine, account.id)) ?? 0
       const free = (account: ExtensionAccount) => until(account) <= at
       const nameOf = (id: string) => saved.accounts.find((a) => a.id === id)?.name ?? id
-      const ring = ringOf(saved.accounts, String(values.accounts ?? ''))
+      // On engines with providers, only an account of the same provider can run the chat's model. One whose provider
+      // isn't known (the engine's own login) may hold any.
+      const provider = saved.accounts.find((a) => a.id === account)?.provider
+      const runs = (a: ExtensionAccount) => a.id === account || !provider || !a.provider || a.provider === provider
+      const ring = ringOf(saved.accounts, String(values.accounts ?? '')).filter(runs)
       const chatId = limit.chat.id
 
       // Another chat may have switched already; then this one follows.

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
 import { effortFor, levelsOfEfforts } from './acp.ts'
-import { opencode, parseModels } from './opencode.ts'
+import { opencode, parseCredentials, parseModels, parseProviders } from './opencode.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/opencode/${name}`, import.meta.url), 'utf8')
@@ -544,5 +544,165 @@ describe("OpenCode's own folders", () => {
     expect(read('command-env').trim()).toBe(`unset ${data} /bin/sh gone`)
     expect(read('args').trim()).toBe(`--print-logs --log-level ERROR acp --pure --cwd ${project}`)
     expect(existsSync(read('config-dir').trim())).toBe(false)
+  })
+})
+
+describe('OpenCode accounts', () => {
+  const accounts = opencode.accounts!
+  const dir = '/garage/accounts/opencode/work'
+  const ok = (stdout: string) => ({ code: 0, stdout, stderr: '' })
+
+  it('offers the providers in its models.dev cache, popular ones first, each with the ways OpenCode signs in', async () => {
+    const cache = JSON.stringify({
+      zeta: { name: 'Zeta AI' },
+      openai: { name: 'OpenAI' },
+      azure: { name: 'Azure' },
+      alpha: {},
+      anthropic: { name: 'Anthropic' },
+    })
+    const providers = parseProviders(cache)
+    const ids = providers.map((p) => p.id)
+    expect(ids.slice(0, 3)).toEqual(['anthropic', 'openai', 'github-copilot'])
+    expect(ids).not.toContain('azure')
+    expect(ids.slice(-2)).toEqual(['alpha', 'zeta'])
+    expect(providers.find((p) => p.id === 'zeta')).toEqual({
+      id: 'zeta',
+      name: 'Zeta AI',
+      group: 'All providers',
+      methods: [{ id: 'api', label: 'API key', kind: 'apiKey' }],
+    })
+    expect(providers.find((p) => p.id === 'openai')?.methods.map((m) => [m.id, m.kind])).toEqual([
+      ['ChatGPT Pro/Plus (browser)', 'login'],
+      ['ChatGPT Pro/Plus (headless)', 'login'],
+      ['Manually enter API Key', 'apiKey'],
+    ])
+    expect(parseProviders('not json').map((p) => p.group)).toEqual(Array(10).fill('Popular'))
+
+    const fake = fakeMachine({ '/bin/sh': ok(cache) })
+    expect((await accounts.providers!(fake.machine)).map((p) => p.id)).toEqual(ids)
+    expect(fake.ran[0]?.args.join(' ')).toMatch(/opencode\/models\.json/)
+  })
+
+  it("reads an account's logins from `opencode auth list`, not the ones in the environment", async () => {
+    const listed = fixture('auth-list.txt')
+    expect(parseCredentials(listed)).toEqual([
+      { name: 'OpenRouter', type: 'api' },
+      { name: 'OpenAI', type: 'api' },
+    ])
+    const fake = fakeMachine({ '/bin/sh': ok(listed) })
+    expect(await accounts.status(fake.machine, dir)).toEqual({ signedIn: true, label: 'OpenRouter, OpenAI' })
+    expect(fake.ran[0]?.args.slice(2)).toEqual(['opencode', 'auth', 'list', '--pure'])
+    expect(fake.ran[0]?.env?.KOTHAR_OPENCODE_AUTH).toBe(`${dir}/auth.json`)
+    expect(fake.ran[0]?.env?.KOTHAR_OPENCODE_SIGNIN).toBeUndefined()
+
+    const one = listed.replace(/.*OpenRouter.*\n/, '')
+    expect(await accounts.status(fakeMachine({ '/bin/sh': ok(one) }).machine, dir)).toEqual({
+      signedIn: true,
+      label: 'OpenAI API key',
+    })
+    const none = '┌  Credentials ~/auth.json\n│\n└  0 credentials\n'
+    expect(await accounts.status(fakeMachine({ '/bin/sh': ok(none) }).machine, dir)).toEqual({ signedIn: false })
+  })
+
+  it('adds a key with `opencode auth login`, the key only on stdin, into the account’s own auth.json', async () => {
+    const fake = fakeMachine({ '/bin/sh': ok(fixture('login-api-key.txt')) })
+    await accounts.addApiKey!(fake.machine, dir, 'sk-test-1', { provider: 'openai', method: 'Manually enter API Key' })
+    const run = fake.ran[0]!
+    expect(run.args.slice(2)).toEqual([
+      'opencode',
+      'auth',
+      'login',
+      '--provider',
+      'openai',
+      '--method',
+      'Manually enter API Key',
+      '--pure',
+    ])
+    expect(run.input).toBe('sk-test-1\r')
+    expect(JSON.stringify([run.args, run.env])).not.toContain('sk-test-1')
+    expect(run.env).toMatchObject({ KOTHAR_OPENCODE_AUTH: `${dir}/auth.json`, KOTHAR_OPENCODE_SIGNIN: '1' })
+
+    const plain = fakeMachine({ '/bin/sh': ok('') })
+    await accounts.addApiKey!(plain.machine, dir, 'sk-test-2', { provider: 'groq', method: 'api' })
+    expect(plain.ran[0]?.args.slice(2)).toEqual(['opencode', 'auth', 'login', '--provider', 'groq', '--pure'])
+
+    const refused = fakeMachine({ '/bin/sh': { code: 1, stdout: fixture('login-unknown.txt'), stderr: '' } })
+    const adding = accounts.addApiKey!(refused.machine, dir, 'sk-test-3', { provider: 'nope-provider', method: 'api' })
+    await expect(adding).rejects.toThrow('Unknown provider "nope-provider"')
+  })
+
+  it('signs in through the browser: the link and any code to enter, then done once OpenCode saved it', () => {
+    const fake = fakeMachine()
+    const events: unknown[] = []
+    const flow = accounts.login(fake.machine, dir, (e) => events.push(e), {
+      provider: 'openai',
+      method: 'ChatGPT Pro/Plus (browser)',
+    })
+    expect(fake.spawned[0]?.args.slice(2)).toEqual([
+      'opencode',
+      'auth',
+      'login',
+      '--provider',
+      'openai',
+      '--method',
+      'ChatGPT Pro/Plus (browser)',
+      '--pure',
+    ])
+    expect(fake.spawned[0]?.env).toMatchObject({ KOTHAR_OPENCODE_SIGNIN: '1', KOTHAR_OPENCODE_MERGE: '1' })
+    fake.stdout(fixture('login-browser.txt'))
+    fake.stdout('◐  Waiting for authorization')
+    const url = expect.stringMatching(/^https:\/\/auth\.openai\.com\/oauth\/authorize\?/)
+    expect(events).toEqual([{ type: 'url', url, noCode: true }])
+    fake.stdout('│\n◇  Login successful\n')
+    fake.exit(0)
+    expect(events.at(-1)).toEqual({ type: 'done' })
+    flow.cancel()
+    expect(fake.state.killed).toBe(true)
+  })
+
+  it('answers GitHub Copilot’s deployment question, passes on the device code, and reports a failed sign-in', () => {
+    const fake = fakeMachine()
+    const events: any[] = []
+    const flow = accounts.login(fake.machine, dir, (e) => events.push(e), {
+      provider: 'github-copilot',
+      method: 'Login with GitHub Copilot',
+    })
+    fake.stdout('┌  Add credential\n│\n◆  Select GitHub deployment type\n│  ● GitHub.com (Public)\n')
+    expect(fake.written()).toBe('\r')
+    fake.stdout('│\n●  Go to: https://github.com/login/device\n│\n●  Enter code: AB12-CD34\n')
+    expect(events).toEqual([
+      { type: 'url', url: 'https://github.com/login/device', noCode: true, instructions: 'Enter code: AB12-CD34' },
+    ])
+    flow.submitCode(' code-1 ')
+    expect(fake.written()).toBe('\rcode-1\r')
+    fake.stdout('■  Failed to authorize\n')
+    fake.exit(1)
+    expect(events.at(-1)).toEqual({ type: 'failed', error: 'Failed to authorize' })
+  })
+})
+
+describe("OpenCode's sign-in folders", () => {
+  const accounts = () => opencode.accounts!
+  const saved = process.env.PATH
+  let root = ''
+  afterEach(() => {
+    process.env.PATH = saved
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('links a new account’s auth.json before it exists, so OpenCode writes the login into the account folder', async () => {
+    root = mkdtempSync(join(tmpdir(), 'kothar-opencode-signin-'))
+    const bin = join(root, 'bin')
+    const account = join(root, 'account')
+    for (const folder of [bin, account]) mkdirSync(folder, { recursive: true })
+    // A stand-in for `opencode auth login`: reads the key and writes it the way OpenCode does, to its data folder.
+    writeFileSync(
+      join(bin, 'opencode'),
+      '#!/bin/sh\nread key\nkey=$(printf %s "$key" | tr -d \'\\r\')\nprintf \'{"groq":{"type":"api","key":"%s"}}\' "$key" > "$XDG_DATA_HOME/opencode/auth.json"\n',
+    )
+    chmodSync(join(bin, 'opencode'), 0o755)
+    process.env.PATH = `${bin}:${process.env.PATH}`
+    await accounts().addApiKey!(localMachine, account, 'sk-local', { provider: 'groq', method: 'api' })
+    expect(JSON.parse(readFileSync(join(account, 'auth.json'), 'utf8'))).toEqual({ groq: { type: 'api', key: 'sk-local' } })
   })
 })

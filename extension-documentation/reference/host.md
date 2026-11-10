@@ -143,7 +143,7 @@ export { research }
 
 | Call | What it does |
 |---|---|
-| `accounts(engine)` | The engine's saved accounts, in the order Settings lists them: `{ engine, active, accounts: { id, name, signedIn? }[] }`. `undefined` if the engine keeps none. |
+| `accounts(engine)` | The engine's saved accounts, in the order Settings lists them: `{ engine, active, accounts: { id, name, signedIn?, provider? }[] }`. `provider` is set on engines whose accounts each sign in to one model provider (OpenCode): a model runs only on an account of its own provider. `undefined` if the engine keeps none. |
 | `useAccount(engine, accountId)` | Makes that account the engine's active one, for every chat. Turns already running keep theirs. |
 
 ## Running programs

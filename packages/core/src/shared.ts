@@ -140,10 +140,17 @@ export interface Session {
 export type AccountStatus = { signedIn: boolean; label?: string; note?: string }
 
 // noCode: the sign-in finishes on its own once the browser redirects back, with no code for the user to paste.
+// instructions: what the sign-in page will ask for, such as a device code to type in.
 export type LoginEvent =
-  | { type: 'url'; url: string; noCode?: boolean }
+  | { type: 'url'; url: string; noCode?: boolean; instructions?: string }
   | { type: 'done' }
   | { type: 'failed'; error: string }
+
+// How an engine that signs in to more than one provider (model vendor) adds an account: per provider, each way it
+// takes, a browser sign-in or an API key. Engines with one provider offer none.
+export type AccountMethod = { id: string; label: string; kind: 'login' | 'apiKey' }
+export type AccountProvider = { id: string; name: string; group?: string; methods: AccountMethod[] }
+export type AccountChoice = { provider: string; method: string }
 
 export interface LoginFlow {
   submitCode(code: string): void
@@ -162,20 +169,36 @@ export interface Adapter {
   steering?: boolean
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
-    login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void): LoginFlow
+    login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void, choice?: AccountChoice): LoginFlow
     logout(machine: Machine, accountDir: string): Promise<void>
     apiKeys?: boolean
+    // The providers an account can be for. Adding one then takes a provider and one of its methods.
+    providers?(machine: Machine): Promise<AccountProvider[]>
+    // Saves an API key in the account's folder the engine's own way. Without it, the core keeps the key and hands it
+    // to sessions as apiKey.
+    addApiKey?(machine: Machine, accountDir: string, key: string, choice?: AccountChoice): Promise<void>
   }
 }
 
-export type Account = { id: string; name: string; kind: 'login' | 'apiKey'; label?: string; signedIn?: boolean; note?: string }
+export type Account = {
+  id: string
+  name: string
+  kind: 'login' | 'apiKey'
+  label?: string
+  signedIn?: boolean
+  note?: string
+  // The provider it's for, on engines that offer providers.
+  provider?: string
+}
 
 export type EngineAccounts = {
   engine: string
   active: string
   apiKeys: boolean
   accounts: Account[]
-  login?: { name: string; url?: string; noCode?: boolean; error?: string }
+  // instructions: what the sign-in page asks for, such as a device code. adding: a key being saved, with no link.
+  login?: { name: string; url?: string; noCode?: boolean; instructions?: string; error?: string; adding?: boolean }
+  providers?: AccountProvider[]
 }
 
 export const PERMISSION_DEFAULTS = {
@@ -454,9 +477,9 @@ export type ClientMessage =
   | { type: 'app.restart' }
   | { type: 'models.setList'; role: ModelRole; models: ModelRow[] }
   | { type: 'memory.set'; engine?: string; model?: string }
-  | { type: 'account.login'; engine: string; name: string }
+  | { type: 'account.login'; engine: string; name: string; provider?: string; method?: string }
   | { type: 'account.code'; engine: string; code: string }
-  | { type: 'account.addApiKey'; engine: string; name: string; key: string }
+  | { type: 'account.addApiKey'; engine: string; name: string; key: string; provider?: string; method?: string }
   | { type: 'account.cancelLogin'; engine: string }
   | { type: 'account.use'; engine: string; accountId: string }
   | { type: 'account.remove'; engine: string; accountId: string }

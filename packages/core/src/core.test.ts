@@ -31,6 +31,7 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   GLOBAL_CONTEXT,
+  type AccountChoice,
   type Adapter,
   type ImageInput,
   type ChatEntry,
@@ -3176,6 +3177,123 @@ describe('accounts', () => {
       expect(plain.core.accounts()[0]?.apiKeys).toBe(false)
       const message = { type: 'account.addApiKey', engine: 'nokeys', name: 'Billing', key } as const
       expect(() => plain.handle(message)).toThrow(/API keys/)
+    })
+  })
+
+  describe('providers', () => {
+    // An engine that signs in to many providers and keeps its keys itself, in the account's folder.
+    function setupProviders(garage = tempDir()) {
+      const fake = createFakeAdapter(textScript, 0)
+      const logins: { dir: string; choice?: AccountChoice }[] = []
+      const keys: { dir: string; key: string; choice?: AccountChoice }[] = []
+      const saved = (dir?: string) => (dir ? join(dir, 'auth.json') : '')
+      const accounts: NonNullable<Adapter['accounts']> = {
+        ...fake.accounts!,
+        apiKeys: false,
+        status: async (_machine, dir) =>
+          dir && existsSync(saved(dir))
+            ? { signedIn: true, label: readFileSync(saved(dir), 'utf8') }
+            : { signedIn: dir === undefined },
+        providers: async () => [
+          { id: 'acme', name: 'Acme', methods: [{ id: 'api', label: 'API key', kind: 'apiKey' }] },
+          {
+            id: 'globex',
+            name: 'Globex',
+            methods: [
+              { id: 'browser', label: 'Globex Plus', kind: 'login' },
+              { id: 'key', label: 'API key', kind: 'apiKey' },
+            ],
+          },
+        ],
+        login(machine, dir, emit, choice) {
+          logins.push({ dir, ...(choice && { choice }) })
+          setTimeout(() => emit({ type: 'url', url: 'https://example.com/device', instructions: 'Enter code: AB-12' }), 0)
+          return {
+            submitCode: () => {
+              writeFileSync(saved(dir), `${choice?.provider} sign-in`)
+              emit({ type: 'done' })
+            },
+            cancel: () => {},
+          }
+        },
+        async addApiKey(_machine, dir, key, choice) {
+          keys.push({ dir, key, ...(choice && { choice }) })
+          if (key === 'sk-refused') throw new Error('Unknown provider')
+          writeFileSync(saved(dir), `${choice?.provider} API key`)
+        },
+      }
+      const adapter: Adapter = { ...fake, accounts }
+      const { adapter: wrapped, calls } = recording(adapter)
+      return { ...open(garage, [wrapped], 'fake'), calls, logins, keys }
+    }
+
+    it('offers the providers after a refresh, and requires one of them and one of its ways', async () => {
+      const t = setupProviders()
+      await t.core.refreshAccounts()
+      expect(accountsOf(t.core).providers?.map((p) => p.id)).toEqual(['acme', 'globex'])
+      const add = (provider?: string, method?: string) =>
+        t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Work', key: 'sk-1', provider, method })
+      expect(() => add()).toThrow(/provider/)
+      expect(() => add('initech')).toThrow(/provider/)
+      expect(() => add('globex', 'browser')).toThrow(/how/)
+      expect(() => t.handle({ type: 'account.login', engine: 'fake', name: 'Work', provider: 'acme' })).toThrow(/how/)
+      expect(t.keys).toEqual([])
+    })
+
+    it('has the engine save a key in the account folder, and starts sessions with the folder only', async () => {
+      const t = setupProviders()
+      await t.core.refreshAccounts()
+      t.handle({ type: 'account.addApiKey', engine: 'fake', name: 'Work', key: ' sk-acme-1 ', provider: 'acme' })
+      expect(accountsOf(t.core).login).toEqual({ name: 'Work', adding: true })
+      await until(() => !accountsOf(t.core).login)
+      const dir = accountDir(t.garage, 'work')
+      expect(t.keys).toEqual([{ dir, key: 'sk-acme-1', choice: { provider: 'acme', method: 'api' } }])
+      expect(existsSync(join(dir, 'api-key'))).toBe(false)
+      const work = { id: 'work', name: 'Work', kind: 'apiKey', label: 'acme API key', signedIn: true, provider: 'acme' }
+      expect(accountsOf(t.core).accounts.at(-1)).toEqual(work)
+      expect(readFileSync(join(t.garage, 'accounts', 'fake.json'), 'utf8')).not.toContain('sk-acme-1')
+
+      const chat = folderChat(t)
+      t.handle({ type: 'account.use', engine: 'fake', accountId: 'work' })
+      t.handle({ type: 'chat.send', chatId: chat.id, text: 'hi' })
+      expect(t.calls[0]?.options.accountDir).toBe(dir)
+      expect(t.calls[0]?.options.apiKey).toBeUndefined()
+      await until(() => statusOf(t.core, chat.id) === 'idle')
+
+      const reopened = setupProviders(t.garage)
+      await reopened.core.refreshAccounts()
+      expect(accountsOf(reopened.core).accounts.at(-1)).toEqual(work)
+      rmSync(join(dir, 'auth.json'))
+      await reopened.core.refreshAccounts()
+      expect(accountsOf(reopened.core).accounts.at(-1)?.signedIn).toBe(false)
+    })
+
+    it('shows why a key was refused and leaves no folder behind', async () => {
+      const t = setupProviders()
+      await t.core.refreshAccounts()
+      const message = { type: 'account.addApiKey', engine: 'fake', name: 'Work', key: 'sk-refused' } as const
+      t.handle({ ...message, provider: 'globex', method: 'key' })
+      await until(() => accountsOf(t.core).login?.error !== undefined)
+      expect(accountsOf(t.core).login?.error).toMatch(/Unknown provider/)
+      expect(existsSync(accountDir(t.garage, 'work'))).toBe(false)
+      expect(JSON.stringify(t.messages)).not.toContain('sk-refused')
+      t.handle({ type: 'account.cancelLogin', engine: 'fake' })
+      expect(accountsOf(t.core).login).toBeUndefined()
+    })
+
+    it('signs in with the chosen way, showing the code to enter, and removes the account with its folder', async () => {
+      const t = setupProviders()
+      await t.core.refreshAccounts()
+      t.handle({ type: 'account.login', engine: 'fake', name: 'Plus', provider: 'globex', method: 'browser' })
+      await until(() => accountsOf(t.core).login?.url !== undefined)
+      expect(accountsOf(t.core).login).toMatchObject({ url: 'https://example.com/device', instructions: 'Enter code: AB-12' })
+      expect(t.logins[0]?.choice).toEqual({ provider: 'globex', method: 'browser' })
+      t.handle({ type: 'account.code', engine: 'fake', code: 'ok' })
+      await until(() => !accountsOf(t.core).login)
+      expect(accountsOf(t.core).accounts.at(-1)).toMatchObject({ id: 'plus', provider: 'globex', label: 'globex sign-in' })
+      t.handle({ type: 'account.remove', engine: 'fake', accountId: 'plus' })
+      await until(() => accountsOf(t.core).accounts.length === 1)
+      expect(existsSync(accountDir(t.garage, 'plus'))).toBe(false)
     })
   })
 })

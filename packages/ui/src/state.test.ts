@@ -300,6 +300,10 @@ describe('reduce', () => {
     expect(listedAccounts(engine('default', [own, key])).accounts).toEqual([own, key])
     const ownSignedOut: Account = { id: 'default', name: 'Default', kind: 'login' }
     expect(listedAccounts(engine('default', [ownSignedOut, work])).accounts).toEqual([ownSignedOut, work])
+    // On engines with providers a label names the provider, so two ChatGPT sign-ins aren't the same person.
+    const ownPlus: Account = { id: 'default', name: 'Default', kind: 'login', label: 'OpenAI sign-in', signedIn: true }
+    const plus: Account = { ...ownPlus, id: 'plus', name: 'Plus', provider: 'openai' }
+    expect(listedAccounts(engine('default', [ownPlus, plus])).accounts).toEqual([ownPlus, plus])
   })
 
   it("keeps a tool's permission on its row: waiting while pending, then the verdict", () => {

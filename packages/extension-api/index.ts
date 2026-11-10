@@ -123,7 +123,9 @@ export type CompletionRequest = { system: string; prompt: string; schema?: objec
 // own.
 export type ExtensionChat = { id: string; name: string; instructions: string; seesAll?: boolean }
 
-export type ExtensionAccount = { id: string; name: string; signedIn?: boolean }
+// provider: the model provider it signs in to, on engines with more than one (OpenCode); a model of one provider
+// doesn't run on another's account.
+export type ExtensionAccount = { id: string; name: string; signedIn?: boolean; provider?: string }
 
 export type ExtensionAccounts = { engine: string; active: string; accounts: ExtensionAccount[] }
 

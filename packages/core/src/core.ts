@@ -1123,10 +1123,11 @@ function openLockedCore(options: {
       accounts(engine) {
         const found = accounts.list().find((state) => state.engine === engine)
         if (!found) return undefined
-        const list = found.accounts.map(({ id, name, signedIn }) => ({
+        const list = found.accounts.map(({ id, name, signedIn, provider }) => ({
           id,
           name,
           ...(signedIn !== undefined && { signedIn }),
+          ...(provider !== undefined && { provider }),
         }))
         return { engine, active: found.active, accounts: list }
       },
@@ -2556,9 +2557,20 @@ function openLockedCore(options: {
         case 'question.respond':
           return answer(chatFor(message.chatId), message.requestId, message.answers)
         case 'account.login':
-          return accounts.login(String(message.engine), String(message.name ?? ''))
+          return accounts.login(
+            String(message.engine),
+            String(message.name ?? ''),
+            optionalText(message.provider),
+            optionalText(message.method),
+          )
         case 'account.addApiKey':
-          return accounts.addApiKey(String(message.engine), String(message.name ?? ''), String(message.key ?? ''))
+          return accounts.addApiKey(
+            String(message.engine),
+            String(message.name ?? ''),
+            String(message.key ?? ''),
+            optionalText(message.provider),
+            optionalText(message.method),
+          )
         case 'account.code':
           return accounts.submitCode(String(message.engine), String(message.code ?? ''))
         case 'account.cancelLogin':
