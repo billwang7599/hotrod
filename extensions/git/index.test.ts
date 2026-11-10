@@ -2,13 +2,24 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import type { ExtensionView } from '@kothar/extension-api'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ChatDetail, ExtensionContext, ExtensionView } from '@kothar/extension-api'
 import { createFakeAdapter, type FakeStep } from '@kothar/core/fake'
 import { startCore } from '@kothar/core/main'
 import type { ClientMessage, CoreMessage, Machine, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import { checksOf, createGitExtension, noteText, parseNumstat, PR_TTL_MS, repoState } from './index.ts'
+import {
+  checksOf,
+  createGitExtension,
+  FILES_MAX,
+  LIVE_REFRESH_MS,
+  noteText,
+  parseNumstat,
+  PR_TTL_MS,
+  repoState,
+  repoView,
+  type RepoState,
+} from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -47,9 +58,11 @@ const noGh: Gh = () => ({ code: null, stdout: '', stderr: 'spawn gh ENOENT' })
 async function start(work: (cwd: string) => void = () => {}, gh: Gh = noGh, clock = { now: 0 }) {
   const garage = tempDir()
   const ghCalls: string[][] = []
+  const gitCalls: string[][] = []
   const machine: Machine = {
     ...sandboxingMachine,
     run: (command, args, options) => {
+      if (command === 'git') gitCalls.push(args)
       if (command !== 'gh') return sandboxingMachine.run(command, args, options)
       ghCalls.push(args)
       return Promise.resolve(gh(args))
@@ -95,7 +108,7 @@ async function start(work: (cwd: string) => void = () => {}, gh: Gh = noGh, cloc
     if (shown.error) throw new Error(shown.error)
     return shown.view!
   }
-  return { core, garage, handle, create, chat, send, tabs, panel, ghCalls, messages }
+  return { core, garage, handle, create, chat, send, tabs, panel, ghCalls, gitCalls, messages }
 }
 
 // Every piece of text in a view, in order, for checking what the tab says.
@@ -224,6 +237,111 @@ describe('the Changes tab', () => {
     const id = t.create('Repo', [repo()])
     const view = await t.panel(id)
     expect(textOf(view)).toEqual(['Refresh', expect.any(String), 'main', 'Not pushed', 'No changes'])
+  })
+})
+
+describe('the Changes tab, polished', () => {
+  it('opens a diff without reading every repo again, and closes a file that left its group', async () => {
+    const dir = repo()
+    const t = await start()
+    const id = t.create('Repo', [dir])
+    writeFileSync(join(dir, 'a.txt'), 'one\nTWO\n')
+    await t.panel(id)
+    const before = t.gitCalls.length
+    const open = { name: 'open', value: { path: dir, group: 'uncommitted', file: 'a.txt' } }
+    const opened = await t.panel(id, { action: open })
+    expect(textOf(opened).find((text) => text.startsWith('diff --git'))).toContain('+TWO')
+    // Only the diff itself: the repo's state is the one the tab already shows.
+    expect(t.gitCalls.slice(before).map((args) => args.slice(2, 3))).toEqual([['diff']])
+    // The agent commits the file: it leaves Uncommitted, and its diff closes rather than show nothing.
+    sh(dir, 'commit', '-q', '-am', 'two')
+    const after = await t.panel(id, { action: { name: 'refresh' } })
+    expect(textOf(after).some((text) => text.startsWith('diff --git'))).toBe(false)
+    expect(textOf(after)).toContain('No changes')
+    writeFileSync(join(dir, 'a.txt'), 'one\nthree\n')
+    const again = await t.panel(id, { action: { name: 'refresh' } })
+    expect(textOf(again).some((text) => text.startsWith('diff --git'))).toBe(false)
+  })
+
+})
+
+describe('reading git, edge cases', () => {
+  const run = sandboxingMachine.run.bind(sandboxingMachine) as never
+
+  it('reads a repo with no commits yet: its branch and its new files', async () => {
+    const dir = tempDir()
+    sh(dir, 'init', '-q', '-b', 'trunk')
+    writeFileSync(join(dir, 'first.txt'), 'hi\n')
+    const state = await repoState(run, { folder: dir, path: dir })
+    expect(state.error).toBeUndefined()
+    expect(state).toMatchObject({ branch: 'trunk', uncommitted: [{ path: 'first.txt', untracked: true }] })
+  })
+
+  it('says plainly when a folder is gone or is no repo', async () => {
+    const dir = tempDir()
+    expect((await repoState(run, { folder: dir, path: dir })).error).toBe(`Not a git repository: ${dir}`)
+    const gone = join(dir, 'gone')
+    expect((await repoState(run, { folder: gone, path: gone })).error).toBe(`Folder not found: ${gone}`)
+    expect(textOf(repoView(await repoState(run, { folder: gone, path: gone })))).toEqual(['gone', `Folder not found: ${gone}`])
+  })
+
+  it('names the commit of a detached checkout instead of calling it HEAD', async () => {
+    const dir = repo()
+    const sha = sh(dir, 'rev-parse', '--short=7', 'HEAD').trim()
+    sh(dir, 'checkout', '-q', '--detach')
+    const state = await repoState(run, { folder: dir, path: dir })
+    expect(state.detached).toBe(sha)
+    expect(textOf(repoView(state))).toContain(`detached at ${sha}`)
+    expect(textOf(repoView(state))).not.toContain('HEAD')
+  })
+
+  it('lists at most FILES_MAX files a group, and says how many more', () => {
+    const files = Array.from({ length: FILES_MAX + 5 }, (_, i) => ({ path: `out/${i}.js`, untracked: true }))
+    const state: RepoState = { target: { folder: '/r', path: '/r' }, branch: 'main', committed: [], uncommitted: files }
+    const view = repoView(state)
+    expect(textOf(view).filter((text) => text.startsWith('out/'))).toHaveLength(FILES_MAX)
+    expect(textOf(view)).toContain('and 5 more files')
+  })
+
+  it("shows a diff git couldn't read as an error, not as a diff", () => {
+    const state: RepoState = {
+      target: { folder: '/r', path: '/r' },
+      branch: 'main',
+      committed: [],
+      uncommitted: [{ path: 'a.txt', added: 1, removed: 0 }],
+    }
+    const view = repoView(state, { path: '/r', group: 'uncommitted', file: 'a.txt' }, { error: 'Couldn’t read the diff: x' })
+    const find = (v: ExtensionView): ExtensionView[] =>
+      'children' in v && Array.isArray(v.children) ? v.children.flatMap(find) : [v]
+    expect(find(view)).toContainEqual({ type: 'text', text: 'Couldn’t read the diff: x', tone: 'error', small: true })
+    expect(find(view).some((v) => v.type === 'code')).toBe(false)
+  })
+})
+
+describe('during a turn', () => {
+  it("draws the tab again after the agent's shell commands and edits, at most every LIVE_REFRESH_MS", async () => {
+    vi.useFakeTimers()
+    cleanups.push(() => void vi.useRealTimers())
+    const extension = createGitExtension({ now: () => Date.now() })
+    const refreshed: (string | undefined)[] = []
+    const chat = { id: 's1' } as ChatDetail
+    const host = { refresh: (id?: string) => refreshed.push(id), chat: () => chat }
+    const context = { host } as unknown as ExtensionContext
+    const tool = (toolId: string, kind: 'shell' | 'edit' | 'read') => {
+      extension.onEvent!(chat, { type: 'tool.started', toolId, name: 'T', kind, summary: '', input: {} }, context)
+      extension.onEvent!(chat, { type: 'tool.completed', toolId, output: '', isError: false }, context)
+    }
+    tool('r1', 'read')
+    expect(refreshed).toEqual([])
+    tool('t1', 'shell')
+    expect(refreshed).toEqual(['s1'])
+    tool('t2', 'edit')
+    tool('t3', 'shell')
+    expect(refreshed).toEqual(['s1'])
+    vi.advanceTimersByTime(LIVE_REFRESH_MS)
+    expect(refreshed).toEqual(['s1', 's1'])
+    vi.advanceTimersByTime(LIVE_REFRESH_MS * 2)
+    expect(refreshed).toEqual(['s1', 's1'])
   })
 })
 

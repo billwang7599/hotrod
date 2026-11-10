@@ -14,6 +14,10 @@ const GH_TIMEOUT_MS = 15_000
 // gh asks GitHub, so a PR's status is kept this long between draws, unless the user refreshes or a turn ends.
 export const PR_TTL_MS = 60_000
 const DIFF_MAX_LINES = 800
+// A group lists at most this many files; a build folder an agent forgot to ignore can hold thousands.
+export const FILES_MAX = 200
+// While a turn runs, the tab is drawn again at most this often after the agent's shell commands and edits.
+export const LIVE_REFRESH_MS = 3000
 
 type Run = ExtensionHost['run']
 
@@ -33,6 +37,8 @@ type Target = { folder: string; path: string; checkout?: Checkout }
 export type RepoState = {
   target: Target
   branch?: string
+  // The commit checked out when no branch is (branch is then HEAD).
+  detached?: string
   upstream?: string
   ahead?: number
   behind?: number
@@ -112,34 +118,64 @@ export async function prOf(run: Run, cwd: string, branch: string): Promise<PrSta
   }
 }
 
+// git's own words for a folder that isn't a repo, made plain.
+export function errorText(message: string, path: string) {
+  if (/not a git repository/i.test(message)) return `Not a git repository: ${path}`
+  return message.replace(/^fatal: /, '')
+}
+
+// The branch checked out. A repo with no commits yet still has one (unborn), which rev-parse can't name.
+async function branchOf(run: Run, path: string) {
+  const named = await tryGit(run, path, ['rev-parse', '--abbrev-ref', 'HEAD'])
+  if (named) return named
+  const unborn = await tryGit(run, path, ['symbolic-ref', '--quiet', '--short', 'HEAD'])
+  if (unborn) return unborn
+  // Neither: say why, in git's words.
+  return (await git(run, path, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
+}
+
 export async function repoState(run: Run, target: Target, pr?: (branch: string) => Promise<PrStatus | undefined>) {
   const state: RepoState = { target, committed: [], uncommitted: [] }
   const { path } = target
+  // The user's folder was moved or deleted. The Machine is this computer for now, so the file system can tell.
+  if (!existsSync(path)) return { ...state, error: `Folder not found: ${path}` }
   try {
-    state.branch = (await git(run, path, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
-    state.upstream = await tryGit(run, path, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'])
+    state.branch = await branchOf(run, path)
+    // Reads that don't depend on each other run together, so a big repo's tab waits for the slowest, not the sum.
+    const [upstream, hasHead, defaultBase] = await Promise.all([
+      tryGit(run, path, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}']),
+      tryGit(run, path, ['rev-parse', '--verify', '--quiet', 'HEAD']),
+      defaultBranch(run, path),
+    ])
+    if (state.branch === 'HEAD' && hasHead) state.detached = hasHead.slice(0, 7)
+    state.upstream = upstream
     if (state.upstream) {
       const counts = await tryGit(run, path, ['rev-list', '--left-right', '--count', '@{upstream}...HEAD'])
       const [behind, ahead] = (counts ?? '').split(/\s+/).map(Number)
       if (Number.isFinite(ahead) && Number.isFinite(behind)) Object.assign(state, { ahead, behind })
     }
     const from = target.checkout?.from
-    const base = from && from !== state.branch ? from : await defaultBranch(run, path)
-    const forkPoint = base && base !== state.branch ? await tryGit(run, path, ['merge-base', base, 'HEAD']) : undefined
-    if (base && forkPoint) {
+    const base = from && from !== state.branch ? from : defaultBase
+    const forkPoint =
+      hasHead && base && base !== state.branch ? await tryGit(run, path, ['merge-base', base, 'HEAD']) : undefined
+    const [committed, tracked, untracked, prStatus] = await Promise.all([
+      base && forkPoint ? git(run, path, ['diff', '--numstat', '--no-renames', forkPoint, 'HEAD']) : undefined,
+      hasHead ? git(run, path, ['diff', '--numstat', '--no-renames', 'HEAD']) : '',
+      git(run, path, ['ls-files', '--others', '--exclude-standard']),
+      pr && state.branch && state.branch !== 'HEAD' ? pr(state.branch) : undefined,
+    ])
+    if (base && committed !== undefined) {
       state.base = base
-      state.committed = parseNumstat(await git(run, path, ['diff', '--numstat', '--no-renames', forkPoint, 'HEAD']))
+      state.committed = parseNumstat(committed)
     }
-    const hasHead = await tryGit(run, path, ['rev-parse', '--verify', '--quiet', 'HEAD'])
-    const tracked = hasHead ? parseNumstat(await git(run, path, ['diff', '--numstat', '--no-renames', 'HEAD'])) : []
-    const untracked = (await git(run, path, ['ls-files', '--others', '--exclude-standard']))
+    const added = untracked
       .split('\n')
       .filter(Boolean)
       .map((file) => ({ path: file, untracked: true }))
-    state.uncommitted = [...tracked, ...untracked]
-    if (pr && state.branch && state.branch !== 'HEAD') state.pr = await pr(state.branch)
+    state.uncommitted = [...parseNumstat(tracked), ...added]
+    if (prStatus) state.pr = prStatus
   } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error)
+    state.error = errorText(error instanceof Error ? error.message : String(error), path)
   }
   return state
 }
@@ -180,14 +216,19 @@ const CHECK_TONES: Record<NonNullable<PrStatus['checks']>, ExtensionTone> = {
   running: 'warning',
 }
 
-export function repoView(state: RepoState, selected?: Selected, diff?: string): ExtensionView {
+// A diff, or why it couldn't be read.
+export type Diff = string | { error: string }
+
+export function repoView(state: RepoState, selected?: Selected, diff?: Diff): ExtensionView {
   const { target } = state
   const title = basename(target.folder)
   if (state.error) {
     return { type: 'card', title, children: [{ type: 'text', text: state.error, tone: 'error', small: true }] }
   }
   const badges: NonNullable<ExtensionListItem['badges']> = []
-  if (state.branch) {
+  if (state.detached) {
+    badges.push({ text: `detached at ${state.detached}`, tone: 'warning', hint: 'No branch is checked out' })
+  } else if (state.branch) {
     const hint = target.checkout ? undefined : 'Not checked out yet: this is the folder itself'
     badges.push({ text: state.branch, tone: 'normal', ...(hint && { hint }) })
   }
@@ -215,9 +256,17 @@ export function repoView(state: RepoState, selected?: Selected, diff?: string): 
   const group = (name: Group, heading: string, files: FileChange[]) => {
     if (!files.length) return
     children.push({ type: 'text', text: heading, tone: 'muted', small: true })
-    children.push({ type: 'list', label: heading, items: files.map((f) => fileItem(state, name, f, selected)) })
+    const shown = files.slice(0, FILES_MAX)
+    children.push({ type: 'list', label: heading, items: shown.map((f) => fileItem(state, name, f, selected)) })
+    if (files.length > shown.length) {
+      children.push({ type: 'text', text: `and ${plural(files.length - shown.length, 'more file')}`, tone: 'muted', small: true })
+    }
     const open = selected?.path === target.path && selected.group === name
-    if (!open || diff === undefined || !files.some((f) => f.path === selected.file)) return
+    if (!open || diff === undefined || !shown.some((f) => f.path === selected.file)) return
+    if (typeof diff !== 'string') {
+      children.push({ type: 'text', text: diff.error, tone: 'error', small: true })
+      return
+    }
     const code: ExtensionView = { type: 'code', language: 'diff', text: diff, maxLines: DIFF_MAX_LINES }
     children.push(diff.trim() ? code : { type: 'empty', text: 'No diff' })
   }
@@ -265,6 +314,12 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
   const selected = new Map<string, Selected>()
   const prs = new Map<string, { at: number; status?: PrStatus }>()
   const before = new Map<string, Map<string, Snapshot>>()
+  // Per chat, what its tab last showed: opening a file's diff draws from it instead of reading every repo again.
+  const shownStates = new Map<string, RepoState[]>()
+  const reuse = new Set<string>()
+  // Per chat, its running shell commands and edits, and when its tab was last drawn for one.
+  const writing = new Map<string, Set<string>>()
+  const live = new Map<string, { at: number; timer?: ReturnType<typeof setTimeout> }>()
 
   const prFor = (run: Run, path: string) => async (branch: string) => {
     const key = `${path}\n${branch}`
@@ -290,10 +345,12 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
     try {
       for (const checkout of space.checkouts) {
         if (!existsSync(checkout.path)) continue
-        const result = await cleanupCheckout(host.run, checkout, space.workDir, idle)
-        if (!result.removed) continue
+        // One checkout git won't remove doesn't stop the others, or the turn's hook.
+        const result = await cleanupCheckout(host.run, checkout, space.workDir, idle).catch(() => undefined)
+        if (!result?.removed) continue
         const where = space.checkouts.length > 1 ? ` in ${basename(checkout.folder)}` : ''
-        const text = `Removed the checkout of ${result.branch}${where}: ${result.reason}`
+        const kept = result.branchKept ? `; its branch ${result.branch} stays, since git wouldn’t delete it` : ''
+        const text = `Removed the checkout of ${result.branch}${where}: ${result.reason}${kept}`
         if (host.chat(space.id)) host.note(space.id, text, { panel: PANEL })
         forget(host, space.id)
         host.refresh(space.id)
@@ -308,6 +365,26 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
   const refreshAround = (host: ExtensionHost, chat: ChatDetail) => {
     host.refresh(chat.id)
     if (chat.parentId && host.chat(chat.parentId)) host.refresh(chat.parentId)
+  }
+  // An agent's commit or edit shows during a long turn too, not only once it ends: drawn at once, then at most every
+  // LIVE_REFRESH_MS, with the last one always drawn. host.refresh draws only tabs that are open.
+  const refreshLive = (host: ExtensionHost, chat: ChatDetail) => {
+    const last = live.get(chat.id) ?? { at: -Infinity }
+    live.set(chat.id, last)
+    if (last.timer) return
+    const wait = last.at + LIVE_REFRESH_MS - now()
+    const draw = () => {
+      delete last.timer
+      last.at = now()
+      if (host.chat(chat.id)) refreshAround(host, chat)
+    }
+    if (wait <= 0) draw()
+    else last.timer = setTimeout(draw, wait)
+  }
+  const stopLive = (chatId: string) => {
+    clearTimeout(live.get(chatId)?.timer)
+    live.delete(chatId)
+    writing.delete(chatId)
   }
 
   return {
@@ -336,12 +413,23 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
         shown: (chat, { host }) => !chat.extension && targetsOf(host, chat.id).length > 0,
         async render(chat, { host }) {
           const targets = targetsOf(host, chat.id)
-          const states = await Promise.all(targets.map((t) => repoState(host.run, t, prFor(host.run, t.path))))
-          const pick = selected.get(chat.id)
-          const picked = pick && states.find((s) => s.target.path === pick.path)
-          const diff =
+          const kept = reuse.delete(chat.id) ? shownStates.get(chat.id) : undefined
+          const same = kept?.length === targets.length && kept.every((s, i) => s.target.path === targets[i]!.path)
+          const states =
+            kept && same ? kept : await Promise.all(targets.map((t) => repoState(host.run, t, prFor(host.run, t.path))))
+          shownStates.set(chat.id, states)
+          let pick = selected.get(chat.id)
+          const picked = pick && states.find((s) => s.target.path === pick!.path)
+          // A file that left its group (committed, reverted, its checkout gone) closes.
+          if (pick && !picked?.[pick.group].some((f) => f.path === pick!.file)) {
+            selected.delete(chat.id)
+            pick = undefined
+          }
+          const diff: Diff | undefined =
             picked && pick
-              ? await diffOf(host.run, picked, pick.group, pick.file).catch((e) => String(e?.message ?? e))
+              ? await diffOf(host.run, picked, pick.group, pick.file).catch((e) => ({
+                  error: `Couldn’t read the diff: ${errorText(String(e?.message ?? e), picked.target.path)}`,
+                }))
               : undefined
           const refresh: ExtensionView = {
             type: 'button',
@@ -374,6 +462,7 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
           const same = open?.path === path && open.group === group && open.file === file
           if (same) selected.delete(chat.id)
           else selected.set(chat.id, { path, group, file })
+          reuse.add(chat.id)
         },
       },
     ],
@@ -383,8 +472,18 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
       for (const target of targetsOf(host, chat.id)) shots.set(target.path, await snapshot(host.run, target.path))
       before.set(chat.id, shots)
     },
+    onEvent(chat, event, { host }) {
+      if (chat.extension) return
+      if (event.type === 'tool.started' && (event.kind === 'shell' || event.kind === 'edit')) {
+        const ids = writing.get(chat.id) ?? new Set()
+        writing.set(chat.id, ids.add(event.toolId))
+      } else if (event.type === 'tool.completed' && writing.get(chat.id)?.delete(event.toolId)) {
+        refreshLive(host, chat)
+      }
+    },
     async onTurnCompleted({ chat }, { host, values }) {
       if (chat.extension) return
+      stopLive(chat.id)
       const shots = before.get(chat.id)
       before.delete(chat.id)
       forget(host, chat.id)
@@ -409,6 +508,12 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
     onChatRemoved(chat) {
       selected.delete(chat.id)
       before.delete(chat.id)
+      shownStates.delete(chat.id)
+      reuse.delete(chat.id)
+      stopLive(chat.id)
+    },
+    onStop() {
+      for (const chatId of [...live.keys()]) stopLive(chatId)
     },
   }
 }

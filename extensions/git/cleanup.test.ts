@@ -122,6 +122,24 @@ describe('cleaning up a checkout', () => {
     expect(fake.removals()).toEqual([])
   })
 
+  it('keeps a checkout git refuses to remove, such as one whose own folder is gone, and deletes no branch', async () => {
+    const merged = { 'gh pr view feat/x --json number,state': '{"number":12,"state":"MERGED"}' }
+    const fake = fakeRun({ ...clean, ...merged, 'git worktree remove /work/s1/repo': { code: 128 } })
+    expect(await cleanupCheckout(fake.run, checkout, '/work/s1')).toEqual({ removed: false, why: 'git kept it: failed' })
+    expect(fake.removals()).toEqual(['/repo: git worktree remove /work/s1/repo'])
+  })
+
+  it('says so when the checkout went but git kept its branch', async () => {
+    const merged = { 'gh pr view feat/x --json number,state': '{"number":12,"state":"MERGED"}' }
+    const fake = fakeRun({ ...clean, ...merged, 'git branch -D feat/x': { code: 1 } })
+    expect(await cleanupCheckout(fake.run, checkout, '/work/s1')).toEqual({
+      removed: true,
+      branch: 'feat/x',
+      reason: 'its pull request #12 was merged',
+      branchKept: true,
+    })
+  })
+
   it('keeps a detached checkout, and one where git status fails', async () => {
     const detached = fakeRun({ ...clean, 'git symbolic-ref --quiet --short HEAD': { code: 1 } })
     expect(await cleanupCheckout(detached.run, checkout, '/work/s1')).toMatchObject({ removed: false })

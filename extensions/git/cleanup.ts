@@ -9,7 +9,10 @@ const GIT_TIMEOUT_MS = 30_000
 const FETCH_TIMEOUT_MS = 60_000
 const GH_TIMEOUT_MS = 15_000
 
-export type Cleanup = { removed: true; branch: string; reason: string } | { removed: false; why: string }
+// branchKept: the checkout went but git wouldn't delete its branch (checked out elsewhere, say).
+export type Cleanup =
+  | { removed: true; branch: string; reason: string; branchKept?: true }
+  | { removed: false; why: string }
 
 async function git(run: Run, cwd: string, args: string[], timeoutMs = GIT_TIMEOUT_MS) {
   const result = await run('git', ['-C', cwd, ...args], { cwd, timeoutMs })
@@ -77,9 +80,14 @@ export async function cleanupCheckout(
   // The branch Kothar made goes too when it holds nothing the merged branch doesn't.
   const made = checkout.branch !== branch && (await isAncestor(run, path, checkout.branch, branch))
   if (!stillIdle()) return { removed: false, why: 'in use by a running chat' }
-  // Without --force, git itself refuses a worktree that changed since the status above.
-  await git(run, folder, ['worktree', 'remove', path])
-  await git(run, folder, ['branch', '-D', branch])
+  // Without --force, git itself refuses a worktree that changed since the status above. With the user's folder moved
+  // or deleted, there's no repo to ask, and the checkout stays too.
+  try {
+    await git(run, folder, ['worktree', 'remove', path])
+  } catch (error) {
+    return { removed: false, why: `git kept it: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  const deleted = (await tryGit(run, folder, ['branch', '-D', branch])) !== undefined
   if (made) await tryGit(run, folder, ['branch', '-D', checkout.branch])
-  return { removed: true, branch, reason }
+  return { removed: true, branch, reason, ...(!deleted && { branchKept: true as const }) }
 }

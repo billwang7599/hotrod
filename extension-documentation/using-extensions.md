@@ -29,7 +29,7 @@ The built-in extensions today:
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
 | Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
-| Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
+| Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Saved Markdown notes that agents find and read when they're relevant, global or per space. Adds a Notes tab. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
