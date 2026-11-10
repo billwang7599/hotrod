@@ -148,10 +148,10 @@ function App() {
   const signedIn = activeAccount?.signedIn ?? engine?.signedIn
 
   const connected = state.connected
-  const { catalog, themes, installed, marketFailures, mods, localInstall, communityMods } = state
+  const { catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions } = state
   const market = useMemo(
-    () => ({ catalog, themes, installed, marketFailures, mods, localInstall, communityMods }),
-    [catalog, themes, installed, marketFailures, mods, localInstall, communityMods],
+    () => ({ catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions }),
+    [catalog, themes, installed, marketFailures, extensions, localInstall, communityExtensions],
   )
   // What a restart would stop.
   const running = state.chats.filter((c) => c.status !== 'idle').length
@@ -262,12 +262,12 @@ function App() {
               engines={state.engines}
               accounts={state.accounts}
               contextDefaults={state.contextDefaults}
-              mods={state.mods}
+              extensions={state.extensions}
               modelLists={state.modelLists}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
-              communityMods={communityMods}
+              communityExtensions={communityExtensions}
               restart={state.restart}
               running={running}
               openMarketplace={openMarketplace}
@@ -300,7 +300,7 @@ function App() {
                 setColumnPx={setColumnPx}
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
-                modUi={state.modUi}
+                extensionUi={state.extensionUi}
                 panelViews={state.panelViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}

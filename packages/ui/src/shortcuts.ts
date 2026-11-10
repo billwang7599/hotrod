@@ -52,7 +52,7 @@ const actions: ShortcutAction[] = [
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((listener) => listener())
 
-/** Adds an action to the registry, for mods and later features. Replaces one with the same id. */
+/** Adds an action to the registry, for extensions and later features. Replaces one with the same id. */
 export function registerShortcut(action: ShortcutAction) {
   const at = actions.findIndex((a) => a.id === action.id)
   if (at < 0) actions.push(action)

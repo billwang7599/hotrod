@@ -34,7 +34,7 @@ import {
 } from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { choosePanelTab, modTabId } from './panel-tab.ts'
+import { choosePanelTab, extensionTabId } from './panel-tab.ts'
 import { usePathsShown } from './paths.ts'
 import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
@@ -674,8 +674,8 @@ type ItemProps = {
   // Opens a chat that still exists, for a worker's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
-  // Opens a mod's panel in the right sidebar, for a mod's note.
-  openPanel?: (mod: string, panel: string) => void
+  // Opens an extension's panel in the right sidebar, for an extension's note.
+  openPanel?: (extension: string, panel: string) => void
   // The item's index in the chat, for choices kept per item (a report card's fold).
   at?: number
 }
@@ -787,12 +787,12 @@ function ItemView(props: ItemProps) {
         <ErrorText>{item.text}</ErrorText>
       )
     case 'note': {
-      const { mod, panel } = item
-      if (!mod || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
+      const { extension, panel } = item
+      if (!extension || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
       return (
         <button
           className="w-fit text-left text-sm text-muted underline decoration-faint underline-offset-2 hover:text-text"
-          onClick={() => openPanel(mod, panel)}
+          onClick={() => openPanel(extension, panel)}
         >
           {item.text}
         </button>
@@ -929,7 +929,7 @@ type ChatProps = {
   contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
-  modUi?: State['modUi']
+  extensionUi?: State['extensionUi']
   panelViews?: State['panelViews']
   terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
@@ -1144,8 +1144,8 @@ export function Chat(props: ChatProps) {
       const select = props.select
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
     },
-    openPanel: (mod: string, panel: string) => {
-      choosePanelTab(modTabId(mod, panel))
+    openPanel: (extension: string, panel: string) => {
+      choosePanelTab(extensionTabId(extension, panel))
       if (!props.contextOpen) props.toggleContext()
     },
   }
@@ -1192,10 +1192,10 @@ export function Chat(props: ChatProps) {
             toggle={props.toggleSidebar}
           />
           <div className="flex min-w-64 flex-1 items-baseline gap-10 pl-2 whitespace-nowrap">
-            <Hint text={!chat.mod && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
+            <Hint text={!chat.extension && !paths.header && (folder ?? 'Not tied to a folder')} side="bottom" align="start">
               <span className="max-w-[50%] shrink-0 truncate font-semibold max-[900px]:max-w-full">{chat.name}</span>
             </Hint>
-            {!chat.mod && paths.header && (
+            {!chat.extension && paths.header && (
               <span className="min-w-0 truncate font-mono text-sm leading-[normal] text-faint max-[900px]:hidden">
                 {folder ?? 'Not tied to a folder'}
               </span>
@@ -1429,7 +1429,7 @@ export function Chat(props: ChatProps) {
             <ul className="mx-auto mb-8 flex max-w-column flex-col gap-8" aria-label="Waiting for you">
               {waits.map(({ chat: of, wait }) => (
                 <li
-                  key={`${of.id}-${wait.mod}`}
+                  key={`${of.id}-${wait.extension}`}
                   className="flex flex-wrap items-center gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-10 shadow-raised"
                 >
                   <span className="min-w-0 flex-1 text-body">
@@ -1447,7 +1447,7 @@ export function Chat(props: ChatProps) {
                         variant={button.primary ? 'primary' : 'default'}
                         disabled={!connected}
                         onClick={() =>
-                          send({ type: 'mod.wait.answer', chatId: of.id, mod: wait.mod, button: button.id })
+                          send({ type: 'extension.wait.answer', chatId: of.id, extension: wait.extension, button: button.id })
                         }
                       >
                         {button.label}
@@ -1524,7 +1524,7 @@ export function Chat(props: ChatProps) {
               connected={connected}
               send={send}
               hide={props.contextOverlay ? props.toggleContext : undefined}
-              modUi={props.modUi}
+              extensionUi={props.extensionUi}
               panelViews={props.panelViews}
               terminalErrors={props.terminalErrors}
               pickers={window.kothar}

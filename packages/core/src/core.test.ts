@@ -14,13 +14,13 @@ import {
 } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import type { LimitReached, Mod, ModChat, ModHost, ModSession } from '@kothar/mod-api'
+import type { LimitReached, Extension, ExtensionChat, ExtensionHost, ExtensionSession } from '@kothar/extension-api'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { LOCK_FILE } from './garage-lock.ts'
-import { WORKERS_MOD } from './kothar-mcp.ts'
+import { WORKERS_EXTENSION } from './kothar-mcp.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import { WINDOW_MAX_CHARS } from './memory.ts'
@@ -44,8 +44,8 @@ import {
 } from './shared.ts'
 
 const TEST_STOP_GRACE_MS = 30
-const MAIN: ModChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
-const mainMod: Mod = { id: 'main-mod', name: 'Main mod', description: '', enabledByDefault: true, chats: [MAIN] }
+const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
+const mainExtension: Extension = { id: 'main-extension', name: 'Main extension', description: '', enabledByDefault: true, chats: [MAIN] }
 const at = '2026-11-06T00:00:00.000Z'
 const otherModel = FAKE_MODELS.find((m) => m !== FAKE_DEFAULTS.defaultModel)!
 const otherThinking = FAKE_THINKING.find((level) => level !== FAKE_DEFAULTS.defaultThinking)!
@@ -118,10 +118,10 @@ function setup(
   source: FakeStep[] | Adapter,
   garage = tempDir(),
   stopGraceMs = TEST_STOP_GRACE_MS,
-  mods: Mod[] = [mainMod],
+  extensions: Extension[] = [mainExtension],
 ) {
   const { adapter, calls } = recording(Array.isArray(source) ? createFakeAdapter(source, 0) : source)
-  return { ...open(garage, [adapter], adapter.id, stopGraceMs, [adapter.id], mods), calls }
+  return { ...open(garage, [adapter], adapter.id, stopGraceMs, [adapter.id], extensions), calls }
 }
 
 function open(
@@ -130,10 +130,10 @@ function open(
   defaultEngine: string,
   stopGraceMs = TEST_STOP_GRACE_MS,
   enabled = adapters.map((a) => a.id),
-  mods: Mod[] = [mainMod],
+  extensions: Extension[] = [mainExtension],
   machine: Machine = sandboxingMachine,
 ) {
-  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, mods })
+  const core = openCore({ garage, adapters, defaultEngine, machine, stopGraceMs, extensions })
   cores.push(core)
   for (const engine of enabled) core.handle({ type: 'engine.setEnabled', engine, enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -212,13 +212,13 @@ describe('chats', () => {
     return info
   }
 
-  it("opens each mod's chat first, permanent and running in the scratch folder with its instructions", async () => {
+  it("opens each extension's chat first, permanent and running in the scratch folder with its instructions", async () => {
     const t = setup(textScript)
-    const otherMod: Mod = { ...mainMod, id: 'other-mod', chats: [{ id: 'side', name: 'Side', instructions: '' }] }
-    const both = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, otherMod])
+    const otherExtension: Extension = { ...mainExtension, id: 'other-extension', chats: [{ id: 'side', name: 'Side', instructions: '' }] }
+    const both = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, otherExtension])
     expect(both.core.chats().map((c) => c.id)).toEqual(['main', 'side'])
     expect(t.core.chats()).toEqual([
-      expect.objectContaining({ id: 'main', name: MAIN.name, mod: mainMod.id, engine: 'fake', folders: [], files: [] }),
+      expect.objectContaining({ id: 'main', name: MAIN.name, extension: mainExtension.id, engine: 'fake', folders: [], files: [] }),
     ])
     expect(chatOf(t.core, 'main')?.parentId).toBeUndefined()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
@@ -236,7 +236,7 @@ describe('chats', () => {
     expect(entriesOf(setup(textScript, t.garage).core, 'main')).toHaveLength(4)
   })
 
-  it("keeps a mod's chat free of folders, files and its own AGENTS.md, dropping any a garage saved", async () => {
+  it("keeps an extension's chat free of folders, files and its own AGENTS.md, dropping any a garage saved", async () => {
     const garage = tempDir()
     const dir = realpathSync(tempDir())
     const file = join(dir, 'notes.md')
@@ -259,7 +259,7 @@ describe('chats', () => {
     expect(t.calls[0]?.options).not.toHaveProperty('extraDirs')
   })
 
-  it("hides an off mod's chat and its workers, keeping their history, and shows them again once it is on", async () => {
+  it("hides an off extension's chat and its workers, keeping their history, and shows them again once it is on", async () => {
     const first = setup(textScript)
     first.handle({ type: 'chat.send', chatId: 'main', text: 'hi' })
     await until(() => statusOf(first.core, 'main') === 'idle')
@@ -271,9 +271,9 @@ describe('chats', () => {
     const space = createChat(t, { name: 'Space' })
     expect(t.core.chats().map((c) => c.id)).toEqual(['main', 'sub', space.id])
 
-    t.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: false })
+    t.handle({ type: 'extension.setEnabled', extensionId: mainExtension.id, enabled: false })
     expect(t.messages.slice(-3)).toEqual([
-      { type: 'mod.updated', mod: expect.objectContaining({ id: mainMod.id, enabled: false }) },
+      { type: 'extension.updated', extension: expect.objectContaining({ id: mainExtension.id, enabled: false }) },
       { type: 'chat.removed', chatId: 'main' },
       { type: 'chat.removed', chatId: 'sub' },
     ])
@@ -285,37 +285,37 @@ describe('chats', () => {
 
     const reopened = setup(textScript, t.garage)
     expect(reopened.core.chats().map((c) => c.id)).toEqual([space.id])
-    reopened.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: true })
+    reopened.handle({ type: 'extension.setEnabled', extensionId: mainExtension.id, enabled: true })
     expect(reopened.messages.slice(-2).map((m) => m.type === 'chat.added' && m.chat.id)).toEqual(['sub', 'main'])
     expect(reopened.core.chats().map((c) => c.id)).toEqual(['main', ...[space.id, 'sub'].sort()])
     expect(entriesOf(reopened.core, 'main')).toHaveLength(4)
   })
 
-  it('refuses to turn a mod off while its chat or a worker of it is busy', async () => {
+  it('refuses to turn an extension off while its chat or a worker of it is busy', async () => {
     const t = setup(permissionScript)
     t.handle({ type: 'chat.send', chatId: 'main', text: 'go' })
     await until(() => statusOf(t.core, 'main') === 'waiting')
-    expect(() => t.handle({ type: 'mod.setEnabled', modId: mainMod.id, enabled: false })).toThrow(
-      `Stop "${MAIN.name}" before turning ${mainMod.name} off`,
+    expect(() => t.handle({ type: 'extension.setEnabled', extensionId: mainExtension.id, enabled: false })).toThrow(
+      `Stop "${MAIN.name}" before turning ${mainExtension.name} off`,
     )
-    expect(t.core.mods()[0]?.enabled).toBe(true)
+    expect(t.core.extensions()[0]?.enabled).toBe(true)
     expect(chatOf(t.core, 'main')).toBeDefined()
   })
 
-  it('opens with no chats when no mod has one, and makes spaces as usual', () => {
+  it('opens with no chats when no extension has one, and makes spaces as usual', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [])
     expect(t.core.chats()).toEqual([])
     expect(createChat(t, { name: 'First' })).toMatchObject({ name: 'First', folders: [] })
   })
 
-  it('refuses two mod chats with one id', () => {
-    const twin: Mod = { ...mainMod, id: 'twin' }
-    expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, twin])).toThrow(
-      'Two mod chats have the id "main"',
+  it('refuses two extension chats with one id', () => {
+    const twin: Extension = { ...mainExtension, id: 'twin' }
+    expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, twin])).toThrow(
+      'Two extension chats have the id "main"',
     )
   })
 
-  it("always names a mod's chat as its mod does, even in a garage that saved another name", () => {
+  it("always names an extension's chat as its extension does, even in a garage that saved another name", () => {
     for (const old of ['Main', 'Workshop', 'Home']) {
       const garage = tempDir()
       mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
@@ -387,13 +387,19 @@ describe('chats', () => {
       join(garage, 'settings.json'),
       JSON.stringify({ mods: { subagents: { enabled: false, limit: 2 } }, models: lists }),
     )
+    // Extensions were mods too, and kept their own files in <garage>/mods/.
+    mkdirSync(join(garage, 'mods', 'git'), { recursive: true })
+    writeFileSync(join(garage, 'mods', 'git', 'state.json'), '{}')
     const t = setup(textScript, garage)
+    expect(existsSync(join(garage, 'mods'))).toBe(false)
+    expect(readFileSync(join(garage, 'extensions', 'git', 'state.json'), 'utf8')).toBe('{}')
     expect(chatOf(t.core, 'aaaa0003')).toMatchObject({ parentId: 'aaaa0001', worker: true, role: 'workers' })
     expect(chatOf(t.core, 'aaaa0003')).not.toHaveProperty('subagent')
     expect(t.core.modelLists().workers).toMatchObject([{ engine: 'fake', model: FAKE_DEFAULTS.defaultModel }])
-    expect(t.core.mods().find((m) => m.id === WORKERS_MOD.id)).toMatchObject({ enabled: false, values: { limit: 2 } })
+    expect(t.core.extensions().find((m) => m.id === WORKERS_EXTENSION.id)).toMatchObject({ enabled: false, values: { limit: 2 } })
     const settings = JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))
-    expect(settings.mods).toEqual({ workers: { enabled: false, limit: 2 } })
+    expect(settings.extensions).toEqual({ workers: { enabled: false, limit: 2 } })
+    expect(settings).not.toHaveProperty('mods')
     expect(settings.models).not.toHaveProperty('subagents')
     const lead = chatOf(t.core, 'aaaa0001')!
     expect(JSON.stringify(lead)).not.toContain('subagent.report')
@@ -434,7 +440,7 @@ describe('chats', () => {
     const places = (core: Core) =>
       core
         .chats()
-        .filter((x) => !x.mod && !x.parentId)
+        .filter((x) => !x.extension && !x.parentId)
         .sort(bySpaceOrder)
         .map((x) => (x.pinned ? `${x.name}*` : x.name))
     t.handle({ type: 'chat.move', chatId: a.id, pinned: false, index: 0 })
@@ -540,7 +546,7 @@ describe('work folder', () => {
       adapters: [adapter],
       defaultEngine: 'fake',
       machine: sandboxingMachine,
-      mods: [mainMod],
+      extensions: [mainExtension],
     })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
@@ -596,7 +602,7 @@ describe('work folder', () => {
     expect((await sessionOf(t, later.id)).cwd).toBe(join(moved, later.id))
   })
 
-  it("runs a mod's chat and its workers in <work>/home, and a space's workers in the space's folder", async () => {
+  it("runs an extension's chat and its workers in <work>/home, and a space's workers in the space's folder", async () => {
     const first = setup(textScript)
     const space = createChat(first, { name: 'Space' })
     first.core.close()
@@ -617,7 +623,7 @@ describe('work folder', () => {
     t.core.close()
     const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
     const machine = { ...localMachine, canSandbox: false }
-    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, extensions: [mainExtension] })
     cores.push(core)
     expect(core.workFolder().canSandbox).toBe(false)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
@@ -760,7 +766,7 @@ describe('worktrees', () => {
     }
     const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
     const garage = tempDir()
-    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: slow, mods: [] })
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: slow, extensions: [] })
     cores.push(core)
     const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
     const t = { core, garage, messages: [] as CoreMessage[], replies: [] as CoreMessage[], handle }
@@ -842,7 +848,7 @@ describe('worktrees', () => {
     it("removes an agent's worktree in the space folder once its branch is merged and gone upstream", async () => {
       const { machine, quiet } = quietMachine()
       const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
-      const opened = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainMod], machine)
+      const opened = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainExtension], machine)
       const t = { ...opened, calls }
       const remote = repoWithOrigin()
       const { repo } = remote
@@ -886,7 +892,7 @@ describe('worktrees', () => {
         mkdirSync(join(garage, 'chats', info.id), { recursive: true })
         writeFileSync(join(garage, 'chats', info.id, 'chat.json'), JSON.stringify(info))
       }
-      const t = open(garage, [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainMod], machine)
+      const t = open(garage, [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainExtension], machine)
       const turn = async (chatId: string) => {
         const before = emits.length
         t.handle({ type: 'chat.send', chatId, text: 'go' })
@@ -1124,7 +1130,7 @@ describe('edits', () => {
     t.core.close()
     const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
     const machine = { ...localMachine, canSandbox: false }
-    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, extensions: [mainExtension] })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
     core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
@@ -1274,7 +1280,7 @@ describe('commands', () => {
     t.core.close()
     const { adapter, calls } = recording(createFakeAdapter(commandScript('npm test'), 0))
     const machine = { ...localMachine, canSandbox: false }
-    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, mods: [mainMod] })
+    const core = openCore({ garage: t.garage, adapters: [adapter], defaultEngine: 'fake', machine, extensions: [mainExtension] })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
     const unsandboxed = { ...t, core, calls, handle: (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {}) }
@@ -2581,7 +2587,7 @@ describe('history', () => {
     writeFileSync(join(dir, 'log.jsonl'), entries.map((e) => JSON.stringify(e) + '\n').join(''))
   }
 
-  it('without a memory mod, sends the latest messages that fit, oldest dropped first, and says so', async () => {
+  it('without a memory extension, sends the latest messages that fit, oldest dropped first, and says so', async () => {
     const garage = tempDir()
     writeLog(garage, 'main', 80)
     writeFileSync(join(garage, 'chats', 'main', 'summaries.jsonl'), '{"id":0,"n":1,"text":"old","at":"x"}\n')
@@ -2601,9 +2607,9 @@ describe('history', () => {
     )
   })
 
-  it('asks the first memory mod that is on for the view and its instructions, and the window when it is off', async () => {
+  it('asks the first memory extension that is on for the view and its instructions, and the window when it is off', async () => {
     const seen: { chat: string; count: number; tools: boolean }[] = []
-    const memory: Mod = {
+    const memory: Extension = {
       id: 'mem',
       name: 'Mem',
       description: '',
@@ -2616,8 +2622,8 @@ describe('history', () => {
         instructions: ({ tools }) => `READ THE VIEW (${tools})`,
       },
     }
-    const second: Mod = { ...memory, id: 'mem2', memory: { view: () => 'SECOND' } }
-    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, memory, second])
+    const second: Extension = { ...memory, id: 'mem2', memory: { view: () => 'SECOND' } }
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, memory, second])
     t.handle({ type: 'chat.send', chatId: 'main', text: 'one' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     expect(t.calls[0]?.prompt).toBe('one')
@@ -2629,18 +2635,18 @@ describe('history', () => {
     )
     expect(seen.at(-1)).toEqual({ chat: 'main', count: 2, tools: false })
 
-    t.handle({ type: 'mod.setEnabled', modId: 'mem', enabled: false })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'mem', enabled: false })
     t.handle({ type: 'chat.send', chatId: 'main', text: 'three' })
     expect(t.calls[2]?.prompt).toContain('SECOND')
-    t.handle({ type: 'mod.setEnabled', modId: 'mem2', enabled: false })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'mem2', enabled: false })
     await until(() => statusOf(t.core, 'main') === 'idle')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'four' })
     expect(t.calls[3]?.prompt).toContain('<message id="0" kind="user">\none\n</message>')
     expect(t.calls[3]?.options.instructions).not.toContain('READ THE VIEW')
   })
 
-  it("falls back to the window when a memory mod's view throws, and shows the error", async () => {
-    const broken: Mod = {
+  it("falls back to the window when a memory extension's view throws, and shows the error", async () => {
+    const broken: Extension = {
       id: 'broken',
       name: 'Broken',
       description: '',
@@ -2651,7 +2657,7 @@ describe('history', () => {
         },
       },
     }
-    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, broken])
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, broken])
     t.handle({ type: 'chat.send', chatId: 'main', text: 'one' })
     await until(() => statusOf(t.core, 'main') === 'idle')
     t.handle({ type: 'chat.send', chatId: 'main', text: 'two' })
@@ -2659,9 +2665,9 @@ describe('history', () => {
     expect(t.messages).toContainEqual({ type: 'error', message: 'Broken: no view today' })
   })
 
-  it('starts mods once model calls can run, stops them when turned off or on quit, and starts them again', async () => {
+  it('starts extensions once model calls can run, stops them when turned off or on quit, and starts them again', async () => {
     const events: string[] = []
-    const worker: Mod = {
+    const worker: Extension = {
       id: 'worker',
       name: 'Worker',
       description: '',
@@ -2669,21 +2675,21 @@ describe('history', () => {
       onStart: () => void events.push('start'),
       onStop: () => void events.push('stop'),
     }
-    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainMod, worker])
+    const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, worker])
     expect(events).toEqual([])
     await t.core.refreshEngines()
     await t.core.refreshEngines()
     expect(events).toEqual(['start'])
-    t.handle({ type: 'mod.setEnabled', modId: 'worker', enabled: false })
-    t.handle({ type: 'mod.setEnabled', modId: 'worker', enabled: true })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'worker', enabled: false })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'worker', enabled: true })
     expect(events).toEqual(['start', 'stop', 'start'])
     await t.core.close()
     expect(events).toEqual(['start', 'stop', 'start', 'stop'])
   })
 
-  it("gives mods a chat's messages, files of their own in its folder, one-shot calls and errors", async () => {
-    let host: ModHost | undefined
-    const mod: Mod = {
+  it("gives extensions a chat's messages, files of their own in its folder, one-shot calls and errors", async () => {
+    let host: ExtensionHost | undefined
+    const extension: Extension = {
       id: 'reader',
       name: 'Reader',
       description: '',
@@ -2698,7 +2704,7 @@ describe('history', () => {
       detect: async (machine) => ({ ...(await plain.detect(machine)), models }),
       complete: async (_machine, request) => (completions.push(request), 'DONE'),
     }
-    const t = setup(fake, tempDir(), TEST_STOP_GRACE_MS, [mainMod, mod])
+    const t = setup(fake, tempDir(), TEST_STOP_GRACE_MS, [mainExtension, extension])
     await t.core.refreshEngines()
     t.handle({ type: 'chat.send', chatId: 'main', text: 'hello' })
     await until(() => statusOf(t.core, 'main') === 'idle')
@@ -3226,7 +3232,7 @@ describe('context', () => {
     ])
   })
 
-  it("injects enabled items global first, after the instructions a mod's own chat gets", async () => {
+  it("injects enabled items global first, after the instructions an extension's own chat gets", async () => {
     const t = setup(textScript)
     const repo = folderWith('REPO RULES')
     const notes = fileWith('NOTES\n')
@@ -3347,8 +3353,8 @@ describe('context', () => {
     const chat = createChat(t, { name: 'App', folders: [repo] })
 
     t.handle({ type: 'context.set', chatId: chat.id, path: repo, enabled: false })
-    // Mods' tabs follow, since a folder can change which a chat gets.
-    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.mods', chatId: chat.id })
+    // Extensions' tabs follow, since a folder can change which a chat gets.
+    expect(t.messages.at(-1)).toMatchObject({ type: 'chat.extensions', chatId: chat.id })
     const updated = t.messages.at(-2)
     if (updated?.type !== 'chat.context') throw new Error('no chat.context')
     expect(updated.chatId).toBe(chat.id)
@@ -3415,7 +3421,7 @@ describe('context', () => {
     expect(itemsOf(t, chat.id).find((i) => i.path === file)?.text).toBe('APP RULES\n')
   })
 
-  it('writes the global AGENTS.md, given to every chat with or without a mod chat', async () => {
+  it('writes the global AGENTS.md, given to every chat with or without an extension chat', async () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [])
     const global = join(t.garage, 'AGENTS.md')
     t.handle({ type: 'instructions.write', text: 'EVERY CHAT' })
@@ -3653,8 +3659,8 @@ describe('models', () => {
   })
 })
 
-describe('mods', () => {
-  const tester: Mod = {
+describe('extensions', () => {
+  const tester: Extension = {
     id: 'tester',
     name: 'Tester',
     description: 'For tests',
@@ -3675,44 +3681,44 @@ describe('mods', () => {
       { key: 'notes', label: 'Notes', type: 'text', default: 'Be brief.', rows: 3 },
     ],
   }
-  const defaultsOf = (mod: Mod) => Object.fromEntries((mod.settings ?? []).map((s) => [s.key, s.default]))
-  const infoOf = (mod: Mod, enabled: boolean, values = defaultsOf(mod)) => {
-    const { id, name, description, settings = [] } = mod
+  const defaultsOf = (extension: Extension) => Object.fromEntries((extension.settings ?? []).map((s) => [s.key, s.default]))
+  const infoOf = (extension: Extension, enabled: boolean, values = defaultsOf(extension)) => {
+    const { id, name, description, settings = [] } = extension
     return { id, name, description, enabled, settings, values }
   }
-  const savedMods = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).mods
+  const savedExtensions = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).extensions
 
-  it('lists every mod with its switch and declared defaults, the workers mod on', () => {
+  it('lists every extension with its switch and declared defaults, the workers extension on', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
-    expect(t.core.mods()).toEqual([infoOf(tester, true), infoOf(WORKERS_MOD, true)])
+    expect(t.core.extensions()).toEqual([infoOf(tester, true), infoOf(WORKERS_EXTENSION, true)])
   })
 
   it('saves switches and values flat in settings.json, broadcasts each and keeps them across a restart', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'settings.json'), JSON.stringify({ theme: 'dark' }))
     const t = setup(textScript, garage, TEST_STOP_GRACE_MS, [tester])
-    t.handle({ type: 'mod.setEnabled', modId: 'tester', enabled: false })
-    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, false) })
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'size', value: 'full' })
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'count', value: -1 })
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'loud', value: true })
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'tester', enabled: false })
+    expect(t.messages.at(-1)).toEqual({ type: 'extension.updated', extension: infoOf(tester, false) })
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'size', value: 'full' })
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'count', value: -1 })
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'loud', value: true })
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: 'Be thorough.\nCite files.' })
     const values = { size: 'full', count: -1, loud: true, notes: 'Be thorough.\nCite files.' }
-    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, false, values) })
+    expect(t.messages.at(-1)).toEqual({ type: 'extension.updated', extension: infoOf(tester, false, values) })
     expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({
       theme: 'dark',
-      mods: { tester: { enabled: false, ...values } },
+      extensions: { tester: { enabled: false, ...values } },
     })
     t.core.close()
-    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, [tester]).core.mods()[0]).toEqual(
+    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, [tester]).core.extensions()[0]).toEqual(
       infoOf(tester, false, values),
     )
   })
 
-  it('refuses a value its declaration rules out, an unknown mod or key, and the reserved key', () => {
+  it('refuses a value its declaration rules out, an unknown extension or key, and the reserved key', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
     const set = (key: string, value: unknown) => () =>
-      t.handle({ type: 'mod.setValue', modId: 'tester', key, value } as never)
+      t.handle({ type: 'extension.setValue', extensionId: 'tester', key, value } as never)
     expect(set('size', '768')).toThrow('Size must be one of: Small, Full')
     expect(set('count', 1.5)).toThrow('Count must be a whole number')
     expect(set('count', -2)).toThrow('Count must be at least -1')
@@ -3722,67 +3728,67 @@ describe('mods', () => {
     expect(set('notes', 3)).toThrow('Notes must be text')
     expect(set('nope', 1)).toThrow('Tester has no setting "nope"')
     expect(set('enabled', false)).toThrow('Tester has no setting "enabled"')
-    expect(() => t.handle({ type: 'mod.setEnabled', modId: 'nope', enabled: true })).toThrow('Unknown extension "nope"')
-    expect(() => t.handle({ type: 'mod.setValue', modId: 'nope', key: 'x', value: 1 })).toThrow('Unknown extension "nope"')
-    expect(t.core.mods()[0]).toEqual(infoOf(tester, true))
-    expect(existsSync(join(t.garage, 'settings.json')) && savedMods(t.garage)).toBeFalsy()
+    expect(() => t.handle({ type: 'extension.setEnabled', extensionId: 'nope', enabled: true })).toThrow('Unknown extension "nope"')
+    expect(() => t.handle({ type: 'extension.setValue', extensionId: 'nope', key: 'x', value: 1 })).toThrow('Unknown extension "nope"')
+    expect(t.core.extensions()[0]).toEqual(infoOf(tester, true))
+    expect(existsSync(join(t.garage, 'settings.json')) && savedExtensions(t.garage)).toBeFalsy()
   })
 
   it('falls back to the declared default for a saved value its declaration rules out', () => {
     const garage = tempDir()
     const saved = { tester: { enabled: 'yes', size: 1024, count: 4, loud: 'no', notes: 7 } }
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: saved }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: saved }))
     const t = setup(textScript, garage, TEST_STOP_GRACE_MS, [tester])
-    expect(t.core.mods()[0]).toEqual(infoOf(tester, true, { ...defaultsOf(tester), count: 4 }))
+    expect(t.core.extensions()[0]).toEqual(infoOf(tester, true, { ...defaultsOf(tester), count: 4 }))
   })
 
   it('takes a blank text value as its default, so saving one resets it', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: 'Custom' })
-    expect(t.core.mods()[0]?.values.notes).toBe('Custom')
-    t.handle({ type: 'mod.setValue', modId: 'tester', key: 'notes', value: ' \n' })
-    expect(t.messages.at(-1)).toEqual({ type: 'mod.updated', mod: infoOf(tester, true) })
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: 'Custom' })
+    expect(t.core.extensions()[0]?.values.notes).toBe('Custom')
+    t.handle({ type: 'extension.setValue', extensionId: 'tester', key: 'notes', value: ' \n' })
+    expect(t.messages.at(-1)).toEqual({ type: 'extension.updated', extension: infoOf(tester, true) })
   })
 
-  it('reads the workers switch and limit saved before mods had declarations', () => {
+  it('reads the workers switch and limit saved before extensions had declarations', () => {
     const garage = tempDir()
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { workers: { enabled: true, limit: -1 } } }))
-    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.mods()).toEqual([
-      infoOf(WORKERS_MOD, true, { ...defaultsOf(WORKERS_MOD), limit: -1 }),
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { workers: { enabled: true, limit: -1 } } }))
+    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.extensions()).toEqual([
+      infoOf(WORKERS_EXTENSION, true, { ...defaultsOf(WORKERS_EXTENSION), limit: -1 }),
     ])
   })
 
-  it("lists a mod that didn't load, off with why, and won't turn it on or change its saved switch", () => {
+  it("lists an extension that didn't load, off with why, and won't turn it on or change its saved switch", () => {
     const garage = tempDir()
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { browser: { enabled: true } } }))
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { browser: { enabled: true } } }))
     const loadError = "@playwright/mcp isn't installed."
     const core = openCore({
       garage,
       adapters: [createFakeAdapter()],
       defaultEngine: 'fake',
       machine: sandboxingMachine,
-      mods: [tester],
-      brokenMods: [{ id: 'browser', loadError }],
+      extensions: [tester],
+      brokenExtensions: [{ id: 'browser', loadError }],
     })
     cores.push(core)
-    expect(core.mods()).toEqual([
+    expect(core.extensions()).toEqual([
       infoOf(tester, true),
-      infoOf(WORKERS_MOD, true),
+      infoOf(WORKERS_EXTENSION, true),
       { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError },
     ])
-    expect(() => core.handle({ type: 'mod.setEnabled', modId: 'browser', enabled: true }, () => {})).toThrow(loadError)
-    expect(savedMods(garage)).toEqual({ browser: { enabled: true } })
+    expect(() => core.handle({ type: 'extension.setEnabled', extensionId: 'browser', enabled: true }, () => {})).toThrow(loadError)
+    expect(savedExtensions(garage)).toEqual({ browser: { enabled: true } })
   })
 
-  it('refuses two mods with one id', () => {
+  it('refuses two extensions with one id', () => {
     expect(() => setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester, { ...tester, name: 'Again' }])).toThrow(
-      'Two mods have the id "tester"',
+      'Two extensions have the id "tester"',
     )
   })
 
   describe('MCP servers', () => {
-    const sessions: ModSession[] = []
-    const web: Mod = {
+    const sessions: ExtensionSession[] = []
+    const web: Extension = {
       id: 'web',
       name: 'Web',
       description: '',
@@ -3801,7 +3807,7 @@ describe('mods', () => {
     }
     beforeEach(() => sessions.splice(0))
 
-    it("gives each session the servers of mods that are on, from its chat, work folder and mod's values", async () => {
+    it("gives each session the servers of extensions that are on, from its chat, work folder and extension's values", async () => {
       const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [web])
       const chat = createChat(t, { name: 'Space' })
       const workDir = join(t.garage, 'work', chat.id)
@@ -3810,11 +3816,11 @@ describe('mods', () => {
       expect(sessions).toEqual([
         { chat: { id: chat.id, name: 'Space', engine: 'fake' }, workDir, sandboxed: true, values: { ask: false } },
       ])
-      t.handle({ type: 'mod.setValue', modId: 'web', key: 'ask', value: true })
+      t.handle({ type: 'extension.setValue', extensionId: 'web', key: 'ask', value: true })
       t.handle({ type: 'chat.setPermission', chatId: chat.id, name: 'editAnywhere', enabled: true })
       expect((await turn(t, chat.id)).mcpServers).toEqual([{ ...server, allowTools: false }])
       expect(sessions.at(-1)?.sandboxed).toBe(false)
-      t.handle({ type: 'mod.setEnabled', modId: 'web', enabled: false })
+      t.handle({ type: 'extension.setEnabled', extensionId: 'web', enabled: false })
       expect((await turn(t, chat.id)).mcpServers).toBeUndefined()
     })
 
@@ -3825,12 +3831,12 @@ describe('mods', () => {
     })
 
     it("ends the turn when two servers share a name, Kothar's included", async () => {
-      const named = (id: string, name: string): Mod => ({ ...web, id, mcpServers: () => [{ name, command: name }] })
-      for (const [name, mods] of [
+      const named = (id: string, name: string): Extension => ({ ...web, id, mcpServers: () => [{ name, command: name }] })
+      for (const [name, extensions] of [
         ['web', [web, named('again', 'web')]],
         ['kothar', [named('kothar', 'kothar')]],
       ] as const) {
-        const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [...mods])
+        const t = setup(takesMcp, tempDir(), TEST_STOP_GRACE_MS, [...extensions])
         const chat = createChat(t)
         t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
         expect(entriesOf(t.core, chat.id).at(-1)).toMatchObject({
@@ -3844,7 +3850,7 @@ describe('mods', () => {
 
   describe('setup', () => {
     const description = 'Downloads the tool.'
-    const tool: Mod = {
+    const tool: Extension = {
       id: 'tool',
       name: 'Tool',
       description: '',
@@ -3886,7 +3892,7 @@ describe('mods', () => {
       }
       const { adapter, calls } = recording({ ...createFakeAdapter(textScript, 0), kotharMcp: true })
       const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [tool], machine)
-      const setupOf = () => t.core.mods()[0]!.setup!
+      const setupOf = () => t.core.extensions()[0]!.setup!
       const turn = async () => {
         const chat = createChat(t)
         t.handle({ type: 'chat.send', chatId: chat.id, text: 'Hi' })
@@ -3896,76 +3902,76 @@ describe('mods', () => {
       return { ...t, state, runs, setupOf, turn }
     }
 
-    it('checks each mod that is on at start, then installs it with progress and checks again', async () => {
+    it('checks each extension that is on at start, then installs it with progress and checks again', async () => {
       const t = start()
       expect(t.setupOf()).toEqual({ description, status: 'checking' })
       await until(() => t.setupOf().status === 'missing')
       expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
       expect(t.runs[0]).toMatchObject({ command: 'check', args: [], options: { cwd: '/' } })
 
-      t.handle({ type: 'mod.install', modId: 'tool' })
-      const progress = t.messages.flatMap((m) => (m.type === 'mod.updated' ? [m.mod.setup?.progress] : []))
+      t.handle({ type: 'extension.install', extensionId: 'tool' })
+      const progress = t.messages.flatMap((m) => (m.type === 'extension.updated' ? [m.extension.setup?.progress] : []))
       expect(progress).toEqual([undefined, undefined, 0.1, 0.6])
       const installing = { status: 'installing', message: 'Tool not installed', progressText: 'Got 60%', progress: 0.6 }
       expect(t.setupOf()).toEqual({ description, ...installing })
       const install = t.runs.at(-1)!
       expect(install).toMatchObject({ command: 'install', args: ['--all'], options: { cwd: '/', timeoutMs: 1000 } })
       expect(install.options).not.toHaveProperty('sandbox')
-      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installing')
+      expect(() => t.handle({ type: 'extension.install', extensionId: 'tool' })).toThrow('Tool is already installing')
 
       t.state.finish(0)
       await until(() => t.setupOf().status === 'ready')
       expect(t.setupOf()).toEqual({ description, status: 'ready', message: 'Tool installed' })
-      expect(() => t.handle({ type: 'mod.install', modId: 'tool' })).toThrow('Tool is already installed')
+      expect(() => t.handle({ type: 'extension.install', extensionId: 'tool' })).toThrow('Tool is already installed')
     })
 
     it('stops an install on cancel, and shows why one failed', async () => {
       const t = start()
       await until(() => t.setupOf().status === 'missing')
-      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
-      t.handle({ type: 'mod.install', modId: 'tool' })
-      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      t.handle({ type: 'extension.cancelInstall', extensionId: 'tool' })
+      t.handle({ type: 'extension.install', extensionId: 'tool' })
+      t.handle({ type: 'extension.cancelInstall', extensionId: 'tool' })
       expect(t.runs.at(-1)!.options.signal?.aborted).toBe(true)
       await until(() => t.setupOf().status === 'missing')
       expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed' })
 
-      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.handle({ type: 'extension.install', extensionId: 'tool' })
       t.state.finish(1, 'Disk full')
       await until(() => t.setupOf().status === 'missing')
       expect(t.setupOf()).toEqual({ description, status: 'missing', message: 'Tool not installed', error: 'Disk full' })
     })
 
-    it("offers a mod's MCP servers only once it is set up, and checks again when it is turned on", async () => {
+    it("offers an extension's MCP servers only once it is set up, and checks again when it is turned on", async () => {
       const t = start()
       await until(() => t.setupOf().status === 'missing')
       expect((await t.turn()).mcpServers).toBeUndefined()
       t.state.installed = true
-      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: false })
-      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
+      t.handle({ type: 'extension.setEnabled', extensionId: 'tool', enabled: false })
+      t.handle({ type: 'extension.setEnabled', extensionId: 'tool', enabled: true })
       expect(t.setupOf().status).toBe('checking')
       await until(() => t.setupOf().status === 'ready')
       expect((await t.turn()).mcpServers).toEqual([{ name: 'tool', command: 'tool-mcp' }])
     })
 
-    it('checks a mod that is off once it is turned on, and refuses to install one with no setup', async () => {
+    it('checks an extension that is off once it is turned on, and refuses to install one with no setup', async () => {
       const garage = tempDir()
-      writeFileSync(join(garage, 'settings.json'), JSON.stringify({ mods: { tool: { enabled: false } } }))
+      writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { tool: { enabled: false } } }))
       const checks: string[] = []
       const check = async () => (checks.push('check'), { ready: true })
-      const quiet: Mod = { ...tool, setup: { ...tool.setup!, check } }
+      const quiet: Extension = { ...tool, setup: { ...tool.setup!, check } }
       const t = open(garage, [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [quiet, tester])
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(checks).toEqual([])
-      t.handle({ type: 'mod.setEnabled', modId: 'tool', enabled: true })
-      await until(() => t.core.mods()[0]?.setup?.status === 'ready')
+      t.handle({ type: 'extension.setEnabled', extensionId: 'tool', enabled: true })
+      await until(() => t.core.extensions()[0]?.setup?.status === 'ready')
       expect(checks).toEqual(['check'])
-      expect(() => t.handle({ type: 'mod.install', modId: 'tester' })).toThrow('Tester has nothing to install')
-      expect(() => t.handle({ type: 'mod.install', modId: 'nope' })).toThrow('Unknown extension "nope"')
+      expect(() => t.handle({ type: 'extension.install', extensionId: 'tester' })).toThrow('Tester has nothing to install')
+      expect(() => t.handle({ type: 'extension.install', extensionId: 'nope' })).toThrow('Unknown extension "nope"')
     })
 
-    it("gives a setup the mod's values, describes it by them, and checks again when one changes", async () => {
+    it("gives a setup the extension's values, describes it by them, and checks again when one changes", async () => {
       const seen: unknown[] = []
-      const picky: Mod = {
+      const picky: Extension = {
         ...tool,
         settings: [
           {
@@ -3986,10 +3992,10 @@ describe('mods', () => {
         },
       }
       const t = open(tempDir(), [createFakeAdapter(textScript, 0)], 'fake', TEST_STOP_GRACE_MS, ['fake'], [picky])
-      const setupOf = () => t.core.mods()[0]!.setup!
+      const setupOf = () => t.core.extensions()[0]!.setup!
       await until(() => setupOf().status === 'missing')
       expect(setupOf().description).toBe('Sets up a.')
-      t.handle({ type: 'mod.setValue', modId: 'tool', key: 'kind', value: 'b' })
+      t.handle({ type: 'extension.setValue', extensionId: 'tool', key: 'kind', value: 'b' })
       await until(() => setupOf().status === 'ready')
       expect(setupOf().description).toBe('Sets up b.')
       expect(seen).toEqual(['a', 'b'])
@@ -4006,7 +4012,7 @@ describe('mods', () => {
           return { code: 1, stdout: '', stderr: '' }
         },
       }
-      const steps: Mod = {
+      const steps: Extension = {
         ...tool,
         setup: {
           description,
@@ -4018,11 +4024,11 @@ describe('mods', () => {
       }
       const adapter = createFakeAdapter(textScript, 0)
       const t = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [steps], machine)
-      const setupOf = () => t.core.mods()[0]!.setup!
+      const setupOf = () => t.core.extensions()[0]!.setup!
       await until(() => setupOf().status === 'missing')
-      t.handle({ type: 'mod.install', modId: 'tool' })
+      t.handle({ type: 'extension.install', extensionId: 'tool' })
       await until(() => runs.at(-1) === 'step')
-      t.handle({ type: 'mod.cancelInstall', modId: 'tool' })
+      t.handle({ type: 'extension.cancelInstall', extensionId: 'tool' })
       next()
       await until(() => setupOf().status === 'missing')
       expect(setupOf().error).toBeUndefined()
@@ -4037,7 +4043,7 @@ describe('usage limits', () => {
     { type: 'limit.reached', message: 'Out of usage', resetsAt: at },
     { type: 'text.completed', text: 'Working on it anyway' },
   ]
-  type Seen = { limit: LimitReached; status?: string; host: ModHost }
+  type Seen = { limit: LimitReached; status?: string; host: ExtensionHost }
 
   // Chats whose work folder is listed wait on a permission; the rest run out of usage on every account but `spare`.
   const asking = new Set<string>()
@@ -4050,7 +4056,7 @@ describe('usage limits', () => {
 
   function setupLimits(onLimit?: (seen: Seen, t: ReturnType<typeof setup>) => void) {
     const seen: Seen[] = []
-    const watcher: Mod = {
+    const watcher: Extension = {
       id: 'watcher',
       name: 'Watcher',
       description: '',
@@ -4065,7 +4071,7 @@ describe('usage limits', () => {
     return { ...t, seen }
   }
 
-  it('logs the limit and lets the turn run its course while no mod watches for limits', async () => {
+  it('logs the limit and lets the turn run its course while no extension watches for limits', async () => {
     const t = setup(limitedScript, tempDir(), TEST_STOP_GRACE_MS, [])
     const chat = createChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
@@ -4080,7 +4086,7 @@ describe('usage limits', () => {
     expect(t.calls[0]!.interrupted).toBeUndefined()
   })
 
-  it('stops the turn and tells each mod that watches, with the chat idle and the account it ran on', async () => {
+  it('stops the turn and tells each extension that watches, with the chat idle and the account it ran on', async () => {
     const t = setupLimits()
     const chat = createChat(t)
     t.handle({ type: 'chat.send', chatId: chat.id, text: 'Go' })
@@ -4107,7 +4113,7 @@ describe('usage limits', () => {
     ])
   })
 
-  it("lets a mod list accounts, switch while other chats run, note it and send the message again", async () => {
+  it("lets an extension list accounts, switch while other chats run, note it and send the message again", async () => {
     const t = setupLimits(({ limit, host }) => {
       const { accounts } = host.accounts('fake')!
       const next = accounts.find((a) => a.id !== limit.account)!
@@ -4138,11 +4144,11 @@ describe('usage limits', () => {
     expect(t.seen[0]!.host.accounts('nope')).toBeUndefined()
     const entries = entriesOf(t.core, chat.id)
     const shown = entries.flatMap((e) =>
-      e.type === 'user.message' || e.type === 'mod.note' ? [`${e.type}: ${e.text}`] : [],
+      e.type === 'user.message' || e.type === 'extension.note' ? [`${e.type}: ${e.text}`] : [],
     )
     expect(shown).toEqual([
       'user.message: Go',
-      'mod.note: Switched to Spare',
+      'extension.note: Switched to Spare',
       'user.message: Go\n\nAnd then this',
     ])
     expect(entries.at(-1)).toEqual({ at: expect.any(String), type: 'turn.completed' })
@@ -4161,7 +4167,7 @@ describe('usage limits', () => {
     ]
     let sessions = 0
     const limited = (): FakeStep[] => [...(scripts[sessions++] ?? []), { type: 'limit.reached', message: 'Out' }]
-    const watcher: Mod = {
+    const watcher: Extension = {
       id: 'w',
       name: 'W',
       description: '',
@@ -4180,7 +4186,7 @@ describe('usage limits', () => {
     expect(outputs).toEqual([false, true, true])
   })
 
-  it('lets a mod continue a stopped turn as a turn of its own, ahead of queued messages', async () => {
+  it('lets an extension continue a stopped turn as a turn of its own, ahead of queued messages', async () => {
     let continued = false
     const t = setupLimits(({ limit, host }) => {
       host.useAccount('fake', 'spare')

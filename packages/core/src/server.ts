@@ -88,13 +88,13 @@ export async function startServer(options: {
       chats: core.chats(),
       accounts: core.accounts(),
       contextDefaults: core.contextDefaults(),
-      mods: core.mods(),
+      extensions: core.extensions(),
       modelLists: core.modelLists(),
       memory: core.memory(),
       workFolder: core.workFolder(),
       themes: core.themes(),
       installed: core.installed(),
-      communityMods: core.communityMods(),
+      communityExtensions: core.communityExtensions(),
       restart: core.restart(),
     })
     socket.on('message', (data) => {

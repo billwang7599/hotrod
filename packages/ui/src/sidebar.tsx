@@ -119,7 +119,7 @@ function ChatRow(props: RowProps) {
         onKeyDown={reorder?.key}
       >
         <span className={`size-7 shrink-0 rounded-full ${DOTS[status]}`} data-status={status} />
-        {chat.mod === 'home' && <HouseIcon />}
+        {chat.extension === 'home' && <HouseIcon />}
         <span className={`min-w-0 flex-1 truncate ${unread ? 'font-semibold' : ''}`} data-unread={unread || undefined}>
           {chat.name}
         </span>
@@ -190,8 +190,8 @@ export function ChatNav({
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
   const tree = chatTree(chats)
-  // Mod chats (Home) sort first; they sit above the spaces, apart from them.
-  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.mod)
+  // Extension chats (Home) sort first; they sit above the spaces, apart from them.
+  const firstSpace = tree.active.findIndex((r) => r.depth === 0 && !r.chat.extension)
   const split = firstSpace < 0 ? tree.active.length : firstSpace
   const folded = useFoldedChats()
   // A row is hidden while a chat above it is folded, unless it's the chat being viewed.
@@ -228,7 +228,7 @@ export function ChatNav({
     move(chat, !!chat.pinned, index)
   }
   const reorder = (row: TreeRow): Reorder | undefined => {
-    if (!connected || row.chat.archived || row.chat.mod) return undefined
+    if (!connected || row.chat.archived || row.chat.extension) return undefined
     const space = rootOf(row.chat)
     const target = (e: DragEvent) => {
       const box = e.currentTarget.getBoundingClientRect()
@@ -333,7 +333,7 @@ export function ChatNav({
         unread={showsUnread(chat, looking && chat.id === selectedId)}
         showEngine={mixedEngines}
         select={() => select(chat.id)}
-        menu={chat.mod || chat.worker ? undefined : chatMenu(chat)}
+        menu={chat.extension || chat.worker ? undefined : chatMenu(chat)}
         fold={below.length ? { folded: isFolded, hidden: below, toggle: () => foldChat(chat.id, !isFolded) } : undefined}
         reorder={reorder(row)}
       />

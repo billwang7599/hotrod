@@ -64,7 +64,7 @@ describe('claudeCode adapter', () => {
     expect(fake.spawned[0]?.env).toEqual({ KOTHAR_MCP_TOKEN: token })
   })
 
-  it("connects each mod's MCP server next to Kothar's, running without asking the tools of those that allow it", () => {
+  it("connects each extension's MCP server next to Kothar's, running without asking the tools of those that allow it", () => {
     const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
     const mcpServers = [
       { name: 'browser', command: '/bin/node', args: ['cli.js', '--headless'], env: { A: '1' }, allowTools: true },

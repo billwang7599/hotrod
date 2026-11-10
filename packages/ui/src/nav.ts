@@ -1,6 +1,6 @@
 import { chatTree, type ChatView } from './state.ts'
 
-/** Home (when its mod is on) and the spaces, top to bottom as the sidebar lists them; no workers or archived ones. */
+/** Home (when its extension is on) and the spaces, top to bottom as the sidebar lists them; no workers or archived ones. */
 export const spaceOrder = (chats: ChatView[]): ChatView[] =>
   chatTree(chats)
     .active.filter((r) => r.depth === 0)

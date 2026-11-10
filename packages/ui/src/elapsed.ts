@@ -1,14 +1,14 @@
 import { useSyncExternalStore } from 'react'
 
 /**
- * Live elapsed times for mod panels (`since` on a list row, the `elapsed` node). One clock ticks for all of them, only
- * while something shows one and the window is visible. Each subscriber re-renders only when its own text changes, so
- * past an hour a row redraws once a minute and the rest of the panel never does.
+ * Live elapsed times for extension panels (`since` on a list row, the `elapsed` node). One clock ticks for all of them,
+ * only while something shows one and the window is visible. Each subscriber re-renders only when its own text changes,
+ * so past an hour a row redraws once a minute and the rest of the panel never does.
  */
 
 const TICK_MS = 1000
 
-// The same format as the Processes mod's duration(); a test pins the two together.
+// The same format as the Processes extension's duration(); a test pins the two together.
 export function elapsed(ms: number) {
   const s = Math.max(0, Math.floor(ms / 1000))
   if (s < 60) return `${s}s`

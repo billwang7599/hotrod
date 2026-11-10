@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
-import type { ModUse } from '@kothar/mod-api'
+import type { ExtensionUse } from '@kothar/extension-api'
 import {
   changesUrl,
-  MOD_USES,
+  EXTENSION_USES,
   previewOf,
   type ClientMessage,
   type InstalledItem,
   type MarketEntry,
   type MarketKind,
-  type ModInfo,
+  type ExtensionInfo,
   type ThemeFile,
   type ThemePreview,
 } from '@kothar/core/shared'
@@ -19,7 +19,7 @@ import { marketKey, type State } from './state.ts'
 import { chooseAppearance, useAppearance } from './themes.tsx'
 
 export type Market = Pick<State, 'catalog' | 'themes' | 'installed' | 'marketFailures'> &
-  Partial<Pick<State, 'mods' | 'localInstall' | 'communityMods'>>
+  Partial<Pick<State, 'extensions' | 'localInstall' | 'communityExtensions'>>
 
 type Props = {
   market: Market
@@ -42,7 +42,7 @@ type Row = {
   notes?: string
   problem?: string
   preview?: ThemePreview
-  uses?: ModUse[]
+  uses?: ExtensionUse[]
   listed: boolean
   installed?: InstalledItem
   theme?: ThemeFile
@@ -172,46 +172,46 @@ function usePending(market: Market) {
 }
 
 // Uses that reach beyond Kothar itself: shown in amber.
-const REACHING: ModUse[] = ['run', 'setup', 'mcpServers', 'permissions', 'sendMessages', 'accounts']
+const REACHING: ExtensionUse[] = ['run', 'setup', 'mcpServers', 'permissions', 'sendMessages', 'accounts']
 
-// What a community mod says it uses through the mod API, in plain words.
-export function UsesList({ uses }: { uses: readonly ModUse[] }) {
+// What a community extension says it uses through the extension API, in plain words.
+export function UsesList({ uses }: { uses: readonly ExtensionUse[] }) {
   if (!uses.length) return <span className="text-sm text-muted">Uses nothing through the extension API</span>
   return (
     <ul className="flex flex-wrap gap-x-12 gap-y-2 text-sm" aria-label="Uses">
       {uses.map((use) => (
         <li key={use} className={REACHING.includes(use) ? 'text-amber' : 'text-muted'}>
-          {MOD_USES[use]}
+          {EXTENSION_USES[use]}
         </li>
       ))}
     </ul>
   )
 }
 
-// Whether an installed mod is on and running, as one quiet line.
-export function ModStatus({ info, communityMods }: { info?: ModInfo; communityMods: boolean }) {
-  const status = modStatus(info, communityMods)
+// Whether an installed extension is on and running, as one quiet line.
+export function ExtensionStatus({ info, communityExtensions }: { info?: ExtensionInfo; communityExtensions: boolean }) {
+  const status = extensionStatus(info, communityExtensions)
   return status ? <span className="text-sm text-faint">{status}</span> : null
 }
 
-// communityMods: the master switch; a mod runs only while it and the mod's own switch are on.
-export function modStatus(info: ModInfo | undefined, communityMods: boolean) {
+// communityExtensions: the master switch; an extension runs only while it and the extension's own switch are on.
+export function extensionStatus(info: ExtensionInfo | undefined, communityExtensions: boolean) {
   if (!info?.community) return undefined
   const { version, running } = info.community
   const stays = running ? ' Its code stays loaded until Kothar restarts.' : ''
   if (!info.enabled) return `Off.${stays || ' Turn it on in Community hub.'}`
-  if (!communityMods) return `Off while community extensions are off.${stays}`
+  if (!communityExtensions) return `Off while community extensions are off.${stays}`
   if (info.loadError) return undefined
   if (!running) return 'Starts when Kothar restarts.'
   if (running !== version) return `Running ${running}. Restart Kothar to run ${version}.`
   return undefined
 }
 
-export const MOD_WARNING =
+export const EXTENSION_WARNING =
   'A community extension runs code on your computer with your permissions. Kothar holds it to what it lists, but it could ' +
   'still read your files or reach the network on its own. Turn on only extensions you trust.'
 
-const usesText = (uses: readonly ModUse[]) => uses.map((use) => `• ${MOD_USES[use]}`).join('\n')
+const usesText = (uses: readonly ExtensionUse[]) => uses.map((use) => `• ${EXTENSION_USES[use]}`).join('\n')
 
 const LOCAL_HINT =
   'Installs an extension (a folder with manifest.json and a built main.mjs) or themes (<id>.json files) from this computer, ' +
@@ -287,7 +287,7 @@ function InstallFromFolder({ market, connected, send, pickFolder }: Props) {
       {shown && 'ids' in shown && (
         <span className="text-sm text-green">
           Installed {names(shown.ids)} from {shown.path}
-          {shown.kind === 'mod' ? '. Turn it on in Community hub.' : '.'}
+          {shown.kind === 'extension' ? '. Turn it on in Community hub.' : '.'}
         </span>
       )}
     </div>
@@ -300,7 +300,7 @@ type ShowFilter = 'all' | 'installed' | 'updates'
 const KIND_FILTERS: { value: MarketKindFilter; label: string }[] = [
   { value: 'all', label: 'All' },
   { value: 'theme', label: 'Themes' },
-  { value: 'mod', label: 'Extensions' },
+  { value: 'extension', label: 'Extensions' },
 ]
 const SHOW_FILTERS: { value: ShowFilter; label: string }[] = [
   { value: 'all', label: 'Everything' },
@@ -351,7 +351,7 @@ const matches = (row: Row, query: string) => {
 
 // What the list shows: catalog entries and installed items of the kinds picked, that pass the filter and the search.
 export function shownRows(market: Market, kind: MarketKindFilter, show: ShowFilter, query: string): Row[] {
-  const kinds: MarketKind[] = kind === 'all' ? ['theme', 'mod'] : [kind]
+  const kinds: MarketKind[] = kind === 'all' ? ['theme', 'extension'] : [kind]
   return kinds
     .flatMap((k) => rowsOf(market, k))
     .filter((row) => (show === 'installed' ? !!row.installed : show === 'updates' ? outdated(row) && row.listed : true))
@@ -407,7 +407,7 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
   const updates = shownRows(market, kind, 'updates', '').length
 
   const install = async (row: Row) => {
-    if (row.kind === 'mod' && !row.installed) {
+    if (row.kind === 'extension' && !row.installed) {
       const ok = await confirm({
         text: `Install ${row.name}?`,
         body:
@@ -594,7 +594,7 @@ export function MarketplaceDialog({ open, close, market, connected, send, pickFo
 const optionId = (row: Row) => `market-${row.kind}-${row.id}`
 
 function emptyText(query: string, kind: MarketKindFilter, show: ShowFilter, listed: boolean) {
-  const what = kind === 'theme' ? 'themes' : kind === 'mod' ? 'extensions' : 'themes or extensions'
+  const what = kind === 'theme' ? 'themes' : kind === 'extension' ? 'extensions' : 'themes or extensions'
   if (query.trim()) return `Nothing matches “${query.trim()}”.`
   if (show === 'updates') return 'Everything installed is up to date.'
   if (show === 'installed') return `No ${what} installed.`
@@ -722,7 +722,7 @@ function Detail({ row, busy, market, connected, send, install }: DetailProps) {
   const failure = market.marketFailures[marketKey(row.kind, row.id)]
   const update = outdated(row)
   const canInstall = row.listed && row.latest !== undefined
-  const info = market.mods?.find((m) => m.id === row.id)
+  const info = market.extensions?.find((m) => m.id === row.id)
   return (
     <article className="flex max-w-[64ch] flex-col gap-14" aria-label={row.name}>
       <div className="flex flex-col gap-4">
@@ -785,14 +785,14 @@ function Detail({ row, busy, market, connected, send, install }: DetailProps) {
       {!row.listed && row.installed?.source === 'marketplace' && market.catalog?.entries && (
         <p className="text-sm text-faint">No longer in the marketplace</p>
       )}
-      {row.kind === 'mod' && row.installed && <ModStatus info={info} communityMods={market.communityMods ?? false} />}
+      {row.kind === 'extension' && row.installed && <ExtensionStatus info={info} communityExtensions={market.communityExtensions ?? false} />}
       {row.description && <p className="text-body leading-[1.5]">{row.description}</p>}
       {row.kind === 'theme' && <Swatches preview={row.preview} name={row.name} />}
-      {row.kind === 'mod' && row.uses && (
+      {row.kind === 'extension' && row.uses && (
         <section className="flex flex-col gap-6">
           <h4 className="text-sm font-semibold">What it says it uses</h4>
           <UsesList uses={row.uses} />
-          <p className="text-sm text-amber">{MOD_WARNING}</p>
+          <p className="text-sm text-amber">{EXTENSION_WARNING}</p>
         </section>
       )}
       {row.notes && (

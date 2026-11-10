@@ -6,10 +6,10 @@
 //   preload.cjs    the window's preload
 //   icon.png       the Dock icon
 //   ui/            packages/ui/dist
-//   mods/<id>/     the built-in mods as erasable TypeScript, without tests; the core imports each index.ts at startup,
-//                  as it does from the repo
-//   node_modules/  only what the built-in mods import at runtime (the Browser mod's Playwright MCP), copied from the
-//                  repo's node_modules at the locked versions
+//   extensions/<id>/  the built-in extensions as erasable TypeScript, without tests; the core imports each index.ts
+//                     at startup, as it does from the repo
+//   node_modules/     only what the built-in extensions import at runtime (the Browser extension's Playwright MCP),
+//                     copied from the repo's node_modules at the locked versions
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -41,12 +41,12 @@ cpSync(join(desktop, 'src', 'preload.cjs'), join(out, 'preload.cjs'))
 cpSync(join(desktop, 'assets', 'icon.png'), join(out, 'icon.png'))
 cpSync(uiDist, join(out, 'ui'), { recursive: true })
 
-const modsSrc = join(repo, 'mods')
+const extensionsSrc = join(repo, 'extensions')
 const runtimeDeps = {}
-for (const id of readdirSync(modsSrc).sort()) {
-  const dir = join(modsSrc, id)
+for (const id of readdirSync(extensionsSrc).sort()) {
+  const dir = join(extensionsSrc, id)
   if (!existsSync(join(dir, 'index.ts'))) continue
-  cpSync(dir, join(out, 'mods', id), {
+  cpSync(dir, join(out, 'extensions', id), {
     recursive: true,
     filter: (path) => !/\.test\.ts$/.test(path) && !path.split(/[\\/]/).includes('node_modules'),
   })
@@ -76,7 +76,7 @@ function copyPackage(name, from) {
     }
   }
 }
-for (const name of Object.keys(runtimeDeps)) copyPackage(name, modsSrc)
+for (const name of Object.keys(runtimeDeps)) copyPackage(name, extensionsSrc)
 
 const desktopPkg = read(join(desktop, 'package.json'))
 writeFileSync(

@@ -1,12 +1,12 @@
 import type { Attachment, ChatEntry, MemoryMessage, MessageKind, WorkerReport } from './shared.ts'
 
 // What every chat needs of its history: its log read as numbered messages, and the history a fresh session is
-// seeded with when no mod provides a memory (the Memory mod does by default). Without one, a session sees a window of
-// the latest messages in full, the oldest dropped first, and is told how many were dropped. No summaries, no model
-// calls, no tools.
+// seeded with when no extension provides a memory (the Memory extension does by default). Without one, a session sees a
+// window of the latest messages in full, the oldest dropped first, and is told how many were dropped. No summaries, no
+// model calls, no tools.
 
-// The Memory mod's budget for the latest messages in full plus its lines (40,000 + 48,000), so a session sees at most
-// as much with the mod off as with it on.
+// The Memory extension's budget for the latest messages in full plus its lines (40,000 + 48,000), so a session sees at
+// most as much with the extension off as with it on.
 export const WINDOW_MAX_CHARS = 88_000
 
 export type Report = { text: string; report: WorkerReport }
@@ -50,7 +50,7 @@ const messageText = ({ id, kind, text }: MemoryMessage) =>
   `<message id="${id}" kind="${kind}">\n${escapeTag(text, 'message')}\n</message>`
 
 // The latest messages in full, newest first while they fit WINDOW_MAX_CHARS. The last message from the user (or a
-// worker) and the reply after it always stay, however long, as the Memory mod's view keeps them.
+// worker) and the reply after it always stay, however long, as the Memory extension's view keeps them.
 export function windowView(messages: MemoryMessage[], maxChars = WINDOW_MAX_CHARS) {
   if (!messages.length) return ''
   const asked = messages.findLastIndex((m) => m.kind === 'user' || m.kind === 'work')

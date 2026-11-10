@@ -142,7 +142,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
 })
 
 describe('space order', () => {
-  const HOME = chat({ id: 'main', name: 'Home', mod: 'home' })
+  const HOME = chat({ id: 'main', name: 'Home', extension: 'home' })
   const A = chat({ id: 'a', order: 0 })
   const B = chat({ id: 'b', order: 1 })
   const P = chat({ id: 'p', order: 0, pinned: true })

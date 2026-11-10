@@ -25,7 +25,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
   ...change,
 })
 
-const HOME = chat({ id: 'main', name: 'Home', mod: 'home', doneAt: '2026-03-01T00:00:00Z' })
+const HOME = chat({ id: 'main', name: 'Home', extension: 'home', doneAt: '2026-03-01T00:00:00Z' })
 const WEB = chat({ id: 'web', name: 'Website', doneAt: '2026-03-03T00:00:00Z' })
 const API = chat({ id: 'api', name: 'API server', readAt: '2026-03-02T00:00:00Z' })
 const SUB = chat({ id: 'sub', name: 'Website worker', parentId: 'web', worker: true, doneAt: '2026-03-04T00:00:00Z' })

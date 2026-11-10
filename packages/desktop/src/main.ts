@@ -4,13 +4,13 @@ import { envVar, startCore } from '@kothar/core/main'
 import { fixPath } from './shell-path.ts'
 import { userDataDir } from './user-data.ts'
 
-// The packaged app is one bundled main.mjs with the UI, preload, icon and built-in mods beside it (see
+// The packaged app is one bundled main.mjs with the UI, preload, icon and built-in extensions beside it (see
 // scripts/stage.mjs); from the repo, each sits where the source tree has it.
 const packaged = app.isPackaged
 const local = (inRepo: string, inApp: string) => fileURLToPath(new URL(packaged ? inApp : inRepo, import.meta.url))
 const uiDir = local('../../ui/dist', 'ui')
 const preload = local('preload.cjs', 'preload.cjs')
-const modsDir = packaged ? fileURLToPath(new URL('mods/', import.meta.url)) : undefined
+const extensionsDir = packaged ? fileURLToPath(new URL('extensions/', import.meta.url)) : undefined
 // A page that dies again this soon after a reload stays dead instead of looping.
 const RELOAD_COOLDOWN_MS = 10_000
 const icon = local('../assets/icon.png', 'icon.png')
@@ -47,10 +47,11 @@ async function start() {
   if (packaged) await fixPath()
   await app.whenReady()
   if (process.platform === 'darwin') app.dock?.setIcon(icon)
-  // Restart (Settings, after community mod changes) quits as usual, stopping every chat and process, then relaunches.
+  // Restart (Settings, after community extension changes) quits as usual, stopping every chat and process, then
+  // relaunches.
   const kothar = await startCore({
     uiDir,
-    ...(modsDir && { modsDir }),
+    ...(extensionsDir && { extensionsDir }),
     restart: () => {
       app.relaunch()
       app.quit()

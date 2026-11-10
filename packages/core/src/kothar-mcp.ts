@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ChatSummary, Mod, ModHost, ModTool, ModValues } from '@kothar/mod-api'
+import type { ChatSummary, Extension, ExtensionHost, ExtensionTool, ExtensionValues } from '@kothar/extension-api'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
@@ -19,7 +19,7 @@ export const WORKER_INSTRUCTIONS =
   "answers and one-line changes. Each worker's final reply comes back to you as a message, so don't wait for it " +
   'or poll it; tell the user what you started and carry on. To stop a worker you no longer need, use stop_chat.'
 
-export const WORKERS_MOD: Mod = {
+export const WORKERS_EXTENSION: Extension = {
   id: 'workers',
   name: 'Workers',
   description: 'Chats can hand a task to a new chat that reports back when it ends.',
@@ -48,7 +48,7 @@ export const WORKERS_MOD: Mod = {
 type Hub = {
   chats(): ChatState[]
   seesAll(chatId: string): boolean
-  // A worker below parentId: the same call a mod's host.createChat makes with a parentId.
+  // A worker below parentId: the same call an extension's host.createChat makes with a parentId.
   createChild(parentId: string, spec: { name: string; role?: ModelRole }): ChatInfo
   send(chatId: string, text: string): void
   // A message for a chat that may be mid-turn, as its composer sends one: steered in, queued or sent.
@@ -56,7 +56,7 @@ type Hub = {
   // What the chat's Stop button does.
   stop(chatId: string): void
   workers(): { enabled: boolean; limit: number }
-  modTools(): { tool: ModTool; values: ModValues; host: ModHost }[]
+  extensionTools(): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost }[]
 }
 
 const reachesFrom = (hub: Hub, caller: ChatState, chat: ChatState) => reaches(caller, chat, hub.seesAll(caller.id))
@@ -174,7 +174,7 @@ export function openKotharMcp(hub: Hub) {
     if (tool.for === 'workers') return spawns
     return spawns || hub.seesAll(caller.id)
   }
-  const modToolsFor = (caller: ChatState) => hub.modTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
+  const extensionToolsFor = (caller: ChatState) => hub.extensionTools().filter(({ tool }) => tool.offered(summaryOf(caller)))
 
   const serverFor = (callerId: string) => {
     const server = new McpServer({ name: 'kothar', version: '0.0.0' })
@@ -206,7 +206,7 @@ export function openKotharMcp(hub: Hub) {
         }),
       )
     }
-    for (const { tool, values, host } of modToolsFor(caller)) {
+    for (const { tool, values, host } of extensionToolsFor(caller)) {
       const inputSchema = fromJsonSchema<Record<string, unknown>>(tool.inputSchema)
       server.registerTool(tool.name, { description: tool.description, inputSchema }, (input) =>
         answer((caller) => tool.run(input, { caller: summaryOf(caller), values, host })),
@@ -218,7 +218,7 @@ export function openKotharMcp(hub: Hub) {
   return {
     grant(chatId: string) {
       const chat = hub.chats().find((c) => c.id === chatId)
-      const offered = chat && (Object.values(TOOLS).some((tool) => offers(chat, tool)) || modToolsFor(chat).length)
+      const offered = chat && (Object.values(TOOLS).some((tool) => offers(chat, tool)) || extensionToolsFor(chat).length)
       if (!offered) return undefined
       const token = randomBytes(32).toString('base64url')
       callers.set(token, chatId)

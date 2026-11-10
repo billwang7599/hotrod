@@ -77,7 +77,7 @@ describe('the core', () => {
       user('2026-01-01T00:00:02Z', 'widget task'),
     ])
     const adapter = createFakeAdapter([], 0)
-    const core = openCore({ garage, adapters: [adapter], defaultEngine: adapter.id, machine: sandboxingMachine, mods: [] })
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: adapter.id, machine: sandboxingMachine, extensions: [] })
     cores.push(core)
     const replies: CoreMessage[] = []
     core.handle({ type: 'search', id: 7, query: 'WIDGET' }, (r) => replies.push(r))

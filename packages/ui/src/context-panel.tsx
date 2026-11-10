@@ -10,7 +10,7 @@ import {
   type CommandInfo,
   type ContextItem,
   type ContextSection,
-  type PanelTab as ModTab,
+  type PanelTab as ExtensionTab,
   type PermissionSwitch,
   type WorkFolder,
   type Worktree,
@@ -20,8 +20,8 @@ import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
-import { ModViewer } from './mod-view.tsx'
-import { choosePanelTab, modTabId, usePanelTab } from './panel-tab.ts'
+import { ExtensionViewer } from './extension-view.tsx'
+import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
 import { folderName, lineOf, panelKey, terminalKey, type ChatView, type State } from './state.ts'
 
 export const SECTIONS: Record<ContextSection, { label: string; about: string; inherited: string }> = {
@@ -535,12 +535,12 @@ function Permissions({ chat, above, workFolder, disabled, send }: {
   )
 }
 
-// Kothar's own tabs; a mod's panel is `mod:<mod>/<panel>` (modTabId).
+// Kothar's own tabs; an extension's panel is `extension:<extension>/<panel>` (extensionTabId).
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
-/** Actions mods add for this chat, listed in the General tab. */
-function ModCommands({ chatId, commands, disabled, send }: {
+/** Actions extensions add for this chat, listed in the General tab. */
+function ExtensionCommands({ chatId, commands, disabled, send }: {
   chatId: string
   commands: CommandInfo[]
   disabled: boolean
@@ -554,16 +554,16 @@ function ModCommands({ chatId, commands, disabled, send }: {
         {commands.map((c) => {
           const button = (
             <Button
-              key={`${c.mod}/${c.id}`}
+              key={`${c.extension}/${c.id}`}
               size="small"
               disabled={disabled}
-              onClick={() => send({ type: 'mod.command', chatId, mod: c.mod, command: c.id })}
+              onClick={() => send({ type: 'extension.command', chatId, extension: c.extension, command: c.id })}
             >
               {c.label}
             </Button>
           )
           return c.hint ? (
-            <Hint key={`${c.mod}/${c.id}`} text={c.hint}>
+            <Hint key={`${c.extension}/${c.id}`} text={c.hint}>
               {button}
             </Hint>
           ) : (
@@ -620,7 +620,7 @@ type ContextPanelProps = {
   connected: boolean
   send: (m: ClientMessage) => void
   hide?: () => void
-  modUi?: State['modUi']
+  extensionUi?: State['extensionUi']
   panelViews?: State['panelViews']
   terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
@@ -637,19 +637,19 @@ export function ContextPanel(props: ContextPanelProps) {
   // A worker follows its space's switches unless it has its own.
   const above = chat ? lineOf(chats, chat).slice(1) : []
   // The space's work folder, once its first message has picked one.
-  const workDir = chat && !chat.mod ? (above.at(-1) ?? chat).workDir : undefined
-  const sections: readonly ContextSection[] = chat?.mod ? ['agents'] : CONTEXT_SECTIONS
-  const intro = chat?.mod ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
+  const workDir = chat && !chat.extension ? (above.at(-1) ?? chat).workDir : undefined
+  const sections: readonly ContextSection[] = chat?.extension ? ['agents'] : CONTEXT_SECTIONS
+  const intro = chat?.extension ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const tab = usePanelTab()
-  const modUi = props.modUi?.chatId === chatId ? props.modUi : undefined
-  const modTabs: ModTab[] = chat ? (modUi?.panels ?? []) : []
-  const modTab = modTabs.find((p) => modTabId(p.mod, p.id) === tab)
-  const known = tab === 'general' || modTab
+  const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []) : []
+  const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
+  const known = tab === 'general' || extensionTab
   const shown: PanelTabId = chat && known ? tab : 'context'
-  const panelView = modTab && props.panelViews?.[panelKey(chatId, modTab.mod, modTab.id)]
+  const panelView = extensionTab && props.panelViews?.[panelKey(chatId, extensionTab.extension, extensionTab.id)]
   useEffect(() => {
-    if (connected && modTab) send({ type: 'mod.panel.get', chatId, mod: modTab.mod, panel: modTab.id })
-  }, [chatId, connected, modTab?.mod, modTab?.id, send])
+    if (connected && extensionTab) send({ type: 'extension.panel.get', chatId, extension: extensionTab.extension, panel: extensionTab.id })
+  }, [chatId, connected, extensionTab?.extension, extensionTab?.id, send])
   const width = usePanelWidth('context')
   const canAdd = shown === 'context' && !locked && sections.includes('folders')
   const drop = useDropPaths(
@@ -659,7 +659,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const tabs: TabEntry[] = [
     ...(chat ? [{ id: 'general', label: TAB_LABEL.general! }] : []),
     { id: 'context', label: TAB_LABEL.context! },
-    ...modTabs.map((p) => ({ id: modTabId(p.mod, p.id), label: p.title })),
+    ...extensionTabs.map((p) => ({ id: extensionTabId(p.extension, p.id), label: p.title })),
   ]
   return (
     <aside
@@ -687,7 +687,7 @@ export function ContextPanel(props: ContextPanelProps) {
       <div
         className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"
         role="tabpanel"
-        aria-label={modTab?.title ?? TAB_LABEL[shown]}
+        aria-label={extensionTab?.title ?? TAB_LABEL[shown]}
       >
         {shown === 'context' && (
           <About intro={`${intro} Edits apply from the next message.`} notes={sections.map((s) => SECTIONS[s])} />
@@ -739,14 +739,14 @@ export function ContextPanel(props: ContextPanelProps) {
           <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
         )}
         {shown === 'general' && chat && (
-          <ModCommands chatId={chatId} commands={modUi?.commands ?? []} disabled={locked} send={send} />
+          <ExtensionCommands chatId={chatId} commands={extensionUi?.commands ?? []} disabled={locked} send={send} />
         )}
-        {modTab && (
-          <ModViewer
+        {extensionTab && (
+          <ExtensionViewer
             view={panelView?.view}
             error={panelView?.error}
-            act={(action) => send({ type: 'mod.panel.action', chatId, mod: modTab.mod, panel: modTab.id, action })}
-            set={(key, value) => send({ type: 'mod.space.set', chatId, mod: modTab.mod, key, value })}
+            act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}
+            set={(key, value) => send({ type: 'extension.space.set', chatId, extension: extensionTab.extension, key, value })}
           />
         )}
       </div>

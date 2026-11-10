@@ -11,22 +11,23 @@ keeps a small core and lets you customize the rest with extensions, which work w
 
 ## Extensions
 
-An extension is written once and works with every engine. It can add panels and commands, react to chats and turns, answer
-permission requests, rewrite messages, and run commands, all through Kothar's public extension API.
+An extension is written once and works with every engine. It can add panels and commands, react to chats and turns,
+answer permission requests, rewrite messages, and run commands, all through Kothar's public extension API.
 
-**Extension documentation:** [mod-documentation/](mod-documentation/index.md) covers using, building and publishing extensions and
-themes, with the full API reference.
+**Extension documentation:** [extension-documentation/](extension-documentation/index.md) covers using, building and
+publishing extensions and themes, with the full API reference.
 
-Community extensions install from the marketplace in Settings, from their authors' own repos. An extension is code, so it lists what
-it uses through the extension API (running programs, reading chats, answering permission requests and so on). Kothar shows
-that list before you install it, refuses to start an extension that does more than it listed, and keeps every community extension
-off until you turn it on. Extensions load when Kothar starts, so turning one on takes a restart.
+Community extensions install from the marketplace in Settings, from their authors' own repos. An extension is code, so
+it lists what it uses through the extension API (running programs, reading chats, answering permission requests and so
+on). Kothar shows that list before you install it, refuses to start an extension that does more than it listed, and
+keeps every community extension off until you turn it on. Extensions load when Kothar starts, so turning one on takes a
+restart.
 
 **Writing an extension or theme:** start from the template
 [billwang7599/kothar-sample-mod](https://github.com/billwang7599/kothar-sample-mod) (or
 [kothar-themes](https://github.com/billwang7599/kothar-themes#make-your-own-theme) for a theme). Try it with **Install from
 folder…** in the Marketplace window (**Browse…** in Settings → Community hub) before you publish, then follow the
-[author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-mod) to list it.
+[author guide](https://github.com/billwang7599/kothar-marketplace#submit-a-theme-or-extension) to list it.
 
 ## Themes
 
@@ -61,6 +62,7 @@ To try a build beside your own Kothar, run it on a throwaway garage:
 - **Kothar's core, app and built-in extensions:** [Functional Source License 1.1, Apache 2.0 future licence](LICENSE.md)
   (FSL-1.1-ALv2). You may use, copy, modify and redistribute it for any purpose except a competing commercial
   product or service. Two years after each version is released, that version becomes Apache 2.0.
-- **The extension API (`packages/mod-api`):** [MIT](packages/mod-api/LICENSE), so extensions can use any licence they like.
+- **The extension API (`packages/extension-api`):** [MIT](packages/extension-api/LICENSE), so extensions can use any
+  licence they like.
 
 Contributing: see [CONTRIBUTING.md](CONTRIBUTING.md).

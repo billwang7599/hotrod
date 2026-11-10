@@ -171,9 +171,9 @@ test('searches names, authors, descriptions and repos, and says when nothing mat
 })
 
 test('filters by kind and by what is installed or has an update', () => {
-  const mod: MarketEntry = {
+  const extension: MarketEntry = {
     id: 'counter',
-    kind: 'mod',
+    kind: 'extension',
     name: 'Counter',
     author: 'Someone',
     description: 'Counts words.',
@@ -181,7 +181,7 @@ test('filters by kind and by what is installed or has an update', () => {
     latest: { tag: 'v1.0.0', version: '1.0.0', uses: ['panels'] },
   }
   const old = installedNord({ version: '0.9.0' })
-  const market: Market = { catalog: { entries: [...entries, mod] }, themes: [nord], installed: [old], marketFailures: {} }
+  const market: Market = { catalog: { entries: [...entries, extension] }, themes: [nord], installed: [old], marketFailures: {} }
   show(market, [], true, 'Extensions')
   expect(options()).toEqual(['Counter'])
   act(() => button(document.querySelector('[role="group"][aria-label="Kind"]'), 'Themes')!.click())
@@ -337,7 +337,7 @@ test('the state keeps the catalog, what is installed and failures, and an instal
   expect(state.marketFailures).toEqual({})
 })
 
-function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: () => void) {
+function settingsAt(page: 'appearance' | 'community-extensions', openMarketplace: () => void) {
   render(
     <SettingsDialog
       open
@@ -347,7 +347,7 @@ function settingsAt(page: 'appearance' | 'community-mods', openMarketplace: () =
       engines={[]}
       accounts={[]}
       contextDefaults={{ agents: true, folders: true, files: true }}
-      mods={[]}
+      extensions={[]}
       modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
       workFolder={{ defaultPath: '/garage/work', canSandbox: true }}
       chooseWorkFolder={() => {}}
@@ -365,7 +365,7 @@ test('Settings has no Marketplace page; Appearance and Community hub open it wit
   const tabs = [...document.querySelectorAll('[role="dialog"] [role="tab"]')].map((tab) => tab.textContent)
   expect(tabs).not.toContain('Marketplace')
   act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
-  settingsAt('community-mods', () => opened++)
+  settingsAt('community-extensions', () => opened++)
   act(() => button(document.querySelector('[role="dialog"]'), 'Browse…')!.click())
   expect(opened).toBe(2)
 })

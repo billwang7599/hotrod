@@ -37,7 +37,7 @@ const chat = (change: Partial<ChatView>): ChatView => ({
   ...change,
 })
 
-const HOME = chat({ id: 'main', name: 'Home', mod: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
+const HOME = chat({ id: 'main', name: 'Home', extension: 'home', createdAt: '2025-01-01T00:00:00.000Z' })
 const SPACE = chat({ id: 's1', name: 'Kothar' })
 const WORKER = chat({ id: 'w1', name: 'Worker', parentId: 's1', worker: true })
 

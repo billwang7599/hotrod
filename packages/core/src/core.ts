@@ -14,30 +14,30 @@ import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type {
   ChatDetail,
-  Mod,
-  ModAction,
-  ModContext,
-  ModManifest,
-  ModHost,
-  ModInstructionsFor,
-  ModPanel,
-  ModView,
-  ModWait,
-  ModWaitAnswer,
-  ModStorage,
-  ModRun,
-  ModUse,
+  Extension,
+  ExtensionAction,
+  ExtensionContext,
+  ExtensionManifest,
+  ExtensionHost,
+  ExtensionInstructionsFor,
+  ExtensionPanel,
+  ExtensionView,
+  ExtensionWait,
+  ExtensionWaitAnswer,
+  ExtensionStorage,
+  ExtensionRun,
+  ExtensionUse,
   PermissionRequest,
   PermissionVerdict,
   SpaceDetail,
   TurnSummary,
-} from '@kothar/mod-api'
+} from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
-import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_MOD, summaryOf } from './kothar-mcp.ts'
+import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
 import { continuationPrompt, messagesOf, seededPrompt, windowView, withAttachments, type Report } from './memory.ts'
 import { realPath } from './machine.ts'
-import { type Fetch, installedMods, openMarketplace } from './marketplace.ts'
-import { type CommunityMod, guardHost, valuesOf } from './mods.ts'
+import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
+import { type CommunityExtension, guardHost, valuesOf } from './extensions.ts'
 import {
   ASK_FIRST_COMMANDS,
   bySpaceOrder,
@@ -74,8 +74,8 @@ import {
   type InstalledItem,
   type MarketKind,
   type MemoryMessage,
-  MOD_USES,
-  type ModInfo,
+  EXTENSION_USES,
+  type ExtensionInfo,
   MODEL_ROLES,
   type NewChat,
   type PanelTab,
@@ -91,7 +91,7 @@ import {
   type Worktree,
 } from './shared.ts'
 import { openModels, type ModelSettings } from './models.ts'
-import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
+import { moveExtensionsDir, renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
 import { searchChats } from './search.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
@@ -100,7 +100,7 @@ import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secre
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
-// A chat's own files, which mods' chat storage can't touch.
+// A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
@@ -130,8 +130,8 @@ type Chat = {
   unsavedText: string
   stopTimer?: ReturnType<typeof setTimeout>
   pendingRequests: Map<string, 'permission' | 'question'>
-  // What mods wait on the user for while the turn runs (ModHost.wait), by mod id.
-  waits: Map<string, ModWait>
+  // What extensions wait on the user for while the turn runs (ExtensionHost.wait), by extension id.
+  waits: Map<string, ExtensionWait>
   mcpToken?: string
   queue: QueuedMessage[]
   turns: number
@@ -178,10 +178,10 @@ function openLockedCore(options: {
   adapters: Adapter[]
   defaultEngine: string
   machine: Machine
-  mods?: Mod[]
-  brokenMods?: { id: string; loadError: string }[]
-  // Mods installed in the garage from the marketplace or a folder; see loadCommunityMods.
-  community?: CommunityMod[]
+  extensions?: Extension[]
+  brokenExtensions?: { id: string; loadError: string }[]
+  // Extensions installed in the garage from the marketplace or a folder; see loadCommunityExtensions.
+  community?: CommunityExtension[]
   stopGraceMs?: number
   marketplaceUrl?: string
   githubToken?: string
@@ -203,51 +203,51 @@ function openLockedCore(options: {
     }
   }
   checkEngine(defaultEngine)
-  const mods = [...(options.mods ?? []), WORKERS_MOD]
-  const modChats = mods.flatMap((mod) => (mod.chats ?? []).map((chat) => ({ ...chat, mod })))
-  const toolNames = [...CORE_TOOL_NAMES, ...mods.flatMap((mod) => (mod.tools ?? []).map((tool) => tool.name))]
+  const extensions = [...(options.extensions ?? []), WORKERS_EXTENSION]
+  const extensionChats = extensions.flatMap((extension) => (extension.chats ?? []).map((chat) => ({ ...chat, extension })))
+  const toolNames = [...CORE_TOOL_NAMES, ...extensions.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name))]
   for (const [what, ids] of [
-    ['mods', mods.map((mod) => mod.id)],
-    ['mod chats', modChats.map((chat) => chat.id)],
+    ['extensions', extensions.map((extension) => extension.id)],
+    ['extension chats', extensionChats.map((chat) => chat.id)],
     ['tools', toolNames],
   ] as const) {
     const twin = ids.find((id, i) => ids.indexOf(id) !== i)
     if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
   }
-  // Community mods come after the built-in ones. One that clashes with a built-in mod's id isn't listed; one whose tool or chat
-  // is taken doesn't run. A mod that didn't load (off, or broken) is listed as a stub with no hooks, so it can be turned
-  // on or off; it runs from the next start.
-  const builtInIds = new Set(mods.map((mod) => mod.id))
-  const community = new Map<string, { manifest: ModManifest; item: InstalledItem; running?: string; loadError?: string }>()
-  // The community mods this run imported (whether or not they loaded), by id with their name, and those installed again
-  // since; what's pending a restart is worked out from these and the settings.
+  // Community extensions come after the built-in ones. One that clashes with a built-in extension's id isn't listed;
+  // one whose tool or chat is taken doesn't run. An extension that didn't load (off, or broken) is listed as a stub
+  // with no hooks, so it can be turned on or off; it runs from the next start.
+  const builtInIds = new Set(extensions.map((extension) => extension.id))
+  const community = new Map<string, { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string }>()
+  // The community extensions this run imported (whether or not they loaded), by id with their name, and those installed
+  // again since; what's pending a restart is worked out from these and the settings.
   const imported = new Map<string, string>()
   const reinstalled = new Set<string>()
-  const stubOf = ({ id, name, description }: ModManifest): Mod => ({ id, name, description, enabledByDefault: false })
+  const stubOf = ({ id, name, description }: ExtensionManifest): Extension => ({ id, name, description, enabledByDefault: false })
   for (const found of options.community ?? []) {
     const { manifest, item } = found
     if (builtInIds.has(manifest.id) || community.has(manifest.id)) {
       console.error(`Skipped the community extension "${manifest.id}": an extension already has that id`)
       continue
     }
-    let { mod, loadError } = found
-    if (mod || loadError) imported.set(manifest.id, manifest.name)
+    let { extension, loadError } = found
+    if (extension || loadError) imported.set(manifest.id, manifest.name)
     const clash =
-      mod &&
-      ((mod.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
-        (mod.chats ?? []).map((chat) => chat.id).find((id) => modChats.some((chat) => chat.id === id)))
+      extension &&
+      ((extension.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
+        (extension.chats ?? []).map((chat) => chat.id).find((id) => extensionChats.some((chat) => chat.id === id)))
     if (clash) {
       loadError = `its tool or chat "${clash}" is already taken`
-      mod = undefined
+      extension = undefined
     }
-    community.set(manifest.id, { manifest, item, ...(mod && { running: manifest.version }), ...(loadError && { loadError }) })
-    if (!mod) {
-      mods.push(stubOf(manifest))
+    community.set(manifest.id, { manifest, item, ...(extension && { running: manifest.version }), ...(loadError && { loadError }) })
+    if (!extension) {
+      extensions.push(stubOf(manifest))
       continue
     }
-    mods.push(mod)
-    modChats.push(...(mod.chats ?? []).map((chat) => ({ ...chat, mod: mod! })))
-    toolNames.push(...(mod.tools ?? []).map((tool) => tool.name))
+    extensions.push(extension)
+    extensionChats.push(...(extension.chats ?? []).map((chat) => ({ ...chat, extension: extension! })))
+    toolNames.push(...(extension.tools ?? []).map((tool) => tool.name))
   }
   const marketplace = openMarketplace({
     garage,
@@ -259,53 +259,54 @@ function openLockedCore(options: {
   const settings: PermissionSwitches &
     ModelSettings & {
       context?: Partial<Record<ContextSection, boolean>>
-      mods?: Record<string, Record<string, unknown>>
-      // The version of each mod's saved settings (Mod.settingsVersion), once one has been migrated.
-      modVersions?: Record<string, number>
+      extensions?: Record<string, Record<string, unknown>>
+      // The version of each extension's saved settings (Extension.settingsVersion), once one has been migrated.
+      extensionVersions?: Record<string, number>
       workFolder?: string
-      // The master switch for community mods; off unless the user turned it on.
-      communityMods?: boolean
+      // The master switch for community extensions; off unless the user turned it on.
+      communityExtensions?: boolean
       // The terminal Open in Terminal uses: 'auto' or absent for the system's, else one of MAC_TERMINALS by id.
       terminal?: string
     } = { engines: {}, ...readJson(settingsFile) }
   const saveSettings = () => writeFileSync(settingsFile, JSON.stringify(settings, null, 2) + '\n')
   if (renameSettings(settings)) saveSettings()
+  moveExtensionsDir(garage)
   const contextDefaults = (): Record<ContextSection, boolean> => ({
     agents: settings.context?.agents ?? true,
     folders: settings.context?.folders ?? true,
     files: settings.context?.files ?? true,
   })
-  const brokenMods = options.brokenMods ?? []
-  // Mods whose saved settings failed to migrate at load, and why; shown on the mod like a load error.
+  const brokenExtensions = options.brokenExtensions ?? []
+  // Extensions whose saved settings failed to migrate at load, and why; shown on the extension like a load error.
   const settingsErrors = new Map<string, string>()
-  const modFor = (id: string) => {
-    const mod = mods.find((m) => m.id === id)
-    if (mod) return mod
-    const broken = brokenMods.find((m) => m.id === id)
+  const extensionFor = (id: string) => {
+    const extension = extensions.find((m) => m.id === id)
+    if (extension) return extension
+    const broken = brokenExtensions.find((m) => m.id === id)
     throw new Error(broken ? `The extension ${id} couldn't load: ${broken.loadError}` : `Unknown extension "${id}"`)
   }
-  const communityOn = () => settings.communityMods === true
-  // A community mod's own switch: off until the user turns it on, whatever it says.
-  const ownSwitch = (mod: Mod) => settings.mods?.[mod.id]?.enabled === true
-  // Whether a mod runs: a community mod only while community mods are on too.
-  const isOn = (mod: Mod) => {
-    const saved = settings.mods?.[mod.id]?.enabled
-    if (community.has(mod.id)) return communityOn() && saved === true
-    return typeof saved === 'boolean' ? saved : mod.enabledByDefault
+  const communityOn = () => settings.communityExtensions === true
+  // A community extension's own switch: off until the user turns it on, whatever it says.
+  const ownSwitch = (extension: Extension) => settings.extensions?.[extension.id]?.enabled === true
+  // Whether an extension runs: a community extension only while community extensions are on too.
+  const isOn = (extension: Extension) => {
+    const saved = settings.extensions?.[extension.id]?.enabled
+    if (community.has(extension.id)) return communityOn() && saved === true
+    return typeof saved === 'boolean' ? saved : extension.enabledByDefault
   }
-  const modValues = (mod: Mod) => valuesOf(mod, settings.mods?.[mod.id])
+  const extensionValues = (extension: Extension) => valuesOf(extension, settings.extensions?.[extension.id])
   const setups = new Map<string, Omit<SetupState, 'description'>>()
   const installs = new Map<string, AbortController>()
-  const modInfo = (mod: Mod): ModInfo => {
-    const { id, name, description, settings: declared = [] } = mod
-    const values = modValues(mod)
-    const about = mod.setup?.description
-    const setup = mod.setup && {
+  const extensionInfo = (extension: Extension): ExtensionInfo => {
+    const { id, name, description, settings: declared = [] } = extension
+    const values = extensionValues(extension)
+    const about = extension.setup?.description
+    const setup = extension.setup && {
       description: typeof about === 'function' ? about(values) : about!,
       ...(setups.get(id) ?? { status: 'checking' }),
     }
-    // A community mod shows its own switch; the master switch is beside it in the UI.
-    const enabled = community.has(id) ? ownSwitch(mod) : isOn(mod)
+    // A community extension shows its own switch; the master switch is beside it in the UI.
+    const enabled = community.has(id) ? ownSwitch(extension) : isOn(extension)
     const settingsError = settingsErrors.get(id)
     const info = { id, name, description, enabled, settings: declared, values, ...(settingsError && { loadError: settingsError }) }
     const from = community.get(id)
@@ -382,81 +383,81 @@ function openLockedCore(options: {
       else if (JSON.stringify(run) !== chat.shownRun) broadcast({ type: 'chat.updated', chat: withRun(chat) })
     }
   }
-  const saveMod = (mod: Mod, change: Record<string, unknown>) => {
-    settings.mods = { ...settings.mods, [mod.id]: { ...settings.mods?.[mod.id], ...change } }
+  const saveExtension = (extension: Extension, change: Record<string, unknown>) => {
+    settings.extensions = { ...settings.extensions, [extension.id]: { ...settings.extensions?.[extension.id], ...change } }
     saveSettings()
-    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
   }
-  const setSetup = (mod: Mod, state: Omit<SetupState, 'description'>) => {
-    setups.set(mod.id, state)
-    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+  const setSetup = (extension: Extension, state: Omit<SetupState, 'description'>) => {
+    setups.set(extension.id, state)
+    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
   }
   const runFor =
-    (signal?: AbortSignal): ModRun =>
+    (signal?: AbortSignal): ExtensionRun =>
     (command, args, options) =>
       // A setup that runs several commands stops at its next one once cancelled.
       signal?.aborted
         ? Promise.reject(new Error('Cancelled'))
         : machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
-  const checkSetup = async (mod: Mod, installError?: string) => {
-    if (!mod.setup || installs.has(mod.id)) return
-    const { message } = setups.get(mod.id) ?? {}
-    setSetup(mod, { status: 'checking', ...(message && { message }) })
+  const checkSetup = async (extension: Extension, installError?: string) => {
+    if (!extension.setup || installs.has(extension.id)) return
+    const { message } = setups.get(extension.id) ?? {}
+    setSetup(extension, { status: 'checking', ...(message && { message }) })
     let checked: Omit<SetupState, 'description'>
     try {
-      const result = await mod.setup.check(runFor(), modValues(mod))
+      const result = await extension.setup.check(runFor(), extensionValues(extension))
       checked = { status: result.ready ? 'ready' : 'missing', ...(result.message && { message: result.message }) }
     } catch (error) {
       checked = { status: 'missing', error: messageOf(error) }
     }
     if (checked.status === 'missing' && installError) checked.error = installError
-    if (!installs.has(mod.id)) setSetup(mod, checked)
+    if (!installs.has(extension.id)) setSetup(extension, checked)
   }
-  const install = (mod: Mod) => {
-    if (!mod.setup) throw new Error(`${mod.name} has nothing to install`)
-    if (installs.has(mod.id)) throw new Error(`${mod.name} is already installing`)
-    if (setups.get(mod.id)?.status === 'ready') throw new Error(`${mod.name} is already installed`)
+  const install = (extension: Extension) => {
+    if (!extension.setup) throw new Error(`${extension.name} has nothing to install`)
+    if (installs.has(extension.id)) throw new Error(`${extension.name} is already installing`)
+    if (setups.get(extension.id)?.status === 'ready') throw new Error(`${extension.name} is already installed`)
     const controller = new AbortController()
-    installs.set(mod.id, controller)
-    const { message } = setups.get(mod.id) ?? {}
-    setSetup(mod, { status: 'installing', ...(message && { message }) })
+    installs.set(extension.id, controller)
+    const { message } = setups.get(extension.id) ?? {}
+    setSetup(extension, { status: 'installing', ...(message && { message }) })
     const report = ({ text, progress }: { text?: string; progress?: number }) => {
-      if (installs.get(mod.id) !== controller) return
+      if (installs.get(extension.id) !== controller) return
       const update = { ...(text && { progressText: text }), ...(progress !== undefined && { progress }) }
-      setSetup(mod, { ...setups.get(mod.id)!, ...update })
+      setSetup(extension, { ...setups.get(extension.id)!, ...update })
     }
-    void mod.setup.install(runFor(controller.signal), report, modValues(mod)).then(
+    void extension.setup.install(runFor(controller.signal), report, extensionValues(extension)).then(
       () => {
-        installs.delete(mod.id)
-        return checkSetup(mod)
+        installs.delete(extension.id)
+        return checkSetup(extension)
       },
       (error) => {
-        installs.delete(mod.id)
-        return checkSetup(mod, controller.signal.aborted ? undefined : messageOf(error))
+        installs.delete(extension.id)
+        return checkSetup(extension, controller.signal.aborted ? undefined : messageOf(error))
       },
     )
   }
-  const setModValue = (mod: Mod, key: string, value: unknown) => {
-    const setting = mod.settings?.find((s) => s.key === key)
-    if (!setting) throw new Error(`${mod.name} has no setting "${key}"`)
+  const setExtensionValue = (extension: Extension, key: string, value: unknown) => {
+    const setting = extension.settings?.find((s) => s.key === key)
+    if (!setting) throw new Error(`${extension.name} has no setting "${key}"`)
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
-    saveMod(mod, { [key]: value })
-    if (isOn(mod)) void checkSetup(mod)
+    saveExtension(extension, { [key]: value })
+    if (isOn(extension)) void checkSetup(extension)
   }
-  // A space's own values for a mod's spaceSettings: the space a worker is in, else the chat itself.
+  // A space's own values for an extension's spaceSettings: the space a worker is in, else the chat itself.
   const spaceChat = (chat: Chat) => chainOf(chat)[0]!
-  const spaceValuesOf = (mod: Mod, chat: Chat) =>
-    valuesOf(mod, spaceChat(chat).info.modValues?.[mod.id], mod.spaceSettings)
-  const setSpaceValue = (mod: Mod, chat: Chat, key: string, value: unknown) => {
-    const setting = mod.spaceSettings?.find((s) => s.key === key)
-    if (!setting) throw new Error(`${mod.name} has no space setting "${key}"`)
+  const spaceValuesOf = (extension: Extension, chat: Chat) =>
+    valuesOf(extension, spaceChat(chat).info.extensionValues?.[extension.id], extension.spaceSettings)
+  const setSpaceValue = (extension: Extension, chat: Chat, key: string, value: unknown) => {
+    const setting = extension.spaceSettings?.find((s) => s.key === key)
+    if (!setting) throw new Error(`${extension.name} has no space setting "${key}"`)
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
     const space = spaceChat(chat)
-    const modValues = { ...space.info.modValues, [mod.id]: { ...space.info.modValues?.[mod.id], [key]: value } }
-    updateChat(space, { modValues })
-    refreshMod(mod)
+    const extensionValues = { ...space.info.extensionValues, [extension.id]: { ...space.info.extensionValues?.[extension.id], [key]: value } }
+    updateChat(space, { extensionValues })
+    refreshExtension(extension)
   }
   const setMemory = (engine?: string, model?: string) => {
     if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
@@ -490,7 +491,7 @@ function openLockedCore(options: {
     settings.workFolder = path
     saveSettings()
     broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
-    startMods()
+    startExtensions()
   }
   const saveChat = ({ info, dir, context }: Chat) => {
     const file = { ...info, ...(Object.keys(context).length ? { context } : {}) }
@@ -511,12 +512,12 @@ function openLockedCore(options: {
     ...(chat.waits.size && { waits: waitsOf(chat) }),
   })
 
-  const waitsOf = (chat: Chat): ChatWait[] => [...chat.waits].map(([mod, wait]) => ({ mod, ...wait }))
-  // A mod's wait, or none: the chat waits while any mod or request does, and runs again once none does.
-  const setWait = (chat: Chat, modId: string, wait: ModWait | undefined) => {
-    if (!wait && !chat.waits.has(modId)) return
-    if (wait) chat.waits.set(modId, wait)
-    else chat.waits.delete(modId)
+  const waitsOf = (chat: Chat): ChatWait[] => [...chat.waits].map(([extension, wait]) => ({ extension, ...wait }))
+  // An extension's wait, or none: the chat waits while any extension or request does, and runs again once none does.
+  const setWait = (chat: Chat, extensionId: string, wait: ExtensionWait | undefined) => {
+    if (!wait && !chat.waits.has(extensionId)) return
+    if (wait) chat.waits.set(extensionId, wait)
+    else chat.waits.delete(extensionId)
     broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: waitsOf(chat) })
     if (wait && chat.status === 'running') setStatus(chat, 'waiting')
     if (!wait && chat.status === 'waiting' && !chat.pendingRequests.size && !chat.waits.size) setStatus(chat, 'running')
@@ -537,11 +538,11 @@ function openLockedCore(options: {
   })
   void accounts.refresh()
 
-  const modServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
+  const extensionServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
     const session = { chat: summaryOf(chat.info), workDir, sandboxed }
-    const servers = mods
-      .filter((mod) => isOn(mod) && (!mod.setup || setups.get(mod.id)?.status === 'ready'))
-      .flatMap((mod) => mod.mcpServers?.({ ...session, values: modValues(mod) }) ?? [])
+    const servers = extensions
+      .filter((extension) => isOn(extension) && (!extension.setup || setups.get(extension.id)?.status === 'ready'))
+      .flatMap((extension) => extension.mcpServers?.({ ...session, values: extensionValues(extension) }) ?? [])
     const names = ['kothar', ...servers.map((server) => server.name)]
     const twin = names.find((name, i) => names.indexOf(name) !== i)
     if (twin !== undefined) throw new Error(`Two MCP servers are named "${twin}"`)
@@ -553,7 +554,7 @@ function openLockedCore(options: {
     return settings.workFolder
   }
 
-  // A one-shot call on the model picked for summaries, for mods (host.complete), run in Home's scratch folder.
+  // A one-shot call on the model picked for summaries, for extensions (host.complete), run in Home's scratch folder.
   const completeFor = async (request: CompletionRequest) => {
     const { engine, model } = models.memory()
     const adapter = engine === undefined ? undefined : adapterFor(engine)
@@ -566,45 +567,45 @@ function openLockedCore(options: {
     return adapter.complete(machine, options)
   }
   let enginesDetected = false
-  // Mods' background work (onStart) waits until model calls can run: engines detected and a work folder chosen.
-  const startedMods = new Set<string>()
-  const startMod = (mod: Mod) => {
-    if (quitting || !enginesDetected || !settings.workFolder || !isOn(mod) || startedMods.has(mod.id)) return
-    if (!mod.onStart) return
-    startedMods.add(mod.id)
-    callMod(mod, () => mod.onStart!(contextOf(mod)))
+  // Extensions' background work (onStart) waits until model calls can run: engines detected and a work folder chosen.
+  const startedExtensions = new Set<string>()
+  const startExtension = (extension: Extension) => {
+    if (quitting || !enginesDetected || !settings.workFolder || !isOn(extension) || startedExtensions.has(extension.id)) return
+    if (!extension.onStart) return
+    startedExtensions.add(extension.id)
+    callExtension(extension, () => extension.onStart!(contextOf(extension)))
   }
-  const startMods = () => mods.forEach(startMod)
-  const stopMod = (mod: Mod) => {
-    if (!startedMods.delete(mod.id)) return
-    callMod(mod, () => mod.onStop?.(contextOf(mod)))
+  const startExtensions = () => extensions.forEach(startExtension)
+  const stopExtension = (extension: Extension) => {
+    if (!startedExtensions.delete(extension.id)) return
+    callExtension(extension, () => extension.onStop?.(contextOf(extension)))
   }
-  // The mod that provides memory: the first that's on with one. Without it, the core's window.
-  const memoryMod = () => mods.find((mod) => isOn(mod) && mod.memory)
+  // The extension that provides memory: the first that's on with one. Without it, the core's window.
+  const memoryExtension = () => extensions.find((extension) => isOn(extension) && extension.memory)
   const viewOf = (chat: Chat, messages: MemoryMessage[], tools: boolean) => {
     if (!messages.length) return ''
-    const mod = memoryMod()
-    if (mod) {
+    const extension = memoryExtension()
+    if (extension) {
       try {
-        const view = mod.memory!.view({ chat: detailOf(chat), messages, tools }, contextOf(mod))
+        const view = extension.memory!.view({ chat: detailOf(chat), messages, tools }, contextOf(extension))
         if (typeof view !== 'string') throw new Error('memory.view must return text')
         return view
       } catch (error) {
-        modError(mod, error)
+        extensionError(extension, error)
       }
     }
     return windowView(messages)
   }
-  const memoryInstructions = (forSession: ModInstructionsFor) => {
-    const mod = memoryMod()
-    if (!mod?.memory?.instructions) return []
+  const memoryInstructions = (forSession: ExtensionInstructionsFor) => {
+    const extension = memoryExtension()
+    if (!extension?.memory?.instructions) return []
     try {
-      const text = mod.memory.instructions(forSession, contextOf(mod))
+      const text = extension.memory.instructions(forSession, contextOf(extension))
       if (text === undefined || text === null) return []
       if (typeof text !== 'string') throw new Error('memory.instructions must return text')
       return text.trim() ? [text.trim()] : []
     } catch (error) {
-      modError(mod, error)
+      extensionError(extension, error)
       return []
     }
   }
@@ -617,7 +618,7 @@ function openLockedCore(options: {
       broadcast({ type: 'chat.waits', chatId: chat.info.id, waits: [] })
     }
     broadcast({ type: 'chat.status', chatId: chat.info.id, status })
-    callMods('onStatusChanged', (mod, context) => mod.onStatusChanged!(detailOf(chat), status, context))
+    callExtensions('onStatusChanged', (extension, context) => extension.onStatusChanged!(detailOf(chat), status, context))
   }
 
   const chatFor = (chatId: string) => {
@@ -626,10 +627,10 @@ function openLockedCore(options: {
     return chat
   }
 
-  const modChatOf = (chat: Chat) => modChats.find((declared) => declared.id === chat.info.id)
+  const extensionChatOf = (chat: Chat) => extensionChats.find((declared) => declared.id === chat.info.id)
 
   const shown = (chat: Chat) => {
-    const owner = modChatOf(chainOf(chat)[0]!)?.mod
+    const owner = extensionChatOf(chainOf(chat)[0]!)?.extension
     return !owner || isOn(owner)
   }
 
@@ -652,7 +653,7 @@ function openLockedCore(options: {
   ]
 
   const checkRemovable = (chat: Chat) => {
-    if (chat.info.mod) throw new Error(`${chat.info.name} cannot be archived or deleted`)
+    if (chat.info.extension) throw new Error(`${chat.info.name} cannot be archived or deleted`)
     if (chat.status !== 'idle') throw new Error('Stop the running chat first')
   }
 
@@ -690,12 +691,12 @@ function openLockedCore(options: {
     const files = [...new Set(turn.tools.flatMap((t) => (t.kind === 'edit' && t.path ? [t.path] : [])))]
     const summary = { chat: detail, ...(end.error && { error: end.error }), ...turn, files }
     const sessionError = end.type === 'session.ended' ? end.error : undefined
-    callMods('onSessionEnded', (mod, context) =>
-      mod.onSessionEnded!({ chat: detail, ...(sessionError && { error: sessionError }) }, context),
+    callExtensions('onSessionEnded', (extension, context) =>
+      extension.onSessionEnded!({ chat: detail, ...(sessionError && { error: sessionError }) }, context),
     )
-    callMods('onTurnCompleted', (mod, context) => mod.onTurnCompleted!(summary, context))
+    callExtensions('onTurnCompleted', (extension, context) => extension.onTurnCompleted!(summary, context))
     if (limit) reportLimit(chat, account, limit)
-    // A mod sent the message again, so the turn goes on.
+    // An extension sent the message again, so the turn goes on.
     if (chat.status !== 'idle') return
     const parent = chat.info.worker ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, end.error)))
@@ -743,7 +744,7 @@ function openLockedCore(options: {
     return { text, report: { chatId: chat.info.id, name: chat.info.name, ...(error && { error }) } }
   }
 
-  const limitWatchers = () => mods.filter((mod) => isOn(mod) && mod.onLimitReached)
+  const limitWatchers = () => extensions.filter((extension) => isOn(extension) && extension.onLimitReached)
 
   const reportLimit = (chat: Chat, account: string | undefined, { message, resetsAt }: NonNullable<Chat['limit']>) => {
     const { engine } = chat.info
@@ -755,8 +756,8 @@ function openLockedCore(options: {
       output: chat.produced === true,
       ...(resetsAt && { resetsAt }),
     }
-    for (const mod of limitWatchers()) {
-      callMod(mod, () => mod.onLimitReached!(limit, contextOf(mod)))
+    for (const extension of limitWatchers()) {
+      callExtension(extension, () => extension.onLimitReached!(limit, contextOf(extension)))
     }
   }
 
@@ -793,7 +794,7 @@ function openLockedCore(options: {
     ...summaryOf(chat.info),
     status: chat.status,
     archived: chat.info.archived,
-    ...(chat.info.mod && { mod: chat.info.mod }),
+    ...(chat.info.extension && { extension: chat.info.extension, mod: chat.info.extension }),
     folders: chat.info.folders,
     files: chat.info.files,
     createdAt: chat.info.createdAt,
@@ -816,35 +817,35 @@ function openLockedCore(options: {
     }
   }
 
-  const modError = (mod: Mod, error: unknown) =>
-    broadcast({ type: 'error', message: `${mod.name}: ${messageOf(error)}` })
+  const extensionError = (extension: Extension, error: unknown) =>
+    broadcast({ type: 'error', message: `${extension.name}: ${messageOf(error)}` })
 
-  // Runs one of a mod's hooks; a throw or a rejection shows as an error and goes no further.
-  const callMod = (mod: Mod, run: () => unknown) => {
+  // Runs one of an extension's hooks; a throw or a rejection shows as an error and goes no further.
+  const callExtension = (extension: Extension, run: () => unknown) => {
     try {
       const result = run()
-      if (result instanceof Promise) result.catch((error) => modError(mod, error))
+      if (result instanceof Promise) result.catch((error) => extensionError(extension, error))
     } catch (error) {
-      modError(mod, error)
+      extensionError(extension, error)
     }
   }
 
-  type Hook = { [K in keyof Mod]-?: NonNullable<Mod[K]> extends (...args: never[]) => unknown ? K : never }[keyof Mod]
-  const watchersOf = (hook: Hook) => mods.filter((mod) => isOn(mod) && mod[hook])
-  const callMods = (hook: Hook, run: (mod: Mod, context: ModContext) => unknown) => {
+  type Hook = { [K in keyof Extension]-?: NonNullable<Extension[K]> extends (...args: never[]) => unknown ? K : never }[keyof Extension]
+  const watchersOf = (hook: Hook) => extensions.filter((extension) => isOn(extension) && extension[hook])
+  const callExtensions = (hook: Hook, run: (extension: Extension, context: ExtensionContext) => unknown) => {
     if (quitting) return
-    for (const mod of watchersOf(hook)) callMod(mod, () => run(mod, contextOf(mod)))
+    for (const extension of watchersOf(hook)) callExtension(extension, () => run(extension, contextOf(extension)))
   }
 
-  // Each mod's text transform in turn; one that throws leaves the text as it was.
+  // Each extension's text transform in turn; one that throws leaves the text as it was.
   const transformed = (hook: 'transformMessage' | 'transformOutput', chat: Chat, text: string) =>
-    watchersOf(hook).reduce((current, mod) => {
+    watchersOf(hook).reduce((current, extension) => {
       try {
-        const next = mod[hook]!(current, detailOf(chat), contextOf(mod))
+        const next = extension[hook]!(current, detailOf(chat), contextOf(extension))
         if (typeof next !== 'string') throw new Error(`${hook} must return text`)
         return next
       } catch (error) {
-        modError(mod, error)
+        extensionError(extension, error)
         return current
       }
     }, text)
@@ -855,35 +856,35 @@ function openLockedCore(options: {
     append(chat, { at, type: 'text.completed', text: done })
   }
 
-  // The first mod with a verdict answers; a mod's promise is waited for before asking the next.
-  const modVerdict = (
+  // The first extension with a verdict answers; an extension's promise is waited for before asking the next.
+  const extensionVerdict = (
     request: PermissionRequest,
     chat: Chat,
   ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
     const watchers = watchersOf('onPermissionRequested')
-    const checked = (mod: Mod, verdict: PermissionVerdict | undefined) => {
+    const checked = (extension: Extension, verdict: PermissionVerdict | undefined) => {
       if (verdict === undefined || verdict === null) return undefined
       if (typeof verdict.allow === 'boolean') return verdict
-      modError(mod, new Error('A permission verdict needs allow: true or false'))
+      extensionError(extension, new Error('A permission verdict needs allow: true or false'))
       return undefined
     }
     const ask = (from: number): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
       for (let i = from; i < watchers.length; i++) {
-        const mod = watchers[i]!
-        let answer: ReturnType<NonNullable<Mod['onPermissionRequested']>>
+        const extension = watchers[i]!
+        let answer: ReturnType<NonNullable<Extension['onPermissionRequested']>>
         try {
-          answer = mod.onPermissionRequested!(request, detailOf(chat), contextOf(mod))
+          answer = extension.onPermissionRequested!(request, detailOf(chat), contextOf(extension))
         } catch (error) {
-          modError(mod, error)
+          extensionError(extension, error)
           continue
         }
         if (answer instanceof Promise) {
           return answer.then(
-            (verdict) => checked(mod, verdict) ?? ask(i + 1),
-            (error) => (modError(mod, error), ask(i + 1)),
+            (verdict) => checked(extension, verdict) ?? ask(i + 1),
+            (error) => (extensionError(extension, error), ask(i + 1)),
           )
         }
-        const verdict = checked(mod, answer)
+        const verdict = checked(extension, answer)
         if (verdict) return verdict
       }
       return undefined
@@ -895,7 +896,7 @@ function openLockedCore(options: {
   // of its space and the chats above it.
   const terminalRoots = (chat: Chat) => {
     return chainOf(chat).flatMap(({ info }) =>
-      info.mod
+      info.extension
         ? []
         : [
             ...info.folders,
@@ -922,7 +923,7 @@ function openLockedCore(options: {
   }
 
   // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.
-  const storageAt = (dir: string, what: string, reserved: string[] = []): ModStorage => {
+  const storageAt = (dir: string, what: string, reserved: string[] = []): ExtensionStorage => {
     const fileOf = (name: string) => {
       const path = resolve(dir, String(name))
       const top = path.slice(dir.length + 1).split(sep)[0]!
@@ -950,20 +951,20 @@ function openLockedCore(options: {
     }
   }
 
-  const seesAll = (chatId: string) => modChats.some((chat) => chat.id === chatId && chat.seesAll)
+  const seesAll = (chatId: string) => extensionChats.some((chat) => chat.id === chatId && chat.seesAll)
   // Whether caller may reach chat, by the rule the core's own reach tools use; both must be chats the user can see.
   const reachable = (callerId: string, chat: Chat) => {
     const caller = chats.get(callerId)
     return !!caller && shown(caller) && shown(chat) && reaches(caller.info, chat.info, seesAll(callerId))
   }
 
-  const hosts = new Map<string, ModHost>()
-  const contextOf = (mod: Mod): ModContext => ({ values: modValues(mod), host: hostFor(mod) })
-  const hostFor = (mod: Mod): ModHost => {
-    const known = hosts.get(mod.id)
+  const hosts = new Map<string, ExtensionHost>()
+  const contextOf = (extension: Extension): ExtensionContext => ({ values: extensionValues(extension), host: hostFor(extension) })
+  const hostFor = (extension: Extension): ExtensionHost => {
+    const known = hosts.get(extension.id)
     if (known) return known
-    const dir = join(garage, 'mods', mod.id)
-    const host: ModHost = {
+    const dir = join(garage, 'extensions', extension.id)
+    const host: ExtensionHost = {
       createChat({ name, folders, files, engine, parentId, role }) {
         if (parentId === undefined) {
           if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
@@ -986,8 +987,8 @@ function openLockedCore(options: {
         const chat = chats.get(chatId)
         return chat && shown(chat) ? spaceOf(chat) : undefined
       },
-      spaceValues: (chatId) => spaceValuesOf(mod, chatFor(chatId)),
-      setSpaceValue: (chatId, key, value) => setSpaceValue(mod, chatFor(chatId), String(key), value),
+      spaceValues: (chatId) => spaceValuesOf(extension, chatFor(chatId)),
+      setSpaceValue: (chatId, key, value) => setSpaceValue(extension, chatFor(chatId), String(key), value),
       reaches(callerId, chatId) {
         const chat = chats.get(String(chatId))
         return !!chat && reachable(String(callerId), chat)
@@ -1009,48 +1010,48 @@ function openLockedCore(options: {
       continue: (chatId, text) => continueTurn(chatFor(chatId), text),
       note(chatId, text, options) {
         const panel = options?.panel
-        if (panel !== undefined && !mod.panels?.some((p) => p.id === panel)) {
-          throw new Error(`${mod.name} has no panel "${panel}"`)
+        if (panel !== undefined && !extension.panels?.some((p) => p.id === panel)) {
+          throw new Error(`${extension.name} has no panel "${panel}"`)
         }
         const at = new Date().toISOString()
-        append(chatFor(chatId), { at, type: 'mod.note', text, ...(panel !== undefined && { mod: mod.id, panel }) })
+        append(chatFor(chatId), { at, type: 'extension.note', text, ...(panel !== undefined && { extension: extension.id, panel }) })
       },
-      error: (text) => modError(mod, String(text)),
+      error: (text) => extensionError(extension, String(text)),
       run: runFor(),
       // Lazily: hosts can be made before the spawning code below is set up.
-      spawn: (command, args, options) => spawnFor(mod)(command, args, options),
-      storage: storageAt(dir, `${mod.name}'s storage`),
-      chatStorage: (chatId) => storageAt(chatFor(chatId).dir, `${mod.name}'s files in this chat`, CHAT_OWN_FILES),
+      spawn: (command, args, options) => spawnFor(extension)(command, args, options),
+      storage: storageAt(dir, `${extension.name}'s storage`),
+      chatStorage: (chatId) => storageAt(chatFor(chatId).dir, `${extension.name}'s files in this chat`, CHAT_OWN_FILES),
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       complete: (request) => completeFor(request),
-      refresh: (chatId) => refreshMod(mod, chatId),
+      refresh: (chatId) => refreshExtension(extension, chatId),
       wait(chatId, wait) {
         const chat = chatFor(chatId)
         if (!['running', 'waiting'].includes(chat.status)) throw new Error('A chat waits for the user only while its turn runs')
-        setWait(chat, mod.id, checkWait(wait))
+        setWait(chat, extension.id, checkWait(wait))
       },
-      endWait: (chatId) => setWait(chatFor(chatId), mod.id, undefined),
+      endWait: (chatId) => setWait(chatFor(chatId), extension.id, undefined),
       processes: (spaceId) =>
-        mods
-          .filter((other) => other !== mod && isOn(other) && other.processes)
+        extensions
+          .filter((other) => other !== extension && isOn(other) && other.processes)
           .flatMap((other) => {
             try {
-              return other.processes!(String(spaceId), contextOf(other)).map((row) => ({ ...row, mod: other.id }))
+              return other.processes!(String(spaceId), contextOf(other)).map((row) => ({ ...row, extension: other.id }))
             } catch (error) {
-              modError(other, error)
+              extensionError(other, error)
               return []
             }
           }),
-      async processAction(spaceId, modId, key, action) {
-        const other = modFor(String(modId))
+      async processAction(spaceId, extensionId, key, action) {
+        const other = extensionFor(String(extensionId))
         if (!isOn(other)) throw new Error(`${other.name} is off`)
         await other.onProcessAction?.(String(spaceId), String(key), String(action), contextOf(other))
       },
       processesChanged: (spaceId) =>
-        callMods('onProcessesChanged', (other, context) =>
-          other === mod ? undefined : other.onProcessesChanged!(String(spaceId), context),
+        callExtensions('onProcessesChanged', (other, context) =>
+          other === extension ? undefined : other.onProcessesChanged!(String(spaceId), context),
         ),
-      // Only inside a folder some chat could open: a mod can't open a terminal anywhere it likes.
+      // Only inside a folder some chat could open: an extension can't open a terminal anywhere it likes.
       async openTerminal(path) {
         const real = realOr(String(path))
         const roots = shownChats().flatMap(terminalRoots).map(realOr)
@@ -1060,124 +1061,124 @@ function openLockedCore(options: {
         await openTerminalAt(real)
       },
     }
-    const uses = community.get(mod.id)?.manifest.uses
-    const given = uses ? guardHost(host, mod, uses) : host
-    hosts.set(mod.id, given)
+    const uses = community.get(extension.id)?.manifest.uses
+    const given = uses ? guardHost(host, extension, uses) : host
+    hosts.set(extension.id, given)
     return given
   }
 
-  // Mod panels and commands: which a chat gets, and the views of panels the UI has asked for.
-  type Offered = { shown?(chat: ChatDetail, context: ModContext): boolean }
-  const offeredBy = (mod: Mod, item: Offered, chat: Chat) => {
+  // Extension panels and commands: which a chat gets, and the views of panels the UI has asked for.
+  type Offered = { shown?(chat: ChatDetail, context: ExtensionContext): boolean }
+  const offeredBy = (extension: Extension, item: Offered, chat: Chat) => {
     if (!item.shown) return true
     try {
-      return item.shown(detailOf(chat), contextOf(mod)) === true
+      return item.shown(detailOf(chat), contextOf(extension)) === true
     } catch (error) {
-      modError(mod, error)
+      extensionError(extension, error)
       return false
     }
   }
-  const modsOf = (chat: Chat): Extract<CoreMessage, { type: 'chat.mods' }> => {
-    const on = mods.filter(isOn)
-    const panels = on.flatMap((mod) =>
-      (mod.panels ?? []).flatMap((p): PanelTab[] =>
-        offeredBy(mod, p, chat) ? [{ mod: mod.id, id: p.id, title: p.title }] : [],
+  const extensionsOf = (chat: Chat): Extract<CoreMessage, { type: 'chat.extensions' }> => {
+    const on = extensions.filter(isOn)
+    const panels = on.flatMap((extension) =>
+      (extension.panels ?? []).flatMap((p): PanelTab[] =>
+        offeredBy(extension, p, chat) ? [{ extension: extension.id, id: p.id, title: p.title }] : [],
       ),
     )
-    const commands = on.flatMap((mod) =>
-      (mod.commands ?? []).flatMap((c): CommandInfo[] =>
-        offeredBy(mod, c, chat) ? [{ mod: mod.id, id: c.id, label: c.label, ...(c.hint && { hint: c.hint }) }] : [],
+    const commands = on.flatMap((extension) =>
+      (extension.commands ?? []).flatMap((c): CommandInfo[] =>
+        offeredBy(extension, c, chat) ? [{ extension: extension.id, id: c.id, label: c.label, ...(c.hint && { hint: c.hint }) }] : [],
       ),
     )
-    return { type: 'chat.mods', chatId: chat.info.id, panels, commands }
+    return { type: 'chat.extensions', chatId: chat.info.id, panels, commands }
   }
   const openPanels = new Map<string, Set<string>>()
   const renders = new Map<string, number>()
-  const panelOf = (modId: unknown, panelId: unknown) => {
-    const mod = modFor(String(modId))
-    if (!isOn(mod)) throw new Error(`${mod.name} is off`)
-    const panel = mod.panels?.find((p) => p.id === panelId)
-    if (!panel) throw new Error(`${mod.name} has no panel "${panelId}"`)
-    return { mod, panel }
+  const panelOf = (extensionId: unknown, panelId: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    const panel = extension.panels?.find((p) => p.id === panelId)
+    if (!panel) throw new Error(`${extension.name} has no panel "${panelId}"`)
+    return { extension, panel }
   }
   // Fills in a panel's switches and pickers from the space's values and the settings they're for.
-  const withControls = (mod: Mod, chat: Chat, view: ModView): ModView => {
+  const withControls = (extension: Extension, chat: Chat, view: ExtensionView): ExtensionView => {
     if (view.type === 'stack' || view.type === 'row' || view.type === 'card') {
-      return { ...view, children: view.children.map((child) => withControls(mod, chat, child)) }
+      return { ...view, children: view.children.map((child) => withControls(extension, chat, child)) }
     }
     if (view.type !== 'switch' && view.type !== 'picker') return view
-    const setting = mod.spaceSettings?.find((s) => s.key === view.setting)
+    const setting = extension.spaceSettings?.find((s) => s.key === view.setting)
     const kind = view.type === 'switch' ? 'boolean' : 'select'
-    if (setting?.type !== kind) throw new Error(`${mod.name} has no ${kind} space setting "${view.setting}"`)
-    const value = spaceValuesOf(mod, chat)[setting.key]!
+    if (setting?.type !== kind) throw new Error(`${extension.name} has no ${kind} space setting "${view.setting}"`)
+    const value = spaceValuesOf(extension, chat)[setting.key]!
     const label = view.label ?? setting.label
     if (view.type === 'switch') return { ...view, label, value: value === true }
     const options = setting.type === 'select' ? setting.options : []
     return { ...view, label, value: value as string | number, options }
   }
-  const renderPanel = async (chat: Chat, mod: Mod, panel: ModPanel) => {
-    const key = `${chat.info.id}\n${mod.id}\n${panel.id}`
+  const renderPanel = async (chat: Chat, extension: Extension, panel: ExtensionPanel) => {
+    const key = `${chat.info.id}\n${extension.id}\n${panel.id}`
     const turn = (renders.get(key) ?? 0) + 1
     renders.set(key, turn)
-    const base = { type: 'mod.panel' as const, chatId: chat.info.id, mod: mod.id, panel: panel.id }
-    let shownView: Extract<CoreMessage, { type: 'mod.panel' }>
+    const base = { type: 'extension.panel' as const, chatId: chat.info.id, extension: extension.id, panel: panel.id }
+    let shownView: Extract<CoreMessage, { type: 'extension.panel' }>
     try {
-      shownView = { ...base, view: withControls(mod, chat, await panel.render(detailOf(chat), contextOf(mod))) }
+      shownView = { ...base, view: withControls(extension, chat, await panel.render(detailOf(chat), contextOf(extension))) }
     } catch (error) {
       shownView = { ...base, error: messageOf(error) }
     }
     // An older render that finishes late doesn't replace a newer one.
     if (renders.get(key) === turn && chats.has(chat.info.id)) broadcast(shownView)
   }
-  const openPanel = (chat: Chat, modId: unknown, panelId: unknown) => {
-    const { mod, panel } = panelOf(modId, panelId)
+  const openPanel = (chat: Chat, extensionId: unknown, panelId: unknown) => {
+    const { extension, panel } = panelOf(extensionId, panelId)
     const open = openPanels.get(chat.info.id) ?? new Set()
-    open.add(`${mod.id}\n${panel.id}`)
+    open.add(`${extension.id}\n${panel.id}`)
     openPanels.set(chat.info.id, open)
-    void renderPanel(chat, mod, panel)
+    void renderPanel(chat, extension, panel)
   }
-  const refreshMod = (mod: Mod, chatId?: string) => {
-    if (!isOn(mod)) return
+  const refreshExtension = (extension: Extension, chatId?: string) => {
+    if (!isOn(extension)) return
     const targets = chatId === undefined ? shownChats() : [chatFor(chatId)]
     for (const chat of targets) {
-      broadcast(modsOf(chat))
-      for (const panel of mod.panels ?? []) {
-        if (openPanels.get(chat.info.id)?.has(`${mod.id}\n${panel.id}`)) void renderPanel(chat, mod, panel)
+      broadcast(extensionsOf(chat))
+      for (const panel of extension.panels ?? []) {
+        if (openPanels.get(chat.info.id)?.has(`${extension.id}\n${panel.id}`)) void renderPanel(chat, extension, panel)
       }
     }
   }
-  const panelAction = async (chat: Chat, modId: unknown, panelId: unknown, action: ModAction) => {
-    const { mod, panel } = panelOf(modId, panelId)
+  const panelAction = async (chat: Chat, extensionId: unknown, panelId: unknown, action: ExtensionAction) => {
+    const { extension, panel } = panelOf(extensionId, panelId)
     if (typeof action?.name !== 'string') throw new Error('A panel action needs a name')
     try {
-      await panel.onAction?.(action, detailOf(chat), contextOf(mod))
+      await panel.onAction?.(action, detailOf(chat), contextOf(extension))
     } catch (error) {
-      modError(mod, error)
+      extensionError(extension, error)
     }
-    if (chats.has(chat.info.id)) await renderPanel(chat, mod, panel)
+    if (chats.has(chat.info.id)) await renderPanel(chat, extension, panel)
   }
-  const answerWait = (chat: Chat, modId: string, answer: ModWaitAnswer) => {
-    const wait = chat.waits.get(modId)
+  const answerWait = (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => {
+    const wait = chat.waits.get(extensionId)
     if (!wait) throw new Error('Nothing is waiting there any more')
     if ('button' in answer && !wait.buttons.some((b) => b.id === answer.button)) {
       throw new Error(`No button "${answer.button}"`)
     }
-    const mod = modFor(modId)
-    callMod(mod, () => mod.onWaitAction?.(detailOf(chat), answer, contextOf(mod)))
+    const extension = extensionFor(extensionId)
+    callExtension(extension, () => extension.onWaitAction?.(detailOf(chat), answer, contextOf(extension)))
   }
-  const checkWait = (wait: ModWait): ModWait => {
+  const checkWait = (wait: ExtensionWait): ExtensionWait => {
     if (typeof wait?.text !== 'string' || !Array.isArray(wait.buttons)) throw new Error('A wait needs text and buttons')
     for (const b of wait.buttons) {
       if (typeof b?.id !== 'string' || typeof b.label !== 'string') throw new Error('Each button needs an id and a label')
     }
     return { text: wait.text, buttons: wait.buttons.map(({ id, label, primary, hint }) => ({ id, label, ...(primary && { primary }), ...(hint && { hint }) })) }
   }
-  const runCommand = (chat: Chat, modId: unknown, commandId: unknown) => {
-    const mod = modFor(String(modId))
-    if (!isOn(mod)) throw new Error(`${mod.name} is off`)
-    const command = mod.commands?.find((c) => c.id === commandId)
-    if (!command || !offeredBy(mod, command, chat)) throw new Error(`${mod.name} has no command "${commandId}" here`)
-    callMod(mod, () => command.run(detailOf(chat), contextOf(mod)))
+  const runCommand = (chat: Chat, extensionId: unknown, commandId: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    const command = extension.commands?.find((c) => c.id === commandId)
+    if (!command || !offeredBy(extension, command, chat)) throw new Error(`${extension.name} has no command "${commandId}" here`)
+    callExtension(extension, () => command.run(detailOf(chat), contextOf(extension)))
   }
 
   const removeChats = (family: Chat[]) => {
@@ -1189,7 +1190,7 @@ function openLockedCore(options: {
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
       removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
-      callMods('onChatRemoved', (mod, context) => mod.onChatRemoved!(detail, context))
+      callExtensions('onChatRemoved', (extension, context) => extension.onChatRemoved!(detail, context))
     }
   }
 
@@ -1206,15 +1207,15 @@ function openLockedCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const { context = {}, title, parentId, mod, ...saved } = renameChatFile(readJson(file))
-    const declared = modChats.find((chat) => chat.id === fallback.id)
+    const { context = {}, title, parentId, extension, ...saved } = renameChatFile(readJson(file))
+    const declared = extensionChats.find((chat) => chat.id === fallback.id)
     const info: ChatInfo = {
       ...fallback,
       ...(title !== undefined && { name: title }),
       ...saved,
       id: fallback.id,
       ...(saved.worker && parentId !== undefined && { parentId }),
-      ...(declared && { name: declared.name, mod: declared.mod.id, folders: [], files: [] }),
+      ...(declared && { name: declared.name, extension: declared.extension.id, folders: [], files: [] }),
     }
     const logFile = join(dir, 'log.jsonl')
     const log = existsSync(logFile) ? readFileSync(logFile, 'utf8') : ''
@@ -1254,7 +1255,7 @@ function openLockedCore(options: {
     createdAt: new Date().toISOString(),
   })
 
-  for (const { id, name } of modChats) loadChat(join(chatsDir, id), freshInfo(id, name))
+  for (const { id, name } of extensionChats) loadChat(join(chatsDir, id), freshInfo(id, name))
   for (const id of readdirSync(chatsDir)) {
     if (chats.has(id) || !existsSync(join(chatsDir, id, 'chat.json'))) continue
     loadChat(join(chatsDir, id), freshInfo(id, id))
@@ -1267,30 +1268,30 @@ function openLockedCore(options: {
     rmSync(chat.dir, { recursive: true, force: true })
   }
 
-  // Once at load: each mod whose settings are saved at an older version than its settingsVersion migrates them, the
-  // global values and every space's together, and they're saved with the new version. A throw saves nothing.
-  for (const mod of mods) {
-    const version = mod.settingsVersion
-    const from = settings.modVersions?.[mod.id] ?? 0
+  // Once at load: each extension whose settings are saved at an older version than its settingsVersion migrates them,
+  // the global values and every space's together, and they're saved with the new version. A throw saves nothing.
+  for (const extension of extensions) {
+    const version = extension.settingsVersion
+    const from = settings.extensionVersions?.[extension.id] ?? 0
     if (!version || from >= version) continue
     try {
-      if (!mod.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
-      const global = settings.mods?.[mod.id]
-      const migratedGlobal = global && mod.migrateSettings({ ...global }, from, {})
+      if (!extension.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
+      const global = settings.extensions?.[extension.id]
+      const migratedGlobal = global && extension.migrateSettings({ ...global }, from, {})
       const spaces = [...chats.values()].flatMap((chat) => {
-        const saved = chat.info.modValues?.[mod.id]
-        return saved ? [{ chat, values: mod.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
+        const saved = chat.info.extensionValues?.[extension.id]
+        return saved ? [{ chat, values: extension.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
       })
       for (const { chat, values } of spaces) {
-        chat.info = { ...chat.info, modValues: { ...chat.info.modValues, [mod.id]: values } }
+        chat.info = { ...chat.info, extensionValues: { ...chat.info.extensionValues, [extension.id]: values } }
         saveChat(chat)
       }
-      if (migratedGlobal) settings.mods = { ...settings.mods, [mod.id]: migratedGlobal }
-      settings.modVersions = { ...settings.modVersions, [mod.id]: version }
+      if (migratedGlobal) settings.extensions = { ...settings.extensions, [extension.id]: migratedGlobal }
+      settings.extensionVersions = { ...settings.extensionVersions, [extension.id]: version }
       saveSettings()
     } catch (error) {
-      settingsErrors.set(mod.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
-      modError(mod, error)
+      settingsErrors.set(extension.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
+      extensionError(extension, error)
     }
   }
 
@@ -1334,11 +1335,11 @@ function openLockedCore(options: {
       writeFileSync(join(chat.dir, PARENT_VIEW_FILE), viewOf(parent, parentMessages, takesMcp(engine)))
     }
     broadcast({ type: 'chat.added', chat: state(chat) })
-    callMods('onChatCreated', (mod, context) => mod.onChatCreated!(detailOf(chat), context))
+    callExtensions('onChatCreated', (extension, context) => extension.onChatCreated!(detailOf(chat), context))
     return chat.info
   }
 
-  // A chat below another, for one task: what spawn_worker and a mod's host.createChat with a parentId both make.
+  // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
   const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
     if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
     if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
@@ -1353,7 +1354,7 @@ function openLockedCore(options: {
   }
 
   const renameChat = (chat: Chat, name: unknown) => {
-    if (chat.info.mod) throw new Error(`${chat.info.name} cannot be renamed`)
+    if (chat.info.extension) throw new Error(`${chat.info.name} cannot be renamed`)
     updateChat(chat, { name: checkName(name) })
   }
 
@@ -1364,17 +1365,17 @@ function openLockedCore(options: {
     family.forEach(checkRemovable)
     family.forEach((c) => updateChat(c, { archived }))
     for (const c of family) {
-      callMods('onChatArchived', (mod, context) => mod.onChatArchived!(detailOf(c), archived, context))
+      callExtensions('onChatArchived', (extension, context) => extension.onChatArchived!(detailOf(c), archived, context))
     }
   }
 
   const moveChat = (chat: Chat, pinned: boolean, index: unknown) => {
-    if (chat.info.mod || chat.info.parentId) throw new Error('Only spaces can be moved or pinned')
+    if (chat.info.extension || chat.info.parentId) throw new Error('Only spaces can be moved or pinned')
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
     if (typeof index !== 'number' || !Number.isInteger(index)) throw new Error('The place to move to must be a number')
     const group = [...chats.values()]
       .map((c) => c.info)
-      .filter((c) => !c.mod && !c.parentId && !c.archived && !!c.pinned === pinned && c.id !== chat.info.id)
+      .filter((c) => !c.extension && !c.parentId && !c.archived && !!c.pinned === pinned && c.id !== chat.info.id)
       .sort(bySpaceOrder)
     group.splice(Math.max(0, Math.min(index, group.length)), 0, chat.info)
     group.forEach((info, order) => {
@@ -1389,64 +1390,65 @@ function openLockedCore(options: {
     removeChats(family)
   }
 
-  const setModEnabled = (mod: Mod, enabled: boolean) => {
-    if (community.has(mod.id) && !communityOn() && enabled) {
-      throw new Error(`Turn on community extensions before turning on ${mod.name}`)
+  const setExtensionEnabled = (extension: Extension, enabled: boolean) => {
+    if (community.has(extension.id) && !communityOn() && enabled) {
+      throw new Error(`Turn on community extensions before turning on ${extension.name}`)
     }
-    const family = (mod.chats ?? []).flatMap(({ id }) => {
+    const family = (extension.chats ?? []).flatMap(({ id }) => {
       const chat = chats.get(id)
       return chat ? familyOf(chat) : []
     })
     const busy = family.find((chat) => chat.status !== 'idle')
-    if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${mod.name} off`)
-    const changed = isOn(mod) !== enabled
-    saveMod(mod, { enabled })
-    if (community.has(mod.id)) restartChanged()
-    if (enabled) void checkSetup(mod)
-    if (changed) modSwitched(mod, enabled, family)
+    if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${extension.name} off`)
+    const changed = isOn(extension) !== enabled
+    saveExtension(extension, { enabled })
+    if (community.has(extension.id)) restartChanged()
+    if (enabled) void checkSetup(extension)
+    if (changed) extensionSwitched(extension, enabled, family)
   }
 
-  // What follows a mod starting or stopping to run: its chats show or hide, spawned processes stop, panels update.
-  const modSwitched = (mod: Mod, enabled: boolean, family = familyOfMod(mod)) => {
-    if (!enabled) stopSpawned(mod)
-    if (!enabled) chats.forEach((chat) => setWait(chat, mod.id, undefined))
-    if (enabled) startMod(mod)
-    else stopMod(mod)
+  // What follows an extension starting or stopping to run: its chats show or hide, spawned processes stop, panels
+  // update.
+  const extensionSwitched = (extension: Extension, enabled: boolean, family = familyOfExtension(extension)) => {
+    if (!enabled) stopSpawned(extension)
+    if (!enabled) chats.forEach((chat) => setWait(chat, extension.id, undefined))
+    if (enabled) startExtension(extension)
+    else stopExtension(extension)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: state(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
-    if (mod.panels?.length || mod.commands?.length) shownChats().forEach((chat) => broadcast(modsOf(chat)))
+    if (extension.panels?.length || extension.commands?.length) shownChats().forEach((chat) => broadcast(extensionsOf(chat)))
   }
-  const familyOfMod = (mod: Mod) =>
-    (mod.chats ?? []).flatMap(({ id }) => {
+  const familyOfExtension = (extension: Extension) =>
+    (extension.chats ?? []).flatMap(({ id }) => {
       const chat = chats.get(id)
       return chat ? familyOf(chat) : []
     })
 
-  // The master switch. Off stops every community mod's hooks at once (its code stays loaded until a restart); on lets
-  // the ones whose own switch is on run, from the next start for any not loaded yet.
-  const setCommunityMods = (enabled: boolean) => {
+  // The master switch. Off stops every community extension's hooks at once (its code stays loaded until a restart); on
+  // lets the ones whose own switch is on run, from the next start for any not loaded yet.
+  const setCommunityExtensions = (enabled: boolean) => {
     if (communityOn() === enabled) return
-    const running = mods.filter((mod) => community.has(mod.id) && ownSwitch(mod))
+    const running = extensions.filter((extension) => community.has(extension.id) && ownSwitch(extension))
     if (!enabled) {
-      const busy = running.flatMap((mod) => familyOfMod(mod)).find((chat) => chat.status !== 'idle')
+      const busy = running.flatMap((extension) => familyOfExtension(extension)).find((chat) => chat.status !== 'idle')
       if (busy) throw new Error(`Stop "${busy.info.name}" before turning community extensions off`)
     }
-    settings.communityMods = enabled
+    settings.communityExtensions = enabled
     saveSettings()
-    broadcast({ type: 'communityMods.updated', enabled })
-    for (const mod of running) {
-      if (enabled) void checkSetup(mod)
-      modSwitched(mod, enabled)
+    broadcast({ type: 'communityExtensions.updated', enabled })
+    for (const extension of running) {
+      if (enabled) void checkSetup(extension)
+      extensionSwitched(extension, enabled)
     }
     restartChanged()
   }
 
-  // Community mod code this run doesn't match the settings: what a restart would start, update or stop.
+  // Community extension code this run doesn't match the settings: what a restart would start, update or stop.
   const restartState = (): RestartState => {
     const changes: RestartChange[] = []
     for (const [id, { manifest }] of community) {
-      const mod = mods.find((m) => m.id === id)
-      const wanted = !!mod && isOn(mod)
+      const extension = extensions.find((m) => m.id === id)
+      const wanted = !!extension && isOn(extension)
       const loaded = imported.has(id)
       const change = wanted ? (!loaded ? 'start' : reinstalled.has(id) ? 'update' : undefined) : loaded ? 'stop' : undefined
       if (change) changes.push({ id, name: manifest.name, change })
@@ -1463,43 +1465,44 @@ function openLockedCore(options: {
     broadcast({ type: 'restart.updated', restart })
   }
 
-  // A community mod was installed or updated. It runs from the next start; an update that uses more than the version
-  // the user turned on is turned off until they turn it on again.
-  const communityChanged = (id: string, added: ModUse[]) => {
-    const install = installedMods(garage).find((m) => m.manifest.id === id)
+  // A community extension was installed or updated. It runs from the next start; an update that uses more than the
+  // version the user turned on is turned off until they turn it on again.
+  const communityChanged = (id: string, added: ExtensionUse[]) => {
+    const install = installedExtensions(garage).find((m) => m.manifest.id === id)
     if (!install) return
     const known = community.get(id)
     community.set(id, { ...known, manifest: install.manifest, item: install.item })
     if (imported.has(id)) reinstalled.add(id)
-    const at = mods.findIndex((m) => m.id === id)
-    if (at < 0) mods.push(stubOf(install.manifest))
-    else if (!known?.running) mods[at] = stubOf(install.manifest)
-    const mod = mods.find((m) => m.id === id)!
-    if (added.length && ownSwitch(mod)) {
-      setModEnabled(mod, false)
-      const more = added.map((use) => MOD_USES[use].toLowerCase()).join('; ')
+    const at = extensions.findIndex((m) => m.id === id)
+    if (at < 0) extensions.push(stubOf(install.manifest))
+    else if (!known?.running) extensions[at] = stubOf(install.manifest)
+    const extension = extensions.find((m) => m.id === id)!
+    if (added.length && ownSwitch(extension)) {
+      setExtensionEnabled(extension, false)
+      const more = added.map((use) => EXTENSION_USES[use].toLowerCase()).join('; ')
       broadcast({
         type: 'error',
-        message: `${mod.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`,
+        message: `${extension.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`,
       })
     }
-    broadcast({ type: 'mod.updated', mod: modInfo(mod) })
+    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
     restartChanged()
   }
 
-  // Turns the mod off and deletes its files. Its storage in <garage>/mods/<id>/ stays, as a built-in mod's does.
-  const uninstallMod = (id: string) => {
-    const mod = mods.find((m) => m.id === id)
-    if (!community.has(id) || !mod) return marketplace.uninstall('mod', id)
-    if (ownSwitch(mod)) setModEnabled(mod, false)
-    marketplace.uninstall('mod', id)
-    const { enabled: _, ...kept } = settings.mods?.[id] ?? {}
-    settings.mods = { ...settings.mods, [id]: kept }
+  // Turns the extension off and deletes its files. Its storage in <garage>/extensions/<id>/ stays, as a built-in
+  // extension's does.
+  const uninstallExtension = (id: string) => {
+    const extension = extensions.find((m) => m.id === id)
+    if (!community.has(id) || !extension) return marketplace.uninstall('extension', id)
+    if (ownSwitch(extension)) setExtensionEnabled(extension, false)
+    marketplace.uninstall('extension', id)
+    const { enabled: _, ...kept } = settings.extensions?.[id] ?? {}
+    settings.extensions = { ...settings.extensions, [id]: kept }
     saveSettings()
     community.delete(id)
     hosts.delete(id)
-    mods.splice(mods.indexOf(mod), 1)
-    broadcast({ type: 'mod.removed', modId: id })
+    extensions.splice(extensions.indexOf(extension), 1)
+    broadcast({ type: 'extension.removed', extensionId: id })
     restartChanged()
   }
 
@@ -1528,7 +1531,7 @@ function openLockedCore(options: {
 
   const contextItems = (chat: Chat): ContextItem[] => {
     const owned = chainOf(chat).flatMap(({ info, dir }) =>
-      info.mod
+      info.extension
         ? []
         : [
             ...info.folders.map((path) => ({ section: 'folders' as const, path, from: info.id })),
@@ -1550,7 +1553,7 @@ function openLockedCore(options: {
   const broadcastContext = (chat: Chat) =>
     familyOf(chat).forEach((c) => {
       broadcast({ type: 'chat.context', chatId: c.info.id, items: contextItems(c) })
-      broadcast(modsOf(c))
+      broadcast(extensionsOf(c))
     })
 
   const setContext = (chat: Chat, path: unknown, enabled: boolean) => {
@@ -1564,7 +1567,7 @@ function openLockedCore(options: {
   }
 
   const checkOwnsContext = (chat: Chat) => {
-    if (chat.info.mod) throw new Error(`${chat.info.name} keeps no folders, files or AGENTS.md of its own`)
+    if (chat.info.extension) throw new Error(`${chat.info.name} keeps no folders, files or AGENTS.md of its own`)
   }
 
   const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
@@ -1609,7 +1612,7 @@ function openLockedCore(options: {
   // A space keeps the folder it got first, so changing the setting moves only new spaces.
   const workDirOf = (chat: Chat) => {
     const space = chainOf(chat)[0]!
-    if (space.info.mod) return join(chosenWorkFolder(), 'home')
+    if (space.info.extension) return join(chosenWorkFolder(), 'home')
     if (!space.info.workDir) updateChat(space, { workDir: join(chosenWorkFolder(), space.info.id) })
     return space.info.workDir!
   }
@@ -1675,8 +1678,8 @@ function openLockedCore(options: {
     }
   }
 
-  // Where a command a mod starts for a chat runs, and its sandbox: the chat's own, over the space's work folder and the
-  // checkouts it has now. Nothing is checked out for it.
+  // Where a command an extension starts for a chat runs, and its sandbox: the chat's own, over the space's work folder
+  // and the checkouts it has now. Nothing is checked out for it.
   const commandPlaceOf = async (chat: Chat) => {
     const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
@@ -1701,16 +1704,16 @@ function openLockedCore(options: {
     return { workDir, sandbox: jail }
   }
 
-  // What each mod has running from host.spawn, so turning the mod off stops it.
+  // What each extension has running from host.spawn, so turning the extension off stops it.
   const spawned = new Map<string, Set<{ kill(): void }>>()
-  const stopSpawned = (mod: Mod) => {
-    for (const proc of spawned.get(mod.id) ?? []) proc.kill()
+  const stopSpawned = (extension: Extension) => {
+    for (const proc of spawned.get(extension.id) ?? []) proc.kill()
   }
   const spawnFor =
-    (mod: Mod): ModHost['spawn'] =>
+    (extension: Extension): ExtensionHost['spawn'] =>
     async (command, args, options = {}) => {
       if (quitting) throw new Error('Kothar is quitting')
-      if (!isOn(mod)) throw new Error(`${mod.name} is off`)
+      if (!isOn(extension)) throw new Error(`${extension.name} is off`)
       const chat = options.chat === undefined ? undefined : chatFor(options.chat)
       const place = chat ? await commandPlaceOf(chat) : undefined
       const cwd = options.cwd ?? place?.workDir ?? '/'
@@ -1719,8 +1722,8 @@ function openLockedCore(options: {
         ...(options.env && { env: options.env }),
         ...(place?.sandbox && { sandbox: place.sandbox }),
       })
-      const running = spawned.get(mod.id) ?? new Set()
-      spawned.set(mod.id, running)
+      const running = spawned.get(extension.id) ?? new Set()
+      spawned.set(extension.id, running)
       running.add(proc)
       proc.onExit(() => running.delete(proc))
       // Nothing reads its stdin, but some watchers stop when it closes, so it stays open.
@@ -1817,7 +1820,7 @@ function openLockedCore(options: {
     chat.turn = { text: '', tools: [] }
     setStatus(chat, 'running')
     const started = { chat: detailOf(chat), text: continuation ?? text, continued: continuation !== undefined }
-    callMods('onTurnStarted', (mod, context) => mod.onTurnStarted!(started, context))
+    callExtensions('onTurnStarted', (extension, context) => extension.onTurnStarted!(started, context))
 
     const items = contextItems(chat).filter((item) => item.enabled)
     const contextText = items.flatMap(({ section, path, text, binary }) => {
@@ -1828,23 +1831,23 @@ function openLockedCore(options: {
       return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
     })
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
-    const role = modChatOf(chat)?.instructions
+    const role = extensionChatOf(chat)?.instructions
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
-    const spawns = zoomable && !chat.info.worker && isOn(WORKERS_MOD)
+    const spawns = zoomable && !chat.info.worker && isOn(WORKERS_EXTENSION)
     const forSession = { chat: detailOf(chat), tools: zoomable }
     const memory = [
-      ...(spawns ? [String(modValues(WORKERS_MOD).instructions)] : []),
+      ...(spawns ? [String(extensionValues(WORKERS_EXTENSION).instructions)] : []),
       ...memoryInstructions(forSession),
       ...(parentView ? [`Your parent chat's memory when it started you:\n\n${parentView}`] : []),
     ]
-    const modInstructions = watchersOf('instructions').flatMap((mod) => {
+    const extensionInstructions = watchersOf('instructions').flatMap((extension) => {
       try {
-        const text = mod.instructions!(forSession, contextOf(mod))
+        const text = extension.instructions!(forSession, contextOf(extension))
         if (text === undefined || text === null) return []
         if (typeof text !== 'string') throw new Error('instructions must return text')
         return text.trim() ? [text.trim()] : []
       } catch (error) {
-        modError(mod, error)
+        extensionError(extension, error)
         return []
       }
     })
@@ -1864,7 +1867,7 @@ function openLockedCore(options: {
             ]
           : []),
       ]
-      const parts = [...(role ? [role] : []), ...rules, ...modInstructions, ...memory, ...contextText]
+      const parts = [...(role ? [role] : []), ...rules, ...extensionInstructions, ...memory, ...contextText]
       const instructions = parts.join('\n\n')
       const extraDirs = [
         ...(cwd === workDir ? [] : [workDir]),
@@ -1923,7 +1926,7 @@ function openLockedCore(options: {
       const handleEvent = (event: EngineEvent) => {
         if (chat.session !== session) return
         const at = new Date().toISOString()
-        for (const mod of watchersOf('onEvent')) callMod(mod, () => mod.onEvent!(detailOf(chat), event, contextOf(mod)))
+        for (const extension of watchersOf('onEvent')) callExtension(extension, () => extension.onEvent!(detailOf(chat), event, contextOf(extension)))
         if (event.type === 'tool.started') {
           const { name, kind, summary, path } = event
           chat.turn?.tools.push({ name, kind, summary, ...(path !== undefined && { path }) })
@@ -1954,7 +1957,7 @@ function openLockedCore(options: {
         if (event.type === 'limit.reached') {
           const { message, resetsAt } = event
           chat.limit ??= { message, ...(resetsAt && { resetsAt }) }
-          // An engine may wait out the limit; a mod that reacts to it gets the chat idle.
+          // An engine may wait out the limit; an extension that reacts to it gets the chat idle.
           if (limitWatchers().length) interrupt(chat, false)
           return
         }
@@ -1979,13 +1982,13 @@ function openLockedCore(options: {
           session?.respond(requestId, verdict.allow, verdict.message)
         }
         const own = verdictOf(event)
-        // The core's denials stand; otherwise a mod's policy goes first.
+        // The core's denials stand; otherwise an extension's policy goes first.
         if (own?.allow === false) return settle(own)
-        const fromMods = modVerdict(event, chat)
-        if (!(fromMods instanceof Promise)) return settle(fromMods ?? own)
-        // Pending, so the user can still answer it while a mod decides; whoever answers first wins.
+        const fromExtensions = extensionVerdict(event, chat)
+        if (!(fromExtensions instanceof Promise)) return settle(fromExtensions ?? own)
+        // Pending, so the user can still answer it while an extension decides; whoever answers first wins.
         chat.pendingRequests.set(requestId, 'permission')
-        void fromMods.then((verdict) => {
+        void fromExtensions.then((verdict) => {
           if (chat.session !== session || chat.pendingRequests.get(requestId) !== 'permission') return
           guarded(() => settle(verdict ?? own))
         })
@@ -1995,7 +1998,7 @@ function openLockedCore(options: {
         chat.mcpToken = zoomable ? mcp.grant(chat.info.id) : undefined
         const kotharMcp = mcpUrl && chat.mcpToken ? { url: mcpUrl, token: chat.mcpToken } : undefined
         const { model, thinking } = run ?? {}
-        const mcpServers = adapter.kotharMcp ? modServers(chat, workDir, jail !== undefined) : []
+        const mcpServers = adapter.kotharMcp ? extensionServers(chat, workDir, jail !== undefined) : []
         const images = imagesFor(adapter, attachments)
         const options = {
           cwd,
@@ -2140,8 +2143,8 @@ function openLockedCore(options: {
     })
     try {
       const message = { text, ...(attachments.length && { attachments }) }
-      // A message sent while mods wait on the user answers them too; it still goes to the agent.
-      for (const modId of chat.waits.keys()) answerWait(chat, modId, { message: text })
+      // A message sent while extensions wait on the user answers them too; it still goes to the agent.
+      for (const extensionId of chat.waits.keys()) answerWait(chat, extensionId, { message: text })
       if (steering && canSteer(chat)) {
         checkActive(chat)
         steer(chat, message)
@@ -2167,13 +2170,13 @@ function openLockedCore(options: {
     },
     stop: (chatId) => interrupt(chatFor(chatId), false),
     workers: () => {
-      const { enabled, values } = modInfo(WORKERS_MOD)
+      const { enabled, values } = extensionInfo(WORKERS_EXTENSION)
       return { enabled, limit: Number(values.limit) }
     },
-    modTools: () =>
-      mods
+    extensionTools: () =>
+      extensions
         .filter(isOn)
-        .flatMap((mod) => (mod.tools ?? []).map((tool) => ({ tool, values: modValues(mod), host: hostFor(mod) }))),
+        .flatMap((extension) => (extension.tools ?? []).map((tool) => ({ tool, values: extensionValues(extension), host: hostFor(extension) }))),
   })
 
   const interrupt = (chat: Chat, force: boolean) => {
@@ -2213,7 +2216,7 @@ function openLockedCore(options: {
     settle(chat, { ...entry, ...(given && { answers: given }) }).answer?.(requestId, given)
   }
 
-  for (const mod of mods.filter(isOn)) void checkSetup(mod)
+  for (const extension of extensions.filter(isOn)) void checkSetup(extension)
 
   return {
     engines: engineInfos,
@@ -2231,13 +2234,13 @@ function openLockedCore(options: {
       enginesDetected = true
       models.settle()
       followModels()
-      startMods()
+      startExtensions()
     },
     setEngineEnabled,
     contextDefaults,
-    mods: (): ModInfo[] => [
-      ...mods.map(modInfo),
-      ...brokenMods.map(({ id, loadError }) => ({
+    extensions: (): ExtensionInfo[] => [
+      ...extensions.map(extensionInfo),
+      ...brokenExtensions.map(({ id, loadError }) => ({
         id,
         name: id,
         description: '',
@@ -2254,7 +2257,7 @@ function openLockedCore(options: {
     setWorkFolder,
     themes: marketplace.themes,
     installed: marketplace.installed,
-    communityMods: communityOn,
+    communityExtensions: communityOn,
     restart: restartState,
     accounts: accounts.list,
     refreshAccounts: accounts.refresh,
@@ -2321,23 +2324,23 @@ function openLockedCore(options: {
         case 'context.get': {
           const chat = chatFor(message.chatId)
           reply({ type: 'chat.context', chatId: chat.info.id, items: contextItems(chat) })
-          return reply(modsOf(chat))
+          return reply(extensionsOf(chat))
         }
-        case 'mod.panel.get':
-          return openPanel(chatFor(message.chatId), message.mod, message.panel)
-        case 'mod.panel.action': {
+        case 'extension.panel.get':
+          return openPanel(chatFor(message.chatId), message.extension, message.panel)
+        case 'extension.panel.action': {
           const chat = chatFor(message.chatId)
-          panelOf(message.mod, message.panel)
-          return void panelAction(chat, message.mod, message.panel, message.action).catch((error) =>
+          panelOf(message.extension, message.panel)
+          return void panelAction(chat, message.extension, message.panel, message.action).catch((error) =>
             broadcast({ type: 'error', message: messageOf(error) }),
           )
         }
-        case 'mod.space.set':
-          return setSpaceValue(modFor(String(message.mod)), chatFor(message.chatId), String(message.key), message.value)
-        case 'mod.command':
-          return runCommand(chatFor(message.chatId), message.mod, message.command)
-        case 'mod.wait.answer':
-          return answerWait(chatFor(message.chatId), String(message.mod), { button: String(message.button) })
+        case 'extension.space.set':
+          return setSpaceValue(extensionFor(String(message.extension)), chatFor(message.chatId), String(message.key), message.value)
+        case 'extension.command':
+          return runCommand(chatFor(message.chatId), message.extension, message.command)
+        case 'extension.wait.answer':
+          return answerWait(chatFor(message.chatId), String(message.extension), { button: String(message.button) })
         case 'context.add':
           return addContext(chatFor(message.chatId), addable(message.section), message.path)
         case 'context.remove':
@@ -2361,16 +2364,16 @@ function openLockedCore(options: {
             throw new Error(`Unknown context section "${message.section}"`)
           }
           return setContextDefault(message.section, message.enabled === true)
-        case 'mod.setEnabled':
-          return setModEnabled(modFor(String(message.modId)), message.enabled === true)
-        case 'mod.setValue':
-          return setModValue(modFor(String(message.modId)), String(message.key), message.value)
-        case 'mod.install':
-          return install(modFor(String(message.modId)))
-        case 'mod.cancelInstall':
-          return installs.get(modFor(String(message.modId)).id)?.abort()
-        case 'communityMods.setEnabled':
-          return setCommunityMods(message.enabled === true)
+        case 'extension.setEnabled':
+          return setExtensionEnabled(extensionFor(String(message.extensionId)), message.enabled === true)
+        case 'extension.setValue':
+          return setExtensionValue(extensionFor(String(message.extensionId)), String(message.key), message.value)
+        case 'extension.install':
+          return install(extensionFor(String(message.extensionId)))
+        case 'extension.cancelInstall':
+          return installs.get(extensionFor(String(message.extensionId)).id)?.abort()
+        case 'communityExtensions.setEnabled':
+          return setCommunityExtensions(message.enabled === true)
         case 'app.restart':
           if (!options.restart) throw new Error('This Kothar can\'t restart itself. Stop it and start it again.')
           if (quitting) return
@@ -2406,12 +2409,12 @@ function openLockedCore(options: {
         case 'market.install': {
           const { kind } = message
           const id = String(message.id)
-          if (kind === 'mod' && builtInIds.has(id)) {
+          if (kind === 'extension' && builtInIds.has(id)) {
             return reply({ type: 'market.installFailed', kind, id, error: `A built-in extension is already called "${id}"` })
           }
           return void marketplace.install(kind, id).then(
             ({ added }) => {
-              if (kind === 'mod') communityChanged(id, added)
+              if (kind === 'extension') communityChanged(id, added)
               marketChanged(kind)
             },
             (error) => reply({ type: 'market.installFailed', kind, id, error: messageOf(error) }),
@@ -2435,12 +2438,12 @@ function openLockedCore(options: {
             return reply({ type: 'market.localFailed', path, error: messageOf(error) })
           }
           const { kind, ids, added } = result
-          if (kind === 'mod') communityChanged(ids[0]!, added)
+          if (kind === 'extension') communityChanged(ids[0]!, added)
           marketChanged(kind)
           return reply({ type: 'market.localInstalled', path, kind, ids })
         }
         case 'market.uninstall':
-          if (message.kind === 'mod') uninstallMod(String(message.id))
+          if (message.kind === 'extension') uninstallExtension(String(message.id))
           else marketplace.uninstall(message.kind, message.id)
           return marketChanged(message.kind)
         case 'search': {
@@ -2475,7 +2478,7 @@ function openLockedCore(options: {
     },
     async close(force = false) {
       quitting = true
-      for (const mod of mods) stopMod(mod)
+      for (const extension of extensions) stopExtension(extension)
       for (const chat of chats.values()) {
         if (chat.status === 'idle') stopSession(chat)
         else interrupt(chat, force)

@@ -2,8 +2,8 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ModView } from '@kothar/mod-api'
-import { ModViewer } from './mod-view.tsx'
+import type { ExtensionView } from '@kothar/extension-api'
+import { ExtensionViewer } from './extension-view.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -25,10 +25,10 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-const show = (view: ModView) =>
+const show = (view: ExtensionView) =>
   act(() =>
     root.render(
-      <ModViewer
+      <ExtensionViewer
         view={view}
         act={() => {
           renders++

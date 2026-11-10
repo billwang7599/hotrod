@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ModHost, ModTool, ModValues } from '@kothar/mod-api'
+import type { ExtensionHost, ExtensionTool, ExtensionValues } from '@kothar/extension-api'
 import { openKotharMcp, WORKER_NAME_MAX_CHARS } from './kothar-mcp.ts'
 import type { ChatEntry, ChatState, NewChat } from './shared.ts'
 
@@ -51,15 +51,15 @@ async function start(workers = { enabled: false, limit: 4 }) {
     chats.push(made)
     return made
   }
-  const modTools: { tool: ModTool; values: ModValues }[] = []
+  const extensionTools: { tool: ExtensionTool; values: ExtensionValues }[] = []
   const host = {
     createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
     send: (chatId, text) => void calls.push(['send', chatId, text]),
-  } as Partial<ModHost> as ModHost
+  } as Partial<ExtensionHost> as ExtensionHost
   const mcp = openKotharMcp({
     chats: () => chats,
     seesAll: (chatId) => chatId === 'main',
-    modTools: () => modTools.map((entry) => ({ ...entry, host })),
+    extensionTools: () => extensionTools.map((entry) => ({ ...entry, host })),
     createChild: (parentId, spec) => created({ parentId, ...spec, worker: true }),
     workers: () => workers,
     send(chatId, text) {
@@ -112,7 +112,7 @@ async function start(workers = { enabled: false, limit: 4 }) {
   }
   const names = async (chatId: string) =>
     (await rpc(grant(chatId), 'tools/list')).body.result.tools.map((t: { name: string }) => t.name).sort()
-  return { mcp, chats, calls, modTools, rpc, tool, json, grant, names, workers }
+  return { mcp, chats, calls, extensionTools, rpc, tool, json, grant, names, workers }
 }
 
 describe('Kothar MCP server', () => {
@@ -126,7 +126,7 @@ describe('Kothar MCP server', () => {
     expect((await rpc(token, 'tools/list')).status).toBe(401)
   })
 
-  it('gives no token to a chat that neither sees every chat, spawns workers nor gets a mod tool', async () => {
+  it('gives no token to a chat that neither sees every chat, spawns workers nor gets an extension tool', async () => {
     const { mcp } = await start()
     expect(mcp.grant('bbbb0001')).toBeUndefined()
     expect(mcp.grant('cccc0001')).toBeUndefined()
@@ -224,8 +224,8 @@ describe('Kothar MCP server', () => {
     expect(calls).toEqual([['stop', 'aaaa0001']])
   })
 
-  describe('mod tools', () => {
-    const make: ModTool = {
+  describe('extension tools', () => {
+    const make: ExtensionTool = {
       name: 'make',
       description: 'Make a chat',
       inputSchema: { type: 'object', properties: { name: { type: 'string', minLength: 1 } }, required: ['name'] },
@@ -238,19 +238,19 @@ describe('Kothar MCP server', () => {
       },
     }
 
-    it('offers a mod tool to the callers it picks, with a token for a chat that has nothing else', async () => {
-      const { modTools, names, mcp } = await start()
-      modTools.push({ tool: make, values: { size: 2 } })
+    it('offers an extension tool to the callers it picks, with a token for a chat that has nothing else', async () => {
+      const { extensionTools, names, mcp } = await start()
+      extensionTools.push({ tool: make, values: { size: 2 } })
       expect(await names('main')).toContain('make')
       expect(await names('aaaa0001')).toEqual(['make'])
       expect(mcp.grant('bbbb0001')).toBeUndefined()
-      modTools.splice(0)
+      extensionTools.splice(0)
       expect(mcp.grant('aaaa0001')).toBeUndefined()
     })
 
     it('runs it with the caller, its values and a host that makes top-level chats and starts them', async () => {
-      const { modTools, calls, json, grant } = await start()
-      modTools.push({ tool: make, values: { size: 2 } })
+      const { extensionTools, calls, json, grant } = await start()
+      extensionTools.push({ tool: make, values: { size: 2 } })
       expect(await json(grant('aaaa0001'), 'make', { name: 'Docs' })).toEqual({
         caller: 'aaaa0001',
         worker: false,
@@ -264,8 +264,8 @@ describe('Kothar MCP server', () => {
     })
 
     it('answers a thrown error or input its schema rules out as a tool error', async () => {
-      const { modTools, calls, tool, grant } = await start()
-      modTools.push({ tool: make, values: {} })
+      const { extensionTools, calls, tool, grant } = await start()
+      extensionTools.push({ tool: make, values: {} })
       expect(await tool(grant('main'), 'make', { name: 'fail' })).toEqual({ isError: true, text: 'No such luck' })
       expect((await tool(grant('main'), 'make', { name: '' })).isError).toBe(true)
       expect((await tool(grant('main'), 'make', {})).isError).toBe(true)
@@ -276,7 +276,7 @@ describe('Kothar MCP server', () => {
   describe('workers', () => {
     const on = (limit = 4) => start({ enabled: true, limit })
 
-    it('offers spawn_worker to every chat but a worker, only while the mod is on', async () => {
+    it('offers spawn_worker to every chat but a worker, only while the extension is on', async () => {
       const off = await start()
       expect(await off.names('main')).not.toContain('spawn_worker')
       expect(off.mcp.grant('bbbb0001')).toBeUndefined()
@@ -290,7 +290,7 @@ describe('Kothar MCP server', () => {
       expect(mcp.grant('eeee0001')).toBeUndefined()
     })
 
-    it('refuses to spawn once the mod is turned off mid-session', async () => {
+    it('refuses to spawn once the extension is turned off mid-session', async () => {
       const { calls, tool, grant, workers } = await on()
       const token = grant('aaaa0001')
       workers.enabled = false

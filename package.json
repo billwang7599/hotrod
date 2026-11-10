@@ -3,13 +3,13 @@
   "private": true,
   "license": "FSL-1.1-ALv2",
   "type": "module",
-  "workspaces": ["packages/*", "mods/*"],
+  "workspaces": ["packages/*", "extensions/*"],
   "engines": { "node": ">=26" },
   "scripts": {
     "dev": "export KOTHAR_TOKEN=$(node -p 'crypto.randomUUID()'); npm run dev -w @kothar/core & npm run dev -w @kothar/ui & wait",
     "desktop": "npm run build -w @kothar/ui && electron packages/desktop",
     "package": "npm run package -w @kothar/desktop",
-    "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p packages/desktop && tsc -p mods && tsc -p bench",
+    "typecheck": "tsc -p packages/core && tsc -p packages/ui && tsc -p packages/desktop && tsc -p extensions && tsc -p bench",
     "test": "vitest run --passWithNoTests",
     "bench:memory": "node bench/memory/run.ts"
   },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatEntry, ChatState, ContextItem, CoreMessage, ModInfo, ThinkingLevel } from '@kothar/core/shared'
+import type { ChatEntry, ChatState, ContextItem, CoreMessage, ExtensionInfo, ThinkingLevel } from '@kothar/core/shared'
 import type { Account, EngineAccounts } from '@kothar/core/shared'
 import {
   accountLabel,
@@ -37,7 +37,7 @@ const engines = [{ id: 'fake', enabled: true, installed: true, signedIn: true }]
 const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> = {}): ChatState => ({
   id,
   name: id,
-  ...(id === MAIN_CHAT_ID && { mod: 'home' }),
+  ...(id === MAIN_CHAT_ID && { extension: 'home' }),
   folders: [],
   files: [],
   engine: 'fake',
@@ -50,7 +50,7 @@ const chat = (id: string, entries: ChatEntry[] = [], change: Partial<ChatState> 
   ...change,
 })
 const contextDefaults = { agents: true, folders: true, files: true }
-const modInfo = (id: string, enabled = false): ModInfo => ({
+const extensionInfo = (id: string, enabled = false): ExtensionInfo => ({
   id,
   name: id,
   description: '',
@@ -58,7 +58,7 @@ const modInfo = (id: string, enabled = false): ModInfo => ({
   settings: [{ key: 'limit', label: 'Limit', type: 'number', default: 4 }],
   values: { limit: 4 },
 })
-const mods = [modInfo('workers'), modInfo('other')]
+const extensions = [extensionInfo('workers'), extensionInfo('other')]
 const noLists = { chat: [], planning: [], searching: [], workers: [] }
 const modelLists = noLists
 const snapshot = (chats: ChatState[]): Action =>
@@ -68,13 +68,13 @@ const snapshot = (chats: ChatState[]): Action =>
     accounts: [],
     chats,
     contextDefaults,
-    mods,
+    extensions,
     modelLists,
     memory: {},
     workFolder: { defaultPath: '/g/work', canSandbox: true },
     themes: [],
     installed: [],
-    communityMods: false,
+    communityExtensions: false,
     restart: { changes: [], canRestart: false },
   })
 type NewEntry = ChatEntry extends infer E ? (E extends unknown ? Omit<E, 'at'> : never) : never
@@ -112,7 +112,7 @@ describe('reduce', () => {
     ])
   })
 
-  it("shows a mod's note after the turn's error, outside the folded steps, and nothing for the raw limit", () => {
+  it("shows an extension's note after the turn's error, outside the folded steps, and nothing for the raw limit", () => {
     const state = run(
       snapshot([
         chat('a', [
@@ -122,7 +122,7 @@ describe('reduce', () => {
           { at, type: 'tool.started', toolId: 't1', name: 'Bash', kind: 'shell', summary: 'ls', input: {} },
           { at, type: 'limit.reached', message: 'Out of usage' },
           { at, type: 'turn.completed', error: 'Out of usage' },
-          { at, type: 'mod.note', text: 'Switched to Spare' },
+          { at, type: 'extension.note', text: 'Switched to Spare' },
           { at, type: 'user.message', text: 'hi' },
         ]),
       ]),
@@ -529,11 +529,11 @@ describe('reduce', () => {
     expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
   })
 
-  it('loads the mods from the snapshot and replaces only the one that changed', () => {
+  it('loads the extensions from the snapshot and replaces only the one that changed', () => {
     const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
-    expect(loaded.mods).toEqual(mods)
-    const on = { ...modInfo('workers', true), values: { limit: -1 } }
-    expect(reduce(loaded, { type: 'mod.updated', mod: on }).mods).toEqual([on, mods[1]])
+    expect(loaded.extensions).toEqual(extensions)
+    const on = { ...extensionInfo('workers', true), values: { limit: -1 } }
+    expect(reduce(loaded, { type: 'extension.updated', extension: on }).extensions).toEqual([on, extensions[1]])
   })
 
   it('loads the model lists from the snapshot and replaces them on update', () => {
@@ -637,7 +637,7 @@ describe('chat tree', () => {
     view('orphan', { parentId: 'nope' }, '2026-11-06T12:00:00.000Z'),
   ]
 
-  it("shows a mod's chat first, then the spaces newest first, each with its workers below it", () => {
+  it("shows an extension's chat first, then the spaces newest first, each with its workers below it", () => {
     expect(rows(chatTree(chats).active)).toEqual(['0 main', '1 s0', '0 new', '0 orphan', '0 old', '1 s1'])
     const spaces = chats.filter((c) => c.id !== MAIN_CHAT_ID && c.parentId !== MAIN_CHAT_ID)
     expect(rows(chatTree(spaces).active)).toEqual(['0 new', '0 orphan', '0 old', '1 s1'])

@@ -182,7 +182,7 @@ describe('terminal.open', () => {
       adapters: [adapter],
       defaultEngine: adapter.id,
       machine: sandboxingMachine,
-      mods: [],
+      extensions: [],
       openTerminal: async (dir, choice) => {
         if (fails.message) throw new Error(fails.message)
         opened.push({ dir, ...(choice && { choice }) })
@@ -292,7 +292,7 @@ describe('terminal.open', () => {
       adapters: [adapter],
       defaultEngine: adapter.id,
       machine: sandboxingMachine,
-      mods: [],
+      extensions: [],
       openTerminal: async (dir) => void opened.push(dir),
     })
     cores.push(core)

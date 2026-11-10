@@ -10,13 +10,13 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Mod } from '@kothar/mod-api'
+import type { Extension } from '@kothar/extension-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { WORKER_INSTRUCTIONS, WORKERS_MOD } from './kothar-mcp.ts'
+import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './kothar-mcp.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -126,7 +126,7 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { chat: [], planning: [], searching: [], workers: [] },
     memory: {},
-    mods: [expect.objectContaining({ id: WORKERS_MOD.id, enabled: true, values: { limit: expect.any(Number), instructions: WORKER_INSTRUCTIONS } })],
+    extensions: [expect.objectContaining({ id: WORKERS_EXTENSION.id, enabled: true, values: { limit: expect.any(Number), instructions: WORKER_INSTRUCTIONS } })],
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -285,9 +285,9 @@ const heldOffers = {
   thinking: ['low', 'high'] as ThinkingLevel[],
 }
 
-const mainMod: Mod = {
-  id: 'main-mod',
-  name: 'Main mod',
+const mainExtension: Extension = {
+  id: 'main-extension',
+  name: 'Main extension',
   description: '',
   enabledByDefault: true,
   chats: [{ id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }],
@@ -315,7 +315,7 @@ const mainMod: Mod = {
   ],
 }
 
-async function startHeld({ kotharMcp = true, mods = [mainMod], steering = false } = {}) {
+async function startHeld({ kotharMcp = true, extensions = [mainExtension], steering = false } = {}) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-test-')))
   const sessions: {
     options: SessionOptions
@@ -355,7 +355,7 @@ async function startHeld({ kotharMcp = true, mods = [mainMod], steering = false 
     adapters: [held],
     defaultEngine: 'held',
     machine: sandboxingMachine,
-    mods,
+    extensions,
   })
   core.handle({ type: 'engine.setEnabled', engine: 'held', enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -416,7 +416,7 @@ it("gives a main chat's session the Kothar MCP server, only while the session li
   expect(send(named.id, 'hi').options.kotharMcp).toEqual({ url: mcpUrl, token: expect.any(String) })
 })
 
-it("runs a mod's tool, whose host makes a top-level chat and starts it, shown like ones the user made", async () => {
+it("runs an extension's tool, whose host makes a top-level chat and starts it, shown like ones the user made", async () => {
   const { core, garage, messages, sessions, tool, json, send } = await startHeld()
   const bearer = send('main', 'hi').options.kotharMcp!.token
   const folder = join(garage, 'made', 'app')
@@ -447,15 +447,15 @@ it("runs a mod's tool, whose host makes a top-level chat and starts it, shown li
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
   core.handle(m, () => {})
 const workersOn = (core: ReturnType<typeof openCore>, limit?: number) => {
-  handleOn(core)({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: true })
-  if (limit !== undefined) handleOn(core)({ type: 'mod.setValue', modId: WORKERS_MOD.id, key: 'limit', value: limit })
+  handleOn(core)({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: true })
+  if (limit !== undefined) handleOn(core)({ type: 'extension.setValue', extensionId: WORKERS_EXTENSION.id, key: 'limit', value: limit })
 }
 const chatIn = (core: ReturnType<typeof openCore>, id: string) => core.chats().find((c) => c.id === id)!
 
-it('lets every user chat spawn workers while the mod is on, up to the limit of running ones', async () => {
+it('lets every user chat spawn workers while the extension is on, up to the limit of running ones', async () => {
   const { core, garage, sessions, post, tool, json, send } = await startHeld()
   const handle = handleOn(core)
-  handle({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: false })
+  handle({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: false })
   const workshop = send('main', 'hi').options.kotharMcp!.token
   expect((await (await post(workshop, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_worker not found',
@@ -498,7 +498,7 @@ it('tells a chat that can spawn workers the saved worker instructions, or the de
   const { core, sessions, send } = await startHeld()
   workersOn(core)
   const setInstructions = (value: string) =>
-    handleOn(core)({ type: 'mod.setValue', modId: WORKERS_MOD.id, key: 'instructions', value })
+    handleOn(core)({ type: 'extension.setValue', extensionId: WORKERS_EXTENSION.id, key: 'instructions', value })
   setInstructions('Spawn one worker per failing test.')
   const custom = send('main', 'hi').options.instructions
   expect(custom).toContain('Spawn one worker per failing test.')
@@ -642,7 +642,7 @@ it('steers a message from send_message into a running turn whose engine can stee
 
 it("sends a limited turn again whole, a lead's reports included, and keeps a worker sent again", async () => {
   const retried: string[] = []
-  const retrier: Mod = {
+  const retrier: Extension = {
     id: 'retrier',
     name: 'Retrier',
     description: '',
@@ -652,7 +652,7 @@ it("sends a limited turn again whole, a lead's reports included, and keeps a wor
       host.retry(chat.id)
     },
   }
-  const { core, sessionOf, sessionsOf, json, send } = await startHeld({ mods: [mainMod, retrier] })
+  const { core, sessionOf, sessionsOf, json, send } = await startHeld({ extensions: [mainExtension, retrier] })
   workersOn(core, -1)
   const lead = send('main', 'Plan it')
   const { chatId } = await json(lead.options.kotharMcp!.token, 'spawn_worker', { task: 'Search' })
@@ -716,7 +716,7 @@ it("gives a worker its parent's items plus its own while it works", async () => 
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
 })
 
-it('without a memory mod, offers no zoom and sends long messages whole', async () => {
+it('without a memory extension, offers no zoom and sends long messages whole', async () => {
   const long = 'x'.repeat(10_000)
   const { send, post } = await startHeld()
   send('main', long).end('ok')
@@ -727,8 +727,8 @@ it('without a memory mod, offers no zoom and sends long messages whole', async (
   expect(reply.error.message).toBe('Tool zoom not found')
 })
 
-// A mod that starts a child of whoever calls its tool, as a Workers mod would.
-const childMod: Mod = {
+// An extension that starts a child of whoever calls its tool, as a Workers extension would.
+const childExtension: Extension = {
   id: 'kids',
   name: 'Kids',
   description: '',
@@ -748,9 +748,9 @@ const childMod: Mod = {
   ],
 }
 
-it("lets a mod start a child chat as spawn_worker does, with the Workers mod off: frozen view, report, removal", async () => {
-  const { core, garage, json, tool, send, sessionOf } = await startHeld({ mods: [mainMod, childMod] })
-  handleOn(core)({ type: 'mod.setEnabled', modId: WORKERS_MOD.id, enabled: false })
+it("lets an extension start a child chat as spawn_worker does, with the Workers extension off: frozen view, report, removal", async () => {
+  const { core, garage, json, tool, send, sessionOf } = await startHeld({ extensions: [mainExtension, childExtension] })
+  handleOn(core)({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: false })
   const parent = send('main', 'Plan the release')
   const token = parent.options.kotharMcp!.token
   const { chatId } = await json(token, 'delegate', { task: 'Check the changelog', spec: { role: 'searching' } })
@@ -758,7 +758,7 @@ it("lets a mod start a child chat as spawn_worker does, with the Workers mod off
   const child = sessionOf(chatId)
   expect(child.prompt).toBe('Check the changelog')
   expect(child.options.instructions).toContain('<message id="0" kind="user">\nPlan the release\n</message>')
-  // Its tool isn't offered to a child, and no memory mod is on, so the child has no Kothar MCP server at all.
+  // Its tool isn't offered to a child, and no memory extension is on, so the child has no Kothar MCP server at all.
   expect(child.options.kotharMcp).toBeUndefined()
 
   // A child takes its folders from its space, and can't have children of its own.
@@ -774,8 +774,8 @@ it("lets a mod start a child chat as spawn_worker does, with the Workers mod off
   expect(existsSync(join(garage, 'chats', chatId))).toBe(false)
 })
 
-// A mod tool that tells what its caller may reach, through the host, next to the core's list_chats.
-const peekMod: Mod = {
+// An extension tool that tells what its caller may reach, through the host, next to the core's list_chats.
+const peekExtension: Extension = {
   id: 'peek',
   name: 'Peek',
   description: '',
@@ -797,8 +797,8 @@ const peekMod: Mod = {
   ],
 }
 
-it("tells a mod's tool who called it and what that caller may reach, by the rule list_chats uses", async () => {
-  const { core, json, send } = await startHeld({ mods: [mainMod, peekMod] })
+it("tells an extension's tool who called it and what that caller may reach, by the rule list_chats uses", async () => {
+  const { core, json, send } = await startHeld({ extensions: [mainExtension, peekExtension] })
   workersOn(core, -1)
   core.handle({ type: 'chat.create', name: 'Alpha' }, () => {})
   core.handle({ type: 'chat.create', name: 'Beta' }, () => {})
@@ -826,7 +826,7 @@ it("tells a mod's tool who called it and what that caller may reach, by the rule
   expect((await json(homeToken, 'peek', { chatId: 'nope' })).reaches).toBe(false)
 })
 
-it("gives a worker its parent's latest messages frozen at launch when no memory mod is on", async () => {
+it("gives a worker its parent's latest messages frozen at launch when no memory extension is on", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld()
   workersOn(core, -1)
   const parent = send('main', 'Plan the release')

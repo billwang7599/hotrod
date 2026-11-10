@@ -70,7 +70,7 @@ const tempEnv = (tmpDir: string): Record<string, string> => ({
   npm_config_cache: join(tmpDir, 'cache', 'npm'),
   PIP_CACHE_DIR: join(tmpDir, 'cache', 'pip'),
   GOCACHE: join(tmpDir, 'cache', 'go-build'),
-  GOMODCACHE: join(tmpDir, 'cache', 'go-mod'),
+  GOMODCACHE: join(tmpDir, 'cache', 'go-extension'),
 })
 
 function sandboxed(command: string, args: string[], sandbox: Sandbox, platform: NodeJS.Platform) {

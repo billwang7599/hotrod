@@ -1,6 +1,6 @@
 // Which actions only read, for the "Read anywhere without asking" switch. Kept on its own so the permission policy can
-// move into a mod later. Everything here is conservative: anything it can't prove is a plain read returns false, and
-// the chat asks the user as before.
+// move into an extension later. Everything here is conservative: anything it can't prove is a plain read returns false,
+// and the chat asks the user as before.
 import { realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 
