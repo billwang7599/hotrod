@@ -22,8 +22,8 @@ const MENU_DEFAULTS: Record<string, string | null> = {
   newSpace: 'CmdOrCtrl+N',
   newSpaceFromFolder: 'CmdOrCtrl+Shift+O',
   settings: 'CmdOrCtrl+,',
-  toggleSidebar: 'CmdOrCtrl+B',
-  toggleContextPanel: 'CmdOrCtrl+Alt+B',
+  toggleSidebar: 'CmdOrCtrl+[',
+  toggleContextPanel: 'CmdOrCtrl+]',
 }
 
 // Chromium's caches would otherwise land in the garage, which shares the app's name.

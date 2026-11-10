@@ -46,8 +46,8 @@ const actions: ShortcutAction[] = [
   { id: 'newSpace', label: 'New space', defaultKeys: 'Mod+N', menu: true },
   { id: 'newSpaceFromFolder', label: 'New space from folder', defaultKeys: 'Mod+Shift+O', desktopOnly: true, menu: true },
   { id: 'settings', label: 'Settings', defaultKeys: 'Mod+,', menu: true },
-  { id: 'toggleSidebar', label: 'Show or hide the sidebar', defaultKeys: 'Mod+B', menu: true },
-  { id: 'toggleContextPanel', label: 'Show or hide the context panel', defaultKeys: 'Mod+Alt+B', menu: true },
+  { id: 'toggleSidebar', label: 'Show or hide the sidebar', defaultKeys: 'Mod+[', menu: true },
+  { id: 'toggleContextPanel', label: 'Show or hide the context panel', defaultKeys: 'Mod+]', menu: true },
   { id: 'marketplace', label: 'Marketplace', defaultKeys: null },
 ]
 
