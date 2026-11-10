@@ -609,10 +609,14 @@ export type ExtensionUse =
   | 'sendMessages'
   // accounts, useAccount
   | 'accounts'
-  // run, spawn, openTerminal
+  // run, spawn, openTerminal, reveal; and Node's child_process, worker_threads and cluster
   | 'run'
   // complete
   | 'models'
+  // Node's own APIs, not the host: fetch, WebSocket, node:http, https, net, tls, dns and the like
+  | 'network'
+  // Node's own APIs: node:fs, for anything outside host.storage
+  | 'files'
 
 // Extensions were called mods. These old names stay, so an extension written against them still type-checks.
 /** @deprecated Use ExtensionSetting. */

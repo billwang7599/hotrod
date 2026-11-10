@@ -48,7 +48,9 @@ extension and before you turn it on, and holds the extension to it:
 
 | Value | Shown to you as | Covers |
 |---|---|---|
-| `run` | Runs programs on your computer | `host.run`, `host.spawn`, `host.openTerminal` |
+| `run` | Runs programs on your computer | `host.run`, `host.spawn`, `host.openTerminal`, `host.reveal`; Node's `child_process`, `worker_threads`, `cluster` |
+| `network` | Reaches the internet | Node's own network APIs: `fetch`, `WebSocket`, `node:http`, `https`, `net`, `tls`, `dns`, `dgram`, `undici` |
+| `files` | Reads or writes your files | Node's `node:fs` and `fs/promises`, for anything beyond `host.storage` |
 | `setup` | Installs software it needs | `setup` |
 | `mcpServers` | Starts MCP servers for agents | `mcpServers` |
 | `permissions` | Approves or denies agents' requests for you | `onPermissionRequested` |
@@ -66,13 +68,20 @@ extension and before you turn it on, and holds the extension to it:
 | `commands` | Adds commands | `commands` |
 | `settings` | Has settings | `settings`, `spaceSettings`, `settingsVersion`/`migrateSettings`, `settingsView`, `onSettingsChanged`, `host.spaceValues`, `host.setSpaceValue` |
 
-`host.note`, `host.error`, `host.storage` and `host.refresh` need nothing listed. An empty list, such as `tools: []`, counts as
+`host.note`, `host.error`, `host.notify`, `host.storage` and `host.refresh` need nothing listed. Any other host call
+needs its use, and a host call that's new to Kothar is refused to community extensions until Kothar gives it one. An empty list, such as `tools: []`, counts as
 unset.
 
 List only what you use. Every entry is something people have to agree to, and a short list is easier to trust.
 
 ## What `uses` doesn't cover
 
-`uses` covers the extension API only. Kothar can't sandbox an extension's code, so an extension could still use Node's
-own APIs, such as `node:fs` or `fetch`, without listing anything. Reviewers check that an extension's `uses` is honest
-when it joins the Marketplace. See [Publishing](../publishing.md).
+Before it imports `main.mjs`, Kothar reads its text for Node's own APIs: `run` for `child_process`, `network` for
+`fetch` or `node:https`, `files` for `node:fs`. Calls that load Node modules by name (`process.getBuiltinModule`,
+`createRequire`, `process.binding`) need all three. An extension that uses one without listing it doesn't start, and
+its row says which.
+
+This catches a forgotten entry. It isn't a sandbox: community extensions still run inside Kothar, and code can reach
+Node in ways a text check can't see. Reviewers check that an extension's `uses` is honest when it joins the
+Marketplace. See [Publishing](../publishing.md). Running each community extension in its own locked-down process is
+planned for a later extension API version.

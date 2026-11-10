@@ -637,6 +637,8 @@ export const EXTENSION_API_VERSION = 1
 // order.
 export const EXTENSION_USES: Record<ExtensionUse, string> = {
   run: 'Runs programs on your computer',
+  network: 'Reaches the internet',
+  files: 'Reads or writes your files',
   setup: 'Installs software it needs',
   mcpServers: 'Starts MCP servers for agents',
   permissions: 'Approves or denies agents\' requests for you',

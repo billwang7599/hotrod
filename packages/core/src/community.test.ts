@@ -7,7 +7,7 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import { communityDir, openMarketplace, type Fetch } from './marketplace.ts'
-import { guardHost, loadCommunityExtensions, usesOf } from './extensions.ts'
+import { FREE_HOST_CALLS, guardHost, HOST_USES, loadCommunityExtensions, nodeUsesOf, usesOf } from './extensions.ts'
 import { approvalsFile, historyFile } from './approvals.ts'
 import { checkExtensionManifest, type CatalogEntry, type CoreMessage } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
@@ -98,6 +98,36 @@ describe('the manifest', () => {
     expect(host.read).toHaveBeenCalled()
     expect(host.note).toHaveBeenCalled()
   })
+
+  it('refuses a host call Kothar has given no use, so new host calls start closed to community extensions', () => {
+    const host = { note: vi.fn(), somethingNew: vi.fn() } as unknown as ExtensionHost
+    const guarded = guardHost(host, { name: 'Sneaky' }, ['readChats', 'run', 'network', 'files'])
+    expect(() => (guarded as unknown as { somethingNew: () => void }).somethingNew()).toThrow(
+      "Sneaky can't use host.somethingNew: community extensions can't use it yet",
+    )
+    guarded.note('c', 'hi')
+    expect(host.note).toHaveBeenCalled()
+  })
+
+  it('gives every host call in the extension API a use or marks it free', () => {
+    const source = readFileSync(new URL('../../extension-api/index.ts', import.meta.url), 'utf8')
+    const body = source.slice(source.indexOf('export type ExtensionHost = {'))
+    const calls = [...body.slice(0, body.indexOf('\n}\n')).matchAll(/^  (\w+)[?(:]/gm)].map((m) => m[1]!)
+    expect(calls.length).toBeGreaterThan(20)
+    const open = calls.filter((call) => !Object.hasOwn(HOST_USES, call) && !FREE_HOST_CALLS.includes(call as keyof ExtensionHost))
+    expect(open).toEqual([])
+  })
+
+  it("reads what main.mjs needs from Node's own APIs", () => {
+    expect(nodeUsesOf(`import { readFileSync } from 'node:fs'`)).toEqual(['files'])
+    expect(nodeUsesOf(`import fs from "fs/promises"`)).toEqual(['files'])
+    expect(nodeUsesOf(`const { exec } = await import('node:child_process')`)).toEqual(['run'])
+    expect(nodeUsesOf(`await fetch(url)`)).toEqual(['network'])
+    expect(nodeUsesOf(`const ws = new WebSocket(url)`)).toEqual(['network'])
+    expect(nodeUsesOf(`import https from 'node:https'`)).toEqual(['network'])
+    expect(nodeUsesOf(`process.getBuiltinModule('fs')`)).toEqual(['run', 'network', 'files'])
+    expect(nodeUsesOf(`prefetch(x); const fsName = 'fsx'; host.run('ls', [])`)).toEqual([])
+  })
 })
 
 describe('loading community extensions', () => {
@@ -122,9 +152,20 @@ describe('loading community extensions', () => {
     install(garage, 'renamed', source('other'))
     install(garage, 'unbundled', `import 'left-pad-for-kothar-tests'\n${source('unbundled')}`)
     install(garage, 'no-default', 'export const x = 1')
+    install(garage, 'phones-home', `${source('phones-home')}fetch('https://example.com/collect')\nglobalThis.kotharLoaded.push('phoned')\n`)
+    install(
+      garage,
+      'listed-net',
+      `${source('listed-net')}if (false) fetch('https://example.com')\n`,
+      manifestOf('listed-net', { uses: ['commands', 'network'] }),
+    )
     const found = await loadCommunityExtensions(garage, () => true)
     const errors = Object.fromEntries(found.map((m) => [m.manifest.id, m.loadError]))
+    expect(loadedIds()).not.toContain('phones-home')
+    expect(loadedIds()).toContain('listed-net')
     expect(errors).toEqual({
+      'listed-net': undefined,
+      'phones-home': `its main.mjs uses Node's own APIs for "network" (reaches the internet) without listing it in its manifest`,
       'no-default': 'main.mjs has no default export',
       renamed: `its id "other" is not its manifest's "renamed"`,
       sneaky: 'it uses "mcpServers", "events" without listing it in its manifest',

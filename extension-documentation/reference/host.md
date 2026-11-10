@@ -23,6 +23,9 @@ names the missing entry.
 | `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
 | `note`, `error`, `notify`, `storage`, `refresh` | nothing |
 
+A community extension can't make any other host call, including one added in a later Kothar, until Kothar lists it here.
+Built-in extensions aren't held to `uses`.
+
 ## Reading chats
 
 | Call | Returns |

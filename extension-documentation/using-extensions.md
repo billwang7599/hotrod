@@ -214,8 +214,13 @@ A community extension is code, and it runs inside Kothar with your permissions.
 
 - **Kothar holds an extension to its list.** Every extension lists what it uses. Kothar shows that list before you
   install it, and won't start an extension that uses more than it listed through the extension API.
-- **But Kothar can't sandbox it.** An extension could still read your files, read your settings or reach the network
-  with Node's own APIs, without listing anything.
+- **It lists Node's own APIs too.** An extension that reaches the internet, reads or writes your files, or runs
+  programs with Node's own APIs must list **Reaches the internet**, **Reads or writes your files** or **Runs programs on
+  your computer**. Kothar reads `main.mjs` before starting it and won't start one that uses an unlisted API in plain
+  sight.
+- **But Kothar can't sandbox it.** The check above catches mistakes, not someone hiding what their code does: an
+  extension still runs inside Kothar, and could read your files, read your settings or reach the network without
+  listing anything.
 - **Review is one-time.** A person reviews an extension when it first joins the Marketplace. Later updates reach you
   without another review.
 - **An update can change what an extension does.** Read **See changes** before you update. Kothar won't run the new

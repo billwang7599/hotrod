@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Extension, ExtensionHost, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
@@ -83,7 +83,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onProcessesChanged', 'panels'],
 ]
 
-// What each host call needs listed. note, storage and refresh need nothing.
+// What each host call needs listed. FREE_HOST_CALLS need nothing; any other call is refused.
 export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   chats: 'readChats',
   chat: 'readChats',
@@ -114,24 +114,49 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   processesChanged: 'panels',
 }
 
+// Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels.
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh']
+
+// What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
+// catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check
+// sees). The escape hatches that load Node modules by name need all three.
+const NODE_USES: [RegExp, ExtensionUse[]][] = [
+  [/['"`](?:node:)?(?:child_process|worker_threads|cluster)['"`]/, ['run']],
+  [/['"`](?:node:)?(?:https?|http2|net|tls|dgram|dns(?:\/promises)?|undici)['"`]/, ['network']],
+  [/\b(?:fetch|WebSocket|EventSource|XMLHttpRequest)\s*\(|\bnew\s+(?:WebSocket|EventSource|XMLHttpRequest)\b/, ['network']],
+  [/['"`](?:node:)?fs(?:\/promises)?['"`]/, ['files']],
+  [/\b(?:getBuiltinModule|createRequire)\s*\(|process\s*\.\s*(?:binding|_linkedBinding|dlopen)\b/, ['run', 'network', 'files']],
+]
+
+export function nodeUsesOf(source: string): ExtensionUse[] {
+  return sortUses(NODE_USES.flatMap(([pattern, uses]) => (pattern.test(source) ? uses : [])))
+}
+
 // The Extension fields an extension sets, as uses. Empty lists count as unset.
 export function usesOf(extension: Extension): ExtensionUse[] {
   const set = (value: unknown) => value !== undefined && !(Array.isArray(value) && value.length === 0)
   return sortUses(FIELD_USES.filter(([field]) => set(extension[field])).map(([, use]) => use))
 }
 
-// A host that refuses calls the extension's manifest didn't list.
+// A host that refuses calls the extension's manifest didn't list, and any call Kothar hasn't given a use: a host call
+// added later is closed to community extensions until it's listed in HOST_USES or FREE_HOST_CALLS.
 export function guardHost(host: ExtensionHost, extension: { name: string }, uses: readonly ExtensionUse[]): ExtensionHost {
-  const guarded = { ...host }
-  for (const [call, use] of Object.entries(HOST_USES) as [keyof ExtensionHost, ExtensionUse][]) {
-    if (uses.includes(use)) continue
-    Object.assign(guarded, {
-      [call]: () => {
-        throw new Error(`${extension.name} can't use host.${call}: its manifest doesn't list "${use}" (${EXTENSION_USES[use]})`)
-      },
-    })
+  const guarded = {} as Record<string, unknown>
+  for (const call of Object.keys(host) as (keyof ExtensionHost)[]) {
+    const use = HOST_USES[call]
+    if (use ? uses.includes(use) : FREE_HOST_CALLS.includes(call)) {
+      guarded[call] = host[call]
+      continue
+    }
+    guarded[call] = () => {
+      throw new Error(
+        use
+          ? `${extension.name} can't use host.${call}: its manifest doesn't list "${use}" (${EXTENSION_USES[use]})`
+          : `${extension.name} can't use host.${call}: community extensions can't use it yet`,
+      )
+    }
   }
-  return guarded
+  return guarded as ExtensionHost
 }
 
 // A community extension installed in the garage. extension is set when this run of Kothar loaded it, which happens only
@@ -159,6 +184,12 @@ export async function loadCommunityExtensions(garage: string, isOn: (id: string)
       continue
     }
     try {
+      // Checked before import, so an extension that would break its list runs none of its code.
+      const unlistedNode = nodeUsesOf(readFileSync(join(dir, EXTENSION_MAIN), 'utf8')).filter((use) => !manifest.uses.includes(use))
+      if (unlistedNode.length) {
+        const list = unlistedNode.map((use) => `"${use}" (${EXTENSION_USES[use].toLowerCase()})`).join(', ')
+        throw new Error(`its main.mjs uses Node's own APIs for ${list} without listing it in its manifest`)
+      }
       // Node keeps every module it imported, so a core restarted in the same process (npm run dev) would get the old
       // main.mjs back; the file's time asks for the one on disk now.
       const url = `${pathToFileURL(join(dir, EXTENSION_MAIN)).href}?at=${statSync(join(dir, EXTENSION_MAIN)).mtimeMs}`
