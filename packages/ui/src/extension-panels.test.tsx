@@ -61,7 +61,7 @@ afterEach(() => {
   host.remove()
 })
 
-function render(panelViews: State['panelViews'] = {}) {
+function render(panelViews: State['panelViews'] = {}, ui: State['extensionUi'] = extensionUi) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -75,7 +75,7 @@ function render(panelViews: State['panelViews'] = {}) {
               readOnly={false}
               connected
               send={(m) => sent.push(m)}
-              extensionUi={extensionUi}
+              extensionUi={ui}
               panelViews={panelViews}
             />
           </Tooltip.Provider>
@@ -129,6 +129,27 @@ test("a render error shows in the panel; a tab the chat doesn't have falls back 
   localStorage.setItem('kothar.panelTab', 'extension:gone/panel')
   render()
   expect(tab('Context').getAttribute('aria-selected')).toBe('true')
+})
+
+test("an extension the chat's setup leaves out loses its tab and commands there, and an open tab falls back to Context", () => {
+  localStorage.setItem('kothar.panelTab', 'extension:git/changes')
+  render({ [panelKey('space', 'git', 'changes')]: { view } })
+  expect(tab('Changes').getAttribute('aria-selected')).toBe('true')
+  // The core sends the chat's panels and commands again, without the left-out extension's.
+  const leftOut = reduce({ ...initialState, chats: [space], selectedId: 'space' }, {
+    type: 'chat.extensions',
+    chatId: 'space',
+    panels: [],
+    commands: [],
+  }).extensionUi
+  render({}, leftOut)
+  expect([...host.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(['General', 'Context'])
+  expect(tab('Context').getAttribute('aria-selected')).toBe('true')
+  act(() => tab('General').click())
+  expect(button('Refresh')).toBeUndefined()
+  // Put back, the tab comes back too.
+  render({}, extensionUi)
+  expect(tab('Changes')).toBeDefined()
 })
 
 test("extensions' commands are listed in General and run on click", () => {

@@ -39,7 +39,8 @@ itself still wins, and anything the setup leaves out follows Settings. Each setu
 
 A setup's instructions go into each session after the extensions' instructions and before the context items (the global
 `AGENTS.md`, then each chat's), so your own `AGENTS.md` files read last. A setup can switch off extensions that are on,
-for its chats only, but it can't turn on one that's off in Settings. An extension with a chat of its own, such as Home,
+for its chats only, but it can't turn on one that's off in Settings. Those chats don't get its tools, instructions,
+panel tabs or commands. An extension with a chat of its own, such as Home,
 always stays on in that chat, so the setup form doesn't list it.
 
 ## Themes

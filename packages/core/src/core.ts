@@ -1246,8 +1246,9 @@ function openLockedCore(options: {
       return false
     }
   }
+  // Only the extensions on for this chat (isOnFor): one its setup leaves out shows no panels or commands there.
   const extensionsOf = (chat: Chat): Extract<CoreMessage, { type: 'chat.extensions' }> => {
-    const on = extensions.filter(isOn)
+    const on = extensions.filter((extension) => isOnFor(extension, chat))
     const panels = on.flatMap((extension) =>
       (extension.panels ?? []).flatMap((p): PanelTab[] =>
         offeredBy(extension, p, chat) ? [{ extension: extension.id, id: p.id, title: p.title }] : [],
@@ -1262,9 +1263,10 @@ function openLockedCore(options: {
   }
   const openPanels = new Map<string, Set<string>>()
   const renders = new Map<string, number>()
-  const panelOf = (extensionId: unknown, panelId: unknown) => {
+  const panelOf = (chat: Chat, extensionId: unknown, panelId: unknown) => {
     const extension = extensionFor(String(extensionId))
     if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
     const panel = extension.panels?.find((p) => p.id === panelId)
     if (!panel) throw new Error(`${extension.name} has no panel "${panelId}"`)
     return { extension, panel }
@@ -1299,7 +1301,7 @@ function openLockedCore(options: {
     if (renders.get(key) === turn && chats.has(chat.info.id)) broadcast(shownView)
   }
   const openPanel = (chat: Chat, extensionId: unknown, panelId: unknown) => {
-    const { extension, panel } = panelOf(extensionId, panelId)
+    const { extension, panel } = panelOf(chat, extensionId, panelId)
     const open = openPanels.get(chat.info.id) ?? new Set()
     open.add(`${extension.id}\n${panel.id}`)
     openPanels.set(chat.info.id, open)
@@ -1311,13 +1313,14 @@ function openLockedCore(options: {
     const targets = chatId === undefined ? shownChats() : [chatFor(chatId)]
     for (const chat of targets) {
       broadcast(extensionsOf(chat))
+      if (!isOnFor(extension, chat)) continue
       for (const panel of extension.panels ?? []) {
         if (openPanels.get(chat.info.id)?.has(`${extension.id}\n${panel.id}`)) void renderPanel(chat, extension, panel)
       }
     }
   }
   const panelAction = async (chat: Chat, extensionId: unknown, panelId: unknown, action: ExtensionAction) => {
-    const { extension, panel } = panelOf(extensionId, panelId)
+    const { extension, panel } = panelOf(chat, extensionId, panelId)
     if (typeof action?.name !== 'string') throw new Error('A panel action needs a name')
     try {
       await panel.onAction?.(action, detailOf(chat), contextOf(extension))
@@ -1345,6 +1348,7 @@ function openLockedCore(options: {
   const runCommand = (chat: Chat, extensionId: unknown, commandId: unknown) => {
     const extension = extensionFor(String(extensionId))
     if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
     const command = extension.commands?.find((c) => c.id === commandId)
     if (!command || !offeredBy(extension, command, chat)) throw new Error(`${extension.name} has no command "${commandId}" here`)
     callExtension(extension, () => command.run(detailOf(chat), contextOf(extension)))
@@ -1530,19 +1534,28 @@ function openLockedCore(options: {
     const setup = name === undefined || name === '' ? undefined : setupNamed(name)
     updateChat(chat, { setup: setup?.id })
     followModels()
+    broadcast(extensionsOf(chat))
   }
 
   const saveSetup = (input: unknown) => {
     const setup = jobSetups.save(input)
     followModels()
+    setupChanged(setup.id)
     return setup
   }
 
   // Chats that used a removed setup go back to Settings.
   const removeSetup = (id: unknown) => {
     jobSetups.remove(id)
-    for (const chat of chats.values()) if (chat.info.setup === id) updateChat(chat, { setup: undefined })
+    const using = [...chats.values()].filter((chat) => chat.info.setup === id)
+    for (const chat of using) updateChat(chat, { setup: undefined })
     followModels()
+    using.forEach((chat) => broadcast(extensionsOf(chat)))
+  }
+
+  // A setup's extensions changed: the chats using it get their panels and commands again.
+  const setupChanged = (id: string) => {
+    for (const chat of chats.values()) if (chat.info.setup === id) broadcast(extensionsOf(chat))
   }
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
@@ -2571,7 +2584,7 @@ function openLockedCore(options: {
           return openPanel(chatFor(message.chatId), message.extension, message.panel)
         case 'extension.panel.action': {
           const chat = chatFor(message.chatId)
-          panelOf(message.extension, message.panel)
+          panelOf(chat, message.extension, message.panel)
           return void panelAction(chat, message.extension, message.panel, message.action).catch((error) =>
             broadcast({ type: 'error', message: messageOf(error) }),
           )
