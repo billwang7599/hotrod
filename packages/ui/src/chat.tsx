@@ -934,6 +934,7 @@ type ChatProps = {
   toggleContext: () => void
   contextItems?: ContextItem[]
   extensionUi?: State['extensionUi']
+  extensions?: State['extensions']
   panelViews?: State['panelViews']
   terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
@@ -1595,6 +1596,7 @@ export function Chat(props: ChatProps) {
               send={send}
               hide={props.contextOverlay ? props.toggleContext : undefined}
               extensionUi={props.extensionUi}
+              extensions={props.extensions}
               panelViews={props.panelViews}
               terminalErrors={props.terminalErrors}
               pickers={window.kothar}

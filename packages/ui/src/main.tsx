@@ -337,6 +337,7 @@ function App() {
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 extensionUi={state.extensionUi}
+                extensions={state.extensions}
                 panelViews={state.panelViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
@@ -10,6 +10,7 @@ import {
   type CommandInfo,
   type ContextItem,
   type ContextSection,
+  type ExtensionInfo,
   type PanelTab as ExtensionTab,
   type PermissionSwitch,
   type Setup,
@@ -588,40 +589,46 @@ function Permissions({ chat, above, workFolder, disabled, send }: {
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
-/** Actions extensions add for this chat, listed in the General tab. */
-function ExtensionCommands({ chatId, commands, disabled, send }: {
+/** Actions extensions add for this chat, listed in the General tab under each extension's name. */
+function ExtensionCommands({ chatId, commands, names, disabled, send }: {
   chatId: string
   commands: CommandInfo[]
+  // Extension id → display name; an extension missing here is headed by its id.
+  names: ReadonlyMap<string, string>
   disabled: boolean
   send: (m: ClientMessage) => void
 }) {
-  if (!commands.length) return null
-  return (
-    <section className="flex flex-col gap-8" aria-label="Commands">
-      <h3 className="font-semibold">Commands</h3>
-      <div className="flex flex-wrap gap-6">
-        {commands.map((c) => {
-          const button = (
-            <Button
-              key={`${c.extension}/${c.id}`}
-              size="small"
-              disabled={disabled}
-              onClick={() => send({ type: 'extension.command', chatId, extension: c.extension, command: c.id })}
-            >
-              {c.label}
-            </Button>
-          )
-          return c.hint ? (
-            <Hint key={`${c.extension}/${c.id}`} text={c.hint}>
-              {button}
-            </Hint>
-          ) : (
-            button
-          )
-        })}
-      </div>
-    </section>
-  )
+  const groups = new Map<string, CommandInfo[]>()
+  for (const c of commands) groups.set(c.extension, [...(groups.get(c.extension) ?? []), c])
+  return [...groups].map(([extension, list]) => {
+    const name = names.get(extension) ?? extension
+    return (
+      <section key={extension} className="flex flex-col gap-8" aria-label={name}>
+        <h3 className="font-semibold">{name}</h3>
+        <div className="flex flex-wrap gap-6">
+          {list.map((c) => {
+            const button = (
+              <Button
+                key={c.id}
+                size="small"
+                disabled={disabled}
+                onClick={() => send({ type: 'extension.command', chatId, extension, command: c.id })}
+              >
+                {c.label}
+              </Button>
+            )
+            return c.hint ? (
+              <Hint key={c.id} text={c.hint}>
+                {button}
+              </Hint>
+            ) : (
+              button
+            )
+          })}
+        </div>
+      </section>
+    )
+  })
 }
 
 function WorkFolderRow({ chatId, path, disabled, send, errors }: {
@@ -670,6 +677,8 @@ type ContextPanelProps = {
   send: (m: ClientMessage) => void
   hide?: () => void
   extensionUi?: State['extensionUi']
+  // Installed extensions, for the names over their commands.
+  extensions?: ExtensionInfo[]
   panelViews?: State['panelViews']
   terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
@@ -695,6 +704,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const tab = usePanelTab()
   const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
   const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []) : []
+  const extensionNames = useMemo(() => new Map((props.extensions ?? []).map((e) => [e.id, e.name])), [props.extensions])
   const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
   const known = tab === 'general' || extensionTab
   const shown: PanelTabId = chat && known ? tab : 'context'
@@ -797,7 +807,13 @@ export function ContextPanel(props: ContextPanelProps) {
           <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
         )}
         {shown === 'general' && chat && (
-          <ExtensionCommands chatId={chatId} commands={extensionUi?.commands ?? []} disabled={locked} send={send} />
+          <ExtensionCommands
+            chatId={chatId}
+            commands={extensionUi?.commands ?? []}
+            names={extensionNames}
+            disabled={locked}
+            send={send}
+          />
         )}
         {extensionTab && (
           <ExtensionViewer

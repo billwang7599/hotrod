@@ -44,6 +44,15 @@ const view: ExtensionView = {
   ],
 }
 
+const extension = (id: string, name: string): State['extensions'][number] => ({
+  id,
+  name,
+  description: '',
+  enabled: true,
+  settings: [],
+  values: {},
+})
+
 let root: Root
 let host: HTMLDivElement
 let sent: ClientMessage[]
@@ -61,7 +70,11 @@ afterEach(() => {
   host.remove()
 })
 
-function render(panelViews: State['panelViews'] = {}, ui: State['extensionUi'] = extensionUi) {
+function render(
+  panelViews: State['panelViews'] = {},
+  ui: State['extensionUi'] = extensionUi,
+  extensions: State['extensions'] = [extension('git', 'Git')],
+) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -76,6 +89,7 @@ function render(panelViews: State['panelViews'] = {}, ui: State['extensionUi'] =
               connected
               send={(m) => sent.push(m)}
               extensionUi={ui}
+              extensions={extensions}
               panelViews={panelViews}
             />
           </Tooltip.Provider>
@@ -157,6 +171,32 @@ test("extensions' commands are listed in General and run on click", () => {
   render()
   act(() => button('Refresh').click())
   expect(sent).toContainEqual({ type: 'extension.command', chatId: 'space', extension: 'git', command: 'refresh' })
+})
+
+test("commands are grouped under the name of the extension that added them, with no generic heading", () => {
+  localStorage.setItem('kothar.panelTab', 'general')
+  render({}, {
+    chatId: 'space',
+    panels: [],
+    commands: [
+      { extension: 'browser', id: 'show-browser', label: 'Show browser', hint: 'Show the tabs' },
+      { extension: 'git', id: 'refresh', label: 'Refresh' },
+      { extension: 'browser', id: 'clear', label: 'Clear tabs' },
+      { extension: 'unknown', id: 'go', label: 'Go' },
+    ],
+  }, [extension('git', 'Git'), extension('browser', 'Browser')])
+  const groups = [...host.querySelectorAll('section')]
+    .filter((s) => s.querySelector('button') && ['Browser', 'Git', 'unknown'].includes(s.getAttribute('aria-label') ?? ''))
+    .map((s) => [s.querySelector('h3')?.textContent, [...s.querySelectorAll('button')].map((b) => b.textContent)])
+  // In the order the core lists them; an extension not in the list is headed by its id.
+  expect(groups).toEqual([
+    ['Browser', ['Show browser', 'Clear tabs']],
+    ['Git', ['Refresh']],
+    ['unknown', ['Go']],
+  ])
+  expect([...host.querySelectorAll('h3')].map((h) => h.textContent)).not.toContain('Commands')
+  act(() => button('Clear tabs').click())
+  expect(sent).toContainEqual({ type: 'extension.command', chatId: 'space', extension: 'browser', command: 'clear' })
 })
 
 test("the state keeps the selected chat's extension tabs and panel views, and drops them on a switch", () => {
