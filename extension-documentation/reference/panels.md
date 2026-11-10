@@ -103,7 +103,7 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `text` | `text`, `tone?`, `mono?`, `small?`, `hint?`, `copy?`, `reveal?` | A line of text. With `copy`, a button beside it copies the text, such as a path. With `reveal`, a **Show in Finder** button shows the path the text is, by [`host.reveal`](host.md#reveal)'s rule: a path outside Kothar's folders shows an error when clicked. |
 | `badge` | `text`, `tone?`, `hint?` | A small label. |
 | `elapsed` | `since` (epoch ms), `tone?`, `mono?`, `small?`, `hint?` | A live time since that moment, such as an uptime. Kothar ticks it, so you needn't redraw. |
-| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?`, `confirm?` | A button. With `confirm: { text, body?, ok?, danger? }`, Kothar asks first in its own dialog and sends the action only if the user confirms. |
+| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?`, `confirm?`, `pick?` | A button. With `confirm: { text, body?, ok?, danger? }`, Kothar asks first in its own dialog and sends the action only if the user confirms. With `pick: { kind: 'folder' \| 'file', title? }`, it opens the system's picker and sends the action with `value`: the picked path (nothing if the user cancels). The picker is only in the desktop app; in a browser tab a pick button isn't drawn, so offer another way too, such as a form for a typed path. |
 | `link` | `text`, `url` | A link that opens in the browser. |
 | `list` | `items`, `empty?`, `label?` | A list of rows. `empty` is shown when there are none. |
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |

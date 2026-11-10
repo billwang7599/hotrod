@@ -43,6 +43,15 @@ const SetValueContext = createContext<SetValue | undefined>(undefined)
 type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
 
+// The desktop app's picker for a button's pick, or undefined in a browser tab, where there's none. A file picker gives
+// the first file chosen.
+function pickerFor(kind: 'folder' | 'file'): ((title?: string) => Promise<string | null>) | undefined {
+  const desktop = typeof window === 'undefined' ? undefined : window.kothar
+  if (!desktop) return undefined
+  if (kind === 'folder') return (title) => desktop.pickFolder(title)
+  return async (title) => (await desktop.pickFiles(title))[0] ?? null
+}
+
 function RevealButton({ path }: { path: string }) {
   const reveal = useContext(RevealContext)
   if (!reveal) return null
@@ -382,13 +391,18 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
         </Hinted>
       )
     case 'button': {
+      const pick = node.pick && pickerFor(node.pick.kind)
+      if (node.pick && !pick) return null
       const button = (
         <Button
           variant={node.variant === 'primary' ? 'primary' : node.variant === 'ghost' ? 'ghost' : 'default'}
           size="small"
           disabled={node.disabled}
           onClick={async () => {
-            if (!node.confirm || (await confirm(node.confirm))) act(node.action)
+            if (node.confirm && !(await confirm(node.confirm))) return
+            if (!pick) return act(node.action)
+            const path = await pick(node.pick!.title)
+            if (path) act({ name: node.action.name, value: path })
           }}
         >
           {node.label}

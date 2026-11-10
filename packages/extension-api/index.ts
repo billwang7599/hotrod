@@ -434,6 +434,10 @@ export type ExtensionView =
       // Asks first, in Kothar's own dialog: text is the question, body what follows it (such as what's lost), ok the
       // confirming button's label. The action is sent only if the user confirms. danger colours the button red.
       confirm?: { text: string; body?: string; ok?: string; danger?: boolean }
+      // Opens the system's picker first, for a folder or a file, with title as its heading. The action is sent with
+      // value: the picked path; nothing is sent if the user cancels. The picker exists only in the desktop app: in a
+      // browser tab the button isn't drawn, so offer another way too, such as a form for a typed path.
+      pick?: { kind: 'folder' | 'file'; title?: string }
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ExtensionListItem[]; empty?: string; label?: string }
