@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
-import { Button, Chevron, confirm, CopyButton, Hint, Select, Switch } from './controls.tsx'
+import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
+import { HtmlFrame } from './html-frame.tsx'
 import { MarkdownEditor } from './markdown-editor.tsx'
 
 /**
@@ -336,11 +337,53 @@ function Search({ node, act }: { node: SearchNode; act: Act }) {
   )
 }
 
+// A labelled button that copies text, saying for a moment whether it worked.
+function CopyText({ node }: { node: Extract<ExtensionView, { type: 'copy' }> }) {
+  const [result, setResult] = useState<'Copied' | 'Couldn’t copy'>()
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = async () => {
+    let copied = true
+    try {
+      await navigator.clipboard.writeText(node.text)
+    } catch {
+      copied = false
+    }
+    setResult(copied ? 'Copied' : 'Couldn’t copy')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setResult(undefined), COPIED_MS)
+  }
+  const button = (
+    <Button size="small" variant="ghost" onClick={() => void copy()} aria-live="polite">
+      {result ?? node.label}
+    </Button>
+  )
+  return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
+}
+
+// Saves text as a file through the browser's own download.
+export function downloadText(text: string, filename: string, mimeType = 'text/plain') {
+  const url = URL.createObjectURL(new Blob([text], { type: mimeType }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.rel = 'noopener'
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // The download has its own copy by now.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+// An html frame without a height takes the room it's given, so the stacks around it grow to give it that room.
+const fills = (node: ExtensionView): boolean =>
+  node.type === 'html' ? node.height === undefined : node.type === 'stack' && node.children.some(fills)
+
 function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   switch (node.type) {
     case 'stack':
       return (
-        <div className={`flex min-w-0 flex-col ${GAPS[node.gap ?? 'normal']}`}>
+        <div className={`flex min-w-0 flex-col ${GAPS[node.gap ?? 'normal']} ${fills(node) ? 'flex-1' : ''}`}>
           {node.children.map((child, i) => (
             <Node key={i} node={child} act={act} />
           ))}
@@ -461,6 +504,18 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
         />
       )
+    case 'html':
+      return <HtmlFrame html={node.html} label={node.label} web={node.web} height={node.height} />
+    case 'copy':
+      return <CopyText node={node} />
+    case 'download': {
+      const button = (
+        <Button size="small" variant="ghost" onClick={() => downloadText(node.text, node.filename, node.mimeType)}>
+          {node.label}
+        </Button>
+      )
+      return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
+    }
     default:
       return null
   }

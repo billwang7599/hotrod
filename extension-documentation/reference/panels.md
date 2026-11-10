@@ -115,6 +115,9 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `split` | `side`, `main` | Two columns, for a popup: a narrow `side`, such as a list, and `main`, such as an editor. Each scrolls on its own. In a narrow panel `side` sits above `main`. |
 | `search` | `action`, `key?`, `value?`, `placeholder?`, `label?` | A search box. As the user types, it sends `{ name: action, value: text }` after a short pause. What's typed stays as the panel redraws; a new `key` starts over at `value`. |
 | `editor` | `key`, `text`, `change`, `links?`, `tags?`, `label?`, `placeholder?`, `autofocus?` | A Markdown editor with live preview. See below. |
+| `html` | `html`, `label`, `web?`, `height?` | A page of HTML, such as a chart an agent made, in a sandboxed frame. See below. |
+| `copy` | `text`, `label`, `hint?` | A button that copies `text` to the clipboard, such as a file's contents. |
+| `download` | `text`, `filename`, `label`, `mimeType?`, `hint?` | A button that saves `text` as a file through the browser's download (a save dialog in the desktop app). `mimeType` defaults to `text/plain`. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
 
@@ -163,6 +166,28 @@ being edited its marks are hidden and it's drawn as it reads: headings, bold, it
 
 ```ts
 { type: 'editor', key: note.path, text: note.body, change: 'save', links: 'open-link', tags: 'filter-tag' }
+```
+
+### HTML
+
+An `html` view draws a page of HTML in a frame, for things to look at or try, such as a chart, a mockup or a small app.
+Its scripts run, but it can't reach Kothar:
+
+- **Its own origin.** The frame is sandboxed with scripts only, so the page has an opaque origin. It can't read Kothar's
+  window, storage, cookies or token, open windows or popups, submit forms or navigate Kothar, and the core refuses its
+  connections.
+- **No network.** A Content-Security-Policy goes in ahead of everything in the page, so nothing the page says loosens
+  it. Scripts and styles load only inline, and images, fonts and media only as `data:` or `blob:` URLs. `fetch`, XHR,
+  WebSockets and beacons are blocked.
+- **`web: true`** also lets the page load scripts, styles, images, fonts and media from `https:` URLs, such as a chart
+  library from a CDN. `fetch`, XHR and WebSockets stay blocked. Let the user choose this, say with a
+  [switch](#switches-and-pickers).
+
+Without a `height`, the frame takes the room it's given, such as the main column of a popup's `split`, and the stacks
+around it grow to give it that room. `label` names the frame for screen readers.
+
+```ts
+{ type: 'html', html: page, label: 'Sales chart' }
 ```
 
 ### Switches and pickers

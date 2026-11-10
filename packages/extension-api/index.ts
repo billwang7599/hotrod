@@ -486,6 +486,19 @@ export type ExtensionView =
       // Puts the cursor in it when it first shows.
       autofocus?: boolean
     }
+  // A page of HTML, such as a chart or a mockup an agent made, drawn in a sandboxed frame. Its scripts run, but in an
+  // origin of their own: they can't reach Kothar's window, storage, token or core, open windows or popups, submit forms
+  // or navigate Kothar. It loads nothing from the network: scripts and styles only inline, images, fonts and media only
+  // as data: or blob: URLs, and no fetch, XHR or WebSocket. web: also lets it load scripts, styles, images, fonts and
+  // media from https: URLs (such as a chart library from a CDN); fetch, XHR and WebSockets stay blocked. label names
+  // the frame for screen readers. height in pixels; without it the frame takes the room it's given (a popup's main
+  // column).
+  | { type: 'html'; html: string; label: string; web?: boolean; height?: number }
+  // A button that copies text, such as a file's contents, to the clipboard.
+  | { type: 'copy'; text: string; label: string; hint?: string }
+  // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
+  // defaults to text/plain.
+  | { type: 'download'; text: string; filename: string; label: string; mimeType?: string; hint?: string }
   // Controls for one of the extension's spaceSettings in the panel's space (a worker's panel shows its space's): a
   // switch for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws
   // again. label defaults to the setting's. value and options are filled in by the core from the space's saved values
