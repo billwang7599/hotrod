@@ -59,11 +59,11 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
       'Agents run shell commands without asking you first, but only while the chat is sandboxed: with edits ' +
       'anywhere on, or on a system Kothar can’t sandbox, every command asks but plain reads.',
   },
-  askNetworkCommands: {
-    label: 'Ask before commands that publish or reach the network',
+  autoNetworkCommands: {
+    label: 'Run network commands without asking',
     about:
-      `Commands that mention ${ASK_FIRST_COMMANDS.join(', ')} ask you first, even while commands run without ` +
-      'asking.',
+      `Agents also run commands that publish or reach the network (${ASK_FIRST_COMMANDS.join(', ')}) without ` +
+      'asking you first. Only matters while Run commands without asking is on; off, those commands ask.',
   },
   autoFetch: {
     label: 'Fetch web pages without asking',

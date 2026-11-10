@@ -1400,7 +1400,8 @@ function openLockedCore(options: {
   const loadChat = (dir: string, fallback: ChatInfo) => {
     mkdirSync(dir, { recursive: true })
     const file = join(dir, 'chat.json')
-    const { context = {}, title, parentId, extension, ...saved } = renameChatFile(readJson(file))
+    const raw = readJson(file)
+    const { context = {}, title, parentId, extension, ...saved } = renameChatFile(raw)
     const declared = extensionChats.find((chat) => chat.id === fallback.id)
     const info: ChatInfo = {
       ...fallback,
@@ -1428,7 +1429,8 @@ function openLockedCore(options: {
       queue: [],
       turns: 0,
     }
-    if (!existsSync(file) || declared || (parentId !== undefined && !info.parentId)) saveChat(chat)
+    const flipped = 'askNetworkCommands' in raw
+    if (!existsSync(file) || declared || flipped || (parentId !== undefined && !info.parentId)) saveChat(chat)
     chats.set(info.id, chat)
     const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
     const lastType = entries.at(-1)?.type
@@ -2155,7 +2157,7 @@ function openLockedCore(options: {
         if (request.kind !== 'shell' || request.command === undefined) return
         if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
         if (!jail || !on('autoRunCommands')) return
-        if (on('askNetworkCommands') && ASKS_FIRST.test(request.command)) return
+        if (!on('autoNetworkCommands') && ASKS_FIRST.test(request.command)) return
         if (mentionsSecret(request.command, reading)) return
         return { allow: true }
       }

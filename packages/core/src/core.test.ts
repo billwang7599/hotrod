@@ -1185,9 +1185,9 @@ describe('commands', () => {
     expect(await turn(t)).toBe('idle')
   })
 
-  it('runs network commands without asking too once that default is off', async () => {
+  it('runs network commands without asking too once that default is on', async () => {
     const t = setup(commandScript(`${ASK_FIRST_COMMANDS[0]} origin`))
-    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
+    t.handle({ type: 'permission.setDefault', name: 'autoNetworkCommands', enabled: true })
     expect(await turn(t)).toBe('idle')
     expect(resolved(t).map((e) => e.auto)).toEqual([true])
   })
@@ -1227,9 +1227,28 @@ describe('commands', () => {
 
   it('lets a space ask before network commands while the default runs them', async () => {
     const t = setup(commandScript(`${ASK_FIRST_COMMANDS.at(-1)} x`))
-    t.handle({ type: 'permission.setDefault', name: 'askNetworkCommands', enabled: false })
-    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: true })
+    t.handle({ type: 'permission.setDefault', name: 'autoNetworkCommands', enabled: true })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoNetworkCommands', enabled: false })
     expect(await turn(t)).toBe('waiting')
+  })
+
+  it('reads an old saved ask-before-network-commands default and chat pick flipped, and saves them under the new name', async () => {
+    const first = setup(textScript)
+    const space = createChat(first, { name: 'Space' })
+    first.core.close()
+    const settingsFile = join(first.garage, 'settings.json')
+    writeFileSync(settingsFile, JSON.stringify({ ...JSON.parse(readFileSync(settingsFile, 'utf8')), askNetworkCommands: false }))
+    const saved = JSON.parse(readFileSync(chatFile(first, space.id), 'utf8'))
+    writeFileSync(chatFile(first, space.id), JSON.stringify({ ...saved, askNetworkCommands: true }))
+    const t = setup(commandScript(`${ASK_FIRST_COMMANDS[0]} origin`), first.garage)
+    expect(t.core.workFolder()).toMatchObject({ autoNetworkCommands: true })
+    expect(JSON.parse(readFileSync(settingsFile, 'utf8'))).toMatchObject({ autoNetworkCommands: true })
+    expect(JSON.parse(readFileSync(settingsFile, 'utf8'))).not.toHaveProperty('askNetworkCommands')
+    const chat = JSON.parse(readFileSync(chatFile(t, space.id), 'utf8'))
+    expect(chat).toMatchObject({ autoNetworkCommands: false })
+    expect(chat).not.toHaveProperty('askNetworkCommands')
+    expect(await turn(t, 'main')).toBe('idle')
+    expect(await turn(t, space.id)).toBe('waiting')
   })
 
   const fetchScript: FakeStep[] = [
@@ -1276,7 +1295,7 @@ describe('commands', () => {
     const t = setup(commandScript('npm test'))
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'editAnywhere', enabled: true })
     t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoRunCommands', enabled: true })
-    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'askNetworkCommands', enabled: false })
+    t.handle({ type: 'chat.setPermission', chatId: 'main', name: 'autoNetworkCommands', enabled: true })
     expect(await turn(t)).toBe('waiting')
     expect(t.calls.at(-1)?.options).not.toHaveProperty('sandbox')
 

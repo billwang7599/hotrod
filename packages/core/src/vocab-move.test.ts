@@ -37,6 +37,20 @@ describe('the subagents-to-workers move', () => {
     expect(renameEntry(message)).toBe(message)
   })
 
+  it('flips the old ask-before-network-commands switch into autoNetworkCommands, in settings and chat.json', () => {
+    for (const asked of [true, false]) {
+      const settings: Record<string, unknown> = { askNetworkCommands: asked, autoFetch: false }
+      expect(renameSettings(settings)).toBe(true)
+      expect(settings).toEqual({ autoNetworkCommands: !asked, autoFetch: false })
+      expect(renameSettings(settings)).toBe(false)
+      expect(renameChatFile({ id: 'a', askNetworkCommands: asked })).toEqual({ id: 'a', autoNetworkCommands: !asked })
+    }
+    const both: Record<string, unknown> = { askNetworkCommands: true, autoNetworkCommands: true }
+    renameSettings(both)
+    expect(both).toEqual({ autoNetworkCommands: true })
+    expect(renameChatFile({ id: 'b' })).toEqual({ id: 'b' })
+  })
+
   it('moves the community extensions folder from aftermarket once, never over one already there', () => {
     const garage = mkdtempSync(join(tmpdir(), 'kothar-vocab-'))
     mkdirSync(join(garage, 'aftermarket', 'demo'), { recursive: true })

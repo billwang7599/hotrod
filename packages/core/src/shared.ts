@@ -204,7 +204,7 @@ export type EngineAccounts = {
 export const PERMISSION_DEFAULTS = {
   editAnywhere: false,
   autoRunCommands: true,
-  askNetworkCommands: true,
+  autoNetworkCommands: false,
   autoFetch: true,
   autoRead: true,
 }

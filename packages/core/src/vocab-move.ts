@@ -12,18 +12,31 @@ const renameKey = (object: Record<string, unknown>, from: string, to: string) =>
   return true
 }
 
+// The switch 'Ask before commands that publish or reach the network' (askNetworkCommands, on = asks) became 'Run
+// network commands without asking' (autoNetworkCommands, on = runs), so every switch means on = asks less. A saved
+// value is flipped under the new name; a value already under the new name wins.
+const flipNetworkSwitch = (object: Record<string, unknown>) => {
+  if (!('askNetworkCommands' in object)) return false
+  const asked = object.askNetworkCommands
+  if (!('autoNetworkCommands' in object) && typeof asked === 'boolean') object.autoNetworkCommands = !asked
+  delete object.askNetworkCommands
+  return true
+}
+
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value)
 
 /**
  * Moves what settings.json kept under mods to extensions (`mods`, `communityMods`, `modVersions`), then the Subagents
- * extension's switch and values to the Workers extension, and the Subagents model list to Workers, in place.
+ * extension's switch and values to the Workers extension, the Subagents model list to Workers, and the default for
+ * network commands to autoNetworkCommands (flipped), in place.
  */
 export function renameSettings(settings: { extensions?: unknown; models?: unknown }): boolean {
   const saved = settings as Record<string, unknown>
   let changed = renameKey(saved, 'mods', 'extensions')
   changed = renameKey(saved, 'communityMods', 'communityExtensions') || changed
   changed = renameKey(saved, 'modVersions', 'extensionVersions') || changed
+  changed = flipNetworkSwitch(saved) || changed
   if (isObject(settings.extensions)) changed = renameKey(settings.extensions, 'subagents', 'workers') || changed
   if (isObject(settings.models)) {
     changed = renameKey(settings.models, 'subagents', 'workers') || changed
@@ -38,7 +51,7 @@ export function renameSettings(settings: { extensions?: unknown; models?: unknow
 /**
  * A saved chat.json's fields under today's names: `subagent: true` is `worker: true`, role `subagents` is `workers`,
  * `mod` (the extension owning the chat) is `extension`, and `modValues` (a space's extension settings)
- * `extensionValues`.
+ * `extensionValues`, and `askNetworkCommands` is `autoNetworkCommands`, flipped.
  */
 export function renameChatFile<T extends Record<string, unknown>>(saved: T): T {
   const { subagent, ...rest } = saved as Record<string, unknown>
@@ -47,6 +60,7 @@ export function renameChatFile<T extends Record<string, unknown>>(saved: T): T {
   renameKey(next, 'mod', 'extension')
   renameKey(next, 'modValues', 'extensionValues')
   if (next.role === 'subagents') next.role = 'workers'
+  flipNetworkSwitch(next)
   return next as T
 }
 
