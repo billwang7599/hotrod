@@ -32,6 +32,7 @@ The built-in extensions today:
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
+| Artifacts | Yes | HTML that agents make for you, such as pages, mockups, small apps, charts and diagrams, kept per space with every version and shown sandboxed in a popup over the chat (⌘⇧A). |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 
 ### Where Memory keeps its summaries, and cleaning up
@@ -86,6 +87,31 @@ closes it.
 Notes are plain files: you can also open either folder as an Obsidian vault, edit them in any editor, or add a `.md`
 file. A file without the `---` front matter is named after the file. An open popup shows such changes within a couple
 of seconds.
+
+### Artifacts
+
+Notes are your documents; artifacts are what agents build for you to look at or try: a page, a mockup, a small
+interactive app, a chart or a diagram, as one self-contained HTML page. Ask for one ("make me a chart of this", "mock up
+the settings page") and the agent makes it with a tool instead of pasting HTML into its reply.
+
+- **Opening:** **⌘⇧A** (Ctrl+Shift+A elsewhere; change it in **Settings → Shortcuts**) or **Artifacts** in the sidebar
+  opens a popup over the chat, and Esc closes it. When an agent makes or updates an artifact, a line in the chat says
+  so: click it to open the popup on that artifact.
+- **The popup** lists this space's artifacts on the left, the latest changed first. The open one is on the right, drawn
+  live. **Source** shows its HTML, **Copy HTML** and **Download** take it out, and **Delete** deletes every version
+  after asking.
+- **Versions:** an agent changing an artifact saves a new version and keeps the old ones. Pick one under the title to
+  see it; hover a version for what changed and when.
+- **Sandboxed:** an artifact's scripts run, but in a frame of its own. It can't reach Kothar, your token, your files or
+  the network: no fetch, no WebSockets, and no scripts, styles, images or fonts from the web. **Load from the web**,
+  under the list, lets this space's artifacts load those from `https:` sites, such as a chart library; they still can't
+  send or fetch data.
+- **Open in browser** opens the file in your default browser, outside Kothar's sandbox, where it can reach the web as any
+  local page can.
+- **Files:** a space's artifacts are in `<data folder>/chats/<space id>/artifacts/<name>/`: `v1.html`, `v2.html`…
+  and `artifact.json` (title, kind, description, versions). They go when the space is deleted. Home keeps none.
+- **Agents** get nothing about artifacts in their prompts. They use `create_artifact`, `update_artifact`,
+  `list_artifacts` and `read_artifact`; a worker shares its space's artifacts.
 
 ### When the connection drops
 
