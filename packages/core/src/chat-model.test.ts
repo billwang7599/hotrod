@@ -68,4 +68,50 @@ describe("a chat's model, for extensions", () => {
     await until(() => t.limits.length > 0 && t.chat().status === 'idle')
     expect(t.limits[0]).toMatchObject({ engine: 'fake', model: 'fake-large', message: 'Out of usage' })
   })
+
+  // A chat busy with a turn stays on its engine until its next message starts, so a model on another engine would be
+  // reported next to the wrong engine. It's left out instead, and comes back once the chat has moved.
+  it('is absent while its model list has moved it to an engine it has not switched to yet', async () => {
+    const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-chat-model-')))
+    cleanups.push(() => rmSync(garage, { recursive: true, force: true }))
+    let host: ExtensionHost | undefined
+    const extension: Extension = {
+      id: 'watcher',
+      name: 'Watcher',
+      description: '',
+      enabledByDefault: true,
+      onChatCreated: (_chat, context) => void (host = context.host),
+    }
+    const call = { toolId: 't1', name: 'Bash', kind: 'shell' as const, summary: 'touch x', input: { command: 'touch x' } }
+    const asks: FakeStep[] = [{ type: 'tool.started', ...call }, { type: 'permission', ...call, output: 'ok' }]
+    const core = openCore({
+      garage,
+      adapters: [{ ...createFakeAdapter(asks, 0), id: 'alpha' }, { ...createFakeAdapter([], 0), id: 'beta' }],
+      defaultEngine: 'alpha',
+      machine: sandboxingMachine,
+      extensions: [extension],
+    })
+    cleanups.push(() => core.close(true))
+    const handle = (m: ClientMessage) => core.handle(m, () => {})
+    handle({ type: 'engine.setEnabled', engine: 'alpha', enabled: true })
+    handle({ type: 'engine.setEnabled', engine: 'beta', enabled: true })
+    handle({ type: 'workFolder.set', path: join(garage, 'work') })
+    await core.refreshEngines()
+    handle({ type: 'models.setList', role: 'chat', models: [{ engine: 'alpha', model: 'fake-small' }] })
+    handle({ type: 'chat.create', name: 'Space' })
+    const id = core.chats().findLast((c) => c.name === 'Space')!.id
+    const detail = () => host!.chat(id)
+    expect(detail()).toMatchObject({ engine: 'alpha', model: 'fake-small' })
+
+    handle({ type: 'chat.send', chatId: id, text: 'Go' })
+    await until(() => detail()?.status === 'waiting')
+    handle({ type: 'models.setList', role: 'chat', models: [{ engine: 'beta', model: 'fake-large' }] })
+    expect(detail()?.engine).toBe('alpha')
+    expect(detail()).not.toHaveProperty('model')
+
+    handle({ type: 'chat.interrupt', chatId: id, force: true })
+    await until(() => detail()?.status === 'idle')
+    handle({ type: 'chat.send', chatId: id, text: 'Again' })
+    expect(detail()).toMatchObject({ engine: 'beta', model: 'fake-large' })
+  })
 })

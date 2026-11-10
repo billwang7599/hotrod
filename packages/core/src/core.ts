@@ -931,6 +931,8 @@ function openLockedCore(options: {
   }
 
   // model: what its next message runs on, as model choice works it out (models.runOf), while that's on its engine.
+  // A chat busy with a turn when its model list moves to another engine stays on its engine until its next message
+  // starts (send), so for that while model is left out rather than given next to an engine it doesn't run on.
   const detailOf = (chat: Chat): ChatDetail => {
     const run = models.runOf(choosesOf(chat))
     return {

@@ -36,7 +36,12 @@ export const cantPs = probePs()
 export const cantWriteTmp = probeTmp()
 
 // Skips the test, with every reason given, when any of them is set. Skipped tests show the reason in the report.
+// On CI (the CI variable set) it fails instead: CI machines aren't sandboxed, so a missing ps or /tmp there is a
+// broken runner, not a reason to pass quietly. The sandbox check is macOS-only and never set elsewhere, and the
+// macOS-only tests skip on Linux with skipIf before reaching here.
 export const needs = (context: TestContext, ...reasons: (string | undefined)[]) => {
-  const missing = reasons.filter(Boolean)
-  if (missing.length > 0) context.skip(missing.join('; '))
+  const missing = reasons.filter(Boolean).join('; ')
+  if (!missing) return
+  if (process.env.CI) throw new Error(`This test can't run on CI: ${missing}`)
+  context.skip(missing)
 }
