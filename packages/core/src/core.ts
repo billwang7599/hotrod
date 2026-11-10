@@ -41,7 +41,6 @@ import { type Fetch, installedExtensions, openMarketplace } from './marketplace.
 import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
 import { type CommunityExtension, guardHost, valuesOf } from './extensions.ts'
 import {
-  ASK_FIRST_COMMANDS,
   bySpaceOrder,
   CONTEXT_SECTIONS,
   editsAnywhere,
@@ -53,7 +52,6 @@ import {
   PERMISSION_SWITCHES,
   isUnread,
   settingProblem,
-  switchedOn,
   type Adapter,
   type Answers,
   type Attachment,
@@ -100,7 +98,7 @@ import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
 import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
-import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
+import { verdictOf } from './permissions.ts'
 
 export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
@@ -109,7 +107,6 @@ const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE,
 export const WRITE_RULES =
   'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
 const WORKER_SETUP = "A worker uses its space's setup and can't have its own"
-const OUTSIDE_EDIT_ADVICE = 'Work there, or ask the user to allow edits outside the work folder for this chat.'
 export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
@@ -125,7 +122,6 @@ const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'F
 const PROTECT_CHECKED_OUT_BRANCHES = true
 // Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
 const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
-const ASKS_FIRST = new RegExp(`\\b(?:${ASK_FIRST_COMMANDS.map((c) => c.replaceAll(' ', '\\s+')).join('|')})\\b`)
 
 type Checkout = { folder: string; worktree: Worktree; writable: string[]; readOnly: string[] }
 
@@ -2143,36 +2139,8 @@ function openLockedCore(options: {
         writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
         ...(readOnly.length && { readOnly }),
       }
-      const verdictOf = (request: Extract<EngineEvent, { type: 'permission.requested' }>) => {
-        if (request.kind === 'edit' && request.path !== undefined) {
-          // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
-          if (within(realPath(resolve(cwd, request.path)), workDir)) return { allow: true }
-          if (!jail) return undefined
-          const message = `Kothar lets this chat edit only inside ${workDir}. ${OUTSIDE_EDIT_ADVICE}`
-          return { allow: false, message }
-        }
-        const on = (name: PermissionSwitch) => switchedOn(name, ...switchesOf(chat))
-        // Fetching writes nothing, so it needs no sandbox.
-        if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
-        // Reading writes nothing either, but logins and keys still ask.
-        const reading = { cwd, home: homedir(), secrets: secretPathsOf(homedir(), garage) }
-        // .env files are let through only where commands run without asking: sandboxed, both switches on.
-        const envFiles = !!jail && on('autoRunCommands') && on('autoEnvCommands')
-        const sandboxedReading = { ...reading, envFiles }
-        if (request.kind === 'read' || request.kind === 'search') {
-          if (!on('autoRead')) return
-          if (request.kind === 'read') {
-            return request.path !== undefined && !isSecret(request.path, sandboxedReading) ? { allow: true } : undefined
-          }
-          return searchReachesSecret(request.path ?? cwd, sandboxedReading) ? undefined : { allow: true }
-        }
-        if (request.kind !== 'shell' || request.command === undefined) return
-        if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
-        if (!jail || !on('autoRunCommands')) return
-        if (!on('autoNetworkCommands') && ASKS_FIRST.test(request.command)) return
-        if (mentionsSecret(request.command, sandboxedReading)) return
-        return { allow: true }
-      }
+      // Read at each request, so a switch flipped mid-turn counts at once.
+      const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home: homedir(), garage })
 
       let session: Session | undefined
       // Where each tool sits in chat.turn.tools, counting from 1.
@@ -2246,7 +2214,7 @@ function openLockedCore(options: {
           append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
           session?.respond(requestId, verdict.allow, verdict.message)
         }
-        const own = verdictOf(event)
+        const own = verdictOf(event, permissionsOf())
         // The core's denials stand; otherwise an extension's policy goes first.
         if (own?.allow === false) return settle(own)
         const fromExtensions = extensionVerdict(event, chat)
