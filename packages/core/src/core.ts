@@ -113,6 +113,7 @@ const BRANCH_SLUG_MAX_CHARS = 40
 // An extension's notification (host.notify), cut to what a system notification shows anyway.
 const NOTIFY_TITLE_CHARS = 120
 const NOTIFY_BODY_CHARS = 400
+const REVEAL_TIMEOUT_MS = 10_000
 // Enough of a repo's .git to commit, fetch and rebase in a worktree; hooks and config stay read-only.
 const GIT_WRITABLE = ['objects', 'refs', 'logs', 'worktrees', 'packed-refs*', 'FETCH_HEAD']
 // Moving a branch checked out in another worktree would show there as staged changes.
@@ -199,6 +200,9 @@ function openLockedCore(options: {
   restart?: () => void
   // Opens the user's terminal app at a folder; choice is settings.json's terminal. Tests pass a stub.
   openTerminal?: (dir: string, choice?: string) => Promise<void>
+  // Shows a file or folder in Finder (the desktop app: Electron's shell). Without it, `open -R` through the Machine.
+  // Tests pass a stub.
+  reveal?: (path: string) => Promise<void>
 }) {
   const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
   mkdirSync(options.garage, { recursive: true })
@@ -1002,6 +1006,25 @@ function openLockedCore(options: {
     await openTerminalAt(path)
   }
 
+  // Show in Finder reaches only Kothar's own folders: the garage, the work folder, and each chat's folders, files, work
+  // folder and checkouts. Anything else is refused, so an extension can't point Finder anywhere it likes.
+  const revealRoots = () => [
+    garage,
+    ...(settings.workFolder ? [settings.workFolder] : []),
+    ...shownChats().flatMap((chat) => [...terminalRoots(chat), ...chat.info.files]),
+  ]
+  const reveal = async (rawPath: unknown) => {
+    const path = typeof rawPath === 'string' ? rawPath : ''
+    const real = realOr(path)
+    if (!isAbsolute(path) || !revealRoots().map(realOr).some((root) => within(real, root))) {
+      throw new Error(`${path || 'That'} isn't in Kothar's data folder, the work folder or a space's folders`)
+    }
+    if (!existsSync(real)) throw new Error(`${path} doesn't exist`)
+    if (options.reveal) return options.reveal(real)
+    const { code, stderr } = await machine.run('open', ['-R', real], { cwd: '/', timeoutMs: REVEAL_TIMEOUT_MS })
+    if (code !== 0) throw new Error(stderr.trim() || `Couldn't show ${path} in Finder`)
+  }
+
   // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.
   const storageAt = (dir: string, what: string, reserved: string[] = []): ExtensionStorage => {
     const fileOf = (name: string) => {
@@ -1153,6 +1176,7 @@ function openLockedCore(options: {
         }
         await openTerminalAt(real)
       },
+      reveal: (path) => reveal(path),
     }
     const uses = community.get(extension.id)?.manifest.uses
     const given = uses ? guardHost(host, extension, uses) : host
@@ -2570,6 +2594,9 @@ function openLockedCore(options: {
           saveSettings()
           return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
         }
+        // Show in Finder, from an extension's view (a text with reveal). Refused paths come back as an error.
+        case 'reveal':
+          return void reveal(message.path).catch((error) => reply({ type: 'error', message: messageOf(error) }))
         case 'terminal.open': {
           const chat = chatFor(message.chatId)
           const path = String(message.path ?? '')

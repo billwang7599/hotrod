@@ -236,6 +236,10 @@ export type ExtensionHost = {
   // folder. The folder must be in some space: one of its folders, its work folder or a checkout, or inside one. Rejects
   // with a short message for the user when it can't (no such folder, the terminal app is missing).
   openTerminal(path: string): Promise<void>
+  // Shows a file or folder in Finder (on macOS; the file manager elsewhere), selected. Only inside Kothar's own folders:
+  // the data folder (the garage), the work folder, and each chat's folders, files, work folder and checkouts. Rejects
+  // with a short message for the user otherwise, or when the path doesn't exist.
+  reveal(path: string): Promise<void>
   // Files of the extension's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The
   // core's own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
   chatStorage(chatId: string): ExtensionStorage
@@ -394,8 +398,18 @@ export type ExtensionView =
   | { type: 'stack'; children: ExtensionView[]; gap?: 'tight' | 'normal' | 'loose' }
   | { type: 'row'; children: ExtensionView[]; justify?: 'start' | 'between' | 'end' }
   | { type: 'heading'; text: string; hint?: string }
-  // copy: a button beside it that copies the text, such as a path.
-  | { type: 'text'; text: string; tone?: ExtensionTone; mono?: boolean; small?: boolean; hint?: string; copy?: boolean }
+  // copy: a button beside it that copies the text, such as a path. reveal: a Show in Finder button for the path the text
+  // is, by host.reveal's rule (a path outside Kothar's folders shows an error when clicked).
+  | {
+      type: 'text'
+      text: string
+      tone?: ExtensionTone
+      mono?: boolean
+      small?: boolean
+      hint?: string
+      copy?: boolean
+      reveal?: boolean
+    }
   | { type: 'badge'; text: string; tone?: ExtensionTone; hint?: string }
   // A live time since this moment (epoch ms), ticked by the UI as ExtensionListItem.since is.
   | { type: 'elapsed'; since: number; tone?: ExtensionTone; mono?: boolean; small?: boolean; hint?: string }

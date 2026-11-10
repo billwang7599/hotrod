@@ -117,7 +117,7 @@ export function storageView(chatsDir: string, inUse: Mode | undefined): Extensio
           "Each chat keeps its summaries in its own folder, beside its log. Switching modes or turning Memory off " +
           'deletes nothing, and deleting a chat deletes its summaries.',
       },
-      { type: 'text', text: chatsDir, mono: true, copy: true, hint: 'The chats folder. Each chat has a folder here, named by its id.' },
+      { type: 'text', text: chatsDir, mono: true, copy: true, reveal: true, hint: 'The chats folder. Each chat has a folder here, named by its id.' },
       ...MODES.flatMap((mode): ExtensionView[] => [{ type: 'divider' }, modeRow(mode)]),
     ],
   }

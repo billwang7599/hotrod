@@ -56,6 +56,8 @@ async function start() {
       app.relaunch()
       app.quit()
     },
+    // Show in Finder: the core has already checked the path is one of Kothar's own (host.reveal).
+    reveal: async (path) => shell.showItemInFolder(path),
   })
 
   const window = new BrowserWindow({

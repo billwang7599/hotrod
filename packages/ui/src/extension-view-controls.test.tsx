@@ -95,3 +95,22 @@ test('text with copy gets a copy button for its text', () => {
   show({ type: 'text', text: '/garage/chats', mono: true, copy: true })
   expect(host.querySelector('button[aria-label="Copy /garage/chats"]')).not.toBeNull()
 })
+
+test('text with reveal gets a Show in Finder button that asks for its path', () => {
+  const revealed: string[] = []
+  act(() =>
+    root.render(
+      <Tooltip.Provider>
+        <ExtensionViewer
+          view={{ type: 'text', text: '/garage/chats', mono: true, copy: true, reveal: true }}
+          act={() => {}}
+          reveal={(path) => revealed.push(path)}
+        />
+      </Tooltip.Provider>,
+    ),
+  )
+  const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Show in Finder')!
+  act(() => button.click())
+  expect(revealed).toEqual(['/garage/chats'])
+  expect(host.querySelector('button[aria-label="Copy /garage/chats"]')).not.toBeNull()
+})

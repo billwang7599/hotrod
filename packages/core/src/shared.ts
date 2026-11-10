@@ -468,6 +468,8 @@ export type ClientMessage =
   | { type: 'terminal.open'; chatId: string; path: string }
   // 'auto' for the system's default terminal, or one of WorkFolder.terminals by id.
   | { type: 'terminal.set'; terminal: string }
+  // Show in Finder, for an extension view's text with reveal: only inside Kothar's own folders (host.reveal's rule).
+  | { type: 'reveal'; path: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.

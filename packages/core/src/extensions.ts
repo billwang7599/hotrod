@@ -105,6 +105,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   run: 'run',
   spawn: 'run',
   openTerminal: 'run',
+  reveal: 'run',
   wait: 'panels',
   endWait: 'panels',
   processes: 'panels',

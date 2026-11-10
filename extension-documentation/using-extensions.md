@@ -43,7 +43,7 @@ Memory writes its summaries into each chat's own folder, beside the chat's log, 
 | Summary tree | `<data folder>/chats/<chat id>/summaries.jsonl` |
 
 On a Mac the data folder is `~/Library/Application Support/Kothar/`. Memory's page in Settings shows the real path, with
-a copy button, and how much disk each mode's summaries take.
+a copy button and **Show in Finder**, and how much disk each mode's summaries take.
 
 - **Switching modes deletes nothing.** Kothar summarizes every chat in the new mode right away, reusing what that mode
   had already written, so switching back and forth costs little.

@@ -36,6 +36,19 @@ type Act = (action: ExtensionAction) => void
 // Saves one of the extension's space settings, for a panel's switches and pickers.
 type SetValue = (key: string, value: string | number | boolean) => void
 const SetValueContext = createContext<SetValue | undefined>(undefined)
+// Show in Finder for a text with reveal; the core checks the path (host.reveal's rule).
+type Reveal = (path: string) => void
+const RevealContext = createContext<Reveal | undefined>(undefined)
+
+function RevealButton({ path }: { path: string }) {
+  const reveal = useContext(RevealContext)
+  if (!reveal) return null
+  return (
+    <Button size="small" variant="ghost" className="shrink-0" onClick={() => reveal(path)}>
+      Show in Finder
+    </Button>
+  )
+}
 
 function SettingSwitch({ node }: { node: Extract<ExtensionView, { type: 'switch' }> }) {
   const set = useContext(SetValueContext)
@@ -256,11 +269,12 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           </span>
         </Hinted>
       )
-      if (!node.copy) return text
+      if (!node.copy && !node.reveal) return text
       return (
         <div className="flex min-w-0 items-center gap-4">
           {text}
-          <CopyButton text={node.text} label={`Copy ${node.text}`} />
+          {node.copy && <CopyButton text={node.text} label={`Copy ${node.text}`} />}
+          {node.reveal && <RevealButton path={node.text} />}
         </div>
       )
     }
@@ -315,12 +329,16 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   }
 }
 
-export function ExtensionViewer({ view, error, act, set }: { view?: ExtensionView; error?: string; act: Act; set?: SetValue }) {
+type ViewerProps = { view?: ExtensionView; error?: string; act: Act; set?: SetValue; reveal?: Reveal }
+
+export function ExtensionViewer({ view, error, act, set, reveal }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>
   return (
     <SetValueContext.Provider value={set}>
-      <Node node={view} act={act} />
+      <RevealContext.Provider value={reveal}>
+        <Node node={view} act={act} />
+      </RevealContext.Provider>
     </SetValueContext.Provider>
   )
 }

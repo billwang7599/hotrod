@@ -83,7 +83,7 @@ settingsView: {
     return {
       type: 'stack',
       children: [
-        { type: 'text', text: host.storage.dir, mono: true, copy: true },
+        { type: 'text', text: host.storage.dir, mono: true, copy: true, reveal: true },
         {
           type: 'button',
           label: 'Clear cache',

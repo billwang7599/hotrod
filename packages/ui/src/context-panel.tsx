@@ -747,6 +747,7 @@ export function ContextPanel(props: ContextPanelProps) {
             error={panelView?.error}
             act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}
             set={(key, value) => send({ type: 'extension.space.set', chatId, extension: extensionTab.extension, key, value })}
+            reveal={(path) => send({ type: 'reveal', path })}
           />
         )}
       </div>

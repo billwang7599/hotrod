@@ -573,6 +573,7 @@ function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
         view={shown.view}
         error={shown.error}
         act={(action) => connected && send({ type: 'extension.settingsView.action', extensionId: id, action })}
+        reveal={(path) => connected && send({ type: 'reveal', path })}
       />
     </div>
   )

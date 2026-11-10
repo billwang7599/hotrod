@@ -16,7 +16,7 @@ names the missing entry.
 | `chats`, `chat`, `read`, `space`, `messages`, `reaches`, `reachable` | `readChats` |
 | `send`, `createChat`, `retry`, `continue`, `interrupt` | `sendMessages` |
 | `accounts`, `useAccount` | `accounts` |
-| `run`, `spawn`, `openTerminal` | `run` |
+| `run`, `spawn`, `openTerminal`, `reveal` | `run` |
 | `complete` | `models` |
 | `chatStorage` | `memory` |
 | `spaceValues`, `setSpaceValue` | `settings` |
@@ -199,6 +199,16 @@ export { startWatcher }
 `openTerminal(path)` opens your terminal app at a folder, in a new window or tab. The folder must be in some space: one
 of its folders, its work folder or a checkout, or inside one. It rejects with a short message for you when it can't,
 such as when the folder doesn't exist.
+
+### reveal
+
+`reveal(path)` shows a file or folder in Finder, selected. It reaches only Kothar's own folders: the data folder (your
+extension's `storage.dir` and the chats' folders are in it), the work folder, and each chat's folders, files, work folder
+and checkouts, or anything inside them. It rejects with a short message for you otherwise, or when the path doesn't
+exist. A symlink counts where it points.
+
+For a path the user should be able to find, a `text` view with `reveal: true` draws the button for you (see
+[Panels](panels.md)).
 
 ## Notes
 

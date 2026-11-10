@@ -49,6 +49,8 @@ export async function startCore(
     restart?: () => void
     // Tests pass a stub, so no terminal really opens.
     openTerminal?: (dir: string, choice?: string) => Promise<void>
+    // Shows a path in Finder; the desktop app passes Electron's, tests a stub.
+    reveal?: (path: string) => Promise<void>
   } = {},
 ) {
   const { env = process.env, home, uiDir, adapters = registered, machine = localMachine } = options
@@ -76,6 +78,7 @@ export async function startCore(
     githubToken,
     ...(options.restart && { restart: options.restart }),
     ...(options.openTerminal && { openTerminal: options.openTerminal }),
+    ...(options.reveal && { reveal: options.reveal }),
   })
   if (engine) core.setEngineEnabled(engine, true)
   const work = envVar(env, 'WORK')
