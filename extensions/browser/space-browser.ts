@@ -1,11 +1,14 @@
-// One space's browser: a Chromium of Kothar's own on the space's profile, headless while agents work, relaunched
-// with a window when the user takes over (a hand-off), and headless again once they're done. Every change runs one
-// at a time, so only one browser is ever on the profile.
+// One space's browser: a Chromium on the space's profile (Kothar's own, or a copy of the user's), headless while agents
+// work, relaunched with a window when the user takes over (a hand-off), and headless again once they're done. Every
+// change runs one at a time, so only one browser is ever on the profile.
 import * as cdp from './cdp.ts'
 import type { Launcher, Running } from './chromium.ts'
 
 // The CDP calls a hand-off makes, as a parameter so tests can fake the browser with a window.
-export type BrowserOps = Pick<typeof cdp, 'listTabs' | 'activeTab' | 'getCookies' | 'restore' | 'bringToFront'>
+export type BrowserOps = Pick<
+  typeof cdp,
+  'listTabs' | 'activeTab' | 'getCookies' | 'restore' | 'bringToFront' | 'addMissingCookies'
+>
 
 export type SavedTab = { url: string; title: string; active: boolean }
 
@@ -44,6 +47,9 @@ export class SpaceBrowser {
   private poll?: ReturnType<typeof setInterval>
   private timeout?: ReturnType<typeof setTimeout>
   private waiters: ((result: HandOffResult) => void)[] = []
+  // Cookies the browser had when it last closed for idleness, kept in memory only: the next start sets the ones its
+  // profile doesn't have (session cookies, and logins made since a copied profile was last copied).
+  private carried: cdp.Cookie[] = []
   private readonly ops: BrowserOps
   private readonly options: SpaceBrowserOptions
 
@@ -71,7 +77,7 @@ export class SpaceBrowser {
         throw new Error('The user has this space’s browser open in a window; it is back in the background once they’re done')
       }
       if (this.mode === 'headless' && this.running) return this.running.endpoint
-      await this.start(true, { tabs: [], cookies: [] })
+      await this.start(true, { tabs: [], cookies: [] }, true)
       return this.running!.endpoint
     })
   }
@@ -99,12 +105,17 @@ export class SpaceBrowser {
     }
   }
 
-  private async start(headless: boolean, from: { tabs: SavedTab[]; cookies: cdp.Cookie[] }) {
-    const running = await this.options.launch({ profile: this.options.profile, headless })
+  // cold: from nothing, not a relaunch that carries a browser's tabs and cookies over.
+  private async start(headless: boolean, from: { tabs: SavedTab[]; cookies: cdp.Cookie[] }, cold = false) {
+    const running = await this.options.launch({ profile: this.options.profile, headless, cold })
     this.running = running
     this.mode = headless ? 'headless' : 'window'
     this.since = Date.now()
     void running.exited.then(() => this.exited(running))
+    if (cold && this.carried.length) {
+      const carried = this.carried.splice(0)
+      await this.ops.addMissingCookies(running.endpoint, carried).catch(() => {})
+    }
     const active = from.tabs.findIndex((t) => t.active)
     if (from.tabs.length || from.cookies.length) {
       await this.ops.restore(
@@ -177,15 +188,16 @@ export class SpaceBrowser {
       this.reason = reason
       if (chatId) this.waitingChat = chatId
       if (this.mode === 'window' && this.running) {
-        await this.ops.bringToFront(this.running.endpoint).catch(() => {})
+        await this.front(this.running)
         this.changed()
         return
       }
+      const cold = this.mode === 'off'
       const from = await this.snapshot()
       await this.halt()
-      await this.start(false, from)
+      await this.start(false, from, cold)
       const running = this.running!
-      await this.ops.bringToFront(running.endpoint).catch(() => {})
+      await this.front(running)
       this.watch(running)
       const limit = this.options.handOffMs ?? 60 * 60_000
       this.timeout = setTimeout(() => void this.finish('timeout'), limit)
@@ -199,10 +211,16 @@ export class SpaceBrowser {
     return result
   }
 
+  // Its current tab in front, and its window in front of the user's other apps.
+  private async front(running: Running) {
+    await this.ops.bringToFront(running.endpoint).catch(() => {})
+    await running.activate?.().catch(() => {})
+  }
+
   // Brings the window forward again, if there is one.
   async show() {
     const running = this.running
-    if (this.mode === 'window' && running) await this.ops.bringToFront(running.endpoint)
+    if (this.mode === 'window' && running) await this.front(running)
   }
 
   // Ends a hand-off: the window closes and the browser goes on headless, on the same tabs and logins.
@@ -227,10 +245,16 @@ export class SpaceBrowser {
     })
   }
 
-  // Closes the browser, whatever mode it's in; a waiting agent hears it was stopped.
-  stop(): Promise<void> {
+  // Closes the browser, whatever mode it's in; a waiting agent hears it was stopped. keepCookies: it closes for
+  // idleness, so its next start gets back the cookies it would otherwise lose (in memory only, never written).
+  stop(keepCookies = false): Promise<void> {
     return this.serial(async () => {
-      if (this.mode === 'window') this.tabs = (await this.snapshot()).tabs
+      if (this.mode === 'window' || keepCookies) {
+        const now = await this.snapshot()
+        this.tabs = now.tabs
+        if (keepCookies) this.carried = now.cookies
+      }
+      if (!keepCookies) this.carried = []
       await this.halt()
       this.reason = undefined
       this.waitingChat = undefined

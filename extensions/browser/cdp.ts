@@ -80,6 +80,20 @@ export async function getCookies(endpoint: string): Promise<Cookie[]> {
   }
 }
 
+// Sets the cookies the browser doesn't have (by name, domain and path), leaving the ones it has as they are.
+export async function addMissingCookies(endpoint: string, cookies: Cookie[]) {
+  const cdp = await connect(endpoint)
+  try {
+    const keyOf = (c: Cookie) => `${c.name}\n${c.domain}\n${c.path}`
+    const have = new Set((await cdp.send<{ cookies: Cookie[] }>('Storage.getCookies')).cookies.map(keyOf))
+    const missing = cookies.filter((c) => !have.has(keyOf(c)))
+    if (missing.length) await cdp.send('Storage.setCookies', { cookies: missing })
+    return missing.length
+  } finally {
+    cdp.close()
+  }
+}
+
 // Which tab the user (or the agent) looked at last: the one whose page is visible and focused, else visible, else
 // the first listed.
 export async function activeTab(endpoint: string, tabs: Tab[]): Promise<Tab | undefined> {

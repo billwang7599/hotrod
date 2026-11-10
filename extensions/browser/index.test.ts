@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -10,7 +10,8 @@ import { sandboxingMachine } from '@kothar/core/test-machine'
 import { getCookies, listTabs } from './cdp.ts'
 import { chromiumArgs, chromiumLauncher, freeProfile, type Launch, type Launcher } from './chromium.ts'
 import { serveEndpoints } from './endpoint.ts'
-import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL } from './index.ts'
+import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
+import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL } from './index.ts'
 import { type BrowserOps, SpaceBrowser } from './space-browser.ts'
 
 const dirs: string[] = []
@@ -39,7 +40,7 @@ const until = async (check: () => boolean | Promise<boolean>, ms = 4000) => {
 // A fake browser: each launch is a "browser" with tabs the test can see and change, so the window step runs without
 // a window. ops reads and writes the same tabs, as the CDP calls would.
 function fakeBrowsers() {
-  type Fake = { launch: Launch; endpoint: string; tabs: { id: string; url: string; title: string }[]; cookies: Record<string, unknown>[]; alive: boolean; quit: () => void; fronted: number }
+  type Fake = { launch: Launch; endpoint: string; tabs: { id: string; url: string; title: string }[]; cookies: Record<string, unknown>[]; alive: boolean; quit: () => void; fronted: number; activated: number }
   const launched: Fake[] = []
   const byEndpoint = (endpoint: string) => launched.find((b) => b.endpoint === endpoint)!
   let next = 0
@@ -48,13 +49,13 @@ function fakeBrowsers() {
     const exited = new Promise<void>((resolve) => (quit = resolve))
     // A browser starts on one blank tab, as Chromium does on about:blank.
     const tabs = [{ id: 'blank', url: 'about:blank', title: '' }]
-    const fake: Fake = { launch: options, endpoint: `http://fake:${++next}`, tabs, cookies: [], alive: true, quit: () => {}, fronted: 0 }
+    const fake: Fake = { launch: options, endpoint: `http://fake:${++next}`, tabs, cookies: [], alive: true, quit: () => {}, fronted: 0, activated: 0 }
     fake.quit = () => {
       fake.alive = false
       quit()
     }
     launched.push(fake)
-    return { endpoint: fake.endpoint, exited, stop: async () => fake.quit() }
+    return { endpoint: fake.endpoint, exited, stop: async () => fake.quit(), activate: async () => void fake.activated++ }
   }
   const ops: BrowserOps = {
     listTabs: async (endpoint) => {
@@ -72,6 +73,14 @@ function fakeBrowsers() {
     bringToFront: async (endpoint) => {
       byEndpoint(endpoint).fronted++
     },
+    addMissingCookies: async (endpoint, cookies) => {
+      const b = byEndpoint(endpoint)
+      const keyOf = (c: Record<string, unknown>) => `${c.name}\n${c.domain}\n${c.path}`
+      const have = new Set(b.cookies.map(keyOf))
+      const missing = cookies.filter((c) => !have.has(keyOf(c)))
+      b.cookies = [...b.cookies, ...missing]
+      return missing.length
+    },
   }
   return { launch, ops, launched }
 }
@@ -81,7 +90,9 @@ function fakeHost(storage: string) {
   const chats: ChatDetail[] = []
   const waits = new Map<string, ExtensionWait>()
   const changed: string[] = []
+  const notified: { chatId?: string; title: string; body?: string }[] = []
   const host = {
+    notify: (notification: { chatId?: string; title: string; body?: string }) => void notified.push(notification),
     chats: () => chats,
     space: (chatId: string) => {
       const chat = chats.find((c) => c.id === chatId)
@@ -99,7 +110,7 @@ function fakeHost(storage: string) {
     chats.push(detail)
     return detail
   }
-  return { host, chats, waits, changed, chat }
+  return { host, chats, waits, changed, chat, notified }
 }
 
 async function startedExtension() {
@@ -121,7 +132,9 @@ it('attaches Playwright MCP to the space’s browser through Kothar’s endpoint
     extension.mcpServers!({ chat: { id, name: id, engine: 'fake' }, workDir: '/work/space', sandboxed: true, values })[0]!
   const { name, command, args, env, allowTools } = serverOf('space')
   expect({ name, command, allowTools }).toEqual({ name: 'browser', command: process.execPath, allowTools: true })
-  expect(args![0]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
+  // Playwright MCP runs behind the filter that leaves out tools agents don't need.
+  expect(args!.slice(0, 4)).toEqual(['-e', FILTER_SCRIPT, HIDDEN_TOOLS.join(','), process.execPath])
+  expect(args![4]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
   expect(valueAfter(args, '--cdp-endpoint')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[\w-]+\/space$/)
   expect(valueAfter(args, '--output-dir')).toBe('/work/space/.browser/output')
   for (const flag of ['--headless', '--browser', '--user-data-dir', '--isolated', '--extension', '--no-sandbox']) {
@@ -140,7 +153,7 @@ it('attaches Playwright MCP to the space’s browser through Kothar’s endpoint
 it('has no browser before it starts, and drops the old picker settings when it migrates', () => {
   const { extension } = createBrowserExtension()
   expect(extension.mcpServers!({ chat: { id: 'a', name: 'a', engine: 'fake' }, workDir: '/w', sandboxed: true, values: defaults })).toEqual([])
-  expect(extension.settings!.map((s) => s.key)).toEqual(['askEachAction', 'idleMinutes'])
+  expect(extension.settings!.map((s) => s.key)).toEqual(['profile', 'profileFolder', 'askEachAction', 'idleMinutes'])
   expect(extension.settingsVersion).toBe(1)
   const old = { browser: 'chrome', port: 9333, extensionToken: 'x', background: true, askEachAction: true }
   expect(extension.migrateSettings!(old, 0, {})).toEqual({ askEachAction: true })
@@ -168,13 +181,13 @@ it('launches the space’s browser headless on the first browse, and keeps it fo
   await fetch(`${endpoint}/json/version/`)
   await fetch(`${endpoint}/json/version/`)
   expect(fakes.launched).toHaveLength(1)
-  expect(fakes.launched[0]!.launch).toEqual({ profile: join(storage, 'profiles', 'space'), headless: true })
+  expect(fakes.launched[0]!.launch).toEqual({ profile: join(storage, 'profiles', 'space'), headless: true, cold: true })
   // Only Kothar's endpoint, with its token, answers.
   expect((await fetch(endpoint.replace(/\/[\w-]+\/space$/, '/wrong/space/json/version'))).status).toBe(404)
 })
 
 it('hands the browser to the user in a window with the same tabs and logins, and goes back headless on Done', async () => {
-  const { extension, fakes, tool, waits, changed, chat, host } = await startedExtension()
+  const { extension, fakes, tool, waits, changed, chat, host, notified } = await startedExtension()
   const space = chat('space')
   // The agent browsed: a headless browser with two tabs and a cookie.
   const servers = extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })
@@ -207,6 +220,8 @@ it('hands the browser to the user in a window with the same tabs and logins, and
     expect.objectContaining({ label: 'Browser', dot: 'warning', detail: 'Open for you: Log in to Example' }),
   ])
   expect(changed).toContain('space')
+  // A notification, once, for when the user is away.
+  expect(notified).toEqual([{ chatId: 'space', title: 'The browser needs you', body: 'Log in to Example' }])
 
   // Open brings it forward again; the user logs in and lands somewhere new.
   await extension.onWaitAction!(space, { button: 'open' }, { values: defaults, host })
@@ -486,3 +501,127 @@ it.skipIf(!chromiumPath)('runs a real headless Chromium, and a hand-off keeps it
   expect(space.mode).toBe('off')
   expect(existsSync(join(profile, 'SingletonLock'))).toBe(false)
 }, 60_000)
+
+// A Mac with Chrome installed and one profile, as the files say.
+function fakeChrome() {
+  const home = tempDir('kothar-home-')
+  const apps = join(home, 'Applications')
+  const executable = join(apps, 'Google Chrome.app', 'Contents', 'MacOS', 'Google Chrome')
+  const data = join(home, 'Library', 'Application Support', 'Google', 'Chrome')
+  for (const dir of [join(executable, '..'), join(data, 'Default')]) mkdirSync(dir, { recursive: true })
+  writeFileSync(executable, '')
+  writeFileSync(join(data, 'Local State'), JSON.stringify({ profile: { info_cache: { Default: { name: 'Person 1', user_name: 'me@example.com' } } } }))
+  writeFileSync(join(data, 'Default', 'Cookies'), 'v1')
+  return { places: { home, apps: [apps] }, executable, source: join(data, 'Default') }
+}
+
+it('runs a copy of the picked profile on that browser’s own app, copied again on each cold start only', async () => {
+  const chrome = fakeChrome()
+  const fakes = fakeBrowsers()
+  const { extension, browsers } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, places: chrome.places })
+  const profile = extension.settings!.find((s) => s.key === 'profile')!
+  expect(profile.type === 'select' && profile.options).toEqual([
+    { value: 'kothar', label: 'Kothar’s own' },
+    { value: 'chrome:Default', label: 'Chrome: Person 1 (me@example.com)' },
+    { value: 'folder', label: 'Other folder…' },
+  ])
+  const storage = tempDir('kothar-browser-extension-')
+  const h = fakeHost(storage)
+  const values = { ...defaults, profile: 'chrome:Default' }
+  await extension.onStart!({ values, host: h.host })
+  cleanups.push(() => extension.onStop!({ values, host: h.host }))
+  // Nothing to install: it runs on the user's Chrome.
+  expect(await extension.setup!.check(run, values)).toEqual({ ready: true, message: 'Uses Chrome: Person 1 (me@example.com), in the background' })
+  const space = h.chat('space')
+  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  await fetch(`${endpoint}/json/version/`)
+  const mirror = join(storage, 'mirrors', 'space')
+  expect(fakes.launched[0]!.launch).toEqual({ profile: mirror, headless: true, cold: true, executable: chrome.executable, keychain: 'real' })
+  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v1')
+
+  // A hand-off relaunches on the same copy, without copying again, so the agent's logins carry over.
+  writeFileSync(join(chrome.source, 'Cookies'), 'v2')
+  fakes.launched[0]!.cookies = [{ name: 'made', value: 'by-agent', domain: 'example.com', path: '/' }]
+  const show = extension.tools!.find((t) => t.name === SHOW_TOOL)!
+  const call = show.run({ reason: 'Look at the chart' }, { caller: space, values, host: h.host })
+  await until(() => h.waits.has('space'))
+  expect(h.waits.get('space')!.text).toBe('Browser: Look at the chart')
+  expect(h.notified).toEqual([{ chatId: 'space', title: 'An agent wants to show you something', body: 'Look at the chart' }])
+  expect(fakes.launched[1]!.launch).toMatchObject({ profile: mirror, headless: false, cold: false, keychain: 'real' })
+  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v1')
+  await extension.onWaitAction!(space, { button: 'done' }, { values, host: h.host })
+  expect(String(await call)).toContain('The user is done.')
+
+  // Closing for idleness keeps its cookies in memory; the next start copies the profile again, then adds back the
+  // cookies the copy doesn't have.
+  await browsers.get('space')!.stop(true)
+  await fetch(`${endpoint}/json/version/`)
+  const next = fakes.launched.at(-1)!
+  expect(next.launch).toMatchObject({ headless: true, cold: true })
+  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v2')
+  expect(next.cookies).toEqual([{ name: 'made', value: 'by-agent', domain: 'example.com', path: '/' }])
+
+  // Refresh logins now closes the background browser, with nothing carried, so the next browse starts on a new copy.
+  extension.settingsView!.onAction!({ name: 'refresh' }, { values, host: h.host })
+  await until(() => !next.alive)
+  await fetch(`${endpoint}/json/version/`)
+  expect(fakes.launched.at(-1)!.cookies).toEqual([])
+
+  // Picking Kothar's own profile again: the background browser closes, and the next starts on Kothar's profile.
+  const own = { ...values, profile: 'kothar' }
+  await extension.onSettingsChanged!({ key: 'profile', value: 'kothar', previous: 'chrome:Default' }, { values: own, host: h.host })
+  await until(() => !fakes.launched.at(-1)!.alive)
+  await fetch(`${endpoint}/json/version/`)
+  expect(fakes.launched.at(-1)!.launch).toEqual({ profile: join(storage, 'profiles', 'space'), headless: true, cold: true })
+
+  // The settings page says where logins come from, and that a missing folder can't be used.
+  const view = JSON.stringify(extension.settingsView!.render({ values, host: h.host }))
+  expect(view).toContain('Logins from Chrome: Person 1 (me@example.com)')
+  expect(view).toContain('Refresh logins now')
+  const broken = { ...values, profile: 'folder', profileFolder: join(chrome.places.home, 'nope') }
+  expect(JSON.stringify(extension.settingsView!.render({ values: broken, host: h.host }))).toContain('doesn\'t exist')
+})
+
+it('refuses to browse on a profile that can’t be used, and says where to fix it', async () => {
+  const chrome = fakeChrome()
+  const fakes = fakeBrowsers()
+  const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places })
+  const h = fakeHost(tempDir('kothar-browser-extension-'))
+  const values = { ...defaults, profile: 'folder', profileFolder: '' }
+  await extension.onStart!({ values, host: h.host })
+  cleanups.push(() => extension.onStop!({ values, host: h.host }))
+  const space = h.chat('space')
+  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  const answer = await fetch(`${endpoint}/json/version/`)
+  expect(answer.status).toBe(503)
+  expect(await answer.text()).toBe('No folder given: pick a profile in Settings → Extensions → Browser')
+  expect(fakes.launched).toEqual([])
+})
+
+it('shows and hides the space’s browser from the General tab and Processes, with no agent waiting', async () => {
+  const { extension, fakes, chat, host } = await startedExtension()
+  const space = chat('space')
+  const worker = chat('worker', { parentId: 'space', worker: true })
+  const context = { values: defaults, host }
+  const command = (id: string) => extension.commands!.find((c) => c.id === id)!
+  expect(command('show-browser').shown!(space, context)).toBe(true)
+  expect(command('hide-browser').shown!(space, context)).toBe(false)
+  // From a worker's General tab too: it's the space's browser.
+  await command('show-browser').run(worker, context)
+  await until(() => fakes.launched.length === 1 && fakes.launched[0]!.fronted === 1)
+  expect(fakes.launched[0]!.launch).toMatchObject({ headless: false, cold: true })
+  // Its tab in front, and its app in front of the user's others.
+  expect(fakes.launched[0]!.activated).toBe(1)
+  expect(command('show-browser').shown!(space, context)).toBe(false)
+  expect(command('hide-browser').shown!(space, context)).toBe(true)
+  expect(extension.processes!('space', context)[0]!.actions.map((a) => a.label)).toEqual(['Open', 'Hide', 'Stop'])
+  await command('hide-browser').run(space, context)
+  expect(fakes.launched[1]!.launch.headless).toBe(true)
+  expect(extension.processes!('space', context)[0]!.actions.map((a) => a.label)).toEqual(['Show', 'Stop'])
+  expect(command('show-browser').shown!(space, context)).toBe(true)
+})
+
+it('offers show_browser beside ask_user_in_browser, and tells agents when to use each', () => {
+  expect(browser.tools!.map((t) => t.name)).toEqual([HAND_OFF_TOOL, SHOW_TOOL])
+  expect(BROWSER_INSTRUCTIONS).toContain(SHOW_TOOL)
+})

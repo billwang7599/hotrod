@@ -28,7 +28,7 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web with Playwright in the background, one browser per space. When a page needs you, the agent hands it to you in a window and carries on when you click Done. |
+| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
@@ -69,6 +69,43 @@ Engines retry short drops on their own. When a drop lasts longer, the turn ends 
   Kothar stops trying and the turn ends with its error, and you get a notification saying so.
 
 A Stop, a usage limit or any other error ends the turn as before.
+
+### Browser: your profile, in the background
+
+**Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
+space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
+have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
+
+**How your profile is used.** Never in place: your browser keeps running untouched, and its profile folder is only
+read. When a space's browser starts, Kothar copies the profile's login state into a folder of its own
+(`<data folder>/extensions/browser/mirrors/<space>/`) and runs that browser's own app on the copy:
+
+- Copied: cookies, site storage (Local Storage, IndexedDB, Session Storage) and saved passwords and autofill (Login
+  Data, Web Data). A single site's IndexedDB over 200 MB is left out, and the settings page says which.
+- Not copied: history, bookmarks, extensions, open tabs, and the browser's own settings and sign-in (Preferences), so
+  the agents' browser doesn't open your startup pages or sync.
+- On macOS your browser encrypts cookies and passwords with a key in your login Keychain ("Chrome Safe Storage" and
+  the like) that only its own app may read without asking. Running the copy on that same app reads it with no prompt.
+  A copy run on any other browser would see no cookies, so a folder must belong to an installed browser.
+- The copy is made again each time a space's browser starts from closed (on its first browse, after it closed for
+  being idle, or after **Refresh logins now**). A hand-off to you in a window keeps the copy it's on. Logins made only
+  in the agents' browser are kept in memory across an idle close, and go when Kothar quits; to keep one, log in in your
+  own browser.
+- Each space's copy goes when the space is deleted. **Refresh logins now** closes the browsers running in the
+  background, so the next browse takes a fresh copy.
+
+**In the background.** Agents' browsers run headless: no window, no Dock icon, and they never take focus, so you can
+keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away.
+
+**When you're needed.** An agent calls `ask_user_in_browser` (log in, CAPTCHA, payment) or `show_browser` (look at
+this). The browser opens in a window with the agent's tabs, in front of your other apps, the chat shows **Open
+browser** and **Done** (with a notification if you're away from Kothar), and Done puts it back in the background
+where you left it. You can look at any time: **Show browser** in a chat's General tab,
+or **Show** on the Browser row in Processes; **Hide** puts it back.
+
+**What agents get.** Playwright's browser tools, less four they rarely need (`browser_run_code_unsafe`, which runs any
+code in Playwright's own process, `browser_emulate_media`, `browser_drop` and `browser_resize`): 21 tools, about 17,000
+characters (roughly 5,000 tokens) in each session that has the browser.
 
 ## Community extensions
 
