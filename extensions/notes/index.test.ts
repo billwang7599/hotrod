@@ -496,3 +496,24 @@ it('filters the list by tag, from the tag row or a #tag clicked in the editor', 
   await tool(app, 'write_note', { name: 'Style', body: 'Short', scope: 'global' })
   expect(JSON.stringify(await panel(app))).toContain('"label":"Deploys"')
 })
+
+it("adds a note to the space's context from the popup, pasted into its next prompts", async () => {
+  const { garage, create, tool, panel, session, handle, messages } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Deploys', body: 'Ship on Fridays' })
+  const file = join(garage, 'chats', app, 'notes', 'deploys.md')
+  const before = JSON.stringify(await panel(app, { name: 'open', value: `${app}:deploys.md` }))
+  expect(before).toContain('"label":"Add to context"')
+  expect(session(app).instructions).not.toContain('Ship on Fridays')
+
+  const after = JSON.stringify(await panel(app, { name: 'context', value: `${app}:deploys.md` }))
+  expect(after).toMatch(/"label":"In context","variant":"ghost","disabled":true/)
+  handle({ type: 'context.get', chatId: app })
+  const context = messages.findLast((m) => m.type === 'chat.context' && m.chatId === app)
+  expect(context?.type === 'chat.context' && context.items.map((i) => i.path)).toContain(realpathSync(file))
+  expect(session(app).instructions).toContain('Ship on Fridays')
+
+  // Home keeps no files, so it has no such button.
+  await tool('main', 'write_note', { name: 'Style', body: 'Short' })
+  expect(JSON.stringify(await panel('main', { name: 'open', value: 'global:style.md' }))).not.toContain('to context')
+})

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type {
   ChatDetail,
@@ -462,7 +462,22 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
     }
   }
 
-  const main = (note: Note | undefined, state: PopupState, notes: Note[]): ExtensionView => {
+  // Whether the note is one of the space's context files already, or undefined where there's no context to add it to
+  // (Home keeps no files).
+  const inContext = (host: ExtensionHost, chat: ChatDetail, note: Note) => {
+    const space = chainOf(host, chat.id)[0]
+    if (!hasSpaceNotes(space)) return undefined
+    const real = (path: string) => {
+      try {
+        return realpathSync(path)
+      } catch {
+        return path
+      }
+    }
+    return space!.files.map(real).includes(real(note.path))
+  }
+
+  const main = (note: Note | undefined, state: PopupState, notes: Note[], context: boolean | undefined): ExtensionView => {
     if (!note) return { type: 'empty', text: 'Pick a note, or make a new one' }
     const scope = note.scope === 'global' ? 'Global' : 'This space'
     const header: ExtensionView = {
@@ -479,6 +494,20 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
         {
           type: 'row',
           children: [
+            ...(context === undefined
+              ? []
+              : [
+                  {
+                    type: 'button' as const,
+                    label: context ? 'In context' : 'Add to context',
+                    variant: 'ghost' as const,
+                    disabled: context,
+                    action: { name: 'context', value: note.key },
+                    hint: context
+                      ? 'Already in this space’s Context → Files: pasted into its prompts'
+                      : 'Add it to this space’s Context → Files, so its agents get it in full from the next message',
+                  },
+                ]),
             { type: 'button', label: 'Rename', variant: 'ghost', action: { name: 'rename' } },
             {
               type: 'button',
@@ -639,7 +668,7 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
             delete state.open
             delete state.renaming
           }
-          return { type: 'split', side: side(chat, host, notes, state), main: main(open, state, notes) }
+          return { type: 'split', side: side(chat, host, notes, state), main: main(open, state, notes, open && inContext(host, chat, open)) }
         },
         onAction(action: ExtensionAction, chat, { host }) {
           const notes = notesFor(host, chat.id)
@@ -675,6 +704,10 @@ export function createNotesExtension({ pollMs = 2000 }: { pollMs?: number } = {}
             }
             case 'rename':
               state.renaming = {}
+              return
+            // The note joins the space's context files, as the user adding it in Context does; a worker's space too.
+            case 'context':
+              host.addContextFile(chat.id, noteOf(action.value).path)
               return
             case 'tag':
               if (action.value) state.tag = String(action.value).replace(/^#/, '')

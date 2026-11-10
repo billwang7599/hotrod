@@ -71,10 +71,12 @@ closes it.
   or a tag in the editor, to list only the notes that have it, and click it again to show them all.
 - **New note** makes an `Untitled` note in this space (**New global** for every space) and asks for its name.
   **Rename** changes its name and its one-line description; **Delete** asks first.
+- **Add to context** puts the open note in this space's **Context → Files**, so the space's agents get it in full
+  from their next message, as any context file. Remove it there as usual. Home has no context, so no such button.
 - **Global notes** are in `<data folder>/extensions/notes/<name>.md`. **A space's notes** are in
   `<data folder>/chats/<space id>/notes/<name>.md`, so they go when the space is deleted. Home keeps no notes of its
   own: it sees global ones.
-- **Agents** get nothing from your notes in their prompts. When you ask ("put that in my notes", "what did I write
+- **Agents** get nothing from your notes in their prompts unless you add one to context. When you ask ("put that in my notes", "what did I write
   about X"), they use `search_notes`, `list_notes`, `read_note`, `write_note` and `delete_note`. A note's file is named
   from its name, so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is
   refused rather than overwriting the first, and the popup refuses a rename to a name already taken. `delete_note`
