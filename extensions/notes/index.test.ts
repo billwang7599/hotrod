@@ -14,6 +14,7 @@ import {
   frontMatterTags,
   fuzzyMatches,
   linksIn,
+  mentionsOf,
   linkTarget,
   noteText,
   relink,
@@ -757,4 +758,23 @@ it('opens the best match on Enter in the search box, or makes the note typed, an
   expect(best).toContain('"completions":["Deploys"]')
   await panel(app, { name: 'go', value: 'Packing list' })
   expect(existsSync(join(garage, 'chats', app, 'notes', 'packing-list.md'))).toBe(true)
+})
+
+it('lists the notes that name a note without linking it', () => {
+  const notes = [
+    note({ key: 'a', name: 'Deploys' }),
+    note({ key: 'b', name: 'Plan' }),
+    note({ key: 'c', name: 'Linked' }),
+    note({ key: 'd', name: 'Code' }),
+    note({ key: 'e', name: 'Word' }),
+  ]
+  const bodies: Record<string, string> = {
+    a: '',
+    b: 'Before deploys (Fridays)',
+    c: 'See [[Deploys]] and deploys',
+    d: '`deploys` in code',
+    e: 'redeploys is another word',
+  }
+  expect(mentionsOf(notes, notes[0]!, (n) => bodies[n.key]!).map((n) => n.key)).toEqual(['b'])
+  expect(mentionsOf([note({ key: 'x', name: 'Go' }), note({ key: 'y', name: 'Y' })], note({ key: 'x', name: 'Go' }), () => 'go go')).toEqual([])
 })

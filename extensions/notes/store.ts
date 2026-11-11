@@ -542,6 +542,26 @@ export function relinkEverywhere(host: ExtensionHost, from: Note, to: string, sa
   return changed.size
 }
 
+/**
+ * The notes that name a note in their text without a [[link]] to it (Obsidian's unlinked mentions): its whole name, as
+ * words, outside code and links. Names under 3 letters are too common to count.
+ */
+export function mentionsOf(notes: Note[], to: Note, body: (note: Note) => string = bodyOf): Note[] {
+  if (to.name.trim().length < 3) return []
+  const escaped = to.name.trim().replace(/[.*+?^$()|[\]\\{}]/g, '\\$&')
+  const name = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu')
+  return notes.filter((note) => {
+    if (note.key === to.key) return false
+    try {
+      const text = body(note)
+      if (linksIn(text).some((target) => resolveLink(notes, target)?.key === to.key)) return false
+      return name.test(withoutCode(text).replace(/\[\[[^\]\n]*\]\]/g, ' '))
+    } catch {
+      return false
+    }
+  })
+}
+
 // The lines of a note that hold a word of the query, for search_notes.
 export function hitsIn(note: Note, query: string, maxHits = 3, maxChars = 200) {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)

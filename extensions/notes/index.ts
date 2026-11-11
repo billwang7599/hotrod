@@ -12,6 +12,7 @@ import {
   globalDir,
   hasSpaceNotes,
   hitsIn,
+  mentionsOf,
   importFolder,
   MAX_DESCRIPTION,
   MAX_NAME,
@@ -467,6 +468,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
         ]
       : []
     const backlinks = backlinksOf(notes, note, safeBody)
+    const mentions = mentionsOf(notes, note, safeBody)
     return {
       type: 'stack',
       gap: 'normal',
@@ -490,6 +492,17 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               { type: 'divider' as const },
               { type: 'heading' as const, text: 'Linked from', hint: 'Notes with a [[link]] to this one' },
               { type: 'list' as const, label: 'Linked from', items: backlinks.map((n) => row(n, undefined, 'title')) },
+            ]
+          : []),
+        ...(mentions.length
+          ? [
+              ...(backlinks.length ? [] : [{ type: 'divider' as const }]),
+              { type: 'heading' as const, text: 'Mentioned in', hint: `Notes that name “${note.name}” without a [[link]]` },
+              {
+                type: 'list' as const,
+                label: 'Mentioned in',
+                items: mentions.map((n) => row(n, undefined, 'title', snippetOf(safeBody(n), note.name))),
+              },
             ]
           : []),
       ],
