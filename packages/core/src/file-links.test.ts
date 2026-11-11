@@ -6,7 +6,7 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import type { Chat } from './chat.ts'
 import { openCore } from './core.ts'
-import { customLaunch, editorLaunch, installedEditors, splitCommand } from './editors.ts'
+import { customLaunch, editorLaunch, installedEditors, splitCommand, systemLaunch } from './editors.ts'
 import { openFileLinks } from './file-links.ts'
 import type { CoreMessage, Machine } from './shared.ts'
 
@@ -220,7 +220,8 @@ describe('in the core', () => {
     t.handle({ type: 'file.open', chatId: t.chatId, path, in: 'terminal' })
     t.handle({ type: 'file.open', chatId: t.chatId, path: '/etc/hosts' })
     await new Promise((r) => setTimeout(r, 10))
-    expect(t.ran).toContainEqual(['open', path])
+    const system = systemLaunch(path, process.platform)
+    expect(t.ran).toContainEqual([system.command, ...system.args])
     expect(t.opened).toEqual([join(path, '..')])
     expect(t.replies.filter((r) => r.type === 'error')).toEqual([
       { type: 'error', message: "/etc/hosts isn't in this chat's folders, checkouts or work folder" },
