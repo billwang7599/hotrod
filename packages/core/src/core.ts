@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type {
   ChatDetail,
   Extension,
@@ -96,6 +96,7 @@ import { buildInstructions } from './instructions.ts'
 import { type Checkout, openCheckouts } from './checkouts.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, quitMidTurn, readChat, readJson, saveChatFile, storedChatIds } from './chat-store.ts'
+import { within, messageOf } from './util.ts'
 
 // Kept here too, for code that imports them from the core.
 export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
@@ -2499,10 +2500,6 @@ function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
   const options = named.map(({ id, label }) => ({ id, label, ...(modelThinking?.[id] && { thinking: modelThinking[id] }) }))
   return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
 }
-
-const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
-
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 

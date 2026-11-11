@@ -1,10 +1,11 @@
 // The core's own permission policy: which requests it answers without asking the user. A pure function of the request
 // and plain data, so it can be tested alone. Extensions' policies run after it (core.ts); its denials stand.
-import { resolve, sep } from 'node:path'
+import { resolve } from 'node:path'
 import type { PermissionRequest, PermissionVerdict } from '@kothar/extension-api'
 import { realPath } from './machine.ts'
 import { isReadOnlyCommand, isSecret, mentionsSecret, searchReachesSecret, secretPathsOf } from './read-only.ts'
 import { ASK_FIRST_COMMANDS, switchedOn, type PermissionSwitch, type PermissionSwitches } from './shared.ts'
+import { within } from './util.ts'
 
 export const OUTSIDE_EDIT_ADVICE = 'Work there, or ask the user to allow edits outside the work folder for this chat.'
 export const ASKS_FIRST = new RegExp(`\\b(?:${ASK_FIRST_COMMANDS.map((c) => c.replaceAll(' ', '\\s+')).join('|')})\\b`)
@@ -21,8 +22,6 @@ export type PermissionContext = {
   home: string
   garage: string
 }
-
-const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
 
 // A verdict answers the request; undefined leaves it to extensions and then the user.
 export const verdictOf = (request: PermissionRequest, context: PermissionContext): PermissionVerdict | undefined => {

@@ -13,6 +13,7 @@ import { connect } from 'node:net'
 import { join } from 'node:path'
 import { garageHolder } from './garage-lock.ts'
 import type { Machine } from './shared.ts'
+import { messageOf } from './util.ts'
 
 // Kothar was called Hotrod. On the first launch after the rename, the old garage moves to Kothar's own folder, once,
 // so nobody is left wondering which folder is in use. It is a rename, never a copy, and nothing is deleted; every
@@ -30,8 +31,6 @@ const IN_USE_TIMEOUT_MS = 500
 const GIT_TIMEOUT_MS = 30_000
 
 type Log = (message: string) => void
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
-
 function readdirOr(dir: string) {
   try {
     return readdirSync(dir)

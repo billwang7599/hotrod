@@ -2,9 +2,10 @@
 // chat may write to use them, and cleaning them up. The core passes in the machine and how to save a space's
 // worktrees; nothing here keeps chats.
 import { existsSync, rmSync } from 'node:fs'
-import { basename, join, sep } from 'node:path'
+import { basename, join } from 'node:path'
 import { realPath } from './machine.ts'
 import type { ChatInfo, Machine, Worktree } from './shared.ts'
+import { within, messageOf } from './util.ts'
 
 const GIT_TIMEOUT_MS = 120_000
 const BRANCH_SLUG_MAX_CHARS = 40
@@ -150,5 +151,3 @@ export const freeName = (base: string, taken: (name: string) => boolean) => {
   return name
 }
 
-const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))

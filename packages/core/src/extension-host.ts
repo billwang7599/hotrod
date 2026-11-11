@@ -19,6 +19,7 @@ import type { openAccounts } from './accounts.ts'
 import { guardHost } from './extensions.ts'
 import { messagesOf } from './memory.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
+import { within } from './util.ts'
 
 // An extension's notification (host.notify), cut to what a system notification shows anyway.
 const NOTIFY_TITLE_CHARS = 120
@@ -282,4 +283,3 @@ export const storageAt = (dir: string, what: string, reserved: string[] = []): E
   }
 }
 
-const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))

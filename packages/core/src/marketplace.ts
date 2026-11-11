@@ -19,6 +19,7 @@ import {
   previewOf,
   type ThemeFile,
 } from './shared.ts'
+import { messageOf } from './util.ts'
 
 // The catalog is its own repo of pointers; each entry's files come from the author's repo. KOTHAR_MARKETPLACE_URL points
 // it elsewhere (a fork, or a local server).
@@ -444,4 +445,3 @@ function rateLimitMessage(response: Response) {
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
