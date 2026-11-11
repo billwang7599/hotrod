@@ -16,6 +16,7 @@ describe('sessionPlaceOf', () => {
     attachmentsDir: '/garage/chats/s/attachments-that-do-not-exist',
     folders: ['/repo', '/notes'],
     repos: ['/repo'],
+    places: [{ path: '/notes', mode: 'edit' as const }],
     sandbox: { writable: ['/work/s'], tmpDir: '/work/s/.tmp' },
   }
 
@@ -30,6 +31,18 @@ describe('sessionPlaceOf', () => {
     })
     expect(place.instructions).toContain('Your work folder: /work/s')
     expect(place.instructions).toContain('- /repo: /work/s/repo (branch kothar/repo)')
+    expect(place.instructions).toContain('- /notes: Edit in place. Write in it directly.')
+    expect(place.folderPlaces).toEqual([
+      { path: '/notes', mode: 'edit' },
+      { path: '/repo', mode: 'checkout', where: '/work/s/repo' },
+      { path: '/other', mode: 'checkout', where: '/work/s/other' },
+    ])
+  })
+
+  it('keeps the plan sandbox read-only paths after the checkouts', () => {
+    const sandbox = { ...plan.sandbox, readOnly: ['/notes/.ssh'] }
+    const place = sessionPlaceOf({ ...plan, sandbox }, [checkout('/repo', '/work/s/repo')])
+    expect(place.jail?.readOnly).toEqual(['/notes/.ssh', '/repo/.git/config'])
   })
 
   it('runs in the work folder without checkouts, and has no sandbox when the plan has none', () => {

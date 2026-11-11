@@ -9,10 +9,14 @@ export const PILL = 'shrink-0 rounded-full px-6 text-xs leading-[1.6]'
 export const VERDICT_COLORS = { allowed: 'bg-green/10 text-green', denied: 'bg-red/10 text-red', cancelled: 'bg-raised text-muted' }
 const AUTO_VERDICT_HINTS: Record<'allowed' | 'denied', Partial<Record<ToolKind, string>>> = {
   allowed: {
-    edit: 'An edit inside the work folder, so Kothar allowed it without asking',
+    edit: 'An edit inside the work folder or a folder set to Edit in place, so Kothar allowed it without asking',
     shell: 'A command in a sandboxed chat, so Kothar ran it without asking',
   },
-  denied: { edit: 'An edit outside the work folder, so Kothar denied it without asking' },
+  denied: {
+    edit:
+      'An edit outside the folders this chat may write, so Kothar denied it without asking. Each folder’s mode in ' +
+      'the Context panel sets where agents may write.',
+  },
 }
 
 export function Verdict({ permission: { outcome, auto, toolKind } }: { permission: Permission }) {

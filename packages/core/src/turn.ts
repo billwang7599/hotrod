@@ -19,6 +19,7 @@ import type { openAccounts } from './accounts.ts'
 import type { Chat } from './chat.ts'
 import type { Checkout } from './checkouts.ts'
 import type { ExtensionHook } from './extensions.ts'
+import { placeAccess, placesOf, type FolderPlace } from './folder-modes.ts'
 import { summaryOf } from './kothar-mcp.ts'
 import { buildInstructions, type InstructionParts } from './instructions.ts'
 import { continuationPrompt, messagesOf, seededPrompt, withAttachments, type Report } from './memory.ts'
@@ -49,7 +50,7 @@ import { messageOf } from './util.ts'
 // Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
 export const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
 
-type Sandbox = { writable: string[]; tmpDir: string }
+type Sandbox = { writable: string[]; tmpDir: string; readOnly?: string[] }
 
 export type TurnDeps = {
   garage: string
@@ -122,21 +123,25 @@ export type TurnPlan = {
   attachmentsDir: string
   folders: string[]
   repos: string[]
+  // The folders that aren't git repos, with their modes (folder-modes.ts).
+  places: FolderPlace[]
   sandbox?: Sandbox
 }
 
 /** What a session is told, but where it runs and its checkouts (buildInstructions). */
-export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts'>
+export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts' | 'folders'>
 
 // Where a turn's session runs and what it's told, once its checkouts are ready: the first checkout (else the work
-// folder) as its folder, the other folders it may reach, and its sandbox widened by the checkouts' git folders.
-export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'sandbox'>, checkouts: Checkout[]) {
-  const { workDir, parts, attachmentsDir, folders, repos, sandbox } = plan
+// folder) as its folder, the other folders it may reach, its sandbox widened by the checkouts' git folders, and every
+// attached folder's place for the permission answers.
+export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'places' | 'sandbox'>, checkouts: Checkout[]) {
+  const { workDir, parts, attachmentsDir, folders, repos, places, sandbox } = plan
   const cwd = checkouts[0]?.worktree.path ?? workDir
   const instructions = buildInstructions({
     ...parts,
     ...(sandbox && { workDir }),
     checkouts: checkouts.map(({ folder, worktree }) => ({ folder, path: worktree.path, branch: worktree.branch })),
+    folders: places,
   })
   const extraDirs = [
     ...(cwd === workDir ? [] : [workDir]),
@@ -144,13 +149,15 @@ export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attac
     ...folders.filter((folder) => !repos.includes(folder)),
     ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
   ]
-  const readOnly = checkouts.flatMap((c) => c.readOnly)
+  const readOnly = [...(sandbox?.readOnly ?? []), ...checkouts.flatMap((c) => c.readOnly)]
+  const { readOnly: _, ...rest } = sandbox ?? {}
   const jail = sandbox && {
-    ...sandbox,
+    ...rest,
     writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
     ...(readOnly.length && { readOnly }),
   }
-  return { cwd, instructions, extraDirs, jail }
+  const checkoutPlaces = checkouts.map((c): FolderPlace => ({ path: c.folder, mode: 'checkout', where: c.worktree.path }))
+  return { cwd, instructions, extraDirs, jail, folderPlaces: [...places, ...checkoutPlaces] }
 }
 
 export function openTurns(deps: TurnDeps) {
@@ -535,18 +542,26 @@ export function openTurns(deps: TurnDeps) {
     const readFiles = items.flatMap((item) => (item.binary ? [item.path] : []))
     const attachmentsDir = attachmentsDirOf(chat)
     const folders = items.flatMap((item) => (item.section === 'folders' ? [item.path] : []))
-    const repos = folders.filter((folder) => existsSync(join(folder, '.git')))
-    const sandbox = editAnywhere ? undefined : sandboxIn(workDir)
-    return { workDir, parts, readFiles, attachmentsDir, folders, repos, sandbox }
+    const repos = items.flatMap((item) => (item.section === 'folders' && item.git ? [item.path] : []))
+    const places = placesOf(items)
+    const base = editAnywhere ? undefined : sandboxIn(workDir)
+    const access = placeAccess(places, home, garage)
+    const sandbox = base && {
+      ...base,
+      writable: [...base.writable, ...access.writable],
+      ...(access.readOnly.length && { readOnly: access.readOnly }),
+    }
+    return { workDir, parts, readFiles, attachmentsDir, folders, repos, places, sandbox }
   }
 
   // The turn's session, once its checkouts are ready: where it runs (sessionPlaceOf), how each event it sends is handled
   // (sessionEvents), and starting it. Its session and tools live here, one per turn.
   const openSession = (chat: Chat, plan: TurnPlan, checkouts: Checkout[]) => {
     const { run, adapter, prompt, zoomable, attachments, workDir, readFiles } = plan
-    const { cwd, instructions, extraDirs, jail } = sessionPlaceOf(plan, checkouts)
-    // Read at each request, so a switch flipped mid-turn counts at once.
-    const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage })
+    const { cwd, instructions, extraDirs, jail, folderPlaces } = sessionPlaceOf(plan, checkouts)
+    // Read at each request, so a switch flipped mid-turn counts at once. Folder modes count from the next turn, as
+    // the sandbox does.
+    const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage, folders: folderPlaces })
     const events = sessionEvents(chat, permissionsOf)
     try {
       chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
+import { blockedWhy, checkMode, modeOf } from './folder-modes.ts'
 import { GLOBAL_CONTEXT, looksBinary, type ChatInfo, type ContextItem, type ContextSection, type CoreMessage } from './shared.ts'
 import { readBytes } from './util.ts'
 
@@ -59,8 +60,27 @@ export function openContext(deps: ContextDeps) {
       const bytes = readBytes(item.section === 'folders' ? join(item.path, 'AGENTS.md') : item.path)
       const binary = item.section === 'files' && looksBinary(bytes)
       const text = binary ? '' : bytes.toString('utf8')
-      return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
+      const folder = item.section === 'folders' ? folderOf(chat, item.path) : {}
+      return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }), ...folder }]
     })
+  }
+
+  // A folder's place: a git repo (checked out whatever its mode), or its mode and why Kothar refuses it, if it does.
+  const folderOf = (chat: Chat, path: string) => {
+    if (existsSync(join(path, '.git'))) return { git: true as const }
+    const blocked = blockedWhy(path, garage)
+    const nearestFirst = chainOf(chat).map((c) => c.info).reverse()
+    return { mode: modeOf(nearestFirst, path), ...(blocked && { blocked }) }
+  }
+
+  // The mode is the chat's own, so its workers take it too; a chat below can pick another.
+  const setFolderMode = (chat: Chat, path: unknown, mode: unknown) => {
+    checkActive(chat)
+    const item = contextItems(chat).find((i) => i.section === 'folders' && i.path === path)
+    if (!item) throw new Error(`This chat has no folder "${path}"`)
+    if (item.git) throw new Error(`${item.path} is a git folder, so agents work in its checkout`)
+    updateChat(chat, { folderModes: { ...chat.info.folderModes, [item.path]: checkMode(mode) } })
+    broadcastContext(chat)
   }
 
   const broadcastContext = (chat: Chat) =>
@@ -98,7 +118,11 @@ export function openContext(deps: ContextDeps) {
     checkActive(chat)
     if (!chat.info[section].includes(String(path))) throw new Error(`${path} is not one of this chat's ${section}`)
     delete chat.context[String(path)]
-    updateChat(chat, { [section]: chat.info[section].filter((p) => p !== path) })
+    const { [String(path)]: _, ...folderModes } = chat.info.folderModes ?? {}
+    updateChat(chat, {
+      [section]: chat.info[section].filter((p) => p !== path),
+      ...(chat.info.folderModes && { folderModes }),
+    })
     broadcastContext(chat)
   }
 
@@ -126,6 +150,7 @@ export function openContext(deps: ContextDeps) {
     addContext,
     removeContext,
     setContext,
+    setFolderMode,
     writeContext,
     setContextDefault,
     writeInstructions: (text: string) => writeAgentsFile(globalAgentsFile, text),

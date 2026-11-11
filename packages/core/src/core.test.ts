@@ -18,7 +18,7 @@ import type { LimitReached, Extension, ExtensionChat, ExtensionHost, ExtensionSe
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
-import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
+import { CHECKOUT_RULES, FOLDER_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { LOCK_FILE } from './garage-lock.ts'
 import { WORKERS_EXTENSION } from './workers.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
@@ -184,7 +184,7 @@ const until = (check: () => boolean) => waitUntil(check, { tries: 200 })
 const withoutRules = (instructions = '') =>
   instructions
     .split('\n\n')
-    .filter((part) => !part.startsWith(WRITE_RULES))
+    .filter((part) => !part.startsWith(WRITE_RULES) && !part.startsWith(FOLDER_RULES))
     .join('\n\n')
 const chatOf = (core: Core, id: string) => core.chats().find((c) => c.id === id)
 const statusOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.status
@@ -604,7 +604,7 @@ describe('work folder', () => {
     expect(added.chat).toMatchObject({ folders: [join(home, 'app')], createdAt: '2030-01-02T03:04:05.000Z' })
   })
 
-  it('runs each space in its own folder there, made at its first message and kept, and lets it write only there', async () => {
+  it('runs each space in its own folder there, made at its first message and kept, and lets it write there and in its folders', async () => {
     const t = setup(textScript)
     const repo = tempDir()
     const chat = createChat(t, { name: 'App', folders: [repo] })
@@ -614,7 +614,7 @@ describe('work folder', () => {
     expect(await sessionOf(t, chat.id)).toMatchObject({
       cwd: dir,
       extraDirs: [repo],
-      sandbox: { writable: [dir], tmpDir: join(dir, '.tmp') },
+      sandbox: { writable: [dir, repo], tmpDir: join(dir, '.tmp') },
     })
     expect(statSync(dir).isDirectory()).toBe(true)
     expect(chatOf(t.core, chat.id)?.workDir).toBe(dir)
@@ -3283,7 +3283,7 @@ describe('context', () => {
     expect(itemsOf(t, 'main')).toEqual([global])
     expect(itemsOf(t, chat.id)).toEqual([
       global,
-      { section: 'folders', path: repo, from: chat.id, enabled: true, text: 'REPO RULES' },
+      { section: 'folders', path: repo, from: chat.id, enabled: true, text: 'REPO RULES', mode: 'edit' },
       { section: 'agents', path: own, from: chat.id, enabled: true, text: '' },
       { section: 'files', path: notes, from: chat.id, enabled: true, text: 'NOTES' },
     ])
@@ -3326,6 +3326,46 @@ describe('context', () => {
     const again = reopenWithWorker(t, app.id)
     expect(await sessionOf(again.t, workerId)).toMatchObject({ extraDirs: [b] })
     expect(await sessionOf(again.t, 'main')).toMatchObject({ cwd: join(work, 'home') })
+  })
+
+  it('gives each folder that is not git a mode, Edit in place by default, kept in chat.json and taken by workers', async () => {
+    const first = setup(textScript)
+    const [docs, ref] = [folderWith(''), folderWith('')]
+    const app = createChat(first, { name: 'App', folders: [docs, ref] })
+    expect(itemsOf(first, app.id).filter((i) => i.section === 'folders').map((i) => i.mode)).toEqual(['edit', 'edit'])
+    first.handle({ type: 'context.folderMode', chatId: app.id, path: ref, mode: 'readOnly' })
+    expect(JSON.parse(readFileSync(chatFile(first, app.id), 'utf8')).folderModes).toEqual({ [ref]: 'readOnly' })
+    const options = await sessionOf(first, app.id)
+    expect(options.sandbox?.writable).toEqual([join(first.garage, 'work', app.id), docs])
+    expect(options.instructions).toContain(`${FOLDER_RULES}\n- ${docs}: Edit in place. Write in it directly.\n- ${ref}: Read only.`)
+    expect(() => first.handle({ type: 'context.folderMode', chatId: app.id, path: ref, mode: 'nope' as 'edit' })).toThrow(
+      'Unknown folder mode',
+    )
+
+    const { t, workerId } = reopenWithWorker(first, app.id)
+    expect(itemsOf(t, workerId).filter((i) => i.section === 'folders').map((i) => i.mode)).toEqual(['edit', 'readOnly'])
+    t.handle({ type: 'context.folderMode', chatId: workerId, path: docs, mode: 'readOnly' })
+    await sessionOf(t, workerId)
+    // The worker's own session is the first; its report then wakes the space.
+    expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(t.garage, 'work', app.id)])
+    expect(itemsOf(t, app.id).find((i) => i.path === docs)?.mode).toBe('edit')
+
+    t.handle({ type: 'context.remove', chatId: app.id, section: 'folders', path: ref })
+    expect(JSON.parse(readFileSync(chatFile(t, app.id), 'utf8')).folderModes).toEqual({})
+  })
+
+  it("keeps git folders on their checkout and never lets a folder holding Kothar's data be written", () => {
+    const t = setup(textScript)
+    const repo = folderWith('')
+    mkdirSync(join(repo, '.git'))
+    const inside = join(t.garage, 'notes')
+    mkdirSync(inside)
+    const app = createChat(t, { name: 'App', folders: [repo, inside] })
+    const [git, held] = itemsOf(t, app.id).filter((i) => i.section === 'folders')
+    expect(git).toMatchObject({ git: true })
+    expect(git).not.toHaveProperty('mode')
+    expect(held).toMatchObject({ mode: 'edit', blocked: expect.stringContaining("Kothar's own data") })
+    expect(() => t.handle({ type: 'context.folderMode', chatId: app.id, path: repo, mode: 'readOnly' })).toThrow('git folder')
   })
 
   it('gives a file that is not text by path with read access, never pasted, down to the workers', async () => {

@@ -43,6 +43,7 @@ import { lockGarage } from './garage-lock.ts'
 import { openFolderAccess, realOr } from './folder-access.ts'
 import { openFileLinks } from './file-links.ts'
 import { openCheckouts } from './checkouts.ts'
+import { placeAccess, placesOf } from './folder-modes.ts'
 import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, saveChatFile } from './chat-store.ts'
@@ -50,7 +51,7 @@ import { messageOf } from './util.ts'
 import { openTurns, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
 
 // Kept here too, for code that imports them from the core.
-export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
+export { CHECKOUT_RULES, FOLDER_RULES, WRITE_RULES } from './instructions.ts'
 
 export const STOP_GRACE_MS = 60_000
 // A chat's own files, which extensions' chat storage can't touch.
@@ -717,7 +718,7 @@ function assembleCore(options: {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
 
-  const { contextDefaults, contextItems, addContext, removeContext, setContext, writeContext, setContextDefault, writeInstructions } =
+  const { contextDefaults, contextItems, addContext, removeContext, setContext, setFolderMode, writeContext, setContextDefault, writeInstructions } =
     openContext({
       garage,
       home,
@@ -766,10 +767,11 @@ function assembleCore(options: {
         .filter(([folder, { path }]) => existsSync(folder) && existsSync(path))
         .map(([folder]) => gitAccess(folder, workDir).catch(() => ({ writable: [], readOnly: [] }))),
     )
-    const readOnly = access.flatMap((a) => a.readOnly)
+    const folders = placeAccess(placesOf(contextItems(chat)), home, garage)
+    const readOnly = [...access.flatMap((a) => a.readOnly), ...folders.readOnly]
     const jail = {
       ...sandbox,
-      writable: [...sandbox.writable, ...access.flatMap((a) => a.writable)],
+      writable: [...sandbox.writable, ...access.flatMap((a) => a.writable), ...folders.writable],
       ...(readOnly.length && { readOnly }),
     }
     return { workDir, sandbox: jail }
@@ -820,6 +822,7 @@ function assembleCore(options: {
     addContext,
     removeContext,
     setContext,
+    setFolderMode,
     writeContext,
     writeInstructions,
     setContextDefault,

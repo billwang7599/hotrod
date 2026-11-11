@@ -64,6 +64,7 @@ export type ProtocolDeps = {
   addContext: (chat: Chat, section: 'folders' | 'files', path: unknown) => void
   removeContext: (chat: Chat, section: 'folders' | 'files', path: unknown) => void
   setContext: (chat: Chat, path: unknown, enabled: boolean) => void
+  setFolderMode: (chat: Chat, path: unknown, mode: unknown) => void
   writeContext: (chat: Chat, text: string) => void
   writeInstructions: (text: string) => void
   setContextDefault: (section: ContextSection, enabled: boolean) => void
@@ -188,6 +189,7 @@ export function openProtocol(deps: ProtocolDeps) {
     'context.add': (message) => deps.addContext(chatFor(message.chatId), addable(message.section), message.path),
     'context.remove': (message) => deps.removeContext(chatFor(message.chatId), addable(message.section), message.path),
     'context.set': (message) => deps.setContext(chatFor(message.chatId), message.path, message.enabled === true),
+    'context.folderMode': (message) => deps.setFolderMode(chatFor(message.chatId), message.path, message.mode),
     'context.write': (message) => {
       if (typeof message.text !== 'string') throw new Error('Context text is missing')
       return deps.writeContext(chatFor(message.chatId), message.text)

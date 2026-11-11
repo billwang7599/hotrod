@@ -243,6 +243,9 @@ export type ChatInfo = PermissionSwitches & {
   thinking?: ThinkingLevel
   workDir?: string
   worktrees?: Record<string, Worktree>
+  // The mode the user picked for a folder that isn't a git repo, by path: a folder of this chat's or one it inherits.
+  // A folder without one takes the nearest chat above's, else DEFAULT_FOLDER_MODE (folder-modes.ts).
+  folderModes?: Record<string, FolderMode>
   // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
   doneAt?: string
   readAt?: string
@@ -411,7 +414,20 @@ export type ContextItem = {
   enabled: boolean
   text: string
   binary?: boolean
+  // Folders only: a git repo, checked out in the work folder whatever its mode.
+  git?: true
+  // Folders that aren't git repos: how agents may write in it, and why they can't when Kothar refuses the mode.
+  mode?: FolderMode
+  blocked?: string
 }
+
+/**
+ * How agents may write in an attached folder that isn't a git repo. edit: in the folder itself, inside the sandbox.
+ * readOnly: nowhere. Git folders are checked out in the work folder instead (design rule 10).
+ */
+export const FOLDER_MODES = ['edit', 'readOnly'] as const
+export type FolderMode = (typeof FOLDER_MODES)[number]
+export const DEFAULT_FOLDER_MODE: FolderMode = 'edit'
 
 const BINARY_SNIFF_BYTES = 8192
 
@@ -499,6 +515,7 @@ export type ClientMessage =
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
+  | { type: 'context.folderMode'; chatId: string; path: string; mode: FolderMode }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInstructions, CHECKOUT_RULES, contextTextOf, type InstructionParts, WRITE_RULES } from './instructions.ts'
+import { buildInstructions, CHECKOUT_RULES, contextTextOf, FOLDER_RULES, type InstructionParts, WRITE_RULES } from './instructions.ts'
 import type { ContextItem } from './shared.ts'
 
 const item = (section: ContextItem['section'], path: string, text: string, more: Partial<ContextItem> = {}): ContextItem => ({
@@ -11,7 +11,7 @@ const item = (section: ContextItem['section'], path: string, text: string, more:
   ...more,
 })
 
-const EMPTY: InstructionParts = { checkouts: [], extensions: [], memory: [], items: [] }
+const EMPTY: InstructionParts = { checkouts: [], folders: [], extensions: [], memory: [], items: [] }
 
 describe('buildInstructions', () => {
   it('joins every part in order: role, rules, extensions, memory, setup, context items', () => {
@@ -21,6 +21,11 @@ describe('buildInstructions', () => {
       checkouts: [
         { folder: '/code/a', path: '/work/space/a', branch: 'space/a' },
         { folder: '/code/b', path: '/work/space/b', branch: 'space/b' },
+      ],
+      folders: [
+        { path: '/docs', mode: 'edit' },
+        { path: '/ref', mode: 'readOnly' },
+        { path: '/garage/x', mode: 'readOnly', blocked: "it holds Kothar's own data" },
       ],
       extensions: ['EXTENSION ONE', 'EXTENSION TWO'],
       workers: 'WORKERS',
@@ -33,6 +38,8 @@ describe('buildInstructions', () => {
       'ROLE',
       `${WRITE_RULES}\nYour work folder: /work/space`,
       `${CHECKOUT_RULES}\n- /code/a: /work/space/a (branch space/a)\n- /code/b: /work/space/b (branch space/b)`,
+      `${FOLDER_RULES}\n- /docs: Edit in place. Write in it directly.\n- /ref: Read only.\n` +
+        "- /garage/x: Read only, since it holds Kothar's own data.",
       'EXTENSION ONE',
       'EXTENSION TWO',
       'WORKERS',

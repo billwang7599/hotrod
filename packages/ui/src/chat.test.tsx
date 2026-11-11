@@ -504,7 +504,7 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   const badges = rows.map((b) => b.querySelector('[data-verdict]')?.textContent)
   expect(badges).toEqual(['Allowed', 'Allowed automatically', 'Denied', 'Denied'])
   expect(container.textContent).not.toContain('Approve')
-  expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the work folder')
+  expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the folders this chat may write')
   act(() => showStepsByDefault(false))
   localStorage.clear()
   reloadSteps()
