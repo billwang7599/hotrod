@@ -5,7 +5,7 @@ import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Attachment, ClientMessage, ContextItem } from '@kothar/core/shared'
-import { SentAttachment } from './chat.tsx'
+import { SentAttachment } from './chat/attachments.tsx'
 import type { ChatView } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
