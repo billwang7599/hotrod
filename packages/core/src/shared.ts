@@ -443,7 +443,7 @@ export type PanelTab = {
   extension: string
   id: string
   title: string
-  placement?: 'tab' | 'popup'
+  placement?: 'tab' | 'popup' | 'dock'
   shortcut?: string
   sidebar?: boolean
 }
@@ -624,6 +624,8 @@ export type CoreMessage =
   | { type: 'error'; message: string }
   // An extension's notification (host.notify); chatId: clicking it opens that chat.
   | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
+  // An extension asks the UI to open one of its panels for the chat (host.showPanel), without taking focus.
+  | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
 

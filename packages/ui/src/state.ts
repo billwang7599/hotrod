@@ -487,6 +487,8 @@ export function reduce(state: State, action: Action): State {
     }
     // Shown by the notifier (notifications.ts), not kept in state.
     case 'notify':
+    // Opens a dock or a tab (main.tsx), not kept in state.
+    case 'extension.panel.show':
       return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }

@@ -52,3 +52,44 @@ export function usePopup() {
     () => popup,
   )
 }
+
+/**
+ * The extension dock panel that's open beside the chat (ExtensionPanel.placement 'dock'), by extensionTabId, or null,
+ * and whether it's widened to fill the chat pane. Shared so a shortcut, a sidebar entry, a note in the chat or the
+ * extension itself (host.showPanel) can open one. Not kept across reloads.
+ */
+export type DockState = { open: string | null; wide: boolean }
+let dock: DockState = { open: null, wide: false }
+const dockListeners = new Set<() => void>()
+
+export const currentDock = () => dock
+
+function setDock(next: DockState) {
+  if (next.open === dock.open && next.wide === dock.wide) return
+  dock = next
+  for (const listener of dockListeners) listener()
+}
+
+/** Opens a dock panel (null closes it). Closing, or opening another, narrows it back beside the chat. */
+export const openDock = (id: string | null) => setDock({ open: id, wide: id !== null && id === dock.open && dock.wide })
+
+export const widenDock = (wide: boolean) => setDock({ ...dock, wide: dock.open !== null && wide })
+
+export function useDock() {
+  return useSyncExternalStore(
+    (listener) => {
+      dockListeners.add(listener)
+      return () => dockListeners.delete(listener)
+    },
+    () => dock,
+  )
+}
+
+/** Whether an extension's panel shown for chatId opens: the user is looking at that chat, or at one below it. */
+export function showsFor(chats: { id: string; parentId?: string }[], selectedId: string, chatId: string) {
+  for (let id: string | undefined = selectedId, i = 0; id !== undefined && i < 32; i++) {
+    if (id === chatId) return true
+    id = chats.find((c) => c.id === id)?.parentId
+  }
+  return false
+}

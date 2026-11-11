@@ -204,6 +204,20 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       complete: (request) => deps.complete(request),
       refresh: (chatId) => deps.refresh(extension, chatId),
+      showPanel(chatId, panel) {
+        const chat = chatFor(String(chatId))
+        const found = extension.panels?.find((p) => p.id === panel)
+        if (!found) throw new Error(`${extension.name} has no panel "${panel}"`)
+        // A popup would take over the window, so only a dock or a tab opens this way.
+        if (found.placement === 'popup' || !deps.isOn(extension)) return
+        deps.broadcast({
+          type: 'extension.panel.show',
+          chatId: chat.info.id,
+          extension: extension.id,
+          panel: found.id,
+          placement: found.placement === 'dock' ? 'dock' : 'tab',
+        })
+      },
       wait(chatId, wait) {
         const chat = chatFor(chatId)
         if (!['running', 'waiting'].includes(chat.status) && !chat.ending) {

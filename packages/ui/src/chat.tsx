@@ -28,6 +28,7 @@ import {
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
+  type PanelTab,
   type Setup,
   type ToolKind,
   type Upload,
@@ -35,7 +36,8 @@ import {
 } from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from './connection.ts'
 import { ContextPanel } from './context-panel.tsx'
-import { choosePanelTab, extensionTabId, openPopup } from './panel-tab.ts'
+import { choosePanelTab, extensionTabId, openDock, openPopup } from './panel-tab.ts'
+import { ExtensionDock, useOpenDock } from './extension-dock.tsx'
 import { usePathsShown } from './paths.ts'
 import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from './drafts.ts'
 import { useReveal, type RevealFrom } from './smooth.ts'
@@ -954,6 +956,8 @@ type ChatProps = {
   select?: (chatId: string) => void
 }
 
+const NO_PANELS: PanelTab[] = []
+
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
   const paths = usePathsShown()
@@ -1202,6 +1206,7 @@ export function Chat(props: ChatProps) {
     return { key: `${chat.id}:thinking:${thought}`, from: thought >= opened.current.thoughts ? 'start' : 'end' }
   }
   const draftFrom: RevealFrom = draftKey === opened.current.draftKey ? 'end' : 'start'
+  const dockPanel = useOpenDock(props.extensionUi?.chatId === chat.id ? props.extensionUi.panels : NO_PANELS)
   const itemProps = {
     chat,
     ...(!reduceMotion && { revealOf }),
@@ -1214,8 +1219,9 @@ export function Chat(props: ChatProps) {
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
     },
     openPanel: (extension: string, panel: string) => {
-      const popup = props.extensionUi?.panels.some((p) => p.extension === extension && p.id === panel && p.placement === 'popup')
-      if (popup) return openPopup(extensionTabId(extension, panel))
+      const placement = props.extensionUi?.panels.find((p) => p.extension === extension && p.id === panel)?.placement
+      if (placement === 'popup') return openPopup(extensionTabId(extension, panel))
+      if (placement === 'dock') return openDock(extensionTabId(extension, panel))
       choosePanelTab(extensionTabId(extension, panel))
       if (!props.contextOpen) props.toggleContext()
     },
@@ -1223,6 +1229,7 @@ export function Chat(props: ChatProps) {
 
   return (
     <div className="flex min-h-0 flex-1" style={{ '--column': `${props.columnPx}px` } as CSSProperties}>
+      <div className="relative flex min-h-0 min-w-0 flex-1">
       <main
         className="relative flex min-h-0 min-w-0 flex-1 flex-col"
         onDragEnter={(e) => {
@@ -1592,6 +1599,19 @@ export function Chat(props: ChatProps) {
           </Hint>
         </div>
       </main>
+      <AnimatePresence initial={false}>
+        {dockPanel && (
+          <ExtensionDock
+            key={extensionTabId(dockPanel.extension, dockPanel.id)}
+            chatId={chat.id}
+            panel={dockPanel}
+            panelViews={props.panelViews}
+            connected={connected}
+            send={send}
+          />
+        )}
+      </AnimatePresence>
+      </div>
       <AnimatePresence initial={false}>
         {props.contextOpen && (
           <SidePanel key="context" side="right" overlay={props.contextOverlay}>

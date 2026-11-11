@@ -4,7 +4,7 @@ import { Dialog } from 'radix-ui'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, MOTION, useReturnFocus } from './controls.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
-import { choosePanelTab, currentPopup, extensionTabId, openPopup, usePopup } from './panel-tab.ts'
+import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
 import { conflictsOf, normalize, parseBinding, refusal, registerShortcut, shortcutActions, type ShortcutHandlers } from './shortcuts.ts'
 import type { SidebarEntry } from './sidebar.tsx'
 import { panelKey, type State } from './state.ts'
@@ -15,6 +15,17 @@ import { panelKey, type State } from './state.ts'
  */
 
 export const isPopup = (panel: PanelTab) => panel.placement === 'popup'
+
+/** What opening a panel does, by where it shows: a popup opens, a dock slides in beside the chat, a tab shows. */
+function opener(panel: PanelTab, showTab: () => void, toggle: boolean) {
+  const id = extensionTabId(panel.extension, panel.id)
+  if (panel.placement === 'popup') return () => openPopup(toggle && currentPopup() === id ? null : id)
+  if (panel.placement === 'dock') return () => openDock(toggle && currentDock().open === id ? null : id)
+  return () => {
+    choosePanelTab(id)
+    showTab()
+  }
+}
 
 /** A panel's keys out of the box: the ones it asks for, unless they're not a shortcut or another action has them. */
 export function panelDefaultKeys(id: string, asked: string | undefined): string | null {
@@ -27,7 +38,8 @@ export function panelDefaultKeys(id: string, asked: string | undefined): string 
 
 /**
  * Puts each panel with keys in the shortcut registry (as `extension:<extension>/<panel>`, remappable in Settings →
- * Shortcuts), and returns the handlers that run them: a popup opens or closes, a tab shows in the right sidebar.
+ * Shortcuts), and returns the handlers that run them: a popup or a dock opens or closes, a tab shows in the right
+ * sidebar.
  */
 export function usePanelShortcuts(panels: PanelTab[], showTab: () => void): ShortcutHandlers {
   const wanted = panels.filter((p) => p.shortcut)
@@ -45,14 +57,7 @@ export function usePanelShortcuts(panels: PanelTab[], showTab: () => void): Shor
   }, [signature])
   return Object.fromEntries(
     wanted.map((panel) => {
-      const id = extensionTabId(panel.extension, panel.id)
-      const run = isPopup(panel)
-        ? () => openPopup(currentPopup() === id ? null : id)
-        : () => {
-            choosePanelTab(id)
-            showTab()
-          }
-      return [id, run]
+      return [extensionTabId(panel.extension, panel.id), opener(panel, showTab, true)]
     }),
   )
 }
@@ -67,12 +72,7 @@ export function sidebarEntries(panels: PanelTab[], keys: Record<string, string |
         key: id,
         label: panel.title,
         keys: keys[id] ?? null,
-        open: isPopup(panel)
-          ? () => openPopup(id)
-          : () => {
-              choosePanelTab(id)
-              showTab()
-            },
+        open: opener(panel, showTab, false),
       }
     })
 }

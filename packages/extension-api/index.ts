@@ -259,6 +259,11 @@ export type ExtensionHost = {
   // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
   // folder. Rejects when no engine that is on can make one.
   complete(request: CompletionRequest): Promise<string>
+  // Opens one of this extension's panels for the chat, without moving the user's focus: a dock panel slides in beside
+  // the chat and a tab shows in the right sidebar, if the user is looking at that chat (or at a chat below it). A popup
+  // isn't opened, since it would take over the window. For something new the user will want to see, such as an artifact
+  // an agent just made; not for every change.
+  showPanel(chatId: string, panel: string): void
   // Draws this extension's panels and commands for the chat again, and its open panels: call it when what they show
   // changed. Without a chat, for every chat.
   refresh(chatId?: string): void
@@ -527,8 +532,11 @@ export type ExtensionPanel = {
   id: string
   title: string
   // 'tab' (the default): a tab in the right sidebar. 'popup': a large window over the chat, for work that wants room,
-  // such as notes; Esc closes it. Either way it belongs to the chat that's open, and draws for it.
-  placement?: 'tab' | 'popup'
+  // such as notes; Esc closes it. 'dock': a column beside the chat, between the transcript and the right sidebar, for
+  // something to look at while the chat goes on, such as an artifact: the user resizes it by its edge, widens it to
+  // fill the chat pane, and closes it; it takes no focus when it opens. One dock panel shows at a time. Whichever, it
+  // belongs to the chat that's open, and draws for it.
+  placement?: 'tab' | 'popup' | 'dock'
   // Keys that open the panel (a popup) or show its tab, out of the box, such as 'Mod+Shift+N' (Mod is ⌘ on macOS,
   // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left
   // off; pick ones that are free.

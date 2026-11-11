@@ -15,6 +15,7 @@ import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
 import { ExtensionPopup, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { choosePanelTab, extensionTabId, openDock, showsFor } from './panel-tab.ts'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -91,12 +92,25 @@ function App() {
     seenRef.current = { chats: state.chats, selectedId: state.selectedId }
   })
   const openRef = useRef((_chatId: string) => {})
+  // Shows the right sidebar, for an extension that opens one of its tabs (host.showPanel).
+  const showTabRef = useRef(() => {})
   // oxlint-disable-next-line react/refs -- read when a notification is clicked, never during render
   const [notifier] = useState(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))))
   const receive = useCallback(
     (action: Action) => {
       if (action.type !== 'connection' && action.type !== 'select' && action.type !== 'toast.dismiss') {
         notifier.observe(action, { ...seenRef.current, looking: isLooking() })
+      }
+      if (action.type === 'extension.panel.show') {
+        const { chats, selectedId } = seenRef.current
+        if (!showsFor(chats, selectedId, action.chatId)) return
+        const id = extensionTabId(action.extension, action.panel)
+        if (action.placement === 'dock') openDock(id)
+        else {
+          choosePanelTab(id)
+          showTabRef.current()
+        }
+        return
       }
       dispatch(action)
     },
@@ -204,6 +218,9 @@ function App() {
     if (contextDocks) setContextOpen(true)
     else setOverlay('context')
   }, [contextDocks])
+  useLayoutEffect(() => {
+    showTabRef.current = showContext
+  })
   const panelKeys = usePanelShortcuts(panels, showContext)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),

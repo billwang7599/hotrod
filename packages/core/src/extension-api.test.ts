@@ -589,6 +589,36 @@ describe('notify', () => {
   })
 })
 
+describe('showPanel', () => {
+  const panels: Extension['panels'] = [
+    { id: 'side', title: 'Side', placement: 'dock', render: () => ({ type: 'empty', text: '' }) },
+    { id: 'tab', title: 'Tab', render: () => ({ type: 'empty', text: '' }) },
+    { id: 'pop', title: 'Pop', placement: 'popup', render: () => ({ type: 'empty', text: '' }) },
+  ]
+
+  it('asks the UI to open a dock or a tab for a chat, never a popup', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.host().showPanel(id, 'side')
+    t.host().showPanel(id, 'tab')
+    t.host().showPanel(id, 'pop')
+    expect(t.messages.filter((m) => m.type === 'extension.panel.show')).toEqual([
+      { type: 'extension.panel.show', chatId: id, extension: 'test', panel: 'side', placement: 'dock' },
+      { type: 'extension.panel.show', chatId: id, extension: 'test', panel: 'tab', placement: 'tab' },
+    ])
+    expect(() => t.host().showPanel(id, 'nope')).toThrow('Test extension has no panel "nope"')
+    expect(() => t.host().showPanel('nope', 'side')).toThrow('Unknown chat "nope"')
+  })
+
+  it('keeps a dock placement for the UI', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    const listed = t.replies.find((m) => m.type === 'chat.extensions')
+    expect(listed).toMatchObject({ panels: [{ id: 'side', placement: 'dock' }, { id: 'tab' }, { id: 'pop', placement: 'popup' }] })
+  })
+})
+
 describe('panels and commands', () => {
   const view = (text: string): ExtensionView => ({ type: 'stack', children: [{ type: 'text', text }] })
 

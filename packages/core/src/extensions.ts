@@ -91,7 +91,7 @@ export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
     extension,
     id,
     title,
-    ...(placement === 'popup' && { placement }),
+    ...((placement === 'popup' || placement === 'dock') && { placement }),
     ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
     ...(sidebar === true && { sidebar }),
   }
@@ -123,6 +123,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   reveal: 'run',
   addContextFile: 'sendMessages',
   wait: 'panels',
+  showPanel: 'panels',
   endWait: 'panels',
   processes: 'panels',
   processAction: 'panels',
