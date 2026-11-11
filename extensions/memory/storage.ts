@@ -1,51 +1,43 @@
-import { lstatSync, readdirSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { ExtensionHost, ExtensionView } from '@kothar/extension-api'
 import { ROLLING_FILE } from './rolling.ts'
 import { SUMMARIES_FILE } from './tree.ts'
 
 // Where each memory mode keeps its summaries, and the Settings readout of how much disk they take, with a way to
-// delete the mode that isn't in use. Each chat keeps its own file, beside its log, in <garage>/chats/<id>/.
+// delete the mode that isn't in use. Each chat keeps its own file, beside its log, in its chatStorage.
 
 type Mode = 'tree' | 'rolling'
+type Host = Pick<ExtensionHost, 'everyChatStorage'>
 
 export const MODE_FILES: Record<Mode, string> = { tree: SUMMARIES_FILE, rolling: ROLLING_FILE }
 export const MODE_LABELS: Record<Mode, string> = { tree: 'Summary tree', rolling: 'Rolling summary' }
 const MODES: Mode[] = ['rolling', 'tree']
 
-// <garage>/chats, from the extension's own storage in <garage>/extensions/<id>/. Every chat folder is there, Home's
-// (main) and workers' too, including chats whose extension is off and so aren't listed by host.chats().
-export const chatsFolderOf = (host: Pick<ExtensionHost, 'storage'>) => join(dirname(dirname(host.storage.dir)), 'chats')
-
-// The mode's file in each chat folder that has one.
-function filesOf(chatsDir: string, mode: Mode) {
-  let ids: string[]
-  try {
-    ids = readdirSync(chatsDir)
-  } catch {
-    return []
-  }
-  return ids.flatMap((id) => {
-    const path = join(chatsDir, id, MODE_FILES[mode])
-    try {
-      const stat = lstatSync(path)
-      return stat.isFile() ? [{ path, size: stat.size }] : []
-    } catch {
-      return []
-    }
+// The mode's file in each chat that has one: every chat Kothar keeps, Home's (main) and workers' too, including chats
+// whose extension is off and so aren't listed by host.chats().
+function filesOf(host: Host, mode: Mode) {
+  return host.everyChatStorage().flatMap(({ storage }) => {
+    const file = storage.list().find((f) => f.name === MODE_FILES[mode])
+    return file ? [{ storage, size: file.size }] : []
   })
 }
 
-export function diskUse(chatsDir: string, mode: Mode) {
-  const files = filesOf(chatsDir, mode)
+export function diskUse(host: Host, mode: Mode) {
+  const files = filesOf(host, mode)
   return { bytes: files.reduce((sum, file) => sum + file.size, 0), chats: files.length }
 }
 
-// Removes the mode's file from every chat folder and nothing else. Returns how many it removed.
-export function deleteSummaries(chatsDir: string, mode: Mode) {
-  const files = filesOf(chatsDir, mode)
-  for (const { path } of files) rmSync(path, { force: true })
+// Removes the mode's file from every chat and nothing else. Returns how many it removed.
+export function deleteSummaries(host: Host, mode: Mode) {
+  const files = filesOf(host, mode)
+  for (const { storage } of files) storage.remove(MODE_FILES[mode])
   return files.length
+}
+
+// The folder that holds every chat's folder, for the readout, or undefined with no chats.
+const chatsFolderOf = (host: Host) => {
+  const [first] = host.everyChatStorage()
+  return first && dirname(first.storage.dir)
 }
 
 export function formatBytes(bytes: number) {
@@ -57,9 +49,10 @@ export function formatBytes(bytes: number) {
 const chatsText = (count: number) => `${count} ${count === 1 ? 'chat' : 'chats'}`
 
 // inUse: the mode Memory runs on now, or none while it's off.
-export function storageView(chatsDir: string, inUse: Mode | undefined): ExtensionView {
+export function storageView(host: Host, inUse: Mode | undefined): ExtensionView {
+  const chatsDir = chatsFolderOf(host)
   const modeRow = (mode: Mode): ExtensionView => {
-    const { bytes, chats } = diskUse(chatsDir, mode)
+    const { bytes, chats } = diskUse(host, mode)
     const used = mode === inUse
     const label = MODE_LABELS[mode]
     return {
@@ -117,7 +110,9 @@ export function storageView(chatsDir: string, inUse: Mode | undefined): Extensio
           "Each chat keeps its summaries in its own folder, beside its log. Switching modes or turning Memory off " +
           'deletes nothing, and deleting a chat deletes its summaries.',
       },
-      { type: 'text', text: chatsDir, mono: true, copy: true, reveal: true, hint: 'The chats folder. Each chat has a folder here, named by its id.' },
+      ...(chatsDir
+        ? [{ type: 'text' as const, text: chatsDir, mono: true, copy: true, reveal: true, hint: 'The chats folder. Each chat has a folder here, named by its id.' }]
+        : []),
       ...MODES.flatMap((mode): ExtensionView[] => [{ type: 'divider' }, modeRow(mode)]),
     ],
   }

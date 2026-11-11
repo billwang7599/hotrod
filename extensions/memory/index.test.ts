@@ -346,7 +346,9 @@ describe('Storage: where summaries live, and cleaning them up', () => {
   it('shows the chats folder, each mode file and its disk use, with only the mode not in use deletable', async () => {
     const garage = tempGarage()
     oldChat(garage, 'aaaa0001', 40)
+    // Home's chat, whose extension isn't loaded here, so it isn't shown: its summaries count all the same.
     mkdirSync(join(garage, 'chats', 'main'), { recursive: true })
+    writeFileSync(join(garage, 'chats', 'main', 'chat.json'), JSON.stringify({ id: 'main', name: 'Home', extension: 'home', folders: [], files: [], createdAt: at }))
     writeFileSync(join(garage, 'chats', 'main', 'summaries.jsonl'), 'x'.repeat(1500))
     const t = await start({ garage, mode: 'rolling' })
     await until(() => existsSync(rollingFile(garage, 'aaaa0001')))

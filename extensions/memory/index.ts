@@ -1,6 +1,6 @@
 import type { ChatSummary, MemoryMessage, Extension, ExtensionContext, ExtensionHost, ExtensionValues } from '@kothar/extension-api'
 import { openRollingCompactor, readRolling, ROLLING_INSTRUCTIONS, ROLLING_ZOOM_INSTRUCTIONS, rollingView } from './rolling.ts'
-import { chatsFolderOf, deleteSummaries, storageView } from './storage.ts'
+import { deleteSummaries, storageView } from './storage.ts'
 import {
   dateOf,
   MEMORY_INSTRUCTIONS,
@@ -59,6 +59,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
     const shared = {
       complete: (request: Parameters<ExtensionHost['complete']>[0]) => host.complete(request),
       onFailure: failing,
+      now: () => host.now().getTime(),
       ...(options.debounceMs !== undefined && { debounceMs: options.debounceMs }),
       ...(options.retryBaseMs !== undefined && { retryBaseMs: options.retryBaseMs }),
       ...(options.minChars !== undefined && { minChars: options.minChars }),
@@ -106,7 +107,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
     if (running && modeOf(values) === mode) throw new Error("Memory uses these summaries now, so they can't be deleted")
     reopen(host, mode)
     if (mode === 'tree') trees.clear()
-    return deleteSummaries(chatsFolderOf(host), mode)
+    return deleteSummaries(host, mode)
   }
 
   // The messages zoom and date read: the caller's own, or a worker's parent's as they were at its launch.
@@ -206,7 +207,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
     settingsView: {
       render(context) {
         remember(context)
-        return storageView(chatsFolderOf(context.host), running ? modeOf(context.values) : undefined)
+        return storageView(context.host, running ? modeOf(context.values) : undefined)
       },
       onAction(action, context) {
         const host = remember(context)
