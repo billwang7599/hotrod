@@ -69,6 +69,10 @@ What works today:
 - **Memory:** every chat has its own.
 - **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
 - **Permissions:** switches decide what runs without asking.
+- **File links:** a path in a chat that exists in its folders, checkouts or work folder is a link. Click opens it in
+  your editor at its line (Settings → Work folder → Open files with: the system's default app, VS Code, Cursor,
+  Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in
+  Finder or copies the path.
 - **Setups, themes, the marketplace,** and the built-in extensions in `extensions/`: Artifacts, Browser, Git, Home,
   Memory, Notes, Processes, Reconnect, Skills and Account rotation.
 
