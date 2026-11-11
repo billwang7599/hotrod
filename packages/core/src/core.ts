@@ -553,7 +553,7 @@ function openLockedCore(options: {
     }
   }
   const openTerminalAt = (path: string) =>
-    (options.openTerminal ?? ((dir, choice) => openTerminal(dir, { choice })))(path, settings.terminal)
+    (options.openTerminal ?? ((dir, choice) => openTerminal(dir, { choice, home })))(path, settings.terminal)
   const terminalFor = async (chat: Chat, rawPath: unknown) => {
     const path = typeof rawPath === 'string' ? rawPath : ''
     if (!isAbsolute(path) || !terminalRoots(chat).some((root) => realOr(root) === realOr(path))) {
@@ -940,6 +940,7 @@ function openLockedCore(options: {
   const { setExtensionEnabled, setCommunityExtensions, restartState, communityChanged, uninstallExtension, approvalOf } =
     openExtensionSwitches({
       garage,
+      now,
       settings,
       saveSettings,
       broadcast,

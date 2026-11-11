@@ -719,6 +719,16 @@ describe('reviewed versions', () => {
     expect(next.find((c) => c.manifest.id === 'kept')).not.toHaveProperty('held')
   })
 
+  it('stamps approvals and history with the clock it is given', async () => {
+    const garage = tempGarage()
+    install(garage, 'timed')
+    const at = new Date('2030-01-02T03:04:05.000Z')
+    await loadCommunityExtensions(garage, () => true, () => true, () => at)
+    expect(JSON.parse(readFileSync(approvalsFile(garage), 'utf8')).timed.approvedAt).toBe(at.toISOString())
+    const history = readFileSync(historyFile(garage), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    expect(history.find((entry) => entry.event === 'approved')).toMatchObject({ id: 'timed', at: at.toISOString() })
+  })
+
   it('approves nothing when the approvals file is unreadable', async () => {
     const garage = tempGarage()
     install(garage, 'pinned')

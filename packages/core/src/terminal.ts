@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
 import { existsSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 // Opens the user's terminal app at a folder, for the Open in Terminal buttons. It runs on this computer, where the user
@@ -30,10 +29,9 @@ export const MAC_TERMINALS: MacTerminal[] = [
 // The setting: automatic, or one of MAC_TERMINALS by id.
 export const AUTOMATIC = 'auto'
 
-export const LAUNCH_SERVICES_PLIST = join(
-  homedir(),
-  'Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist',
-)
+// Where macOS keeps the user's default apps, under their home folder.
+export const launchServicesPlist = (home: string) =>
+  join(home, 'Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist')
 // What iTerm2's "Make iTerm2 Default Term" and others claim: the app that opens shell scripts.
 const SHELL_TYPES = ['com.apple.terminal.shell-script', 'public.unix-executable']
 
@@ -101,7 +99,9 @@ export async function openTerminal(
     platform?: NodeJS.Platform
     env?: Record<string, string | undefined>
     choice?: string
-    // The macOS LaunchServices plist as JSON, or undefined if it can't be read.
+    // The user's home folder (the core's home), where the macOS LaunchServices plist is read.
+    home?: string
+    // The macOS LaunchServices plist as JSON, or undefined if it can't be read. Defaults to reading it under home.
     launchServices?: () => Promise<unknown>
   } = {},
 ) {
@@ -110,7 +110,7 @@ export async function openTerminal(
   const automatic = !MAC_TERMINALS.some((t) => t.id === choice)
   const bundle =
     platform === 'darwin' && automatic
-      ? defaultTerminalOf(await (options.launchServices ?? readLaunchServices)().catch(() => undefined))
+      ? defaultTerminalOf(await launchServicesOf(options)().catch(() => undefined))
       : undefined
   const launches = launchesFor(dir, { platform, choice, bundle, env })
   let last: unknown
@@ -129,7 +129,11 @@ export async function openTerminal(
   throw new Error(`Couldn't open a terminal: ${last instanceof Error ? last.message : String(last)}`)
 }
 
-export async function readLaunchServices(file = LAUNCH_SERVICES_PLIST): Promise<unknown> {
+// Without a home folder there's no plist to read, and the automatic choice falls back to Terminal.
+const launchServicesOf = ({ launchServices, home }: { launchServices?: () => Promise<unknown>; home?: string }) =>
+  launchServices ?? (home === undefined ? async () => undefined : () => readLaunchServices(launchServicesPlist(home)))
+
+export async function readLaunchServices(file: string): Promise<unknown> {
   if (!existsSync(file)) return undefined
   const { stdout } = await run({ command: 'plutil', args: ['-convert', 'json', '-o', '-', file], wait: true })
   return JSON.parse(stdout)

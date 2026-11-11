@@ -242,14 +242,16 @@ export type CommunityExtension = CommunityInstall & { extension?: Extension; loa
 // turned on (see approvals.ts). An extension that's off is never imported, so installing one runs none of its code.
 // switchedOn is the extension's own switch alone (isOn also needs the Community extensions switch); it decides which
 // extensions a garage without approvals yet carries over.
+// It runs at startup, before the core opens, so the clock defaults here; tests pass their own.
 export async function loadCommunityExtensions(
   garage: string,
   isOn: (id: string) => boolean,
   switchedOn: (id: string) => boolean = isOn,
+  now: () => Date = () => new Date(),
 ): Promise<CommunityExtension[]> {
   const loaded: CommunityExtension[] = []
   const installs = installedExtensions(garage)
-  const approvals = approvalsFor(garage, installs, switchedOn)
+  const approvals = approvalsFor(garage, now, installs, switchedOn)
   for (const install of installs) {
     const { manifest, dir } = install
     if (!isOn(manifest.id)) {
@@ -259,7 +261,7 @@ export async function loadCommunityExtensions(
     const held = reviewOf(approvals[manifest.id], install)
     if (held) {
       console.error(`Didn't start the community extension in ${dir}: ${held}`)
-      logHistory(garage, { id: manifest.id, event: 'held', version: manifest.version, reason: held })
+      logHistory(garage, now, { id: manifest.id, event: 'held', version: manifest.version, reason: held })
       loaded.push({ ...install, held })
       continue
     }

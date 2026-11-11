@@ -6,7 +6,7 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import type { CoreMessage } from './shared.ts'
-import { defaultTerminalOf, launchesFor, openTerminal, type Launch, type Spawner } from './terminal.ts'
+import { defaultTerminalOf, launchesFor, launchServicesPlist, openTerminal, type Launch, type Spawner } from './terminal.ts'
 
 let dirs: string[] = []
 let cores: Core[] = []
@@ -110,6 +110,12 @@ describe('what opens a terminal at a folder', () => {
 })
 
 describe('opening it', () => {
+  it('looks for LaunchServices under the home folder it is given', () => {
+    expect(launchServicesPlist('/Users/someone')).toBe(
+      '/Users/someone/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist',
+    )
+  })
+
   it('reads LaunchServices for the automatic choice and opens that app, never through a shell', async () => {
     const dir = tempDir()
     const { launches, spawn } = spawner()

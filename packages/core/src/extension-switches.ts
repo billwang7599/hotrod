@@ -11,6 +11,8 @@ import { EXTENSION_USES, type ChatState, type CoreMessage, type ExtensionInfo, t
 
 export type ExtensionSwitchDeps = {
   garage: string
+  /** The core's clock, for the approvals and history it writes. */
+  now: () => Date
   settings: Settings
   saveSettings: () => void
   broadcast: (message: CoreMessage) => void
@@ -48,6 +50,7 @@ export type ExtensionSwitchDeps = {
 export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
   const {
     garage,
+    now,
     settings,
     saveSettings,
     broadcast,
@@ -90,7 +93,7 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     if (from && enabled) {
       // Turning it on approves these exact files; the loader runs nothing else.
       const install = installedExtensions(garage).find((m) => m.manifest.id === extension.id)
-      if (install) approvals = { ...approvals, [extension.id]: approve(garage, install) }
+      if (install) approvals = { ...approvals, [extension.id]: approve(garage, now, install) }
       delete from.held
     }
     saveExtension(extension, { enabled })
@@ -163,7 +166,7 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     const install = installedExtensions(garage).find((m) => m.manifest.id === id)
     if (!install) return
     const known = community.get(id)
-    logInstall(garage, install, !!known)
+    logInstall(garage, now, install, !!known)
     community.set(id, { ...known, manifest: install.manifest, item: install.item })
     if (imported.has(id)) reinstalled.add(id)
     const at = extensions.findIndex((m) => m.id === id)
@@ -196,7 +199,7 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     forget(garage, id)
     const { [id]: _gone, ...rest } = approvals
     approvals = rest
-    logHistory(garage, { id, event: 'uninstalled', ...(version && { version }) })
+    logHistory(garage, now, { id, event: 'uninstalled', ...(version && { version }) })
     const { enabled: _, ...kept } = settings.extensions?.[id] ?? {}
     settings.extensions = { ...settings.extensions, [id]: kept }
     saveSettings()
