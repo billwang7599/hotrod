@@ -580,6 +580,32 @@ describe('work folder', () => {
     expect(t.core.workFolder().path).toBe(workOf(t))
   })
 
+  it("uses the home folder and clock it's given: ~ means that folder, which can't be the work folder, and times come from the clock", () => {
+    const home = tempDir()
+    mkdirSync(join(home, 'app'))
+    const garage = tempDir()
+    const core = openCore({
+      garage,
+      adapters: [createFakeAdapter(textScript, 0)],
+      defaultEngine: 'fake',
+      machine: sandboxingMachine,
+      extensions: [],
+      home,
+      now: () => new Date('2030-01-02T03:04:05.000Z'),
+    })
+    cores.push(core)
+    const messages: CoreMessage[] = []
+    core.onMessage((m) => messages.push(m))
+    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
+    handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    expect(() => handle({ type: 'workFolder.set', path: home })).toThrow("can't be the work folder")
+    expect(() => handle({ type: 'workFolder.set', path: '~' })).toThrow("can't be the work folder")
+    handle({ type: 'chat.create', name: 'App', folders: ['~/app'] })
+    const added = messages.findLast((m) => m.type === 'chat.added')
+    if (added?.type !== 'chat.added') throw new Error('no chat.added')
+    expect(added.chat).toMatchObject({ folders: [join(home, 'app')], createdAt: '2030-01-02T03:04:05.000Z' })
+  })
+
   it('runs each space in its own folder there, made at its first message and kept, and lets it write only there', async () => {
     const t = setup(textScript)
     const repo = tempDir()

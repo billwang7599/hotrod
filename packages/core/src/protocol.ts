@@ -33,6 +33,8 @@ type Accounts = ReturnType<typeof openAccounts>
 
 export type ProtocolDeps = {
   broadcast: (message: CoreMessage) => void
+  /** The time, for when a chat was read. */
+  now: () => Date
   isQuitting: () => boolean
   /** Restarts Kothar; without it, the user restarts it themselves. */
   restart?: () => void
@@ -129,7 +131,7 @@ export function openProtocol(deps: ProtocolDeps) {
     'chat.delete': (message) => deps.deleteChat(chatFor(message.chatId)),
     'chat.read': (message) => {
       const chat = chatFor(message.chatId)
-      return isUnread(chat.info) ? deps.updateChat(chat, { readAt: new Date().toISOString() }) : undefined
+      return isUnread(chat.info) ? deps.updateChat(chat, { readAt: deps.now().toISOString() }) : undefined
     },
     'chat.history': (message, reply) => {
       const { chatId, before, to } = message

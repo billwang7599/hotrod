@@ -4,7 +4,6 @@
 // keeps chats.
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type {
   ChatDetail,
@@ -54,6 +53,10 @@ type Sandbox = { writable: string[]; tmpDir: string }
 
 export type TurnDeps = {
   garage: string
+  /** The user's home folder, which permission answers keep secrets in. */
+  home: string
+  /** The time, for log entries. */
+  now: () => Date
   machine: Machine
   stopGraceMs: number
   isQuitting: () => boolean
@@ -129,6 +132,8 @@ export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts'>
 export function openTurns(deps: TurnDeps) {
   const {
     garage,
+    home,
+    now,
     machine,
     stopGraceMs,
     isQuitting,
@@ -417,7 +422,7 @@ export function openTurns(deps: TurnDeps) {
   // gone goes the way lostChat sends it.
   const forceStop = (chat: Chat) => {
     try {
-      endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Interrupted' })
+      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: 'Interrupted' })
     } catch (error) {
       lostChat(chat, error)
     }
@@ -454,7 +459,7 @@ export function openTurns(deps: TurnDeps) {
       (checkouts) => stillStarting() && start(checkouts),
       (error) => {
         if (!stillStarting()) return
-        endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: messageOf(error) })
+        endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: messageOf(error) })
       },
     )
   }
@@ -483,7 +488,7 @@ export function openTurns(deps: TurnDeps) {
     const zoomable = takesMcp(adapter.id)
     const view = viewOf(chat, messagesOf(chat.entries), zoomable)
     const prompt = continuation ? continuationPrompt(view, continuation) : seededPrompt(view, message, reports)
-    const at = new Date().toISOString()
+    const at = now().toISOString()
     if (!continuation) {
       chat.produced = false
       for (const { text, report } of reports) append(chat, { at, type: 'worker.report', text, ...report })
@@ -533,7 +538,7 @@ export function openTurns(deps: TurnDeps) {
       ...(readOnly.length && { readOnly }),
     }
     // Read at each request, so a switch flipped mid-turn counts at once.
-    const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home: homedir(), garage })
+    const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage })
 
     let session: Session | undefined
     // Where each tool sits in chat.turn.tools, counting from 1.
@@ -551,7 +556,7 @@ export function openTurns(deps: TurnDeps) {
     const emit = (event: EngineEvent) => guarded(() => handleEvent(event))
     const handleEvent = (event: EngineEvent) => {
       if (chat.session !== session) return
-      const at = new Date().toISOString()
+      const at = now().toISOString()
       for (const extension of watchersOf('onEvent')) callExtension(extension, () => extension.onEvent!(detailOf(chat), event, contextOf(extension)))
       if (event.type === 'tool.started') {
         const { name, kind, summary, path } = event
@@ -603,7 +608,7 @@ export function openTurns(deps: TurnDeps) {
           return setStatus(chat, 'waiting')
         }
         chat.pendingRequests.delete(requestId)
-        const resolvedAt = new Date().toISOString()
+        const resolvedAt = now().toISOString()
         append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
         session?.respond(requestId, verdict.allow, verdict.message)
       }
@@ -647,7 +652,7 @@ export function openTurns(deps: TurnDeps) {
       session.prompt(prompt, images)
     } catch (error) {
       if (chat.status === 'idle') return
-      endTurn(chat, { at: new Date().toISOString(), type: 'turn.completed', error: String(error) })
+      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: String(error) })
     }
   }
 
@@ -796,7 +801,7 @@ export function openTurns(deps: TurnDeps) {
   }
 
   const respond = (chat: Chat, requestId: string, allow: boolean) => {
-    const entry = { at: new Date().toISOString(), type: 'permission.resolved' as const, requestId, allow }
+    const entry = { at: now().toISOString(), type: 'permission.resolved' as const, requestId, allow }
     settle(chat, entry).respond(requestId, allow)
   }
 
@@ -807,7 +812,7 @@ export function openTurns(deps: TurnDeps) {
       throw new Error('Answers must give each question a list of choices')
     }
     const given = answers as Answers | undefined
-    const entry = { at: new Date().toISOString(), type: 'question.resolved' as const, requestId }
+    const entry = { at: now().toISOString(), type: 'question.resolved' as const, requestId }
     settle(chat, { ...entry, ...(given && { answers: given }) }).answer?.(requestId, given)
   }
 

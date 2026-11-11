@@ -1,7 +1,6 @@
 // Kothar's own settings in settings.json: which engines are on, the model for summaries, the work folder and the
 // terminal, and the default permission switches. Extensions' own settings aren't here.
 import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Settings } from './chat-store.ts'
 import type { openModels } from './models.ts'
@@ -11,6 +10,8 @@ import { within } from './util.ts'
 
 export type SettingsDeps = {
   garage: string
+  /** The user's home folder: never a work folder, and what ~ means in a typed path. */
+  home: string
   settings: Settings
   saveSettings: () => void
   broadcast: (message: CoreMessage) => void
@@ -30,7 +31,7 @@ export type SettingsDeps = {
 }
 
 export function openAppSettings(deps: SettingsDeps) {
-  const { garage, settings, saveSettings, broadcast, adapterFor, checkEngine, checkEnabled, offersModel, engineInfo, models } = deps
+  const { garage, home, settings, saveSettings, broadcast, adapterFor, checkEngine, checkEnabled, offersModel, engineInfo, models } = deps
   const defaultWorkFolder = join(garage, 'work')
   const workFolder = (): WorkFolder => ({
     ...(settings.workFolder && { path: settings.workFolder }),
@@ -67,12 +68,12 @@ export function openAppSettings(deps: SettingsDeps) {
   // A work folder holding the garage would let an agent write chat.json, settings and accounts.
   const checkWorkFolder = (path: string) => {
     const reachesGarage = within(garage, path) || (within(path, garage) && path !== defaultWorkFolder)
-    if (reachesGarage || [homedir(), realpathSync(homedir())].includes(path)) {
+    if (reachesGarage || [home, realpathSync(home)].includes(path)) {
       throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Kothar's`)
     }
   }
   const setWorkFolder = (rawPath: unknown) => {
-    const typed = String(rawPath ?? '').trim().replace(/^~(?=$|\/)/, homedir())
+    const typed = String(rawPath ?? '').trim().replace(/^~(?=$|\/)/, home)
     if (!isAbsolute(typed)) throw new Error(`The path must be absolute: ${rawPath}`)
     checkWorkFolder(resolve(typed))
     if (existsSync(typed) && !statSync(typed).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)

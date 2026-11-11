@@ -1,7 +1,6 @@
 // A chat's context items: the global AGENTS.md, then each chat's folders, AGENTS.md and files from its space down,
 // each switched on or off per chat (defaults in Settings). The core passes in the chats' tree and how to save them.
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
@@ -10,6 +9,8 @@ import { readBytes } from './util.ts'
 
 export type ContextDeps = {
   garage: string
+  /** The user's home folder, for ~ in a picked path. */
+  home: string
   settings: Settings
   saveSettings: () => void
   broadcast: (message: CoreMessage) => void
@@ -24,7 +25,7 @@ export type ContextDeps = {
 }
 
 export function openContext(deps: ContextDeps) {
-  const { garage, settings, saveSettings, broadcast, parentOf, chainOf, familyOf, checkActive, saveChat, updateChat, extensionsOf } =
+  const { garage, home, settings, saveSettings, broadcast, parentOf, chainOf, familyOf, checkActive, saveChat, updateChat, extensionsOf } =
     deps
   const globalAgentsFile = join(garage, 'AGENTS.md')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -85,7 +86,7 @@ export function openContext(deps: ContextDeps) {
   const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
     checkActive(chat)
     checkOwnsContext(chat)
-    const path = checkPath(rawPath, section)
+    const path = checkPath(rawPath, section, home)
     if (contextItems(chat).some((item) => item.path === path)) {
       throw new Error(`${path} is already in this chat's context`)
     }
@@ -132,8 +133,8 @@ export function openContext(deps: ContextDeps) {
 }
 
 // A folder or file the user picked, resolved; ~ is their home folder.
-export const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
-  const path = String(rawPath).trim().replace(/^~(?=$|\/)/, homedir())
+export const checkPath = (rawPath: unknown, section: 'folders' | 'files', home: string) => {
+  const path = String(rawPath).trim().replace(/^~(?=$|\/)/, home)
   if (!isAbsolute(path)) throw new Error(`The path must be absolute: ${rawPath}`)
   const stat = existsSync(path) ? statSync(path) : undefined
   if (section === 'folders' ? !stat?.isDirectory() : !stat?.isFile()) {

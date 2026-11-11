@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { homedir } from 'node:os'
 import {
   existsSync,
   mkdirSync,
@@ -118,8 +119,12 @@ function openLockedCore(options: {
   // Shows a file or folder in Finder (the desktop app: Electron's shell). Without it, `open -R` through the Machine.
   // Tests pass a stub.
   reveal?: (path: string) => Promise<void>
+  // The user's home folder and the clock. Core modules get them from here instead of asking the OS, so tests can
+  // pass their own.
+  home?: string
+  now?: () => Date
 }) {
-  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS } = options
+  const { adapters, defaultEngine, machine, stopGraceMs = STOP_GRACE_MS, home = homedir(), now = () => new Date() } = options
   mkdirSync(options.garage, { recursive: true })
   // Context paths are saved resolved, so attachment paths must be too for a pin to match its file.
   const garage = realpathSync(options.garage)
@@ -269,6 +274,7 @@ function openLockedCore(options: {
   mkdirSync(chatsDir, { recursive: true })
   const { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal } = openAppSettings({
     garage,
+    home,
     settings,
     saveSettings,
     broadcast,
@@ -624,6 +630,8 @@ function openLockedCore(options: {
     whenAllStopped,
   } = openTurns({
     garage,
+    home,
+    now,
     machine,
     stopGraceMs,
     isQuitting: () => quitting,
@@ -765,7 +773,7 @@ function openLockedCore(options: {
     if (resave) saveChat(chat)
     chats.set(info.id, chat)
     if (quitMidTurn(entries)) {
-      append(chat, { at: new Date().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
+      append(chat, { at: now().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
     }
     return chat
   }
@@ -777,7 +785,7 @@ function openLockedCore(options: {
     files: [],
     engine: models.engineFor(),
     archived: false,
-    createdAt: new Date().toISOString(),
+    createdAt: now().toISOString(),
   })
 
   for (const { id, name } of extensionChats) loadChat(join(chatsDir, id), freshInfo(id, name))
@@ -836,8 +844,8 @@ function openLockedCore(options: {
     const engine = spec.engine ?? models.engineFor(role, setup)
     if (parent) checkActive(parent)
     if (parent?.info.worker) throw new Error('A worker cannot start chats')
-    const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders')))]
-    const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files')))]
+    const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders', home)))]
+    const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files', home)))]
     let id = randomBytes(4).toString('hex')
     while (chats.has(id)) id = randomBytes(4).toString('hex')
     const parentMessages = parent && messagesOf(parent.entries)
@@ -854,7 +862,7 @@ function openLockedCore(options: {
       files,
       engine,
       archived: false,
-      createdAt: new Date().toISOString(),
+      createdAt: now().toISOString(),
       ...pin,
       ...(!parent && setup && { setup: setup.id }),
     }
@@ -976,6 +984,7 @@ function openLockedCore(options: {
   const { contextDefaults, contextItems, addContext, removeContext, setContext, writeContext, setContextDefault, writeInstructions } =
     openContext({
       garage,
+      home,
       settings,
       saveSettings,
       broadcast,
@@ -1058,6 +1067,7 @@ function openLockedCore(options: {
 
   const handle = openProtocol({
     broadcast,
+    now,
     isQuitting: () => quitting,
     restart: options.restart,
     chatFor,
