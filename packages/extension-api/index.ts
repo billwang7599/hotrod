@@ -468,10 +468,23 @@ export type ExtensionView =
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ExtensionListItem[]; empty?: string; label?: string }
-  // language 'diff' colours added and removed lines; others are shown plain. follow: for output that grows, such as a
-  // log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end as lines arrive
-  // unless the user scrolls up.
-  | { type: 'code'; text: string; language?: string; maxLines?: number; follow?: boolean }
+  // language 'diff' colours added and removed lines; javascript (js, mjs), jsx, typescript (ts), tsx, html (htm, svg,
+  // xml), css, json and python (py) get syntax colours in the theme's; others are shown plain. follow: for output that
+  // grows, such as a log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end
+  // as lines arrive unless the user scrolls up. lineNumbers: numbers each line in a gutter. fill: takes the room it's
+  // given (a popup's or a dock's main column) instead of at most 480 px.
+  | {
+      type: 'code'
+      text: string
+      language?: string
+      maxLines?: number
+      follow?: boolean
+      lineNumbers?: boolean
+      fill?: boolean
+    }
+  // Markdown, drawn as Kothar draws replies (GitHub-flavoured: tables, task lists, code blocks with Copy). Raw HTML in it
+  // stays text, and links open in the browser.
+  | { type: 'markdown'; text: string }
   // A card with a title that folds; open says how it starts.
   | { type: 'card'; title: string; badges?: ExtensionListItem['badges']; open?: boolean; children: ExtensionView[] }
   | { type: 'divider' }

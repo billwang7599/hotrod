@@ -502,3 +502,50 @@
   padding: 0 6px;
   cursor: pointer;
 }
+
+/* Syntax colours in a code view (highlight.ts), from the theme's own tokens. */
+.tok-keyword,
+.tok-operatorKeyword,
+.tok-modifier,
+.tok-controlKeyword {
+  color: var(--accent);
+}
+.tok-string,
+.tok-string2,
+.tok-regexp,
+.tok-inserted {
+  color: var(--green);
+}
+.tok-number,
+.tok-bool,
+.tok-atom,
+.tok-literal,
+.tok-attributeName,
+.tok-meta {
+  color: var(--amber);
+}
+.tok-tagName,
+.tok-deleted,
+.tok-invalid {
+  color: var(--red);
+}
+.tok-typeName,
+.tok-className,
+.tok-namespace,
+.tok-definition {
+  color: var(--text);
+  font-weight: 600;
+}
+.tok-propertyName,
+.tok-variableName,
+.tok-labelName {
+  color: var(--text);
+}
+.tok-comment {
+  color: var(--faint);
+  font-style: italic;
+}
+.tok-punctuation,
+.tok-operator {
+  color: var(--muted);
+}

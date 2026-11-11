@@ -181,3 +181,19 @@ test('a page loads only the libraries Kothar serves, each by its exact URL, befo
   show({ type: 'html', label: 'App', html: '<p/>', libraries: ['mermaid'] })
   expect(host.querySelector('iframe')!.getAttribute('csp')).toBe(frameCsp(false, ['mermaid']))
 })
+
+test('a code view colours a known language and numbers its lines; a markdown view draws as replies do', () => {
+  show({ type: 'code', text: 'const a = 1\nconst b = 2\n', language: 'js', lineNumbers: true, fill: true })
+  const pre = host.querySelector('pre')!
+  expect(pre.dataset.language).toBe('js')
+  expect(pre.className).toContain('flex-1')
+  expect(pre.querySelector('.tok-keyword')!.textContent).toBe('const')
+  expect([...pre.querySelectorAll('[aria-hidden="true"]')].map((n) => n.textContent)).toEqual(['1', '2'])
+  show({ type: 'code', text: 'plain text', language: 'rust' })
+  expect(host.querySelector('pre')!.dataset.language).toBeUndefined()
+  expect(host.querySelector('pre')!.className).toContain('max-h-480')
+  show({ type: 'markdown', text: '# Plan\n\n- [x] one\n\n<script>alert(1)</script>' })
+  expect(host.querySelector('.markdown h1')!.textContent).toBe('Plan')
+  expect(host.querySelector('.markdown input[type="checkbox"]')).not.toBeNull()
+  expect(host.querySelector('.markdown script')).toBeNull()
+})

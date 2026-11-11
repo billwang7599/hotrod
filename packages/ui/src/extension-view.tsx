@@ -2,7 +2,9 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
+import { highlightLines } from './highlight.ts'
 import { HtmlFrame } from './html-frame.tsx'
+import { Markdown } from './markdown.tsx'
 import { MarkdownEditor } from './markdown-editor.tsx'
 
 /**
@@ -137,10 +139,14 @@ function lineTone(line: string) {
 
 type CodeNode = Extract<ExtensionView, { type: 'code' }>
 
-function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNode, 'type'>) {
-  const lines = text.replace(/\n$/, '').split('\n')
-  const shown = follow ? lines.slice(-maxLines) : lines.slice(0, maxLines)
+function Code({ text, language, maxLines = MAX_CODE_LINES, follow, lineNumbers, fill }: Omit<CodeNode, 'type'>) {
+  const trimmed = text.replace(/\n$/, '')
+  const lines = trimmed.split('\n')
+  const first = follow ? Math.max(lines.length - maxLines, 0) : 0
+  const shown = lines.slice(first, first + maxLines)
   const cut = lines.length - shown.length
+  const coloured = language === 'diff' ? undefined : highlightLines(trimmed, language)
+  const gutter = String(first + shown.length).length
   const pre = useRef<HTMLPreElement>(null)
   // A followed log stays at its end as it grows, until the user scrolls up to read.
   const atEnd = useRef(true)
@@ -156,12 +162,27 @@ function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNo
     <pre
       ref={pre}
       onScroll={follow ? onScroll : undefined}
-      className="scroll-inset scroll-inset-tight max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]"
+      className={`scroll-inset scroll-inset-tight overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5] ${fill ? 'min-h-0 flex-1' : 'max-h-480'}`}
+      data-language={coloured ? language : undefined}
     >
       {follow && more}
       {shown.map((line, i) => (
-        <div key={i} className={`px-8 whitespace-pre ${language === 'diff' ? lineTone(line) : 'text-muted'}`}>
-          {line || ' '}
+        <div key={i} className={`flex px-8 whitespace-pre ${language === 'diff' ? lineTone(line) : coloured ? 'text-text' : 'text-muted'}`}>
+          {lineNumbers && (
+            <span aria-hidden="true" className="mr-12 shrink-0 text-right text-faint select-none" style={{ width: `${gutter}ch` }}>
+              {first + i + 1}
+            </span>
+          )}
+          <span>
+            {coloured
+              ? coloured[first + i]!.map((run, j) => (
+                  <span key={j} className={run.className}>
+                    {run.text}
+                  </span>
+                ))
+              : line}
+            {!line && ' '}
+          </span>
         </div>
       ))}
       {!follow && more}
@@ -377,7 +398,11 @@ export function downloadText(text: string, filename: string, mimeType = 'text/pl
 
 // An html frame without a height takes the room it's given, so the stacks around it grow to give it that room.
 const fills = (node: ExtensionView): boolean =>
-  node.type === 'html' ? node.height === undefined : node.type === 'stack' && node.children.some(fills)
+  node.type === 'html'
+    ? node.height === undefined
+    : node.type === 'code'
+      ? node.fill === true
+      : node.type === 'stack' && node.children.some(fills)
 
 function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   switch (node.type) {
@@ -462,7 +487,18 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
     case 'list':
       return <List node={node} act={act} />
     case 'code':
-      return <Code text={node.text} language={node.language} maxLines={node.maxLines} follow={node.follow} />
+      return (
+        <Code
+          text={node.text}
+          language={node.language}
+          maxLines={node.maxLines}
+          follow={node.follow}
+          lineNumbers={node.lineNumbers}
+          fill={node.fill}
+        />
+      )
+    case 'markdown':
+      return <Markdown text={node.text} className="min-w-0 text-body leading-[1.6]" />
     case 'card':
       return <Card node={node} act={act} />
     case 'divider':
