@@ -430,6 +430,12 @@ export type ExtensionListItem = {
   selected?: boolean
   action?: ExtensionAction
   hint?: string
+  // Parts of the label to highlight, such as what a search matched: [start, end) character ranges.
+  marks?: [number, number][]
+  // A quieter line under the label, such as the line of text a search matched, with its own highlighted ranges.
+  excerpt?: { text: string; marks?: [number, number][] }
+  // A small button at the end of the row, apart from its action, such as "Link" on a mention.
+  button?: { label: string; action: ExtensionAction; hint?: string }
 }
 
 export type ExtensionView =
@@ -530,6 +536,13 @@ export type ExtensionView =
       autofocus?: boolean
       // Names typing [[ offers, such as every note's: the arrows pick one, Enter or Tab puts it in as [[name]].
       completions?: string[]
+      // When the text changed elsewhere while the user had unsent typing and they pick "Keep mine", this action is sent
+      // first with value: the other text, so the extension can keep it somewhere (say, as a copy) before the editor's
+      // text replaces it. Without it, the other text is dropped.
+      keep?: string
+      // Moves the cursor to the start of a line (numbered from 1) and scrolls it to the top, such as a heading picked in
+      // an outline; the editor takes focus. Each new key jumps once; the same key again does nothing.
+      jump?: { key: string; line: number }
     }
   // A page of HTML, such as a chart or a mockup an agent made, drawn in a sandboxed frame. Its scripts run, but in an
   // origin of their own: they can't reach Kothar's window, storage, token or core, open windows or popups, submit forms

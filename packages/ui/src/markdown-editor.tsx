@@ -14,6 +14,7 @@ import { defaultKeymap, history, historyKeymap, indentLess, indentMore } from '@
 import { defineLanguageFacet, Language, syntaxTree } from '@codemirror/language'
 import { GFM, type MarkdownConfig, parser as baseParser } from '@lezer/markdown'
 import { Button } from './controls.tsx'
+import { highlightRanges } from './highlight.ts'
 
 /**
  * A Markdown editor with live preview, as Obsidian's: the text stays plain Markdown, but on lines the cursor isn't on,
@@ -184,8 +185,13 @@ const CODE_TOKENS =
 const HASH_COMMENTS = /^(py|python|sh|bash|zsh|shell|rb|ruby|yaml|yml|toml|r|perl|pl|makefile|dockerfile|conf|ini)$/i
 const DASH_COMMENTS = /^(sql|lua|haskell|hs|elm)$/i
 
-/** The colour marks for a code block's text, from its language (the fence's info, maybe empty). */
+/**
+ * The colour marks for a code block's text, from its language (the fence's info, maybe empty): the languages Kothar
+ * parses (highlight.ts, as code views colour them) get the same tok-* colours; others a few rules that suit most.
+ */
 export function codeTokens(text: string, language: string, offset = 0): Range<Decoration>[] {
+  const parsed = highlightRanges(text, language)
+  if (parsed) return parsed.map(({ from, to, className }) => mark(className).range(offset + from, offset + to))
   const found: Range<Decoration>[] = []
   for (const match of text.matchAll(CODE_TOKENS)) {
     const [whole, comment, string, number, keyword] = match
@@ -304,8 +310,11 @@ export function previewDecorations(state: EditorState, active: Set<number>, from
         eachLine(node.from, node.to, 'cm-md-codeblock')
         const info = node.node.getChild('CodeInfo')
         const language = info ? doc.sliceString(info.from, info.to).trim() : ''
-        for (let text = node.node.getChild('CodeText'); text; text = text.nextSibling) {
-          if (text.name === 'CodeText') found.push(...codeTokens(doc.sliceString(text.from, text.to), language, text.from))
+        // One run over the block's text, so a parser sees it whole (a string or comment can span lines).
+        const texts = node.node.getChildren('CodeText')
+        if (texts.length) {
+          const from = texts[0]!.from
+          found.push(...codeTokens(doc.sliceString(from, texts.at(-1)!.to), language, from))
         }
         return
       }
@@ -543,22 +552,26 @@ type EditorProps = {
   onChange: (text: string) => void
   onLink?: (target: string) => void
   onTag?: (tag: string) => void
+  /** "Keep mine" over a text that changed elsewhere: called with that other text, before the editor's is sent. */
+  onKeep?: (theirs: string) => void
+  /** Puts the cursor at the start of this line (from 1) and scrolls it to the top, once per key. */
+  jump?: { key: string; line: number }
 }
 
 export const EDITOR_SAVE_MS = 400
 
 type Suggest = { from: number; items: string[]; index: number; left: number; top: number }
 
-export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, completions, onChange, onLink, onTag }: EditorProps) {
+export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, completions, onChange, onLink, onTag, onKeep, jump }: EditorProps) {
   const wrap = useRef<HTMLDivElement>(null)
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   // What the extension and the editor last agreed the text is: the last text sent or taken in.
   const agreed = useRef(text)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const handlers = useRef({ onChange, onLink, onTag, completions })
+  const handlers = useRef({ onChange, onLink, onTag, onKeep, completions })
   useLayoutEffect(() => {
-    handlers.current = { onChange, onLink, onTag, completions }
+    handlers.current = { onChange, onLink, onTag, onKeep, completions }
   })
   // A text that came from the extension (changed on disk) while the user had unsent typing: until they pick one, the
   // editor keeps theirs and saves nothing but on close.
@@ -794,6 +807,19 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, co
     editor.dispatch({ changes: { from: 0, to: current.length, insert: text } })
   }, [text])
 
+  // A jump: once per key, to the start of the line, scrolled to the top.
+  const jumped = useRef<string | undefined>(undefined)
+  const jumpKey = jump?.key
+  const jumpLine = jump?.line
+  useEffect(() => {
+    const editor = view.current
+    if (!editor || jumpKey === undefined || jumpLine === undefined || jumped.current === jumpKey) return
+    jumped.current = jumpKey
+    const line = editor.state.doc.line(Math.min(Math.max(1, Math.floor(jumpLine) || 1), editor.state.doc.lines))
+    editor.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'start', yMargin: 8 }) })
+    editor.focus()
+  }, [jumpKey, jumpLine, docKey])
+
   const useTheirs = () => {
     const editor = view.current
     const theirs = conflictRef.current
@@ -804,6 +830,10 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, co
     editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: theirs } })
   }
   const keepMine = () => {
+    const theirs = conflictRef.current
+    // The other text goes to the extension first, so it can keep it before the editor's replaces it.
+    if (theirs !== undefined) handlers.current.onKeep?.(theirs)
+    agreed.current = theirs ?? agreed.current
     conflictRef.current = undefined
     setConflict(undefined)
     flushRef.current(true)

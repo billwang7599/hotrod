@@ -228,7 +228,8 @@ function Card({ node, act }: { node: Extract<ExtensionView, { type: 'card' }>; a
 }
 
 // The arrows move along a list's rows; up from the first goes back to a search box above it.
-const ROW_BUTTONS = ':scope > li button'
+// The rows' own buttons (not a row's extra button, which Tab reaches): the arrows move between them.
+const ROW_BUTTONS = ':scope > li button[data-row]'
 function moveAlong(e: KeyboardEvent<HTMLUListElement>) {
   if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
   const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>(ROW_BUTTONS)]
@@ -240,6 +241,33 @@ function moveAlong(e: KeyboardEvent<HTMLUListElement>) {
   if (e.key === 'ArrowUp') e.currentTarget.closest('[data-split-side]')?.querySelector<HTMLInputElement>('input[type=search]')?.focus()
 }
 
+/**
+ * Text with some ranges highlighted ([start, end), as an extension sends them for a search match). Ranges are clamped to
+ * the text, sorted, and an overlap is cut, so anything an extension sends draws the text whole and in order.
+ */
+export function Marked({ text, marks }: { text: string; marks?: [number, number][] }) {
+  if (!marks?.length) return <>{text}</>
+  const parts: ReactNode[] = []
+  let at = 0
+  const ranges = marks
+    .filter((r) => Array.isArray(r) && Number.isFinite(r[0]) && Number.isFinite(r[1]))
+    .map(([a, b]) => [Math.max(0, Math.floor(a)), Math.min(text.length, Math.floor(b))] as const)
+    .sort((x, y) => x[0] - y[0])
+  for (const [from, to] of ranges) {
+    const start = Math.max(from, at)
+    if (to <= start) continue
+    if (start > at) parts.push(text.slice(at, start))
+    parts.push(
+      <mark key={start} className="rounded-sm bg-accent/25 text-inherit">
+        {text.slice(start, to)}
+      </mark>,
+    )
+    at = to
+  }
+  if (at < text.length) parts.push(text.slice(at))
+  return <>{parts}</>
+}
+
 function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; act: Act }) {
   if (!node.items.length) return node.empty ? <p className="text-sm text-faint">{node.empty}</p> : null
   return (
@@ -248,7 +276,16 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
         const body = (
           <>
             {item.dot && <span className={`size-7 shrink-0 rounded-full ${DOTS[item.dot]}`} data-tone={item.dot} />}
-            <span className={`min-w-0 flex-1 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>{item.label}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className={`min-w-0 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>
+                <Marked text={item.label} marks={item.marks} />
+              </span>
+              {item.excerpt && (
+                <span className="min-w-0 truncate text-xs text-muted" data-excerpt>
+                  <Marked text={item.excerpt.text} marks={item.excerpt.marks} />
+                </span>
+              )}
+            </span>
             {item.since !== undefined ? (
               <Elapsed since={item.since} className="shrink-0 font-mono text-xs text-faint" />
             ) : (
@@ -265,6 +302,7 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
               <RowHint hint={item.hint}>
                 {item.action ? (
                   <button
+                    data-row
                     className={`${row} hover:bg-hover aria-pressed:bg-hover`}
                     aria-pressed={item.selected ?? undefined}
                     onClick={() => act(item.action!)}
@@ -276,6 +314,7 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
                 )}
               </RowHint>
             </div>
+            {item.button && <RowButton button={item.button} act={act} />}
             {item.link && (
               <a
                 className="shrink-0 font-mono text-xs text-accent hover:underline"
@@ -291,6 +330,15 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
       })}
     </ul>
   )
+}
+
+function RowButton({ button, act }: { button: NonNullable<ExtensionListItem['button']>; act: Act }) {
+  const control = (
+    <Button size="small" variant="ghost" className="shrink-0" onClick={() => act(button.action)}>
+      {button.label}
+    </Button>
+  )
+  return button.hint ? <Hint text={button.hint}>{control}</Hint> : control
 }
 
 type FormNode = Extract<ExtensionView, { type: 'form' }>
@@ -392,7 +440,7 @@ function Search({ node, act }: { node: SearchNode; act: Act }) {
         } else if (e.key === 'ArrowDown') {
           // To the first list row after the box, in the same column.
           const column = e.currentTarget.closest('[data-split-side]') ?? e.currentTarget.parentElement
-          const first = column?.querySelector<HTMLButtonElement>('ul li button')
+          const first = column?.querySelector<HTMLButtonElement>('ul li button[data-row]')
           if (first) {
             e.preventDefault()
             first.focus()
@@ -581,6 +629,8 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           placeholder={node.placeholder}
           autofocus={node.autofocus}
           completions={node.completions}
+          jump={node.jump}
+          onKeep={node.keep ? (theirs) => act({ name: node.keep!, value: theirs }) : undefined}
           onChange={(text) => act({ name: node.change, value: text })}
           onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
           onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}

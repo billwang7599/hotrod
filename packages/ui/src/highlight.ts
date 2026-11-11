@@ -62,3 +62,11 @@ export function highlightLines(text: string, language: string | undefined): Run[
   }
   return lines
 }
+
+/** The coloured spans of the text, as offsets into it with their tok-* classes; undefined for a language Kothar doesn't know. */
+export function highlightRanges(text: string, language: string | undefined): { from: number; to: number; className: string }[] | undefined {
+  if (!highlights(language) || text.length > HIGHLIGHT_MAX_CHARS) return undefined
+  const found: { from: number; to: number; className: string }[] = []
+  highlightTree(PARSERS[language!.toLowerCase()]!.parse(text), classHighlighter, (from, to, className) => found.push({ from, to, className }))
+  return found
+}

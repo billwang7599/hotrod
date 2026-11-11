@@ -259,16 +259,37 @@ test('a table reads as a table while the cursor is outside it', () => {
   expect(tableDecorations(v.state).size).toBe(0)
 })
 
-test('code is coloured: keywords, strings, numbers and comments', () => {
-  const kinds = (code: string, language = 'js') =>
+test('code is coloured: languages Kothar parses as code views colour them, others by a few rules', () => {
+  const kinds = (code: string, language: string) =>
     codeTokens(code, language).map((r) => [(r.value.spec as { class: string }).class, code.slice(r.from, r.to)])
-  expect(kinds('const a = "x" // note')).toEqual([
-    ['cm-tok-keyword', 'const'],
-    ['cm-tok-string', '"x"'],
-    ['cm-tok-comment', '// note'],
+  // Parsed (highlight.ts): the code views' tok-* classes.
+  expect(kinds('const a = "x" // note', 'js')).toEqual(
+    expect.arrayContaining([
+      ['tok-keyword', 'const'],
+      ['tok-string', '"x"'],
+      ['tok-comment', '// note'],
+    ]),
+  )
+  expect(kinds('x = 42 # why', 'python')).toContainEqual(['tok-comment', '# why'])
+  // Not parsed: the simple rules.
+  expect(kinds('func main() { return 1 } // go', 'go')).toEqual([
+    ['cm-tok-keyword', 'func'],
+    ['cm-tok-keyword', 'return'],
+    ['cm-tok-number', '1'],
+    ['cm-tok-comment', '// go'],
   ])
-  expect(kinds('x = 42 # why', 'python')).toContainEqual(['cm-tok-comment', '# why'])
-  expect(kinds('color: #fff', 'css')).toEqual([])
+  expect(kinds('x = 1 # why', 'ruby')).toContainEqual(['cm-tok-comment', '# why'])
+  expect(kinds('color #fff', 'scss')).toEqual([])
+})
+
+test('a code block is coloured as one run, so a parsed string or comment can span lines', () => {
+  const { view } = mount({ text: '```ts\n/* one\ntwo */ let x = 1\n```' })
+  const state = view().state
+  ensureSyntaxTree(state, state.doc.length, 5000)
+  const comment = previewDecorations(state, new Set())
+    .filter((r) => (r.value.spec as { class?: string }).class === 'tok-comment')
+    .map((r) => state.doc.sliceString(r.from, r.to))
+  expect(comment).toEqual(['/* one\ntwo */'])
 })
 
 test('a change from elsewhere over unsent typing asks which to keep, and saves nothing until then', () => {
@@ -282,6 +303,7 @@ test('a change from elsewhere over unsent typing asks which to keep, and saves n
   const keep = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Keep mine')!
   act(() => keep.click())
   expect(changes).toEqual(['one mine'])
+  // Without onKeep, the other text is dropped.
   expect(host.querySelector('[role=alert]')).toBeNull()
 
   act(() => view().dispatch({ changes: { from: 0, insert: '>' } }))
@@ -320,4 +342,28 @@ test('a note opens again where its cursor was', () => {
   render({ docKey: 'other', text: 'x' })
   render({ docKey: 'kept', text: 'hello world' })
   expect(view().state.selection.main.head).toBe(5)
+})
+
+test('"Keep mine" hands the other text to onKeep first, then sends the editor\'s', () => {
+  vi.useFakeTimers()
+  const order: string[] = []
+  const { view, render } = mount({ text: 'one', onKeep: (t) => order.push(`keep:${t}`), onChange: (t) => order.push(`save:${t}`) })
+  act(() => view().dispatch({ changes: { from: 3, insert: ' mine' } }))
+  render({ text: 'one theirs' })
+  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Keep mine')!.click())
+  expect(order).toEqual(['keep:one theirs', 'save:one mine'])
+})
+
+test('a jump puts the cursor at the start of its line and takes focus, once per key', () => {
+  const text = '# A\n\ntext\n\n## B\n\nmore'
+  const { view, render } = mount({ text, jump: { key: 'j1', line: 5 } })
+  expect(view().state.selection.main.head).toBe(text.indexOf('## B'))
+  expect(view().hasFocus).toBe(true)
+  // The same key again doesn't move the cursor back.
+  act(() => view().dispatch({ selection: { anchor: 0 } }))
+  render({ text, jump: { key: 'j1', line: 5 } })
+  expect(view().state.selection.main.head).toBe(0)
+  // A line past the end goes to the last.
+  render({ text, jump: { key: 'j2', line: 99 } })
+  expect(view().state.selection.main.head).toBe(text.indexOf('more'))
 })
