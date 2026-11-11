@@ -6,7 +6,8 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import { MARKETPLACE_URL, openMarketplace, sha256, type Fetch } from './marketplace.ts'
-import { changesUrl, checkCatalog, checkTheme, previewOf, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
+import { checkCatalog, checkTheme } from './catalog-check.ts'
+import { changesUrl, previewOf, type CatalogEntry, type CoreMessage, type ThemeFile } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
 
 const themeFile = (id: string): ThemeFile =>

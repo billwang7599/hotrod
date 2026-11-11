@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./shared": "./src/shared.ts",
+    "./catalog-check": "./src/catalog-check.ts",
     "./main": "./src/main.ts",
     "./fake": "./src/adapters/fake.ts",
     "./test-machine": "./src/adapters/test-machine.ts"
