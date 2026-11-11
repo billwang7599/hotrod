@@ -62,6 +62,8 @@ packages/
                          instructions, memory, checkouts, extension-host, settings, setups, ...)
     src/shared.ts        what core and UI share: the adapter interface, the UI protocol, common types
     src/machine.ts       runs processes, locally and sandboxed
+    src/folder-modes.ts  how agents may write in attached folders: the sandbox, permission answers and instructions
+    src/folder-copies.ts folders set to Work on a copy: the copy, its changes and Copy changes back
     src/adapters/        one file per engine (claude-code, codex, opencode, pi, fake) and their helpers
     src/kothar-mcp.ts    the MCP server Kothar gives every agent (zoom, date, spawn_worker, ...)
   ui/              React app (Tailwind, Radix, Motion), talking to the core over a WebSocket (@kothar/ui)

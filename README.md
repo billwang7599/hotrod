@@ -68,6 +68,12 @@ What works today:
 - **Workers:** a lead can hand tasks to workers that run beside it.
 - **Memory:** every chat has its own.
 - **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
+- **Folder modes:** each attached folder that isn't a git repo has a mode, picked in the Context panel. **Edit in
+  place** (the default) lets the sandbox write in the folder itself, though logins, keys and `.env` files in it still
+  ask. **Work on a copy** copies it into the work folder once, and **Copy changes back** shows what the agents changed
+  and copies your pick back, refusing to overwrite an original that changed since unless you confirm. **Read only**
+  keeps agents out. A folder holding Kothar's own data is always read only. Each session's instructions list every
+  folder with its mode, and a refused edit names the setting that would allow it.
 - **Permissions:** switches decide what runs without asking.
 - **File links:** a path in a chat that exists in its folders, checkouts or work folder is a link. Click opens it in
   your editor at its line (Settings → Work folder → Open files with: the system's default app, VS Code, Cursor,
