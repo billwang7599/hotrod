@@ -372,6 +372,8 @@ function Search({ node, act }: { node: SearchNode; act: Act }) {
   return (
     <input
       type="search"
+      // The popup that draws it focuses it as it opens (extension-popups.tsx).
+      data-autofocus={node.autofocus || undefined}
       className="min-w-0 text-sm"
       aria-label={node.label ?? node.placeholder ?? 'Search'}
       placeholder={node.placeholder}

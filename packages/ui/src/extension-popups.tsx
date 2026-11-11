@@ -1,10 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
-import { Button, MOTION, useReturnFocus } from './controls.tsx'
+import { Button, Hint, MOTION } from './controls.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
 import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
+import { clampPopup, type PopupSize, POPUP_DEFAULT_WIDTH, POPUP_MIN, POPUP_MARGIN, POPUP_STEP, POPUP_TOP, resetPopupSize, setPopupSize, usePopupSize } from './popup-size.ts'
 import { conflictsOf, normalize, parseBinding, refusal, registerShortcut, shortcutActions, type ShortcutHandlers } from './shortcuts.ts'
 import type { SidebarEntry } from './sidebar.tsx'
 import { panelKey, type State } from './state.ts'
@@ -85,17 +86,43 @@ type PopupProps = {
   send: (m: ClientMessage) => void
 }
 
-/** The open chat's popup panel that's open, if any: a large window over the chat. Esc closes it. */
+/**
+ * The open chat's popup panel that's open, if any: a large window over the chat. The user resizes it by its corner or
+ * maximises it to fill the window, and it opens at that size next time (popup-size.ts). Esc restores a maximised popup,
+ * then closes it.
+ *
+ * Focus: opening it puts focus in the popup itself, not on its Close button, and once the view has drawn, on the field
+ * the extension marked autofocus (a search box's, ExtensionView 'search'), unless something in it took focus already
+ * (an editor's autofocus). Closing it puts focus back where it was.
+ */
 export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: PopupProps) {
   const open = usePopup()
   const panel = panels.find((p) => isPopup(p) && extensionTabId(p.extension, p.id) === open)
-  const focus = useReturnFocus()
   const extension = panel?.extension
   const id = panel?.id
+  const tabId = panel && extensionTabId(panel.extension, panel.id)
+  const size = usePopupSize(tabId)
+  const content = useRef<HTMLDivElement>(null)
+  // Where focus was before the popup opened: read before anything in the popup can take it.
+  const opener = useRef<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (tabId) opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  }, [tabId])
   useEffect(() => {
     if (connected && extension && id) send({ type: 'extension.panel.get', chatId, extension, panel: id })
   }, [chatId, connected, extension, id, send])
   const shown = panel && panelViews?.[panelKey(chatId, panel.extension, panel.id)]
+  const view = shown?.view
+  // Once the view is there, its autofocus field takes focus, while nothing else in the popup has it.
+  useEffect(() => {
+    const root = content.current
+    if (!root || !view) return
+    const active = document.activeElement
+    if (active !== root && active !== document.body && active !== null) return
+    root.querySelector<HTMLElement>('[data-autofocus]')?.focus()
+  }, [view, tabId])
+  const maximise = (max: boolean) => tabId && setPopupSize(tabId, { max })
+  const sized = !size.max && (size.width || size.height)
   return (
     <Dialog.Root open={!!panel} onOpenChange={(o) => o || openPopup(null)}>
       <AnimatePresence>
@@ -108,16 +135,58 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
               forceMount
               asChild
               aria-describedby={undefined}
-              onOpenAutoFocus={focus.remember}
-              onCloseAutoFocus={focus.restore}
+              onOpenAutoFocus={(e) => {
+                e.preventDefault()
+                content.current?.focus()
+              }}
+              onCloseAutoFocus={(e) => {
+                e.preventDefault()
+                if (opener.current?.isConnected) opener.current.focus()
+              }}
+              onEscapeKeyDown={(e) => {
+                if (!size.max) return
+                e.preventDefault()
+                maximise(false)
+              }}
             >
               <m.div
-                className="fixed inset-x-0 top-[6vh] z-20 mx-auto flex h-[88vh] w-[min(1080px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border bg-panel text-text shadow-overlay outline-none"
-                data-popup={extensionTabId(panel.extension, panel.id)}
+                ref={content}
+                tabIndex={-1}
+                className={`fixed z-20 flex flex-col overflow-hidden rounded-xl border bg-panel text-text shadow-overlay outline-none ${
+                  size.max ? 'inset-8' : 'inset-x-0 top-[6vh] mx-auto h-[88vh] w-[min(1080px,calc(100vw-32px))]'
+                }`}
+                style={
+                  sized
+                    ? {
+                        width: `min(${size.width ?? POPUP_DEFAULT_WIDTH}px, calc(100vw - ${2 * POPUP_MARGIN}px))`,
+                        ...(size.height && { height: `min(${size.height}px, calc(${100 - POPUP_TOP * 100}vh - ${POPUP_MARGIN}px))` }),
+                      }
+                    : undefined
+                }
+                data-popup={tabId}
+                data-maximised={size.max || undefined}
                 {...MOTION.pop}
               >
-                <header className="flex h-44 shrink-0 items-center justify-between gap-8 border-b px-16">
-                  <Dialog.Title className="font-semibold">{panel.title}</Dialog.Title>
+                <header className="flex h-44 shrink-0 items-center gap-4 border-b pr-8 pl-16" onDoubleClick={(e) => e.target === e.currentTarget && maximise(!size.max)}>
+                  <Dialog.Title className="min-w-0 flex-1 truncate font-semibold">{panel.title}</Dialog.Title>
+                  <Hint text={size.max ? 'Back to its own size (Esc)' : 'Fill the window'}>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="grid place-items-center"
+                      aria-label={size.max ? `Restore ${panel.title}` : `Maximise ${panel.title}`}
+                      aria-pressed={!!size.max}
+                      onClick={() => maximise(!size.max)}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                        {size.max ? (
+                          <path d="M6.5 2v4.5H2M9.5 14V9.5H14M2 2l4.5 4.5M14 14L9.5 9.5" />
+                        ) : (
+                          <path d="M10 2h4v4M6 14H2v-4M14 2L9 7M2 14l5-5" />
+                        )}
+                      </svg>
+                    </Button>
+                  </Hint>
                   <Dialog.Close asChild>
                     <Button variant="ghost" size="icon" aria-label={`Close ${panel.title}`}>
                       ×
@@ -126,7 +195,7 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
                 </header>
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-16">
                   <ExtensionViewer
-                    view={shown?.view}
+                    view={view}
                     error={shown?.error}
                     act={(action) =>
                       send({ type: 'extension.panel.action', chatId, extension: panel.extension, panel: panel.id, action })
@@ -135,11 +204,70 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
                     reveal={(path) => send({ type: 'reveal', path })}
                   />
                 </div>
+                {!size.max && <PopupResizer id={tabId!} title={panel.title} box={content} saved={size} />}
               </m.div>
             </Dialog.Content>
           </Dialog.Portal>
         )}
       </AnimatePresence>
     </Dialog.Root>
+  )
+}
+
+/**
+ * The popup's bottom-right corner, to resize it: drag it (the popup stays centred, so its width grows on both sides),
+ * or focus it and use the arrows. Double-click goes back to the default size.
+ */
+function PopupResizer({ id, title, box, saved }: { id: string; title: string; box: React.RefObject<HTMLDivElement | null>; saved: PopupSize }) {
+  const [dragging, setDragging] = useState(false)
+  const windowSize = () => ({ width: innerWidth, height: innerHeight })
+  // Its size on screen (the saved one may be more than the window allows), else the saved or default size.
+  const measure = () => {
+    const rect = box.current?.getBoundingClientRect()
+    return { width: rect?.width || saved.width || POPUP_DEFAULT_WIDTH, height: rect?.height || saved.height || POPUP_MIN.height }
+  }
+  const resize = (width: number, height: number) => setPopupSize(id, clampPopup({ width, height }, windowSize()))
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`Resize ${title}`}
+      data-dragging={dragging || undefined}
+      className="absolute right-0 bottom-0 z-10 size-16 cursor-nwse-resize rounded-br-xl text-faint transition-colors hover:text-accent focus-visible:text-accent focus-visible:outline-none data-dragging:text-accent"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        const start = { x: e.clientX, y: e.clientY, ...measure() }
+        setDragging(true)
+        const body = document.body.style
+        const saved = { userSelect: body.userSelect, cursor: body.cursor }
+        body.userSelect = 'none'
+        body.cursor = 'nwse-resize'
+        const onMove = (m: PointerEvent) => resize(start.width + 2 * (m.clientX - start.x), start.height + (m.clientY - start.y))
+        const onUp = () => {
+          setDragging(false)
+          Object.assign(body, saved)
+          removeEventListener('pointermove', onMove)
+          removeEventListener('pointerup', onUp)
+          removeEventListener('pointercancel', onUp)
+        }
+        addEventListener('pointermove', onMove)
+        addEventListener('pointerup', onUp)
+        addEventListener('pointercancel', onUp)
+      }}
+      onDoubleClick={() => resetPopupSize(id)}
+      onKeyDown={(e) => {
+        const dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+        const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0
+        if (!dx && !dy) return
+        e.preventDefault()
+        const now = measure()
+        resize(now.width + dx * POPUP_STEP, now.height + dy * POPUP_STEP)
+      }}
+    >
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+        <path d="M13 7l-6 6M13 11l-2 2" />
+      </svg>
+    </div>
   )
 }

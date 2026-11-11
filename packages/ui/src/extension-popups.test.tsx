@@ -11,6 +11,7 @@ import { ExtensionViewer, SEARCH_VIEW_MS } from './extension-view.tsx'
 import { ConfirmDialog } from './controls.tsx'
 import { ExtensionPopup, panelDefaultKeys, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
 import { currentPopup, openPopup, usePanelTab } from './panel-tab.ts'
+import { reloadPopupSizes } from './popup-size.ts'
 import { reloadShortcuts, setBinding, shortcutActions } from './shortcuts.ts'
 import { panelKey, type ChatView, type State } from './state.ts'
 
@@ -26,6 +27,7 @@ let sent: ClientMessage[]
 beforeEach(() => {
   localStorage.clear()
   reloadShortcuts()
+  reloadPopupSizes()
   sent = []
   host = document.createElement('div')
   document.body.append(host)
@@ -219,4 +221,77 @@ test("a popup button's confirm opens above the popup, so its own buttons take th
   expect(layer(alert.previousElementSibling)).toBeGreaterThan(20)
   await act(async () => [...alert.querySelectorAll('button')].find((b) => b.textContent === 'Delete')!.click())
   expect(sent).toContainEqual(expect.objectContaining({ type: 'extension.panel.action', action: { name: 'delete' } }))
+})
+
+const notesView = (view: ExtensionView): State['panelViews'] => ({ [panelKey('space', 'notes', 'notes')]: { view } })
+const button = (label: string) => document.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!
+const escape = () =>
+  act(() => {
+    ;(document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  })
+
+test("opening a popup focuses its view's autofocus search box, never its Close button, and closing goes back", async () => {
+  const opener = document.createElement('button')
+  document.body.append(opener)
+  opener.focus()
+  renderPopup()
+  act(() => openPopup('extension:notes/notes'))
+  // Before the view arrives, the popup itself has focus.
+  expect(document.activeElement).toBe(dialog())
+  renderPopup(notesView({ type: 'stack', children: [{ type: 'button', label: 'New', action: { name: 'new' } }, { type: 'search', action: 'search', placeholder: 'Find', autofocus: true }] }))
+  expect(document.activeElement).toBe(dialog()!.querySelector('input[type="search"]'))
+  // Drawn again, it doesn't take focus back from where the user moved it.
+  act(() => button('Maximise Notes').focus())
+  renderPopup(notesView({ type: 'stack', children: [{ type: 'search', action: 'search', placeholder: 'Find again', autofocus: true }] }))
+  expect(document.activeElement).toBe(button('Maximise Notes'))
+  // Once its exit animation is done.
+  await act(async () => {
+    openPopup(null)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+  expect(document.activeElement).toBe(opener)
+  opener.remove()
+})
+
+test('without an autofocus field, an open popup keeps focus on itself, not on Close', () => {
+  renderPopup(notesView({ type: 'button', label: 'New', action: { name: 'new' } }))
+  act(() => openPopup('extension:notes/notes'))
+  expect(document.activeElement).toBe(dialog())
+})
+
+test('a popup maximises and restores, Esc restores before it closes, and it opens as it was left', () => {
+  renderPopup(notesView({ type: 'text', text: 'Hi' }))
+  act(() => openPopup('extension:notes/notes'))
+  act(() => button('Maximise Notes').click())
+  expect(dialog()!.dataset.maximised).toBe('true')
+  expect(button('Restore Notes').getAttribute('aria-pressed')).toBe('true')
+  // No resize corner while it fills the window.
+  expect(document.querySelector('[aria-label="Resize Notes"]')).toBeNull()
+  act(() => openPopup(null))
+  act(() => openPopup('extension:notes/notes'))
+  expect(dialog()!.dataset.maximised).toBe('true')
+  escape()
+  expect(currentPopup()).toBe('extension:notes/notes')
+  expect(dialog()!.dataset.maximised).toBeUndefined()
+  escape()
+  expect(currentPopup()).toBeNull()
+})
+
+test("a popup's corner resizes it with the arrows, kept per extension, and double-click goes back to the default", () => {
+  Object.assign(window, { innerWidth: 1400, innerHeight: 900 })
+  renderPopup(notesView({ type: 'text', text: 'Hi' }))
+  act(() => openPopup('extension:notes/notes'))
+  const corner = document.querySelector<HTMLElement>('[aria-label="Resize Notes"]')!
+  // jsdom lays nothing out: the corner starts from the default width and the smallest height.
+  const key = (k: string) => act(() => corner.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true })))
+  key('ArrowRight')
+  key('ArrowDown')
+  expect(JSON.parse(localStorage.getItem('kothar.popupSizes')!)).toEqual({ 'extension:notes/notes': { width: 1112, height: 352 } })
+  expect(dialog()!.style.width).toMatch(/^min\(1112px,/)
+  expect(dialog()!.style.height).toMatch(/^min\(352px,/)
+  // Never wider than the window allows.
+  for (let i = 0; i < 20; i++) key('ArrowRight')
+  expect(JSON.parse(localStorage.getItem('kothar.popupSizes')!)['extension:notes/notes'].width).toBe(1400 - 32)
+  act(() => corner.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })))
+  expect(dialog()!.style.width).toBe('')
 })
