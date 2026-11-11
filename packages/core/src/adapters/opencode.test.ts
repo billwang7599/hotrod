@@ -1,11 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
 import { effortFor, levelsOfEfforts } from './acp.ts'
-import { opencode, parseCredentials, parseModels, parseProviders } from './opencode.ts'
+import { createOpencode, opencode, parseCredentials, parseModels, parseProviders } from './opencode.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/opencode/${name}`, import.meta.url), 'utf8')
@@ -33,10 +33,10 @@ const MODEL_OPTIONS = [
 const created = (configOptions: unknown[] = []) =>
   line({ jsonrpc: '2.0', id: 2, result: { sessionId: 'ses_1', configOptions } })
 
-function startSession(extra: Partial<SessionOptions> = {}) {
+function startSession(extra: Partial<SessionOptions> = {}, adapter = opencode) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
-  const session = opencode.start(fake.machine, { cwd: '/tmp/project', instructions: 'Be kind.', ...extra }, (e) =>
+  const session = adapter.start(fake.machine, { cwd: '/tmp/project', instructions: 'Be kind.', ...extra }, (e) =>
     events.push(e),
   )
   return { fake, events, session }
@@ -484,18 +484,14 @@ describe('OpenCode one-shot completions', () => {
 
 describe('OpenCode in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
-  const saved = process.env.XDG_DATA_HOME
-  afterEach(() => {
-    if (saved === undefined) delete process.env.XDG_DATA_HOME
-    else process.env.XDG_DATA_HOME = saved
-  })
+  // The user's own environment, without XDG_DATA_HOME.
+  const adapter = createOpencode({ env: {}, home: '/Users/me' })
 
   it('also lets it write its login, which it refreshes in place', () => {
-    delete process.env.XDG_DATA_HOME
-    const { fake } = startSession({ sandbox })
-    const login = join(homedir(), '.local', 'share', 'opencode', 'auth.json')
+    const { fake } = startSession({ sandbox }, adapter)
+    const login = '/Users/me/.local/share/opencode/auth.json'
     expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', login], tmpDir: sandbox.tmpDir })
-    const account = startSession({ sandbox, accountDir: '/garage/accounts/opencode/a1' })
+    const account = startSession({ sandbox, accountDir: '/garage/accounts/opencode/a1' }, adapter)
     expect(account.fake.spawned[0]?.sandbox?.writable).toEqual(['/work/space', '/garage/accounts/opencode/a1/auth.json'])
     expect(account.fake.spawned[0]?.env?.KOTHAR_OPENCODE_AUTH).toBe('/garage/accounts/opencode/a1/auth.json')
   })

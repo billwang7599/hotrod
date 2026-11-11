@@ -1,18 +1,17 @@
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { type EngineEvent, type LoginEvent, type SessionOptions } from '../shared.ts'
-import { claudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
+import { claudeCode, createClaudeCode, MAX_IMAGE_BASE64_CHARS } from './claude-code.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${name}.jsonl`, import.meta.url), 'utf8')
 
-function startSession(instructions = '', extra: Partial<SessionOptions> = {}) {
+function startSession(instructions = '', extra: Partial<SessionOptions> = {}, adapter = claudeCode) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
   const options = { cwd: '/tmp/project', instructions, ...extra }
-  const session = claudeCode.start(fake.machine, options, (e) => events.push(e))
+  const session = adapter.start(fake.machine, options, (e) => events.push(e))
   return { fake, events, session }
 }
 
@@ -784,19 +783,15 @@ describe('claudeCode accounts', () => {
 
 describe('claudeCode in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
-  const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
-  const defaultDir = join(homedir(), '.claude')
+  // The user's own environment, without CLAUDE_CONFIG_DIR.
+  const adapter = createClaudeCode({ env: {}, home: '/Users/me' })
+  const keychain = '/Users/me/Library/Keychains/login.keychain-db*'
+  const defaultDir = '/Users/me/.claude'
   const locks = [join(defaultDir, '.oauth_refresh.lock*'), join(defaultDir, '.storage-write.lock')]
   const defaultWritable = ['/work/space', join(defaultDir, 'shell-snapshots'), ...locks, keychain]
-  const savedConfigDir = process.env.CLAUDE_CONFIG_DIR
-  afterEach(() => {
-    if (savedConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
-    else process.env.CLAUDE_CONFIG_DIR = savedConfigDir
-  })
 
   it('also lets it write its shell snapshots, login locks and the keychain, with its temp folder in the sandbox', () => {
-    delete process.env.CLAUDE_CONFIG_DIR
-    const { fake } = startSession('', { sandbox })
+    const { fake } = startSession('', { sandbox }, adapter)
     expect(fake.spawned[0]?.sandbox).toEqual({ writable: defaultWritable, tmpDir: sandbox.tmpDir })
     expect(fake.spawned[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
@@ -814,20 +809,19 @@ describe('claudeCode in a sandbox', () => {
   })
 
   it("puts the shell snapshots in the config folder it runs with: the account's, else CLAUDE_CONFIG_DIR", () => {
-    process.env.CLAUDE_CONFIG_DIR = '/cfg'
-    expect(startSession('', { sandbox }).fake.spawned[0]?.sandbox?.writable).toContain('/cfg/shell-snapshots')
+    const withConfigDir = createClaudeCode({ env: { CLAUDE_CONFIG_DIR: '/cfg' }, home: '/Users/me' })
+    expect(startSession('', { sandbox }, withConfigDir).fake.spawned[0]?.sandbox?.writable).toContain('/cfg/shell-snapshots')
     const accountDir = '/garage/accounts/claude-code/work'
-    const inAccount = startSession('', { sandbox, accountDir }).fake.spawned[0]
+    const inAccount = startSession('', { sandbox, accountDir }, withConfigDir).fake.spawned[0]
     expect(inAccount?.sandbox?.writable).toContain(`${accountDir}/shell-snapshots`)
     expect(inAccount?.env).toEqual({ CLAUDE_CONFIG_DIR: accountDir, CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })
 
   it('sandboxes a one-shot completion the same way', async () => {
-    delete process.env.CLAUDE_CONFIG_DIR
     const stdout = JSON.stringify({ type: 'result', is_error: false, result: 'ok' })
     const fake = fakeMachine({ claude: { code: 0, stdout, stderr: '' } })
     const request = { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox }
-    await claudeCode.complete!(fake.machine, request)
+    await adapter.complete!(fake.machine, request)
     expect(fake.ran[0]?.sandbox?.writable).toEqual(defaultWritable)
     expect(fake.ran[0]?.env).toEqual({ CLAUDE_CODE_TMPDIR: sandbox.tmpDir })
   })

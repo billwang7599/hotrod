@@ -1,18 +1,18 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
-import { pi } from './pi.ts'
+import { createPi, pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/pi/${name}.jsonl`, import.meta.url), 'utf8')
 
-function startSession(instructions = '', extra: Partial<SessionOptions> = {}) {
+function startSession(instructions = '', extra: Partial<SessionOptions> = {}, adapter = pi) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
-  const session = pi.start(fake.machine, { cwd: '/tmp/project', instructions, ...extra }, (e) => events.push(e))
+  const session = adapter.start(fake.machine, { cwd: '/tmp/project', instructions, ...extra }, (e) => events.push(e))
   return { fake, events, session }
 }
 
@@ -563,30 +563,25 @@ describe("pi's own agent folder", () => {
 
 describe('pi in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
-  const savedAgentDir = process.env.PI_CODING_AGENT_DIR
-  afterEach(() => {
-    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
-    else process.env.PI_CODING_AGENT_DIR = savedAgentDir
-  })
+  // The user's own environment, without PI_CODING_AGENT_DIR.
+  const adapter = createPi({ env: {}, home: '/Users/me' })
   const stateFiles = (dir: string) =>
     ['auth.json*', 'settings.json.lock*', 'models-store.json*', 'install/update.lock*'].map((file) => join(dir, file))
 
   it('also lets it write only its login and lock files, under PI_CODING_AGENT_DIR or ~/.pi/agent', () => {
-    delete process.env.PI_CODING_AGENT_DIR
-    const { fake } = startSession('', { sandbox })
-    const agentDir = join(homedir(), '.pi', 'agent')
+    const { fake } = startSession('', { sandbox }, adapter)
+    const agentDir = '/Users/me/.pi/agent'
     expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', ...stateFiles(agentDir)], tmpDir: sandbox.tmpDir })
-    process.env.PI_CODING_AGENT_DIR = '/pi-state'
-    expect(startSession('', { sandbox }).fake.spawned[0]?.sandbox?.writable).toEqual([
+    const withAgentDir = createPi({ env: { PI_CODING_AGENT_DIR: '/pi-state' }, home: '/Users/me' })
+    expect(startSession('', { sandbox }, withAgentDir).fake.spawned[0]?.sandbox?.writable).toEqual([
       '/work/space',
       ...stateFiles('/pi-state'),
     ])
   })
 
   it('sandboxes a one-shot completion the same way', async () => {
-    delete process.env.PI_CODING_AGENT_DIR
     const fake = fakeMachine({ pi: { code: 0, stdout: 'ok', stderr: '' } })
-    await pi.complete!(fake.machine, { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox })
-    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', ...stateFiles(join(homedir(), '.pi', 'agent'))])
+    await adapter.complete!(fake.machine, { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox })
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', ...stateFiles('/Users/me/.pi/agent')])
   })
 })

@@ -1,10 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
-import { codex, commandOf, configOf, envKeyNote, KEYCHAIN_NOTE } from './codex.ts'
+import { codex, commandOf, createCodex, configOf, envKeyNote, KEYCHAIN_NOTE } from './codex.ts'
 import { fakeMachine } from './test-machine.ts'
 
 // Fixtures are real codex-cli 0.167 app-server output, recorded against a local stand-in for the model API (no model
@@ -431,29 +431,24 @@ describe('codex adapter', () => {
     })
 
     it('says an API key set only in the environment signs no session in, rather than blaming the Keychain', async () => {
-      vi.stubEnv('OPENAI_API_KEY', '')
-      vi.stubEnv('CODEX_API_KEY', 'sk-test')
-      try {
-        // Codex's login status ignores the variable, so it reports no login.
-        const out = { code: 1, stdout: '', stderr: 'Not logged in\n' }
-        const envOnly = fakeMachine({ 'codex login status': out })
-        expect(await codex.accounts!.status(envOnly.machine)).toEqual({ signedIn: false, note: envKeyNote('CODEX_API_KEY') })
-        expect(envOnly.ran).toHaveLength(1)
-        vi.stubEnv('CODEX_API_KEY', '')
-        vi.stubEnv('OPENAI_API_KEY', 'sk-test')
-        expect(await codex.accounts!.status(fakeMachine({ 'codex login status': out }).machine)).toEqual({
-          signedIn: false,
-          note: envKeyNote('OPENAI_API_KEY'),
-        })
-        // An account added in Kothar has its own login; the variable says nothing about it.
-        expect(await codex.accounts!.status(fakeMachine({ 'codex login status': out }).machine, '/acc')).toEqual({ signedIn: false })
-        // A real login wins: the Keychain check runs as before.
-        const status = { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
-        const keychain = fakeMachine({ 'codex login status': status, '/bin/sh': { code: 1, stdout: '', stderr: '' } })
-        expect(await codex.accounts!.status(keychain.machine)).toEqual({ signedIn: false, note: KEYCHAIN_NOTE })
-      } finally {
-        vi.unstubAllEnvs()
-      }
+      const withEnv = (env: Record<string, string>) => createCodex({ env, home: '/Users/me' })
+      // Codex's login status ignores the variable, so it reports no login.
+      const out = { code: 1, stdout: '', stderr: 'Not logged in\n' }
+      const envOnly = fakeMachine({ 'codex login status': out })
+      const codexKey = withEnv({ OPENAI_API_KEY: '', CODEX_API_KEY: 'sk-test' })
+      expect(await codexKey.accounts!.status(envOnly.machine)).toEqual({ signedIn: false, note: envKeyNote('CODEX_API_KEY') })
+      expect(envOnly.ran).toHaveLength(1)
+      const openai = withEnv({ CODEX_API_KEY: '', OPENAI_API_KEY: 'sk-test' })
+      expect(await openai.accounts!.status(fakeMachine({ 'codex login status': out }).machine)).toEqual({
+        signedIn: false,
+        note: envKeyNote('OPENAI_API_KEY'),
+      })
+      // An account added in Kothar has its own login; the variable says nothing about it.
+      expect(await openai.accounts!.status(fakeMachine({ 'codex login status': out }).machine, '/acc')).toEqual({ signedIn: false })
+      // A real login wins: the Keychain check runs as before.
+      const status = { code: 0, stdout: 'Logged in using ChatGPT\n', stderr: '' }
+      const keychain = fakeMachine({ 'codex login status': status, '/bin/sh': { code: 1, stdout: '', stderr: '' } })
+      expect(await openai.accounts!.status(keychain.machine)).toEqual({ signedIn: false, note: KEYCHAIN_NOTE })
     })
 
     it('signs in with the browser flow in the account folder, passing its link on', () => {
