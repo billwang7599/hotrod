@@ -4,7 +4,7 @@ import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import { PERMISSION_SWITCHES, switchedOn, type ClientMessage, type WorkFolder } from '@kothar/core/shared'
 import { PERMISSIONS } from '../context-panel.tsx'
-import { Button, CHAT_NOUN, ErrorText, GROUP, MOTION, Select, Switch, useReturnFocus } from '../controls.tsx'
+import { Button, CHAT_NOUN, ErrorText, GROUP, Hint, MOTION, Select, Switch, useReturnFocus } from '../controls.tsx'
 import { SettingRow } from './rows.tsx'
 import type { PageProps } from './types.ts'
 
@@ -16,11 +16,16 @@ const WORK_FOLDER_HINT =
 const TERMINAL_ABOUT =
   'What Open in Terminal opens. Automatic uses the app macOS opens shell scripts with, else Terminal.'
 
+const EDITOR_ABOUT = 'What a file path in a chat opens with when you click it.'
+const COMMAND_HINT =
+  'Runs without a shell. {file}, {line} and {col} are filled in; without {file}, the file goes at the end.'
+
 const PERMISSION_DEFAULT_HINT = 'The switches below are the default for every chat; each can choose otherwise in its Context panel.'
 
 export const WORK_FOLDER_INTRO = `${WORK_FOLDER_HINT} ${PERMISSION_DEFAULT_HINT}`
 
-// The work folder itself, the terminal Open in Terminal uses, and the default permission switches for every chat.
+// The work folder itself, the terminal Open in Terminal uses, what file links open with, and the default permission
+// switches for every chat.
 export function WorkFolderPage({ workFolder, chooseWorkFolder, connected, send }: PageProps) {
   return (
     <div className={GROUP}>
@@ -46,6 +51,7 @@ export function WorkFolderPage({ workFolder, chooseWorkFolder, connected, send }
           />
         </SettingRow>
       )}
+      <EditorRow workFolder={workFolder} connected={connected} send={send} />
       {PERMISSION_SWITCHES.map((name) => {
         const { label, about, amberWhileOn } = PERMISSIONS[name]
         const on = switchedOn(name, workFolder)
@@ -65,6 +71,56 @@ export function WorkFolderPage({ workFolder, chooseWorkFolder, connected, send }
         )
       })}
     </div>
+  )
+}
+
+// Open files with: the system's default app, an installed editor Kothar knows, or the user's own command.
+function EditorRow({ workFolder, connected, send }: Pick<PageProps, 'workFolder' | 'connected' | 'send'>) {
+  const choice = workFolder.editor ?? 'system'
+  const saved = workFolder.editorCommand ?? ''
+  const [command, setCommand] = useState(saved)
+  const [shownSaved, setShownSaved] = useState(saved)
+  if (saved !== shownSaved) {
+    setShownSaved(saved)
+    setCommand(saved)
+  }
+  const save = () => {
+    if (command.trim() !== saved) send({ type: 'editor.set', editor: 'custom', command })
+  }
+  return (
+    <SettingRow
+      name="Open files with"
+      description={EDITOR_ABOUT}
+      below={
+        choice === 'custom' && (
+          <Hint text={COMMAND_HINT} side="bottom" align="start">
+            <input
+              className="w-full font-mono text-sm"
+              aria-label="Command to open files"
+              value={command}
+              placeholder="nvim-qt +{line} {file}"
+              spellCheck={false}
+              disabled={!connected}
+              onChange={(e) => setCommand(e.target.value)}
+              onBlur={save}
+              onKeyDown={(e) => e.key === 'Enter' && save()}
+            />
+          </Hint>
+        )
+      }
+    >
+      <Select
+        label="Open files with"
+        value={choice}
+        disabled={!connected}
+        options={[
+          { value: 'system', label: 'System default' },
+          ...(workFolder.editors ?? []).map((e) => ({ value: e.id, label: e.name })),
+          { value: 'custom', label: 'Custom command' },
+        ]}
+        onChange={(editor) => send({ type: 'editor.set', editor })}
+      />
+    </SettingRow>
   )
 }
 

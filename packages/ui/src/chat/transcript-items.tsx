@@ -4,6 +4,7 @@ import { Fragment, useContext, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import type { ClientMessage, ContextItem } from '@kothar/core/shared'
 import { Chevron, CopyBlock, CopyButton, ErrorText, MOTION } from '../controls.tsx'
+import { LinkedText, NoFileLinks } from '../file-links.tsx'
 import { Markdown } from '../markdown.tsx'
 import { UserText } from '../lists.tsx'
 import { useReveal, type RevealFrom } from '../smooth.ts'
@@ -28,10 +29,11 @@ export type RevealOf = (item: Item) => { key: string; from: RevealFrom } | undef
 
 type RevealedProps = { item: Item & { text: string }; revealOf?: RevealOf; children: (text: string) => ReactNode }
 
-/** A reply or thinking text, typed out while it arrives live. */
+/** A reply or thinking text, typed out while it arrives live. Its paths become links once it's all shown. */
 function Revealed({ item, revealOf, children }: RevealedProps) {
   const reveal = revealOf?.(item)
-  return children(useReveal(reveal?.key ?? '', item.text, reveal?.from ?? 'none', !!reveal))
+  const text = useReveal(reveal?.key ?? '', item.text, reveal?.from ?? 'none', !!reveal)
+  return text === item.text ? children(text) : <NoFileLinks>{children(text)}</NoFileLinks>
 }
 
 type ItemProps = {
@@ -221,7 +223,9 @@ export function ItemView(props: ItemProps) {
           summary={
             <>
               <span className={TOOL_NAME}>{item.name}</span>
-              <span className={TOOL_INPUT}>{item.summary}</span>
+              <span className={TOOL_INPUT}>
+                <LinkedText text={item.summary} inButton />
+              </span>
               {item.permission && <Verdict permission={item.permission} />}
               {item.state === 'running' ? (
                 <Dots label="running" className="text-sm text-green" />
@@ -237,7 +241,7 @@ export function ItemView(props: ItemProps) {
         >
           <CopyBlock label="Copy output" text={item.output}>
             <pre className={`${BODY} border-t pl-26`}>
-              {item.output ||
+              {(item.output && <LinkedText text={item.output} />) ||
                 (item.state === 'running' ? (
                   <Dots label="running" />
                 ) : item.state === 'waiting' ? (
@@ -308,7 +312,9 @@ export function ItemView(props: ItemProps) {
           summary={
             <>
               <span className={TOOL_NAME}>{item.name}</span>
-              <span className={TOOL_INPUT}>{item.summary}</span>
+              <span className={TOOL_INPUT}>
+                <LinkedText text={item.summary} inButton />
+              </span>
               <Verdict permission={item} />
             </>
           }
@@ -324,5 +330,10 @@ export function ItemView(props: ItemProps) {
 /** The reply as it streams in, typed out rather than shown in the bursts the engine sends. */
 export function StreamingText(props: { name: string; text: string; from: RevealFrom; smooth: boolean }) {
   const text = useReveal(props.name, props.text, props.from, props.smooth)
-  return <Markdown className={`streaming ${ASSISTANT}`} text={text} />
+  // Paths in a reply still streaming aren't links: a half-typed one would be asked about.
+  return (
+    <NoFileLinks>
+      <Markdown className={`streaming ${ASSISTANT}`} text={text} />
+    </NoFileLinks>
+  )
 }

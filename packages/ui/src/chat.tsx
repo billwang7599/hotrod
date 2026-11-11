@@ -1,7 +1,7 @@
 // A chat's view: its header, the transcript, what waits below it (queue, requests, waits) and the message box, with
 // the Context panel beside it. The transcript items, cards and message box live in chat/.
 import type { ExtensionAction } from '@kothar/extension-api'
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import {
   levelsOf,
@@ -43,6 +43,7 @@ import { useAttachments, useFileDrop } from './chat/use-attachments.ts'
 import { Composer } from './chat/composer.tsx'
 import { Dots, Row } from './chat/parts.tsx'
 import { ItemView, StreamingText } from './chat/transcript-items.tsx'
+import { editorLabel, FileLinks } from './file-links.tsx'
 
 const INTERRUPT_SEND_TEXT = 'Interrupt and send now?'
 const FORCE_STOP_TEXT = 'Force stop? The engine and any command it started get a few seconds to exit, then are killed.'
@@ -112,6 +113,8 @@ export function Chat(props: ChatProps) {
   const space = line.at(-1)!
   const stepsShown = useStepsShown(chat.id, ...line.slice(1).map((c) => c.id))
   const reportsShown = useReportsShown(chat.id, ...line.slice(1).map((c) => c.id))
+  const editor = editorLabel(workFolder)
+  const fileLinks = useMemo(() => ({ chatId: chat.id, send, connected, editor }), [chat.id, send, connected, editor])
   const viewOnly = !!chat.worker
   // Workers never ask in their own view: their requests wait in the space above them.
   const requests = viewOnly ? [] : workerRequests(props.chats, chat.id)
@@ -344,6 +347,7 @@ export function Chat(props: ChatProps) {
           onKeyDown={userScrolls}
         >
           <div className="mx-auto flex w-full max-w-column flex-1 flex-col gap-10" ref={contentRef}>
+            <FileLinks.Provider value={fileLinks}>
             <StepsOpen.Provider value={stepsShown}>
               <ReportsOpen.Provider value={reportsShown}>
                 {chat.items.length === 0 && !chat.draft && (
@@ -399,6 +403,7 @@ export function Chat(props: ChatProps) {
                 )}
               </ReportsOpen.Provider>
             </StepsOpen.Provider>
+            </FileLinks.Provider>
           </div>
         </div>
         <div className="relative shrink-0 px-24 pb-16">
