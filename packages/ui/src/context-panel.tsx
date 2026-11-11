@@ -3,6 +3,7 @@ import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
   CONTEXT_SECTIONS,
+  FOLDER_MODES,
   GLOBAL_CONTEXT,
   PERMISSION_SWITCHES,
   switchedOn,
@@ -11,6 +12,7 @@ import {
   type ContextItem,
   type ContextSection,
   type ExtensionInfo,
+  type FolderMode,
   type PanelTab as ExtensionTab,
   type PermissionSwitch,
   type Setup,
@@ -36,8 +38,8 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   folders: {
     label: 'Folders',
     about:
-      'Each folder’s AGENTS.md is read in. Agents read folders but don’t write them: a git folder is checked out ' +
-      'in the work folder on a branch of its own, and they work there',
+      'Each folder’s AGENTS.md is read in. A git folder is checked out in the work folder on a branch of its own, ' +
+      'and agents work there; for any other folder, its mode sets whether agents write in it',
     inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
@@ -50,8 +52,9 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   editAnywhere: {
     label: 'Allow edits outside the work folder',
     about:
-      'On: no sandbox, and edits outside the work folder ask you first. Off: agents write only in the chat’s ' +
-      'folder in the work folder, and edits elsewhere are denied. From the chat’s next message.',
+      'On: no sandbox, and edits outside the work folder and the folders set to Edit in place ask you first. Off: ' +
+      'agents write only in the chat’s folder in the work folder and in folders set to Edit in place, and edits ' +
+      'elsewhere are denied. From the chat’s next message.',
     amberWhileOn: true,
   },
   autoRunCommands: {
@@ -100,6 +103,16 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
+const FOLDER_MODE_UI: Record<FolderMode, { label: string; about: string }> = {
+  edit: {
+    label: 'Edit in place',
+    about:
+      'Agents write in this folder itself, still sandboxed. Logins, keys and .env files in it still ask. It has no ' +
+      'git history, so an edit can’t be undone.',
+  },
+  readOnly: { label: 'Read only', about: 'Agents read this folder but never write in it.' },
+}
+const FOLDER_MODE_HINT = 'A pick here is for this chat and the workers it starts. From the chat’s next message.'
 const COLLAPSED_KEY = 'kothar.contextCollapsed'
 const PREVIEW = 'scroll-inset scroll-inset-tight max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
@@ -306,6 +319,7 @@ function PathCard({
           onChange={(enabled) => send({ type: 'context.set', chatId, path: item.path, enabled })}
         />
       </div>
+      {folder && item.mode && <FolderModeRow item={item} mode={item.mode} chatId={chatId} disabled={readOnly} send={send} />}
       {folder && <TerminalError chatId={chatId} path={item.path} errors={terminalErrors} />}
       <CardBody collapsed={collapsed} className="gap-4 pt-4">
         {paths.context && (
@@ -351,6 +365,34 @@ function PathCard({
           )}
         </div>
       </CardBody>
+    </div>
+  )
+}
+
+/** How agents may write in a folder that isn't a git repo: its mode, or why Kothar keeps it read only. */
+function FolderModeRow({ item, mode, chatId, disabled, send }: {
+  item: ContextItem
+  mode: FolderMode
+  chatId: string
+  disabled: boolean
+  send: (m: ClientMessage) => void
+}) {
+  return (
+    <div className={`flex items-center gap-8 pt-6 text-sm ${item.enabled ? '' : 'opacity-55'}`}>
+      <span className="min-w-0 flex-1 text-muted">Mode</span>
+      {item.blocked ? (
+        <span className="text-xs text-muted">Read only, since {item.blocked}</span>
+      ) : (
+        <Select
+          variant="chip"
+          label={`Mode of ${item.path}`}
+          value={mode}
+          disabled={disabled}
+          hint={`${FOLDER_MODE_UI[mode].about} ${FOLDER_MODE_HINT}`}
+          options={FOLDER_MODES.map((value) => ({ value, label: FOLDER_MODE_UI[value].label }))}
+          onChange={(value) => send({ type: 'context.folderMode', chatId, path: item.path, mode: value as FolderMode })}
+        />
+      )}
     </div>
   )
 }
