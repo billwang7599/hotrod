@@ -40,6 +40,9 @@ function storageIn(dir: string): ExtensionStorage {
     write: (name, text) => write(join(dir, name), text),
     append: (name, text) => write(join(dir, name), (existsSync(join(dir, name)) ? readFileSync(join(dir, name), 'utf8') : '') + text),
     remove: (name) => rmSync(join(dir, name), { force: true }),
+    list: () => {
+      throw new Error('not used in these tests')
+    },
   }
 }
 

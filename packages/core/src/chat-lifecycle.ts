@@ -4,7 +4,7 @@
 import { randomBytes } from 'node:crypto'
 import { rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatDetail, Extension, ExtensionContext } from '@kothar/extension-api'
+import type { ChatDetail, Extension, ExtensionContext, SpaceDetail } from '@kothar/extension-api'
 import type { Chat } from './chat.ts'
 import { quitMidTurn, readChat, storedChatIds } from './chat-store.ts'
 import type { DeclaredChat } from './community-load.ts'
@@ -52,6 +52,7 @@ export type ChatLifecycleDeps = {
   append: (chat: Chat, entry: ChatEntry) => void
   shownState: (chat: Chat) => ChatState
   detailOf: (chat: Chat) => ChatDetail
+  spaceOf: (chat: Chat) => SpaceDetail
   // A parent's memory as a new worker's frozen view of it.
   viewOf: (chat: Chat, messages: MemoryMessage[], tools: boolean) => string
   takesMcp: (engine: string) => boolean
@@ -216,15 +217,20 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
 
   // Removes each chat with its folder, without checks: deleteChat, and a finished worker (turn.ts).
   const removeChats = (family: Chat[]) => {
+    const spaces: SpaceDetail[] = []
     for (const c of family) {
       deps.stopSession(c)
       const detail = deps.detailOf(c)
+      if (!c.info.parentId && !c.info.extension) spaces.push(deps.spaceOf(c))
       chats.delete(c.info.id)
       deps.forgetChat(c.info.id)
       rmSync(c.dir, { recursive: true, force: true })
       broadcast({ type: 'chat.removed', chatId: c.info.id })
       deps.removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
       deps.callExtensions('onChatRemoved', (extension, context) => extension.onChatRemoved!(detail, context))
+    }
+    for (const space of spaces) {
+      deps.callExtensions('onSpaceRemoved', (extension, context) => extension.onSpaceRemoved!(space, context))
     }
   }
 

@@ -86,6 +86,23 @@ describe('lifecycle hooks', () => {
     expect(heard).toEqual(['created Alpha idle', 'archived Alpha', 'unarchived Alpha', 'removed Alpha'])
   })
 
+  it('hear a space removed with its work folder and checkouts, after each of its chats, and only for spaces', async () => {
+    const heard: string[] = []
+    let removed: unknown
+    const t = start({
+      onChatRemoved: (chat) => void heard.push(`removed ${chat.name}`),
+      onSpaceRemoved: (space) => {
+        heard.push(`space removed ${space.name}`)
+        removed = space
+      },
+    })
+    const id = t.create('Alpha')
+    await t.send(id)
+    t.handle({ type: 'chat.delete', chatId: id })
+    expect(heard).toEqual(['removed Alpha', 'space removed Alpha'])
+    expect(removed).toEqual({ id, name: 'Alpha', workDir: join(t.garage, 'work', id), folders: [], checkouts: [] })
+  })
+
   it('hear a turn start and end with what it did, the statuses it went through and every event', async () => {
     const heard: string[] = []
     const events: string[] = []

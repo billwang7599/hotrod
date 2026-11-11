@@ -546,6 +546,8 @@ function assembleCore(options: {
 
   const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
     garage,
+    home,
+    now,
     machine,
     chatOwnFiles: CHAT_OWN_FILES,
     isQuitting: () => quitting,
@@ -564,6 +566,7 @@ function assembleCore(options: {
     chatFor,
     shown,
     shownChats,
+    allChats: () => [...chats.values()],
     detailOf,
     spaceOf,
     reachable,
@@ -630,6 +633,7 @@ function assembleCore(options: {
     append,
     shownState,
     detailOf,
+    spaceOf,
     viewOf,
     takesMcp,
     callExtensions,

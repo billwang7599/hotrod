@@ -1,7 +1,7 @@
 // What each extension gets from Kothar: its host (ExtensionHost) and context, made once per extension and kept, plus
 // the commands it starts with host.spawn. The core passes in everything a host reaches as plain functions; nothing here
 // keeps chats or settings.
-import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type {
   ChatDetail,
@@ -12,6 +12,7 @@ import type {
   ExtensionNoteCard,
   ExtensionRun,
   ExtensionStorage,
+  ExtensionStoredFile,
   ExtensionUse,
   ExtensionValues,
   ExtensionWait,
@@ -64,6 +65,9 @@ type Place = { workDir: string; sandbox?: Parameters<Machine['spawn']>[2]['sandb
 
 export type HostDeps<C extends HostChat> = {
   garage: string
+  /** The user's home folder and the clock, as the core has them. */
+  home: string
+  now: () => Date
   machine: Pick<Machine, 'spawn'>
   /** The core's own files in a chat's folder, which an extension's chat storage can't touch. */
   chatOwnFiles: string[]
@@ -87,6 +91,8 @@ export type HostDeps<C extends HostChat> = {
   chatFor: (chatId: string) => C
   shown: (chat: C) => boolean
   shownChats: () => C[]
+  /** Every chat the core keeps, shown or not. */
+  allChats: () => C[]
   detailOf: (chat: C) => ChatDetail
   spaceOf: (chat: C) => SpaceDetail
   reachable: (callerId: string, chat: C) => boolean
@@ -158,6 +164,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     const known = hosts.get(extension.id)
     if (known) return known
     const dir = join(deps.garage, 'extensions', extension.id)
+    const chatStorageOf = (chat: C) => storageAt(chat.dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles)
     const host: ExtensionHost = {
       createChat({ name, folders, files, engine, parentId, role }) {
         if (parentId === undefined) {
@@ -214,7 +221,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         }
         const action = options?.action === undefined ? undefined : noteAction(options.action, panel)
         const card = options?.card === undefined ? undefined : noteCard(options.card)
-        const at = new Date().toISOString()
+        const at = deps.now().toISOString()
         deps.append(chatFor(chatId), {
           at,
           type: 'extension.note',
@@ -241,7 +248,10 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       run: deps.run(),
       spawn: spawnFor(extension),
       storage: storageAt(dir, `${extension.name}'s storage`),
-      chatStorage: (chatId) => storageAt(chatFor(chatId).dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles),
+      chatStorage: (chatId) => chatStorageOf(chatFor(chatId)),
+      everyChatStorage: () => deps.allChats().map((chat) => ({ chatId: chat.info.id, storage: chatStorageOf(chat) })),
+      home: deps.home,
+      now: () => deps.now(),
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       complete: (request) => deps.complete(request),
       refresh: (chatId) => deps.refresh(extension, chatId),
@@ -311,10 +321,11 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
 
 // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.
 export const storageAt = (dir: string, what: string, reserved: string[] = []): ExtensionStorage => {
+  const isReserved = (top: string) => reserved.some((own) => own.toLowerCase() === top.toLowerCase())
   const fileOf = (name: string) => {
     const path = resolve(dir, String(name))
     const top = path.slice(dir.length + 1).split(sep)[0]!
-    if (path === dir || !within(path, dir) || reserved.some((own) => own.toLowerCase() === top.toLowerCase())) throw new Error(`"${name}" is outside ${what}`)
+    if (path === dir || !within(path, dir) || isReserved(top)) throw new Error(`"${name}" is outside ${what}`)
     return path
   }
   const writable = (name: string) => {
@@ -335,6 +346,27 @@ export const storageAt = (dir: string, what: string, reserved: string[] = []): E
     write: (name, text) => writeFileSync(writable(name), text),
     append: (name, text) => appendFileSync(writable(name), text),
     remove: (name) => rmSync(fileOf(name), { force: true }),
+    list(folder) {
+      const at = folder === undefined || folder === '' ? dir : fileOf(folder)
+      let names: string[]
+      try {
+        names = readdirSync(at)
+      } catch (error) {
+        if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return []
+        throw error
+      }
+      return names
+        .filter((name) => at !== dir || !isReserved(name))
+        .sort()
+        .flatMap((name): ExtensionStoredFile[] => {
+          try {
+            const stat = lstatSync(join(at, name))
+            return stat.isFile() ? [{ name, size: stat.size }] : []
+          } catch {
+            return []
+          }
+        })
+    },
   }
 }
 

@@ -168,7 +168,12 @@ export type ExtensionStorage = {
   // Adds to the end of the file, making it if it's missing.
   append(name: string, text: string): void
   remove(name: string): void
+  // The files directly in a folder of it (the top without one), by name and size in bytes, sorted by name. Folders and
+  // links aren't listed; a missing folder lists nothing. A chat's storage leaves out the core's own files.
+  list(folder?: string): ExtensionStoredFile[]
 }
+
+export type ExtensionStoredFile = { name: string; size: number }
 
 // Which of the user's model lists (Settings → Models) a chat runs on.
 export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
@@ -263,6 +268,14 @@ export type ExtensionHost = {
   // Files of the extension's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The
   // core's own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
   chatStorage(chatId: string): ExtensionStorage
+  // The chatStorage of every chat Kothar keeps, by chat id: spaces, workers, archived chats, and an extension's own chat
+  // (Home) even while that extension is off and its chat isn't shown. For housekeeping across chats, such as how much
+  // disk an extension's files take, or removing them; not for reading chats the user can't see.
+  everyChatStorage(): { chatId: string; storage: ExtensionStorage }[]
+  // The user's home folder, as the core sees it (tests and a remote machine can give another).
+  home: string
+  // The core's clock. Use it instead of Date.now() or new Date(), so tests and the core agree on the time.
+  now(): Date
   // The chat's log as numbered memory messages, oldest first.
   messages(chatId: string): MemoryMessage[]
   // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
@@ -687,6 +700,10 @@ export type Extension = {
   // The chat is gone from the core by now; its log and folder too.
   onChatRemoved?(chat: ChatDetail, context: ExtensionContext): void | Promise<void>
   onChatArchived?(chat: ChatDetail, archived: boolean, context: ExtensionContext): void | Promise<void>
+  // A space was deleted (after onChatRemoved for each of its chats): its work folder and checkouts as they were. Kothar
+  // removes the work folder and the checkouts itself, since it made them; this is for an extension's own records of
+  // them, such as cached pull requests of a checkout.
+  onSpaceRemoved?(space: SpaceDetail, context: ExtensionContext): void | Promise<void>
   onStatusChanged?(chat: ChatDetail, status: ChatStatus, context: ExtensionContext): void | Promise<void>
   onTurnStarted?(turn: TurnStart, context: ExtensionContext): void | Promise<void>
   onTurnCompleted?(turn: TurnSummary, context: ExtensionContext): void | Promise<void>
@@ -747,7 +764,7 @@ export type ExtensionUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onLimitReached, onStart, onStop
+  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop
   | 'events'
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
@@ -757,7 +774,7 @@ export type ExtensionUse =
   | 'settings'
   | 'chats'
   | 'setup'
-  // memory, and host.chatStorage
+  // memory, and host.chatStorage, everyChatStorage
   | 'memory'
   // Host calls: chats, chat, read, space, messages, reaches, reachable.
   | 'readChats'
@@ -771,7 +788,7 @@ export type ExtensionUse =
   | 'models'
   // Node's own APIs, not the host: fetch, WebSocket, node:http, https, net, tls, dns and the like
   | 'network'
-  // Node's own APIs: node:fs, for anything outside host.storage
+  // host.home; and Node's own APIs: node:fs, for anything outside host.storage
   | 'files'
 
 // Extensions were called mods. These old names stay, so an extension written against them still type-checks.

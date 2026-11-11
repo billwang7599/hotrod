@@ -64,6 +64,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onChatCreated', 'events'],
   ['onChatRemoved', 'events'],
   ['onChatArchived', 'events'],
+  ['onSpaceRemoved', 'events'],
   ['onLimitReached', 'events'],
   ['panels', 'panels'],
   ['commands', 'commands'],
@@ -109,6 +110,8 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   reaches: 'readChats',
   reachable: 'readChats',
   chatStorage: 'memory',
+  everyChatStorage: 'memory',
+  home: 'files',
   complete: 'models',
   send: 'sendMessages',
   createChat: 'sendMessages',
@@ -130,8 +133,9 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   processesChanged: 'panels',
 }
 
-// Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh']
+// Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
+// the clock.
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now']
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check
@@ -222,13 +226,16 @@ export function guardHost(host: ExtensionHost, extension: { name: string }, uses
       guarded[call] = host[call]
       continue
     }
-    guarded[call] = () => {
+    const refuse = () => {
       throw new Error(
         use
           ? `${extension.name} can't use host.${call}: its manifest doesn't list "${use}" (${EXTENSION_USES[use]})`
           : `${extension.name} can't use host.${call}: community extensions can't use it yet`,
       )
     }
+    // A value (host.home) refuses when it's read; a call when it's made.
+    if (typeof host[call] === 'function') guarded[call] = refuse
+    else Object.defineProperty(guarded, call, { get: refuse, enumerable: true })
   }
   return guarded as ExtensionHost
 }

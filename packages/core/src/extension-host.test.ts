@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Extension } from '@kothar/extension-api'
@@ -30,6 +30,8 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
   }
   const deps: HostDeps<HostChat> = {
     garage: tempDir(),
+    home: '/Users/someone',
+    now: () => new Date('2026-01-02T03:04:05.000Z'),
     machine: { spawn: unused },
     chatOwnFiles: ['chat.json', 'log.jsonl'],
     isQuitting: () => false,
@@ -48,6 +50,7 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
     },
     shown: () => true,
     shownChats: () => [chat],
+    allChats: () => [chat],
     detailOf: unused,
     spaceOf: unused,
     reachable: () => true,
@@ -99,6 +102,30 @@ describe('storageAt', () => {
     expect(() => storage.write('', 'x')).toThrow('is outside the store')
     expect(() => storage.read('CHAT.json')).toThrow('"CHAT.json" is outside the store')
   })
+
+  it('lists the plain files in a folder of it, by name, without reserved ones, folders or links', () => {
+    const dir = tempDir()
+    writeFileSync(join(dir, 'chat.json'), '{}')
+    writeFileSync(join(dir, 'b.md'), 'bee')
+    writeFileSync(join(dir, 'a.md'), 'a')
+    mkdirSync(join(dir, 'notes'))
+    writeFileSync(join(dir, 'notes', 'n.md'), 'note')
+    symlinkSync(join(dir, 'a.md'), join(dir, 'link.md'))
+    const storage = storageAt(dir, 'the store', ['chat.json'])
+
+    expect(storage.list()).toEqual([
+      { name: 'a.md', size: 1 },
+      { name: 'b.md', size: 3 },
+    ])
+    expect(storage.list('notes')).toEqual([{ name: 'n.md', size: 4 }])
+    expect(storage.list('missing')).toEqual([])
+    expect(storage.list('a.md')).toEqual([])
+    expect(() => storage.list('../')).toThrow('is outside the store')
+  })
+
+  it('lists nothing when its folder is missing', () => {
+    expect(storageAt(join(tempDir(), 'gone'), 'the store').list()).toEqual([])
+  })
 })
 
 describe('openExtensionHosts', () => {
@@ -124,6 +151,39 @@ describe('openExtensionHosts', () => {
     storage.write('mine.md', 'hello')
     expect(readFileSync(join(chat.dir, 'mine.md'), 'utf8')).toBe('hello')
     expect(() => storage.write('log.jsonl', 'x')).toThrow("Demo's files in this chat")
+  })
+
+  it('gives every chat’s storage, shown or not, the home folder and the core’s clock', () => {
+    const shown = chatAt(tempDir())
+    const hidden = { ...chatAt(tempDir()), info: { id: 'main', name: 'Home', folders: [], files: [] } as unknown as ChatInfo }
+    const host = hostsWith(shown, { shown: (chat) => chat === shown, allChats: () => [shown, hidden] }).hostFor(extension)
+
+    expect(host.everyChatStorage().map(({ chatId, storage }) => [chatId, storage.dir])).toEqual([
+      ['c1', shown.dir],
+      ['main', hidden.dir],
+    ])
+    expect(() => host.everyChatStorage()[1]!.storage.write('log.jsonl', 'x')).toThrow("Demo's files in this chat")
+    expect(host.home).toBe('/Users/someone')
+    expect(host.now().toISOString()).toBe('2026-01-02T03:04:05.000Z')
+  })
+
+  it('stamps a note with the core’s clock', () => {
+    const appended: unknown[] = []
+    const { hostFor } = hostsWith(chatAt(tempDir()), { append: (_chat, entry) => void appended.push(entry) })
+
+    hostFor(extension).note('c1', 'Hello')
+
+    expect(appended).toEqual([{ at: '2026-01-02T03:04:05.000Z', type: 'extension.note', text: 'Hello' }])
+  })
+
+  it('refuses a community extension the home folder and every chat’s storage unless it listed them', () => {
+    const { hostFor } = hostsWith(chatAt(tempDir()), { usesOf: () => [] })
+    const host = hostFor(extension)
+
+    expect(() => host.home).toThrow(`Demo can't use host.home: its manifest doesn't list "files"`)
+    expect(() => host.everyChatStorage()).toThrow(`Demo can't use host.everyChatStorage`)
+    expect(host.now().toISOString()).toBe('2026-01-02T03:04:05.000Z')
+    expect(hostsWith(chatAt(tempDir()), { usesOf: () => ['files'] }).hostFor(extension).home).toBe('/Users/someone')
   })
 
   it('cuts a notification to what a system notification shows', () => {
