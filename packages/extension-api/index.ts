@@ -519,8 +519,12 @@ export type ExtensionView =
   // as data: or blob: URLs, and no fetch, XHR or WebSocket. web: also lets it load scripts, styles, images, fonts and
   // media from https: URLs (such as a chart library from a CDN); fetch, XHR and WebSockets stay blocked. label names
   // the frame for screen readers. height in pixels; without it the frame takes the room it's given (a popup's main
-  // column).
-  | { type: 'html'; html: string; label: string; web?: boolean; height?: number }
+  // column). errors: each runtime error the page hits (an uncaught error or a rejected promise, with its stack where
+  // there is one) is sent as the action named errors with value: the error's text, at most 2000 characters and 20 per
+  // page load. The page could send any text this way, so treat it as the page's, not Kothar's. theme: the page draws in
+  // Kothar's light or dark scheme (prefers-color-scheme inside matches it, and there's no white sheet behind it), for
+  // pages made to follow it; without it a page draws on white, as in a browser.
+  | { type: 'html'; html: string; label: string; web?: boolean; height?: number; errors?: string; theme?: boolean }
   // A button that copies text, such as a file's contents, to the clipboard.
   | { type: 'copy'; text: string; label: string; hint?: string }
   // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType

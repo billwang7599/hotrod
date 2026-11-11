@@ -2,10 +2,10 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import type { ExtensionView } from '@kothar/extension-api'
+import type { ExtensionAction, ExtensionView } from '@kothar/extension-api'
 import { Tooltip } from 'radix-ui'
 import { ExtensionViewer } from './extension-view.tsx'
-import { frameCsp, sandboxedDocument } from './html-frame.tsx'
+import { FRAME_ERROR_CHARS, FRAME_ERRORS_PER_LOAD, frameCsp, frameErrorOf, sandboxedDocument } from './html-frame.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -22,11 +22,11 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const show = (view: ExtensionView) =>
+const show = (view: ExtensionView, act_: (a: ExtensionAction) => void = () => {}) =>
   act(() =>
     root.render(
       <Tooltip.Provider>
-        <ExtensionViewer view={view} act={() => {}} />
+        <ExtensionViewer view={view} act={act_} />
       </Tooltip.Provider>,
     ),
   )
@@ -115,4 +115,49 @@ test('a download view saves its text under its file name', () => {
   act(() => host.querySelector('button')!.click())
   expect(clicked.map((a) => [a.download, a.href])).toEqual([['chart.html', 'blob:x']])
   expect(blobs[0]!.type).toBe('text/html')
+})
+
+test('with errors, a reporter runs right after the policy, before the page’s own scripts', () => {
+  const doc = sandboxedDocument('<!doctype html><script>boom()</script>', { errors: true })
+  const parsed = new DOMParser().parseFromString(doc, 'text/html')
+  const [reporter, own] = [...parsed.querySelectorAll('script')]
+  expect(reporter!.textContent).toContain('postMessage')
+  expect(own!.textContent).toBe('boom()')
+  expect(doc.indexOf('Content-Security-Policy')).toBeLessThan(doc.indexOf('postMessage'))
+  expect(sandboxedDocument('<p/>')).not.toContain('postMessage')
+  expect(sandboxedDocument('<p/>', { theme: true })).toContain('<meta name="color-scheme" content="light dark">')
+})
+
+test('only a string from the reporter counts as an error, cut to size', () => {
+  expect(frameErrorOf({ kotharFrameError: '  x is not defined ' })).toBe('x is not defined')
+  expect(frameErrorOf({ kotharFrameError: 'e'.repeat(5000) })).toHaveLength(FRAME_ERROR_CHARS)
+  for (const other of [null, 'text', { kotharFrameError: 3 }, { kotharFrameError: ' ' }, { other: 'x' }]) {
+    expect(frameErrorOf(other)).toBeUndefined()
+  }
+})
+
+test('a page’s errors go to the panel as its action, from that frame only, at most so many a load', () => {
+  const sent: ExtensionAction[] = []
+  show({ type: 'html', label: 'App', html: '<p/>', errors: 'error' }, (a) => sent.push(a))
+  const frame = host.querySelector('iframe')!
+  const post = (data: unknown, source: MessageEventSource | null = frame.contentWindow) =>
+    act(() => {
+      dispatchEvent(new MessageEvent('message', { data, source }))
+    })
+  post({ kotharFrameError: 'ReferenceError: x is not defined' })
+  post({ kotharFrameError: 'from elsewhere' }, window)
+  post({ kotharFrameError: 'from nowhere' }, null)
+  expect(sent).toEqual([{ name: 'error', value: 'ReferenceError: x is not defined' }])
+  for (let i = 0; i < FRAME_ERRORS_PER_LOAD + 5; i++) post({ kotharFrameError: `again ${i}` })
+  expect(sent).toHaveLength(FRAME_ERRORS_PER_LOAD)
+})
+
+test('a plain page draws on white; a themed one on the panel, in Kothar’s scheme', () => {
+  show({ type: 'html', label: 'A', html: '<p/>' })
+  const plain = host.querySelector('iframe')!
+  expect([plain.style.backgroundColor, plain.style.colorScheme]).toEqual(['rgb(255, 255, 255)', 'light'])
+  show({ type: 'html', label: 'A', html: '<p/>', theme: true })
+  const themed = host.querySelector('iframe')!
+  expect(themed.style.backgroundColor).toBe('transparent')
+  expect(['light', 'dark']).toContain(themed.style.colorScheme)
 })

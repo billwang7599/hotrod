@@ -505,7 +505,16 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
         />
       )
     case 'html':
-      return <HtmlFrame html={node.html} label={node.label} web={node.web} height={node.height} />
+      return (
+        <HtmlFrame
+          html={node.html}
+          label={node.label}
+          web={node.web}
+          height={node.height}
+          theme={node.theme}
+          onError={node.errors ? (error) => act({ name: node.errors!, value: error }) : undefined}
+        />
+      )
     case 'copy':
       return <CopyText node={node} />
     case 'download': {
