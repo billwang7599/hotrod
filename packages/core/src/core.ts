@@ -11,18 +11,16 @@ import type {
   ChatDetail,
   Extension,
   ExtensionContext,
-  ExtensionManifest,
   ExtensionInstructionsFor,
-  ExtensionUse,
   SpaceDetail,
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups, WORKER_SETUP } from './setups.ts'
 import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
 import { messagesOf, windowView } from './memory.ts'
-import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
-import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
-import { type CommunityEntry, type CommunityExtension, type ExtensionHook, valuesOf } from './extensions.ts'
+import { type Fetch, openMarketplace } from './marketplace.ts'
+import { readApprovals } from './approvals.ts'
+import { type CommunityEntry, type CommunityExtension, type ExtensionHook, stubOf, valuesOf } from './extensions.ts'
 import {
   bySpaceOrder,
   editsAnywhere,
@@ -38,17 +36,15 @@ import {
   type ModelRole,
   type MarketKind,
   type MemoryMessage,
-  EXTENSION_USES,
   type ExtensionInfo,
   MODEL_ROLES,
   type NewChat,
-  type RestartChange,
-  type RestartState,
   type Setup,
 } from './shared.ts'
 import { openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
+import { openExtensionSwitches } from './extension-switches.ts'
 import { openExtensionSettings } from './extension-settings.ts'
 import { openPanels } from './panels.ts'
 import { openAppSettings } from './settings.ts'
@@ -154,7 +150,6 @@ function openLockedCore(options: {
   // again since; what's pending a restart is worked out from these and the settings.
   const imported = new Map<string, string>()
   const reinstalled = new Set<string>()
-  const stubOf = ({ id, name, description }: ExtensionManifest): Extension => ({ id, name, description, enabledByDefault: false })
   for (const found of options.community ?? []) {
     const { manifest, item } = found
     if (builtInIds.has(manifest.id) || community.has(manifest.id)) {
@@ -196,7 +191,7 @@ function openLockedCore(options: {
   moveExtensionsDir(garage)
   // What the user turned on, per community extension (approvals.ts). One whose files aren't those didn't start; its
   // switch goes off, so turning it on again is the user reviewing the new files.
-  let approvals: Record<string, Approval> = readApprovals(garage) ?? {}
+  const savedApprovals = readApprovals(garage) ?? {}
   const heldOn = [...community].filter(([id, c]) => c.held && settings.extensions?.[id]?.enabled === true)
   for (const [id] of heldOn) settings.extensions = { ...settings.extensions, [id]: { ...settings.extensions?.[id], enabled: false } }
   if (heldOn.length) saveSettings()
@@ -320,7 +315,7 @@ function openLockedCore(options: {
     broadcast,
     machine,
     community,
-    approvalOf: (id) => approvals[id],
+    approvalOf: (id) => approvalOf(id),
     settingsErrors,
     isOn,
     ownSwitch,
@@ -934,137 +929,36 @@ function openLockedCore(options: {
     removeChats(family)
   }
 
-  const setExtensionEnabled = (extension: Extension, enabled: boolean) => {
-    if (community.has(extension.id) && !communityOn() && enabled) {
-      throw new Error(`Turn on community extensions before turning on ${extension.name}`)
-    }
-    const family = (extension.chats ?? []).flatMap(({ id }) => {
-      const chat = chats.get(id)
-      return chat ? familyOf(chat) : []
+  const { setExtensionEnabled, setCommunityExtensions, restartState, communityChanged, uninstallExtension, approvalOf } =
+    openExtensionSwitches({
+      garage,
+      settings,
+      saveSettings,
+      broadcast,
+      extensions,
+      community,
+      imported,
+      reinstalled,
+      approvals: savedApprovals,
+      canRestart: options.restart !== undefined,
+      communityOn,
+      ownSwitch,
+      isOn,
+      extensionInfo,
+      saveExtension,
+      checkSetup,
+      startExtension,
+      stopExtension,
+      stopSpawned,
+      forgetHost,
+      marketplace,
+      chats,
+      familyOf,
+      shownChats,
+      shownState,
+      setWait,
+      extensionsOf,
     })
-    const busy = family.find((chat) => chat.status !== 'idle')
-    if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${extension.name} off`)
-    const changed = isOn(extension) !== enabled
-    const from = community.get(extension.id)
-    if (from && enabled) {
-      // Turning it on approves these exact files; the loader runs nothing else.
-      const install = installedExtensions(garage).find((m) => m.manifest.id === extension.id)
-      if (install) approvals = { ...approvals, [extension.id]: approve(garage, install) }
-      delete from.held
-    }
-    saveExtension(extension, { enabled })
-    if (from) restartChanged()
-    if (enabled) void checkSetup(extension)
-    if (changed) extensionSwitched(extension, enabled, family)
-  }
-
-  // What follows an extension starting or stopping to run: its chats show or hide, spawned processes stop, panels
-  // update.
-  const extensionSwitched = (extension: Extension, enabled: boolean, family = familyOfExtension(extension)) => {
-    if (!enabled) stopSpawned(extension)
-    if (!enabled) chats.forEach((chat) => setWait(chat, extension.id, undefined))
-    if (enabled) startExtension(extension)
-    else stopExtension(extension)
-    if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: shownState(chat) }))
-    else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
-    if (extension.panels?.length || extension.commands?.length) shownChats().forEach((chat) => broadcast(extensionsOf(chat)))
-  }
-  const familyOfExtension = (extension: Extension) =>
-    (extension.chats ?? []).flatMap(({ id }) => {
-      const chat = chats.get(id)
-      return chat ? familyOf(chat) : []
-    })
-
-  // The master switch. Off stops every community extension's hooks at once (its code stays loaded until a restart); on
-  // lets the ones whose own switch is on run, from the next start for any not loaded yet.
-  const setCommunityExtensions = (enabled: boolean) => {
-    if (communityOn() === enabled) return
-    const running = extensions.filter((extension) => community.has(extension.id) && ownSwitch(extension))
-    if (!enabled) {
-      const busy = running.flatMap((extension) => familyOfExtension(extension)).find((chat) => chat.status !== 'idle')
-      if (busy) throw new Error(`Stop "${busy.info.name}" before turning community extensions off`)
-    }
-    settings.communityExtensions = enabled
-    saveSettings()
-    broadcast({ type: 'communityExtensions.updated', enabled })
-    for (const extension of running) {
-      if (enabled) void checkSetup(extension)
-      extensionSwitched(extension, enabled)
-    }
-    restartChanged()
-  }
-
-  // Community extension code this run doesn't match the settings: what a restart would start, update or stop.
-  const restartState = (): RestartState => {
-    const changes: RestartChange[] = []
-    for (const [id, { manifest }] of community) {
-      const extension = extensions.find((m) => m.id === id)
-      const wanted = !!extension && isOn(extension)
-      const loaded = imported.has(id)
-      const change = wanted ? (!loaded ? 'start' : reinstalled.has(id) ? 'update' : undefined) : loaded ? 'stop' : undefined
-      if (change) changes.push({ id, name: manifest.name, change })
-    }
-    for (const [id, name] of imported) if (!community.has(id)) changes.push({ id, name, change: 'stop' })
-    return { changes, canRestart: options.restart !== undefined }
-  }
-  let lastRestart = JSON.stringify(restartState())
-  const restartChanged = () => {
-    const restart = restartState()
-    const text = JSON.stringify(restart)
-    if (text === lastRestart) return
-    lastRestart = text
-    broadcast({ type: 'restart.updated', restart })
-  }
-
-  // A community extension was installed or updated. It runs from the next start, and only as the files the user turned
-  // on: an update (any change to its files) turns it off until they review it and turn it on again.
-  const communityChanged = (id: string, added: ExtensionUse[]) => {
-    const install = installedExtensions(garage).find((m) => m.manifest.id === id)
-    if (!install) return
-    const known = community.get(id)
-    logInstall(garage, install, !!known)
-    community.set(id, { ...known, manifest: install.manifest, item: install.item })
-    if (imported.has(id)) reinstalled.add(id)
-    const at = extensions.findIndex((m) => m.id === id)
-    if (at < 0) extensions.push(stubOf(install.manifest))
-    else if (!known?.running) extensions[at] = stubOf(install.manifest)
-    const extension = extensions.find((m) => m.id === id)!
-    if (ownSwitch(extension) && reviewOf(approvals[id], install)) {
-      setExtensionEnabled(extension, false)
-      const more = added.map((use) => EXTENSION_USES[use].toLowerCase()).join('; ')
-      broadcast({
-        type: 'error',
-        message: added.length
-          ? `${extension.name} was turned off: its update also ${more}. Turn it on again in Community hub to allow that.`
-          : `${extension.name} was turned off: ${install.manifest.version} isn't the version you turned on. ` +
-            'Read the changes, then turn it on again in Community hub.',
-      })
-    }
-    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
-    restartChanged()
-  }
-
-  // Turns the extension off and deletes its files. Its storage in <garage>/extensions/<id>/ stays, as a built-in
-  // extension's does.
-  const uninstallExtension = (id: string) => {
-    const extension = extensions.find((m) => m.id === id)
-    if (!community.has(id) || !extension) return marketplace.uninstall('extension', id)
-    if (ownSwitch(extension)) setExtensionEnabled(extension, false)
-    const version = community.get(id)?.manifest.version
-    marketplace.uninstall('extension', id)
-    forget(garage, id)
-    const { [id]: _gone, ...rest } = approvals
-    approvals = rest
-    logHistory(garage, { id, event: 'uninstalled', ...(version && { version }) })
-    const { enabled: _, ...kept } = settings.extensions?.[id] ?? {}
-    settings.extensions = { ...settings.extensions, [id]: kept }
-    saveSettings()
-    community.delete(id)
-    forgetHost(id)
-    extensions.splice(extensions.indexOf(extension), 1)
-    broadcast({ type: 'extension.removed', extensionId: id })
-    restartChanged()
-  }
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
     if (chat.status !== 'idle') throw new Error('Wait for the turn to end before changing the model')

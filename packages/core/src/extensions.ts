@@ -296,3 +296,6 @@ export type ExtensionHook = {
 
 /** A community extension as the core keeps it: what's installed, the version running, and why it didn't load or start. */
 export type CommunityEntry = { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string; held?: string }
+
+/** An extension that didn't load (off, or broken) as a stub with no hooks, so it can still be turned on or off. */
+export const stubOf = ({ id, name, description }: ExtensionManifest): Extension => ({ id, name, description, enabledByDefault: false })
