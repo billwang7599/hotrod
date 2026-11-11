@@ -111,7 +111,7 @@ export type TurnDeps = {
 type TurnInput = { text: string; attachments: Attachment[]; reports: Report[]; continuation?: string }
 
 /** A turn ready to start: what it runs on, its prompt, what its session is told, and where it may reach. */
-type TurnPlan = {
+export type TurnPlan = {
   run: ReturnType<ReturnType<typeof openModels>['runOf']>
   adapter: Adapter
   prompt: string
@@ -128,6 +128,31 @@ type TurnPlan = {
 
 /** What a session is told, but where it runs and its checkouts (buildInstructions). */
 export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts'>
+
+// Where a turn's session runs and what it's told, once its checkouts are ready: the first checkout (else the work
+// folder) as its folder, the other folders it may reach, and its sandbox widened by the checkouts' git folders.
+export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'sandbox'>, checkouts: Checkout[]) {
+  const { workDir, parts, attachmentsDir, folders, repos, sandbox } = plan
+  const cwd = checkouts[0]?.worktree.path ?? workDir
+  const instructions = buildInstructions({
+    ...parts,
+    ...(sandbox && { workDir }),
+    checkouts: checkouts.map(({ folder, worktree }) => ({ folder, path: worktree.path, branch: worktree.branch })),
+  })
+  const extraDirs = [
+    ...(cwd === workDir ? [] : [workDir]),
+    ...checkouts.slice(1).map((c) => c.worktree.path),
+    ...folders.filter((folder) => !repos.includes(folder)),
+    ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
+  ]
+  const readOnly = checkouts.flatMap((c) => c.readOnly)
+  const jail = sandbox && {
+    ...sandbox,
+    writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
+    ...(readOnly.length && { readOnly }),
+  }
+  return { cwd, instructions, extraDirs, jail }
+}
 
 export function openTurns(deps: TurnDeps) {
   const {
@@ -518,32 +543,51 @@ export function openTurns(deps: TurnDeps) {
     return { workDir, parts, readFiles, attachmentsDir, folders, repos, sandbox }
   }
 
-  // The turn's session, once its checkouts are ready: it starts the engine and handles each event it sends. Its
-  // session and tools live here, one per turn.
+  // The turn's session, once its checkouts are ready: where it runs (sessionPlaceOf), how each event it sends is handled
+  // (sessionEvents), and starting it. Its session and tools live here, one per turn.
   const openSession = (chat: Chat, plan: TurnPlan, checkouts: Checkout[]) => {
-    const { run, adapter, prompt, zoomable, attachments, workDir, parts, readFiles, attachmentsDir, folders, repos, sandbox } = plan
-    const cwd = checkouts[0]?.worktree.path ?? workDir
-    const instructions = buildInstructions({
-      ...parts,
-      ...(sandbox && { workDir }),
-      checkouts: checkouts.map(({ folder, worktree }) => ({ folder, path: worktree.path, branch: worktree.branch })),
-    })
-    const extraDirs = [
-      ...(cwd === workDir ? [] : [workDir]),
-      ...checkouts.slice(1).map((c) => c.worktree.path),
-      ...folders.filter((folder) => !repos.includes(folder)),
-      ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
-    ]
-    const readOnly = checkouts.flatMap((c) => c.readOnly)
-    const jail = sandbox && {
-      ...sandbox,
-      writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
-      ...(readOnly.length && { readOnly }),
-    }
+    const { run, adapter, prompt, zoomable, attachments, workDir, readFiles } = plan
+    const { cwd, instructions, extraDirs, jail } = sessionPlaceOf(plan, checkouts)
     // Read at each request, so a switch flipped mid-turn counts at once.
     const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage })
+    const events = sessionEvents(chat, permissionsOf)
+    try {
+      chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
+      const url = mcpUrl()
+      const kotharMcp = url && chat.mcpToken ? { url, token: chat.mcpToken } : undefined
+      const { model, thinking } = run ?? {}
+      const mcpServers = adapter.kotharMcp ? extensionServers(chat, workDir, jail !== undefined) : []
+      const images = imagesFor(adapter, attachments)
+      const options = {
+        cwd,
+        instructions,
+        ...(extraDirs.length && { extraDirs }),
+        ...(readFiles.length && { readFiles }),
+        ...accounts.sessionFor(adapter.id),
+        ...(kotharMcp && { kotharMcp }),
+        ...(mcpServers.length && { mcpServers }),
+        ...(model && { model }),
+        ...(thinking && { thinking }),
+        ...(jail && { sandbox: jail }),
+      }
+      chat.account = accounts.activeOf(adapter.id)
+      chat.runModel = model
+      const session = adapter.start(machine, options, events.emit)
+      events.ref.session = session
+      if (chat.status === 'idle') return session.close()
+      chat.session = session
+      session.prompt(prompt, images)
+    } catch (error) {
+      if (chat.status === 'idle') return
+      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: String(error) })
+    }
+  }
 
-    let session: Session | undefined
+  // Handles the events one session sends for chat: tools tracked for the turn summary, text streamed and saved, steers,
+  // limits, questions, and permission requests answered by the core's rules, then extensions, else the user. Events
+  // from any other session than ref.session (an older turn's, or one that never became the chat's) are dropped.
+  const sessionEvents = (chat: Chat, permissionsOf: () => Parameters<typeof verdictOf>[1]) => {
+    const ref: { session?: Session } = {}
     // Where each tool sits in chat.turn.tools, counting from 1.
     const toolIds = new Map<string, number>()
     // Engine events arrive from an adapter's stdout handler, where a throw would take the whole app down. A write
@@ -556,9 +600,8 @@ export function openTurns(deps: TurnDeps) {
         lostChat(chat, error)
       }
     }
-    const emit = (event: EngineEvent) => guarded(() => handleEvent(event))
     const handleEvent = (event: EngineEvent) => {
-      if (chat.session !== session) return
+      if (chat.session !== ref.session) return
       const at = now().toISOString()
       for (const extension of watchersOf('onEvent')) callExtension(extension, () => extension.onEvent!(detailOf(chat), event, contextOf(extension)))
       if (event.type === 'tool.started') {
@@ -613,7 +656,7 @@ export function openTurns(deps: TurnDeps) {
         chat.pendingRequests.delete(requestId)
         const resolvedAt = now().toISOString()
         append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
-        session?.respond(requestId, verdict.allow, verdict.message)
+        ref.session?.respond(requestId, verdict.allow, verdict.message)
       }
       const own = verdictOf(event, permissionsOf())
       // The core's denials stand; otherwise an extension's policy goes first.
@@ -623,40 +666,11 @@ export function openTurns(deps: TurnDeps) {
       // Pending, so the user can still answer it while an extension decides; whoever answers first wins.
       chat.pendingRequests.set(requestId, 'permission')
       void fromExtensions.then((verdict) => {
-        if (chat.session !== session || chat.pendingRequests.get(requestId) !== 'permission') return
+        if (chat.session !== ref.session || chat.pendingRequests.get(requestId) !== 'permission') return
         guarded(() => settle(verdict ?? own))
       })
     }
-
-    try {
-      chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
-      const url = mcpUrl()
-      const kotharMcp = url && chat.mcpToken ? { url, token: chat.mcpToken } : undefined
-      const { model, thinking } = run ?? {}
-      const mcpServers = adapter.kotharMcp ? extensionServers(chat, workDir, jail !== undefined) : []
-      const images = imagesFor(adapter, attachments)
-      const options = {
-        cwd,
-        instructions,
-        ...(extraDirs.length && { extraDirs }),
-        ...(readFiles.length && { readFiles }),
-        ...accounts.sessionFor(adapter.id),
-        ...(kotharMcp && { kotharMcp }),
-        ...(mcpServers.length && { mcpServers }),
-        ...(model && { model }),
-        ...(thinking && { thinking }),
-        ...(jail && { sandbox: jail }),
-      }
-      chat.account = accounts.activeOf(adapter.id)
-      chat.runModel = model
-      session = adapter.start(machine, options, emit)
-      if (chat.status === 'idle') return session.close()
-      chat.session = session
-      session.prompt(prompt, images)
-    } catch (error) {
-      if (chat.status === 'idle') return
-      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: String(error) })
-    }
+    return { ref, emit: (event: EngineEvent) => guarded(() => handleEvent(event)) }
   }
 
   const imagesFor = (adapter: Adapter, attachments: Attachment[]) =>
