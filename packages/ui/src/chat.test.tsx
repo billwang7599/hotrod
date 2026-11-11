@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { DRAFT_SAVE_MS } from './drafts.ts'
+import { currentDock, openDock } from './panel-tab.ts'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
 import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
@@ -100,6 +101,7 @@ type RenderOptions = {
   steering?: boolean
   engines?: EngineInfo[]
   modelLists?: ModelLists
+  extensionUi?: ComponentProps<typeof Chat>['extensionUi']
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -135,6 +137,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
                 ]
               }
               modelLists={options.modelLists}
+              extensionUi={options.extensionUi}
               connected
               send={send}
               openSettings={() => {}}
@@ -1263,4 +1266,36 @@ test("a chat whose own model can't run says so and offers to go back to Settings
   const back = [...container.querySelectorAll('button')].find((b) => b.textContent === "Use Settings' models")!
   act(() => back.click())
   expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1' })
+})
+
+test("an extension's card stays in view when the turn folds, and opens its panel on what it's about", () => {
+  const sent: ClientMessage[] = []
+  const tool = (toolId: string): Item => ({ kind: 'tool', toolId, name: 'create_artifact', summary: '', state: 'done', output: '' })
+  const card: Item = {
+    kind: 'note',
+    text: 'Made the artifact',
+    extension: 'artifacts',
+    panel: 'artifacts',
+    action: { name: 'open', value: 'chart' },
+    card: { title: 'Sales chart', badge: 'Chart', detail: 'v2' },
+  }
+  const panels = [{ extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock' as const }]
+  render({ items: [USER, tool('t1'), card, tool('t2'), { kind: 'text', text: 'Done' }] }, (m) => sent.push(m), {
+    extensionUi: { chatId: 'c1', panels, commands: [] },
+  })
+  const shown = container.querySelector('[data-note-card]') as HTMLButtonElement
+  expect(shown.textContent).toContain('Sales chart')
+  expect(shown.textContent).toContain('Chart')
+  expect(shown.textContent).toContain('v2')
+  expect(container.textContent).toContain('2 steps')
+  act(() => shown.click())
+  expect(sent).toContainEqual({
+    type: 'extension.panel.action',
+    chatId: 'c1',
+    extension: 'artifacts',
+    panel: 'artifacts',
+    action: { name: 'open', value: 'chart' },
+  })
+  expect(currentDock().open).toBe('extension:artifacts/artifacts')
+  act(() => openDock(null))
 })

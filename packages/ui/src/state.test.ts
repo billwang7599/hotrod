@@ -629,6 +629,17 @@ describe('foldSteps', () => {
     expect(shown([user('a'), tool('t1'), tool('t2')])).toEqual(['a', '2 steps'])
   })
 
+  it("keeps an extension's card out of the folded steps", () => {
+    const card: Item = { kind: 'note', text: 'Made the artifact', card: { title: 'Chart' } }
+    const plain: Item = { kind: 'note', text: 'Switched account' }
+    expect(shown([user('a'), tool('t1'), card, tool('t2'), plain, tool('t3'), text('Done')])).toEqual([
+      'a',
+      '4 steps',
+      'Made the artifact',
+      'Done',
+    ])
+  })
+
   it('leaves a single step unfolded', () => {
     expect(shown([user('a'), tool('t1'), text('Done')])).toEqual(['a', 't1', 'Done'])
     expect(shown([user('a'), text('Hi')])).toEqual(['a', 'Hi'])

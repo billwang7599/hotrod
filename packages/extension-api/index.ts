@@ -107,8 +107,15 @@ export type ChatEntry = { at: string } & (
   | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
-  // panel: clicking the note opens that panel of the extension's.
-  | { type: 'extension.note'; text: string; extension?: string; panel?: string }
+  // panel: clicking the note opens that panel of the extension's, then sends it action. card: drawn as a card.
+  | {
+      type: 'extension.note'
+      text: string
+      extension?: string
+      panel?: string
+      action?: ExtensionAction
+      card?: ExtensionNoteCard
+    }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
 
@@ -223,8 +230,10 @@ export type ExtensionHost = {
   // idle, as it is in onLimitReached.
   continue(chatId: string, text: string): void
   // A short line in the chat's transcript, for the user. Agents don't see it. With panel, clicking it opens that
-  // panel of this extension's.
-  note(chatId: string, text: string, options?: { panel?: string }): void
+  // panel of this extension's, and with action too, then sends the panel that action (as if clicked in it), such as
+  // which item to show. With card, it's drawn as a card instead (see ExtensionNoteCard), which stays in view when the
+  // turn's steps fold away: for something the user will come back to, such as an artifact an agent made.
+  note(chatId: string, text: string, options?: ExtensionNoteOptions): void
   // An error for the user, shown as one from a hook that throws is: after the extension's name. For background work.
   error(text: string): void
   // A system notification, such as "Reconnect gave up" or "The browser needs you". Kothar shows it as the other
@@ -285,6 +294,11 @@ export type ExtensionHost = {
   processAction(spaceId: string, extension: string, key: string, action: string): Promise<void>
   processesChanged(spaceId: string): void
 }
+
+// How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
+// (such as a version) beside it. Each is plain text, cut if long.
+export type ExtensionNoteCard = { title: string; badge?: string; detail?: string }
+export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
 export type ExtensionWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }

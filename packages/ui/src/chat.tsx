@@ -1,3 +1,4 @@
+import type { ExtensionAction, ExtensionNoteCard } from '@kothar/extension-api'
 import {
   Fragment,
   useContext,
@@ -687,10 +688,44 @@ type ItemProps = {
   // Opens a chat that still exists, for a worker's report.
   openChat?: (chatId: string) => (() => void) | undefined
   revealOf?: RevealOf
-  // Opens an extension's panel in the right sidebar, for an extension's note.
-  openPanel?: (extension: string, panel: string) => void
+  // Opens an extension's panel (a tab, a popup or a dock), for an extension's note, then sends it the note's action.
+  openPanel?: (extension: string, panel: string, action?: ExtensionAction) => void
   // The item's index in the chat, for choices kept per item (a report card's fold).
   at?: number
+}
+
+/** An extension's note drawn as a card, such as an artifact an agent made: click to open it in the extension's panel. */
+function NoteCard({ card, text, open }: { card: ExtensionNoteCard; text: string; open?: () => void }) {
+  const body = (
+    <>
+      <span aria-hidden="true" className="grid size-32 shrink-0 place-items-center rounded bg-raised text-muted">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+          <rect x="2.5" y="2.5" width="11" height="11" rx="2" />
+          <path d="M5 6h6M5 8.5h6M5 11h3.5" />
+        </svg>
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-2">
+        <span className="flex min-w-0 items-center gap-6">
+          <span className="min-w-0 truncate font-semibold" title={card.title}>
+            {card.title}
+          </span>
+          {card.badge && <span className="shrink-0 rounded-full bg-raised px-8 py-1 text-xs text-muted">{card.badge}</span>}
+          {card.detail && <span className="shrink-0 font-mono text-xs text-faint">{card.detail}</span>}
+        </span>
+        <span className="min-w-0 truncate text-sm text-muted">{text}</span>
+      </span>
+    </>
+  )
+  const box = 'flex w-full max-w-420 min-w-0 items-center gap-10 rounded-lg border bg-bg px-10 py-8 text-left shadow-raised'
+  return open ? (
+    <button className={`${box} transition-colors hover:bg-hover`} data-note-card onClick={open}>
+      {body}
+    </button>
+  ) : (
+    <div className={box} data-note-card>
+      {body}
+    </div>
+  )
 }
 
 type Report = Extract<Item, { kind: 'report' }>
@@ -800,12 +835,14 @@ function ItemView(props: ItemProps) {
         <ErrorText>{item.text}</ErrorText>
       )
     case 'note': {
-      const { extension, panel } = item
-      if (!extension || !panel || !openPanel) return <div className="text-sm text-muted">{item.text}</div>
+      const { extension, panel, card } = item
+      const open = extension && panel && openPanel ? () => openPanel(extension, panel, item.action) : undefined
+      if (card) return <NoteCard card={card} text={item.text} open={open} />
+      if (!open) return <div className="text-sm text-muted">{item.text}</div>
       return (
         <button
           className="w-fit text-left text-sm text-muted underline decoration-faint underline-offset-2 hover:text-text"
-          onClick={() => openPanel(extension, panel)}
+          onClick={open}
         >
           {item.text}
         </button>
@@ -1218,7 +1255,9 @@ export function Chat(props: ChatProps) {
       const select = props.select
       return select && props.chats.some((c) => c.id === chatId) ? () => select(chatId) : undefined
     },
-    openPanel: (extension: string, panel: string) => {
+    openPanel: (extension: string, panel: string, action?: ExtensionAction) => {
+      // The action first, so the panel draws what the note is about as it opens.
+      if (action && connected) send({ type: 'extension.panel.action', chatId: chat.id, extension, panel, action })
       const placement = props.extensionUi?.panels.find((p) => p.extension === extension && p.id === panel)?.placement
       if (placement === 'popup') return openPopup(extensionTabId(extension, panel))
       if (placement === 'dock') return openDock(extensionTabId(extension, panel))

@@ -508,6 +508,31 @@ describe('the host', () => {
     expect(() => t.host().note(id, 'Bad', { panel: 'nope' })).toThrow('Test extension has no panel "nope"')
   })
 
+  it('notes a card that opens its panel on an action, cut to size', () => {
+    const t = withHost({ panels: [{ id: 'info', title: 'Info', render: () => ({ type: 'empty', text: '' }) }] })
+    const id = t.create()
+    t.host().note(id, 'Made it', {
+      panel: 'info',
+      action: { name: 'open', value: { slug: 'chart', version: 2 } },
+      card: { title: `  Sales\n chart ${'x'.repeat(200)}`, badge: 'Chart', detail: '' },
+    })
+    t.host().note(id, 'Bare card', { card: { title: 'Plain' } })
+    const [made, bare] = t.chat(id).entries.filter((e) => e.type === 'extension.note')
+    expect(made).toMatchObject({
+      extension: 'test',
+      panel: 'info',
+      action: { name: 'open', value: { slug: 'chart', version: 2 } },
+      card: { title: `Sales chart ${'x'.repeat(108)}`, badge: 'Chart' },
+    })
+    expect((made as { card: object }).card).not.toHaveProperty('detail')
+    expect(bare).toMatchObject({ extension: 'test', card: { title: 'Plain' } })
+    expect(bare).not.toHaveProperty('panel')
+    expect(() => t.host().note(id, 'x', { action: { name: 'open' } })).toThrow('give its panel too')
+    expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: '' } })).toThrow('needs a name')
+    expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: 'a', value: 'x'.repeat(5000) } })).toThrow('at most 4000')
+    expect(() => t.host().note(id, 'x', { card: { title: ' ' } })).toThrow('needs a title')
+  })
+
   it('runs commands through the Machine', async () => {
     const t = withHost()
     t.create()

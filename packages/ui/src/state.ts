@@ -1,4 +1,4 @@
-import type { ExtensionView } from '@kothar/extension-api'
+import type { ExtensionAction, ExtensionNoteCard, ExtensionView } from '@kothar/extension-api'
 import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
   RestartState,
@@ -65,8 +65,9 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
-  // extension and panel: clicking the note opens that extension's panel.
-  | { kind: 'note'; text: string; extension?: string; panel?: string }
+  // extension and panel: clicking the note opens that extension's panel, then sends it action. card: drawn as a card,
+  // kept in view when the turn's steps fold.
+  | { kind: 'note'; text: string; extension?: string; panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // Thinking as it streams in: never logged, but kept with the entries so items can be rebuilt from them.
 type Shown = ChatEntry | { type: 'thinking.shown'; text: string }
@@ -252,8 +253,11 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
     case 'extension.note': {
-      const { text, extension, panel } = entry
-      return [...items, { kind: 'note', text, ...(extension && panel && { extension, panel }) }]
+      const { text, extension, panel, action, card } = entry
+      return [
+        ...items,
+        { kind: 'note', text, ...(extension && panel && { extension, panel, ...(action && { action }) }), ...(card && { card }) },
+      ]
     }
     // The turn's error or an extension's note says it.
     case 'limit.reached':
@@ -298,6 +302,8 @@ const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pen
 
 // The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits. A question
 // waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
+const carded = (item: Item) => item.kind === 'note' && item.card !== undefined
+
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   let turn: ShownItem[] = []
@@ -305,10 +311,11 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
-    const steps = turn.slice(0, end).filter((s) => !asking(s.item))
+    const steps = turn.slice(0, end).filter((s) => !asking(s.item) && !carded(s.item))
     if (live || steps.length < 2) rows.push(...turn)
     else {
-      const kept = turn.slice(0, end).filter((s) => asking(s.item))
+      // Questions, and an extension's card (such as an artifact made), stay in view.
+      const kept = turn.slice(0, end).filter((s) => asking(s.item) || carded(s.item))
       rows.push({ at: steps[0]!.at, steps: steps.map((s) => s.item) }, ...kept, ...turn.slice(end))
     }
     turn = []

@@ -6,8 +6,10 @@ import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type {
   ChatDetail,
   Extension,
+  ExtensionAction,
   ExtensionContext,
   ExtensionHost,
+  ExtensionNoteCard,
   ExtensionRun,
   ExtensionStorage,
   ExtensionUse,
@@ -20,6 +22,34 @@ import { guardHost } from './extensions.ts'
 import { messagesOf } from './memory.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
 import { within } from './util.ts'
+
+// A note in the transcript (host.note) and its card, cut to what a line shows; its action is kept to what a click
+// would send.
+const NOTE_CHARS = 1000
+const CARD_CHARS = { title: 120, badge: 30, detail: 60 }
+const NOTE_ACTION_BYTES = 4000
+
+function noteAction(action: unknown, panel: string | undefined): ExtensionAction {
+  if (panel === undefined) throw new Error('A note’s action goes to one of the extension’s panels: give its panel too')
+  const name = (action as { name?: unknown } | null)?.name
+  if (typeof name !== 'string' || !name) throw new Error('A note’s action needs a name')
+  const json = JSON.stringify(action)
+  if (json.length > NOTE_ACTION_BYTES) throw new Error(`A note’s action is at most ${NOTE_ACTION_BYTES} characters of JSON`)
+  const { value } = JSON.parse(json) as ExtensionAction
+  return { name, ...(value !== undefined && { value }) }
+}
+
+function noteCard(card: unknown): ExtensionNoteCard {
+  const field = (key: keyof typeof CARD_CHARS) => {
+    const value = (card as Record<string, unknown> | null)?.[key]
+    return value === undefined ? undefined : String(value).replace(/\s+/g, ' ').trim().slice(0, CARD_CHARS[key])
+  }
+  const title = field('title')
+  if (!title) throw new Error('A note’s card needs a title')
+  const badge = field('badge')
+  const detail = field('detail')
+  return { title, ...(badge && { badge }), ...(detail && { detail }) }
+}
 
 // An extension's notification (host.notify), cut to what a system notification shows anyway.
 const NOTIFY_TITLE_CHARS = 120
@@ -182,8 +212,19 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         if (panel !== undefined && !extension.panels?.some((p) => p.id === panel)) {
           throw new Error(`${extension.name} has no panel "${panel}"`)
         }
+        const action = options?.action === undefined ? undefined : noteAction(options.action, panel)
+        const card = options?.card === undefined ? undefined : noteCard(options.card)
         const at = new Date().toISOString()
-        deps.append(chatFor(chatId), { at, type: 'extension.note', text, ...(panel !== undefined && { extension: extension.id, panel }) })
+        deps.append(chatFor(chatId), {
+          at,
+          type: 'extension.note',
+          text: String(text).slice(0, NOTE_CHARS),
+          ...(panel !== undefined && { extension: extension.id, panel }),
+          ...(action && { action }),
+          ...(card && { card }),
+          // A card is the extension's even without a panel, so the transcript can say whose it is.
+          ...(card && panel === undefined && { extension: extension.id }),
+        })
       },
       error: (text) => extensionError(extension, String(text)),
       // The UI decides whether it shows (Settings → Appearance → Notifications) and draws it as the system's notification.
