@@ -10,9 +10,14 @@ import home from '../home/index.ts'
 import {
   backlinksOf,
   createNotesExtension,
+  attachmentsIn,
   freeName,
   frontMatterTags,
   fuzzyMatches,
+  fuzzyRanges,
+  headingsIn,
+  linkMention,
+  wordRanges,
   linksIn,
   mentionsOf,
   linkTarget,
@@ -25,6 +30,7 @@ import {
   titleFrom,
   noteToDelete,
   noteWatcher,
+  PASTED_PICTURE,
   parseNote,
   searchNotes,
   slugOf,
@@ -722,9 +728,12 @@ it('finds notes by letters in order and by text with a snippet, and offers to ma
   await tool(app, 'write_note', { name: 'Deploys', body: 'Ship on Fridays' })
   const fuzzy = JSON.stringify(await panel(app, { name: 'search', value: 'grcs' }))
   expect(fuzzy).toContain('"label":"Groceries"')
+  // The letters it matched by are highlighted.
+  expect(fuzzy).toContain('"marks":[[0,1],[1,2],[3,4],[8,9]]')
   expect(fuzzy).toContain('"label":"New note “grcs”","variant":"ghost"')
   const text = JSON.stringify(await panel(app, { name: 'search', value: 'fridays' }))
-  expect(text).toContain('"hint":"Ship on Fridays"')
+  // The line it matched shows under its name, the words highlighted.
+  expect(text).toContain('"excerpt":{"text":"Ship on Fridays","marks":[[8,15]]}')
   // Nothing matches: making it is the main button.
   const none = JSON.stringify(await panel(app, { name: 'search', value: 'Trip ideas' }))
   expect(none).toContain('"label":"New note “Trip ideas”","variant":"primary"')
@@ -777,4 +786,116 @@ it('lists the notes that name a note without linking it', () => {
   }
   expect(mentionsOf(notes, notes[0]!, (n) => bodies[n.key]!).map((n) => n.key)).toEqual(['b'])
   expect(mentionsOf([note({ key: 'x', name: 'Go' }), note({ key: 'y', name: 'Y' })], note({ key: 'x', name: 'Go' }), () => 'go go')).toEqual([])
+})
+
+it('reads headings outside code, finds words and letters to highlight, and the pictures a note shows', () => {
+  expect(headingsIn('# One\ntext\n```\n# not\n```\n## Two [[Link|shown]] ##\n####### seven\n#tag')).toEqual([
+    { level: 1, text: 'One', line: 1 },
+    { level: 2, text: 'Two shown', line: 6 },
+  ])
+  expect(wordRanges('Ship on fridays, Friday', 'FRIDAY ship')).toEqual([[0, 4], [8, 14], [17, 23]])
+  expect(fuzzyRanges('Groceries', 'grcs')).toEqual([[0, 1], [1, 2], [3, 4], [8, 9]])
+  expect(fuzzyRanges('Groceries', 'zz')).toEqual([])
+  expect(attachmentsIn('![a](attachments/a.png) ![b](<attachments/b%20c.png>) ![x](../attachments/x.png) `![c](attachments/c.png)` ![d](attachments/../d.png)')).toEqual([
+    'attachments/a.png',
+    'attachments/b c.png',
+  ])
+})
+
+it('links the first mention of a name, keeping how it was written, never in code, links or URLs', () => {
+  expect(linkMention('About Deploys and deploys', 'Deploys')).toBe('About [[Deploys]] and deploys')
+  expect(linkMention('the deploys list', 'Deploys')).toBe('the [[Deploys|deploys]] list')
+  expect(linkMention('`deploys` [[Other|deploys]] [deploys](https://x/deploys) https://x/deploys then deploys', 'Deploys')).toBe(
+    '`deploys` [[Other|deploys]] [deploys](https://x/deploys) https://x/deploys then [[Deploys|deploys]]',
+  )
+  expect(linkMention('redeploys', 'Deploys')).toBe('redeploys')
+  expect(linkMention('a (C++) b', 'C++')).toBe('a ([[C++]]) b')
+})
+
+it("opens with the search box focused, or the editor for a note opened to type in; the editor reads the note's pictures", async () => {
+  const { create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Plan', body: 'one' })
+  const first = await panel(app)
+  const find = (view: ExtensionView, type: string): any => JSON.parse(JSON.stringify(view), (_k, v) => v).side.children.find((c: any) => c.type === type) ?? findDeep(view, type)
+  const findDeep = (view: unknown, type: string): any => {
+    if (!view || typeof view !== 'object') return undefined
+    if ((view as { type?: string }).type === type) return view
+    for (const v of Object.values(view)) {
+      const found = findDeep(v, type)
+      if (found) return found
+    }
+  }
+  // The note last edited is open, but quietly: the keyboard goes to search.
+  expect(find(first, 'search').autofocus).toBe(true)
+  expect(findDeep(first, 'editor')).toMatchObject({ autofocus: false, keep: 'keep', paste: 'picture', files: expect.stringMatching(/notes$/) })
+  const opened = await panel(app, { name: 'open', value: `${app}:plan.md` })
+  expect(find(opened, 'search').autofocus).toBe(false)
+  expect(findDeep(opened, 'editor').autofocus).toBe(true)
+})
+
+it('"Keep mine" keeps the other version as a note of its own before the editor saves over it', async () => {
+  const { garage, create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Plan', body: 'one' })
+  await panel(app, { name: 'open', value: `${app}:plan.md` })
+  const file = join(garage, 'chats', app, 'notes', 'plan.md')
+  // The editor was shown the agent's text over unsent typing; the user keeps theirs.
+  writeFileSync(file, noteText('Plan', '', 'agent text'))
+  await panel(app)
+  const kept = JSON.stringify(await panel(app, { name: 'keep', value: 'agent text' }))
+  await panel(app, { name: 'write', value: 'my text' })
+  expect(readFileSync(file, 'utf8')).toContain('my text')
+  expect(readFileSync(join(garage, 'chats', app, 'notes', 'plan-changed-outside.md'), 'utf8')).toContain('agent text')
+  expect(kept).toContain('That version is kept as “Plan (changed outside)”')
+  // Only one copy: the write that follows isn't taken for another conflict.
+  expect(existsSync(join(garage, 'chats', app, 'notes', 'plan-changed-outside-2.md'))).toBe(false)
+})
+
+it('saves a pasted picture beside the note, never over another or outside attachments/, and moves pictures with a note', async () => {
+  const { garage, create, tool, panel, messages } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Plan', body: 'one' })
+  await panel(app, { name: 'open', value: `${app}:plan.md` })
+  const dir = join(garage, 'chats', app, 'notes')
+  const png = Buffer.from([137, 80, 78, 71]).toString('base64')
+  await panel(app, { name: 'picture', value: { path: 'attachments/pasted-1.png', mimeType: 'image/png', data: png } })
+  expect(readFileSync(join(dir, 'attachments', 'pasted-1.png'))).toEqual(Buffer.from([137, 80, 78, 71]))
+  // Not over one that's there.
+  const again = JSON.stringify(await panel(app, { name: 'picture', value: { path: 'attachments/pasted-1.png', mimeType: 'image/png', data: Buffer.from('x').toString('base64') } }))
+  expect(again).toContain('already there')
+  expect(readFileSync(join(dir, 'attachments', 'pasted-1.png'))).toEqual(Buffer.from([137, 80, 78, 71]))
+  // Nowhere but attachments/, and only pictures.
+  for (const path of ['../x.png', 'attachments/../../x.png', 'attachments/a b.png', 'attachments/x.svg', 'attachments/sub/x.png', 'x.png']) {
+    expect(PASTED_PICTURE.test(path), path).toBe(false)
+    await panel(app, { name: 'picture', value: { path, mimeType: 'image/png', data: png } })
+  }
+  expect(messages.filter((m) => m.type === 'error' || (m.type === 'extension.panel' && m.error)).length).toBeGreaterThan(0)
+  for (const path of ['x.png', 'notes/x.png', 'attachments/x.svg']) expect(existsSync(join(garage, 'chats', app, path)), path).toBe(false)
+  expect(existsSync(join(dir, 'x.png'))).toBe(false)
+  // Moved to global notes, the note takes its pictures along.
+  await panel(app, { name: 'write', value: 'one\n\n![](attachments/pasted-1.png)\n' })
+  await panel(app, { name: 'move', value: `${app}:plan.md` })
+  expect(existsSync(join(garage, 'extensions', 'notes', 'attachments', 'pasted-1.png'))).toBe(true)
+})
+
+it('shows an outline for a note with headings, which jumps the editor, and links a mention in one click', async () => {
+  const { garage, create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Deploys', body: '# Deploys\n\n## Before\n\ntext\n\n## After\n\nmore' })
+  await tool(app, 'write_note', { name: 'Plan', body: 'Check deploys first' })
+  const open = JSON.stringify(await panel(app, { name: 'open', value: `${app}:deploys.md` }))
+  expect(open).toContain('"type":"card","title":"Outline"')
+  expect(open).toContain('"label":"\u2003After","action":{"name":"jump","value":7}')
+  const jumped = JSON.stringify(await panel(app, { name: 'jump', value: 7 }))
+  expect(jumped).toMatch(/"jump":\{"key":"[^"]+","line":7\}/)
+  // A short note has none.
+  expect(JSON.stringify(await panel(app, { name: 'open', value: `${app}:plan.md` }))).not.toContain('"title":"Outline"')
+  const back = JSON.stringify(await panel(app, { name: 'open', value: `${app}:deploys.md` }))
+  expect(back).toContain('"button":{"label":"Link","action":{"name":"link-mention","value":"' + app + ':plan.md"}')
+  const linked = JSON.stringify(await panel(app, { name: 'link-mention', value: `${app}:plan.md` }))
+  expect(readFileSync(join(garage, 'chats', app, 'notes', 'plan.md'), 'utf8')).toContain('Check [[Deploys|deploys]] first')
+  // It's a backlink now, no longer a mention.
+  expect(linked).toContain('"text":"Linked from"')
+  expect(linked).not.toContain('"text":"Mentioned in"')
 })

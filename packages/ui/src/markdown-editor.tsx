@@ -196,7 +196,8 @@ class Picture extends WidgetType {
     img.className = 'cm-md-image'
     img.src = this.url
     img.alt = this.alt
-    img.loading = 'lazy'
+    // Not lazy: a widget's picture starts with no height, so a lazy one may never be seen to load. The editor only
+    // draws what's near the screen anyway.
     return img
   }
 }

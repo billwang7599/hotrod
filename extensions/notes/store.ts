@@ -654,3 +654,96 @@ function freePath(path: string) {
     if (!existsSync(next)) return next
   }
 }
+
+/** The headings of a note's text, outside code: each one's level, text (marks dropped) and line (from 1). */
+export function headingsIn(text: string): { level: number; text: string; line: number }[] {
+  const found: { level: number; text: string; line: number }[] = []
+  let fence: string | undefined
+  text.split('\n').forEach((raw, i) => {
+    const open = /^\s{0,3}(```|~~~)/.exec(raw)?.[1]
+    if (open) {
+      if (!fence) fence = open
+      else if (open === fence) fence = undefined
+      return
+    }
+    if (fence) return
+    const match = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/.exec(raw)
+    if (!match || !match[2]!.trim()) return
+    found.push({ level: match[1]!.length, text: match[2]!.replace(/\[\[([^\]|]*\|)?([^\]]*)\]\]/g, '$2').replace(/[*_`~]+/g, '').trim(), line: i + 1 })
+  })
+  return found
+}
+
+/** Where each word of the query appears in text (letter case aside), every time, as [start, end) ranges. */
+export function wordRanges(text: string, query: string): [number, number][] {
+  const lower = text.toLowerCase()
+  const ranges: [number, number][] = []
+  for (const word of query.toLowerCase().split(/\s+/).filter(Boolean)) {
+    for (let at = lower.indexOf(word); at >= 0; at = lower.indexOf(word, at + word.length)) ranges.push([at, at + word.length])
+  }
+  return ranges.sort((a, b) => a[0] - b[0])
+}
+
+/** The letters of a fuzzy match in text, in order (as fuzzyMatches finds them), as one-letter ranges; [] if none. */
+export function fuzzyRanges(text: string, query: string): [number, number][] {
+  const q = query.toLowerCase().replace(/\s+/g, '')
+  const t = text.toLowerCase()
+  const ranges: [number, number][] = []
+  let at = 0
+  for (const ch of q) {
+    at = t.indexOf(ch, at)
+    if (at < 0) return []
+    ranges.push([at, at + 1])
+    at++
+  }
+  return ranges
+}
+
+/**
+ * The text with the first mention of a note's name (as mentionsOf finds it: whole words, outside code, links and URLs)
+ * made a [[link]]: [[Name]] when it's written as the name is, else [[Name|as written]]. Unchanged if there's none.
+ */
+export function linkMention(text: string, name: string): string {
+  const escaped = name.trim().replace(/[.*+?^$()|[\]\\{}]/g, '\\$&')
+  if (name.trim().length < 3) return text
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu')
+  let done = false
+  return outsideCode(text, (part) => {
+    if (done) return part
+    // Links ([[…]], [text](url)) and bare URLs stay as they are; the name is looked for between them.
+    const skip = /\[\[[^\]\n]*\]\]|!?\[[^\]\n]*\]\([^)\n]*\)|https?:\/\/\S+/g
+    let out = ''
+    let last = 0
+    const scan = (piece: string) => {
+      if (done) return piece
+      const match = pattern.exec(piece)
+      if (!match) return piece
+      done = true
+      const link = match[0] === name.trim() ? `[[${name.trim()}]]` : `[[${name.trim()}|${match[0]}]]`
+      return piece.slice(0, match.index) + link + piece.slice(match.index + match[0].length)
+    }
+    for (const m of part.matchAll(skip)) {
+      out += scan(part.slice(last, m.index)) + m[0]
+      last = m.index + m[0].length
+    }
+    return out + scan(part.slice(last))
+  })
+}
+
+// Where a pasted picture goes, relative to its note's folder: attachments/<letters, digits, dashes>.<picture type>.
+export const PASTED_PICTURE = /^attachments\/[A-Za-z0-9-]{1,80}\.(png|jpg|jpeg|gif|webp)$/
+
+/** The pictures a note's text shows from its own attachments/ folder: ![…](attachments/x.png), without repeats. */
+export function attachmentsIn(text: string): string[] {
+  const found: string[] = []
+  for (const match of withoutCode(text).matchAll(/!\[[^\]\n]*\]\(<?(attachments\/[^)\s>]+)>?\)/g)) {
+    let path: string
+    try {
+      path = decodeURI(match[1]!)
+    } catch {
+      continue
+    }
+    if (!path.split('/').includes('..') && !found.includes(path)) found.push(path)
+  }
+  return found
+}

@@ -1,5 +1,5 @@
-import { mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import type { ChatDetail, ChatSummary, Extension, ExtensionAction, ExtensionHost, ExtensionListItem, ExtensionView } from '@kothar/extension-api'
 import {
   backlinksOf,
@@ -11,8 +11,13 @@ import {
   frontMatterTags,
   globalDir,
   hasSpaceNotes,
+  attachmentsIn,
+  fuzzyRanges,
+  headingsIn,
   hitsIn,
+  linkMention,
   mentionsOf,
+  PASTED_PICTURE,
   importFolder,
   MAX_DESCRIPTION,
   MAX_NAME,
@@ -38,6 +43,7 @@ import {
   spaceDir,
   tagsIn,
   wordCount,
+  wordRanges,
 } from './store.ts'
 
 export * from './store.ts'
@@ -60,6 +66,10 @@ const SORT_LABELS: Record<NoteSort, string> = { edited: 'Edited', created: 'Crea
 // A new note's name while it has none of its own; its first line names it as the user types.
 const UNTITLED = 'Untitled'
 const MAX_TITLE = 60
+// A note with this many headings gets an outline to jump by.
+const OUTLINE_MIN_HEADINGS = 3
+// A pasted picture's bytes, base64 (the editor sends at most 10 MB).
+const MAX_PICTURE_BASE64 = Math.ceil((10 * 1024 * 1024 * 4) / 3) + 4
 
 // Watches the note folders the popup has shown, so a note added, edited or deleted outside Kothar (in an editor, in
 // Obsidian, by git, by an agent's own file tools) shows in an open popup without reopening it. owner is 'global' or a
@@ -140,6 +150,8 @@ type PopupState = {
   importing?: boolean
   // The note was opened for the user (the popup's first look), so the editor doesn't take the keyboard.
   quiet?: boolean
+  // A heading picked in the outline, for the editor to jump to: a new key per pick.
+  jump?: { key: string; line: number }
 }
 
 const listedNote = (note: Note) => ({ name: note.name, description: note.description, scope: note.scope, path: note.path })
@@ -208,17 +220,22 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
     }
   }
 
-  const row = (note: Note, open: string | undefined, sort: NoteSort, snippet?: string): ExtensionListItem => {
+  // query: what a search typed, to highlight in the name, and in snippet (the line of text it matched), shown under it.
+  const row = (note: Note, open: string | undefined, sort: NoteSort, snippet?: string, query = ''): ExtensionListItem => {
     const time = sort === 'created' ? note.created : note.edited
     const detail = [note.folder, sort !== 'title' && time ? shortTime(time, now()) : undefined].filter(Boolean).join(' · ')
-    const hint = [snippet, note.description].filter(Boolean).join('\n')
+    const words = wordRanges(note.name, query)
+    // A name that holds the words gets them marked; one found by its letters in order, those letters.
+    const marks = query.trim() ? (words.length ? words : fuzzyRanges(note.name, query)) : []
     return {
       key: note.key,
       label: note.name,
       selected: note.key === open,
       action: { name: 'open', value: note.key },
       ...(detail && { detail }),
-      ...(hint && { hint }),
+      ...(note.description && { hint: note.description }),
+      ...(marks.length && { marks }),
+      ...(snippet && { excerpt: { text: snippet, marks: wordRanges(snippet, query) } }),
     }
   }
 
@@ -248,7 +265,13 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
     )
     // While searching, best matches first; otherwise the order picked.
     const shown = searching ? matched : sortNotes(matched, sort)
-    const snippet = (note: Note) => (searching ? snippetOf(bodies.get(note.key)!, state.query) : undefined)
+    // The line of text a search matched, for a note whose name doesn't hold every word.
+    const snippet = (note: Note) => {
+      if (!searching) return undefined
+      const words = state.query.toLowerCase().split(/\s+/).filter(Boolean)
+      if (words.every((w) => note.name.toLowerCase().includes(w))) return undefined
+      return snippetOf(bodies.get(note.key)!, state.query)
+    }
     const filtered = searching || !!state.tag
     const sortButton: ExtensionView = {
       type: 'button',
@@ -269,7 +292,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
       const listed = shown.filter((note) => note.scope === scope && !pinned.includes(note))
       return [
         heading(title, hint),
-        { type: 'list', label: title, items: listed.map((note) => row(note, state.open, sort, snippet(note))), empty: filtered ? 'Nothing matches' : empty },
+        { type: 'list', label: title, items: listed.map((note) => row(note, state.open, sort, snippet(note), state.query)), empty: filtered ? 'Nothing matches' : empty },
       ]
     }
     const query = oneLine(state.query)
@@ -293,7 +316,16 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
             },
           ],
         },
-        { type: 'search', key: chat.id, value: state.query, placeholder: 'Search or make a note', action: 'search', submit: 'go' },
+        {
+          type: 'search',
+          key: chat.id,
+          value: state.query,
+          placeholder: 'Search or make a note',
+          action: 'search',
+          submit: 'go',
+          // Opening the popup goes to the search box, unless a note was opened for typing (a link, a new note).
+          autofocus: !state.open || !!state.quiet,
+        },
         ...(offerNew
           ? [
               {
@@ -469,12 +501,38 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
       : []
     const backlinks = backlinksOf(notes, note, safeBody)
     const mentions = mentionsOf(notes, note, safeBody)
+    const headings = headingsIn(body)
+    const outline: ExtensionView[] =
+      headings.length >= OUTLINE_MIN_HEADINGS
+        ? [
+            {
+              type: 'card',
+              title: 'Outline',
+              // Folded, so the note's text comes first; one click shows its headings.
+              open: false,
+              badges: [{ text: String(headings.length), tone: 'muted' }],
+              children: [
+                {
+                  type: 'list',
+                  label: 'Outline',
+                  items: headings.map((h, i) => ({
+                    key: `${i}:${h.line}`,
+                    // Deeper headings sit further in.
+                    label: `${'\u2003'.repeat(Math.max(0, h.level - headings.reduce((min, x) => Math.min(min, x.level), 6)))}${h.text}`,
+                    action: { name: 'jump', value: h.line },
+                  })),
+                },
+              ],
+            },
+          ]
+        : []
     return {
       type: 'stack',
       gap: 'normal',
       children: [
         header,
         ...rename,
+        ...outline,
         {
           type: 'editor',
           key: state.doc ?? note.key,
@@ -486,6 +544,11 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
           placeholder: 'Start typing. The first line names the note. [[Another note]] links, #tag tags',
           autofocus: !state.renaming && !state.quiet,
           completions: [...new Set(notes.filter((n) => n.key !== note.key).map((n) => n.name))].sort((a, b) => a.localeCompare(b)),
+          keep: 'keep',
+          // Pictures sit beside the note, in attachments/; pasted ones are saved there.
+          files: dirname(note.path),
+          paste: 'picture',
+          ...(state.jump && { jump: state.jump }),
         },
         ...(backlinks.length
           ? [
@@ -501,7 +564,10 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               {
                 type: 'list' as const,
                 label: 'Mentioned in',
-                items: mentions.map((n) => row(n, undefined, 'title', snippetOf(safeBody(n), note.name))),
+                items: mentions.map((n) => ({
+                  ...row(n, undefined, 'title', snippetOf(safeBody(n), note.name), note.name),
+                  button: { label: 'Link', action: { name: 'link-mention', value: n.key }, hint: `Make its first mention a [[link]] to “${note.name}”` },
+                })),
               },
             ]
           : []),
@@ -509,10 +575,25 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
     }
   }
 
+  // Keeps a version of the note that's about to be replaced (changed outside Kothar while the user typed) as a note of
+  // its own beside it, "<name> (changed outside)", so neither is lost, and says so.
+  const keepCopy = (chatId: string, host: ExtensionHost, notes: Note[], note: Note, body: string, state: PopupState) => {
+    const copy = saveNote(
+      host,
+      chatId,
+      { name: freeName(notes, note.scope, `${note.name} (changed outside)`.slice(0, MAX_NAME)), description: note.description, body, scope: note.scope },
+      undefined,
+      'refuse',
+      true,
+    )
+    state.notice = { text: `“${note.name}” changed outside Kothar while you typed. That version is kept as “${copy.name}”.`, tone: 'warning' }
+  }
+
   // Opens a note, as the editor's own (a new editor key) unless it's the same note under a new name.
   const openNote = (state: PopupState, key: string) => {
     state.open = key
     state.doc = key
+    delete state.jump
     delete state.renaming
     delete state.auto
     delete state.quiet
@@ -692,16 +773,8 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               const seen = known.get(note.path) ?? []
               let conflict = false
               if (onDisk !== text && seen.length && !seen.includes(onDisk)) {
-                const copy = saveNote(
-                  host,
-                  chat.id,
-                  { name: freeName(notes, note.scope, `${note.name} (changed outside)`.slice(0, MAX_NAME)), description: note.description, body: onDisk, scope: note.scope },
-                  undefined,
-                  'refuse',
-                  true,
-                )
+                keepCopy(chat.id, host, notes, note, onDisk, state)
                 conflict = true
-                state.notice = { text: `“${note.name}” changed outside Kothar while you typed. That version is kept as “${copy.name}”.`, tone: 'warning' }
               }
               let saved = saveNote(host, chat.id, { name: note.name, description: note.description, body: text, scope: note.scope }, note, 'refuse', true)
               know(saved.path, text)
@@ -722,6 +795,52 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               if (saved.key === note.key && !conflict) return
               break
             }
+            // "Keep mine" in the editor over a version changed elsewhere: that version is kept as a note of its own
+            // first; the editor's text follows as a write.
+            case 'keep': {
+              const note = state.open ? notes.find((n) => n.key === state.open) : undefined
+              const theirs = String(action.value ?? '')
+              if (!note || !theirs.trim()) return
+              keepCopy(chat.id, host, notes, note, theirs, state)
+              break
+            }
+            case 'jump': {
+              const line = Number(action.value)
+              if (!Number.isInteger(line) || line < 1) return
+              state.jump = { key: `${now()}:${line}`, line }
+              return
+            }
+            // A picture pasted or dropped into the editor: saved beside the open note, in attachments/.
+            case 'picture': {
+              const note = state.open ? notes.find((n) => n.key === state.open) : undefined
+              const { path, data } = (action.value ?? {}) as { path?: unknown; data?: unknown }
+              if (!note) throw new Error('No note is open to save the picture with')
+              if (typeof path !== 'string' || !PASTED_PICTURE.test(path)) throw new Error('A pasted picture goes in attachments/, named by letters, digits and dashes')
+              if (typeof data !== 'string' || data.length > MAX_PICTURE_BASE64) throw new Error('That picture is too big (10 MB at most)')
+              const file = join(dirname(note.path), ...path.split('/'))
+              mkdirSync(dirname(file), { recursive: true })
+              try {
+                // Never over another picture that has the name.
+                writeFileSync(file, Buffer.from(data, 'base64'), { flag: 'wx' })
+              } catch (error) {
+                state.notice = { text: (error as NodeJS.ErrnoException).code === 'EEXIST' ? `A picture named ${path} is already there; it shows instead` : errorText(error), tone: 'error' }
+                break
+              }
+              return
+            }
+            // One click on a mention of the open note in another note: its first mention becomes a [[link]].
+            case 'link-mention': {
+              const open = noteOf(state.open)
+              const other = noteOf(action.value)
+              const text = readFileSync(other.path, 'utf8')
+              const head = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)?.[0] ?? ''
+              const body = text.slice(head.length)
+              const linked = linkMention(body, open.name)
+              if (linked === body) return
+              writeFileSync(other.path, head + linked)
+              state.notice = { text: `Linked “${other.name}” to “${open.name}”`, tone: 'muted' }
+              break
+            }
             case 'rename':
               state.renaming = {}
               return
@@ -734,7 +853,16 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               const note = noteOf(action.value)
               const scope: NoteScope = note.scope === 'global' ? 'space' : 'global'
               try {
-                const moved = saveNote(host, chat.id, { name: note.name, description: note.description, body: bodyOf(note), scope }, note, 'refuse', true)
+                const body = bodyOf(note)
+                const moved = saveNote(host, chat.id, { name: note.name, description: note.description, body, scope }, note, 'refuse', true)
+                // Its pictures go with it (copied: another note may show them too).
+                for (const picture of attachmentsIn(body)) {
+                  const from = join(dirname(note.path), ...picture.split('/'))
+                  const to = join(dirname(moved.path), ...picture.split('/'))
+                  if (!existsSync(from) || existsSync(to)) continue
+                  mkdirSync(dirname(to), { recursive: true })
+                  copyFileSync(from, to)
+                }
                 state.open = moved.key
                 state.notice = { text: `Moved to ${scope === 'global' ? 'global notes' : 'this space'}`, tone: 'muted' }
               } catch (error) {
