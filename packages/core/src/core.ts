@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import type {
   ChatDetail,
   Extension,
@@ -34,8 +34,6 @@ import { type CommunityExtension, type ExtensionHook, panelTabOf, valuesOf } fro
 import {
   bySpaceOrder,
   editsAnywhere,
-  GLOBAL_CONTEXT,
-  looksBinary,
   PERMISSION_SWITCHES,
   settingProblem,
   type Adapter,
@@ -44,8 +42,6 @@ import {
   type ChatState,
   type CommandInfo,
   type CompletionRequest,
-  type ContextItem,
-  type ContextSection,
   type CoreMessage,
   type EngineInfo,
   type EngineStatus,
@@ -68,6 +64,7 @@ import {
 import { openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
+import { checkPath, openContext } from './context.ts'
 import type { Chat } from './chat.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
@@ -219,11 +216,6 @@ function openLockedCore(options: {
   const heldOn = [...community].filter(([id, c]) => c.held && settings.extensions?.[id]?.enabled === true)
   for (const [id] of heldOn) settings.extensions = { ...settings.extensions, [id]: { ...settings.extensions?.[id], enabled: false } }
   if (heldOn.length) saveSettings()
-  const contextDefaults = (): Record<ContextSection, boolean> => ({
-    agents: settings.context?.agents ?? true,
-    folders: settings.context?.folders ?? true,
-    files: settings.context?.files ?? true,
-  })
   const brokenExtensions = options.brokenExtensions ?? []
   // Extensions whose saved settings failed to migrate at load, and why; shown on the extension like a load error.
   const settingsErrors = new Map<string, string>()
@@ -1397,93 +1389,21 @@ function openLockedCore(options: {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
 
-  const globalAgentsFile = join(garage, 'AGENTS.md')
-
-  const switchOf = (chat: Chat, item: Pick<ContextItem, 'section' | 'path' | 'from'>): boolean => {
-    const pinned = chat.context[item.path]
-    if (pinned !== undefined) return pinned
-    if (item.from === chat.info.id) return true
-    const parent = parentOf(chat)
-    return chat.info.worker && parent ? switchOf(parent, item) : contextDefaults()[item.section]
-  }
-
-  const contextItems = (chat: Chat): ContextItem[] => {
-    const owned = chainOf(chat).flatMap(({ info, dir }) =>
-      info.extension
-        ? []
-        : [
-            ...info.folders.map((path) => ({ section: 'folders' as const, path, from: info.id })),
-            { section: 'agents' as const, path: join(dir, 'AGENTS.md'), from: info.id },
-            ...info.files.map((path) => ({ section: 'files' as const, path, from: info.id })),
-          ],
-    )
-    const seen = new Set<string>()
-    return [{ section: 'agents' as const, path: globalAgentsFile, from: GLOBAL_CONTEXT }, ...owned].flatMap((item) => {
-      if (seen.has(item.path)) return []
-      seen.add(item.path)
-      const bytes = readBytes(item.section === 'folders' ? join(item.path, 'AGENTS.md') : item.path)
-      const binary = item.section === 'files' && looksBinary(bytes)
-      const text = binary ? '' : bytes.toString('utf8')
-      return [{ ...item, enabled: switchOf(chat, item), text, ...(binary && { binary }) }]
-    })
-  }
-
-  const broadcastContext = (chat: Chat) =>
-    familyOf(chat).forEach((c) => {
-      broadcast({ type: 'chat.context', chatId: c.info.id, items: contextItems(c) })
-      broadcast(extensionsOf(c))
+  const { contextDefaults, contextItems, addContext, removeContext, setContext, writeContext, setContextDefault, writeInstructions } =
+    openContext({
+      garage,
+      settings,
+      saveSettings,
+      broadcast,
+      parentOf,
+      chainOf,
+      familyOf,
+      checkActive,
+      saveChat,
+      updateChat,
+      extensionsOf,
     })
 
-  const setContext = (chat: Chat, path: unknown, enabled: boolean) => {
-    checkActive(chat)
-    if (!contextItems(chat).some((item) => item.path === path)) {
-      throw new Error(`This chat has no context item "${path}"`)
-    }
-    chat.context = { ...chat.context, [String(path)]: enabled }
-    saveChat(chat)
-    broadcastContext(chat)
-  }
-
-  const checkOwnsContext = (chat: Chat) => {
-    if (chat.info.extension) throw new Error(`${chat.info.name} keeps no folders, files or AGENTS.md of its own`)
-  }
-
-  const addContext = (chat: Chat, section: 'folders' | 'files', rawPath: unknown) => {
-    checkActive(chat)
-    checkOwnsContext(chat)
-    const path = checkPath(rawPath, section)
-    if (contextItems(chat).some((item) => item.path === path)) {
-      throw new Error(`${path} is already in this chat's context`)
-    }
-    updateChat(chat, { [section]: [...chat.info[section], path] })
-    broadcastContext(chat)
-  }
-
-  const removeContext = (chat: Chat, section: 'folders' | 'files', path: unknown) => {
-    checkActive(chat)
-    if (!chat.info[section].includes(String(path))) throw new Error(`${path} is not one of this chat's ${section}`)
-    delete chat.context[String(path)]
-    updateChat(chat, { [section]: chat.info[section].filter((p) => p !== path) })
-    broadcastContext(chat)
-  }
-
-  const writeAgentsFile = (path: string, text: string) => {
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, text)
-    broadcast({ type: 'context.file', path, text })
-  }
-
-  const writeContext = (chat: Chat, text: string) => {
-    checkActive(chat)
-    checkOwnsContext(chat)
-    writeAgentsFile(join(chat.dir, 'AGENTS.md'), text)
-  }
-
-  const setContextDefault = (section: ContextSection, enabled: boolean) => {
-    settings.context = { ...settings.context, [section]: enabled }
-    saveSettings()
-    broadcast({ type: 'context.defaults', defaults: contextDefaults() })
-  }
 
   const attachmentsDirOf = (chat: Chat) => join(chat.dir, 'attachments')
 
@@ -1578,7 +1498,7 @@ function openLockedCore(options: {
     removeContext,
     setContext,
     writeContext,
-    writeInstructions: (text) => writeAgentsFile(globalAgentsFile, text),
+    writeInstructions,
     setContextDefault,
     setEngineEnabled,
     setWorkFolder,
@@ -1720,14 +1640,4 @@ const checkName = (name: unknown) => {
   const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''
   if (!trimmed) throw new Error('A chat needs a name')
   return trimmed
-}
-
-const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
-  const path = String(rawPath).trim().replace(/^~(?=$|\/)/, homedir())
-  if (!isAbsolute(path)) throw new Error(`The path must be absolute: ${rawPath}`)
-  const stat = existsSync(path) ? statSync(path) : undefined
-  if (section === 'folders' ? !stat?.isDirectory() : !stat?.isFile()) {
-    throw new Error(`Not a ${section === 'folders' ? 'folder' : 'file'}: ${rawPath}`)
-  }
-  return realpathSync(path)
 }
