@@ -288,3 +288,8 @@ export async function loadCommunityExtensions(
   }
   return loaded
 }
+
+/** The name of one of an extension's hooks: any of its members that's a function. */
+export type ExtensionHook = {
+  [K in keyof Extension]-?: NonNullable<Extension[K]> extends (...args: never[]) => unknown ? K : never
+}[keyof Extension]
