@@ -197,3 +197,18 @@ test('a code view colours a known language and numbers its lines; a markdown vie
   expect(host.querySelector('.markdown input[type="checkbox"]')).not.toBeNull()
   expect(host.querySelector('.markdown script')).toBeNull()
 })
+
+test('a list row with a hint still takes the full width, the hint on the row itself', () => {
+  show({
+    type: 'list',
+    items: [
+      { key: 'a', label: 'With hint', detail: 'v2', hint: 'What it is', action: { name: 'open', value: 'a' } },
+      { key: 'b', label: 'Plain', detail: 'v1', action: { name: 'open', value: 'b' } },
+    ],
+  })
+  const [hinted, plain] = [...host.querySelectorAll('li button')] as HTMLButtonElement[]
+  expect(hinted!.hasAttribute('data-hint')).toBe(true)
+  expect(hinted!.className).toContain('w-full')
+  expect(hinted!.parentElement!.className).not.toContain('w-fit')
+  expect(plain!.hasAttribute('data-hint')).toBe(false)
+})

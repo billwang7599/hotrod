@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
@@ -113,6 +113,16 @@ function Hinted({ hint, children }: { hint?: string; children: ReactNode }) {
     </Hint>
   ) : (
     <>{children}</>
+  )
+}
+
+function RowHint({ hint, children }: { hint?: string; children: ReactElement }) {
+  return hint ? (
+    <Hint text={hint} align="start">
+      {children}
+    </Hint>
+  ) : (
+    children
   )
 }
 
@@ -238,7 +248,8 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
         return (
           <li key={item.key} className="flex min-w-0 items-center gap-8">
             <div className="flex min-w-0 flex-1 flex-col">
-              <Hinted hint={item.hint}>
+              {/* The hint goes on the row itself, so a row with one still takes the full width. */}
+              <RowHint hint={item.hint}>
                 {item.action ? (
                   <button
                     className={`${row} hover:bg-hover aria-pressed:bg-hover`}
@@ -248,9 +259,9 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
                     {body}
                   </button>
                 ) : (
-                  <div className={row}>{body}</div>
+                  <div className={item.hint ? `${row} cursor-help` : row}>{body}</div>
                 )}
-              </Hinted>
+              </RowHint>
             </div>
             {item.link && (
               <a
