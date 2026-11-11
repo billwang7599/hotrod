@@ -1,11 +1,12 @@
 import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isThinkingLevel, MAX_SETUP_INSTRUCTIONS, type CoreMessage, type Setup } from './shared.ts'
+import type { Chat } from './chat.ts'
+import { isThinkingLevel, MAX_SETUP_INSTRUCTIONS, type ChatInfo, type CoreMessage, type Setup } from './shared.ts'
 
 // Setups: saved choices for a kind of job (engine, model, thinking level, extensions left out, instructions), one plain
-// JSON file each in `<garage>/setups/`. This module only stores and checks them; models.ts applies a setup's model and
-// the core its extensions and instructions, from a chat's next message.
+// JSON file each in `<garage>/setups/`. openSetups stores and checks them and openChatSetups lets chats pick and follow
+// them; models.ts applies a setup's model and the core its extensions and instructions, from a chat's next message.
 
 const ID = /^[a-z0-9-]{1,64}$/
 
@@ -118,3 +119,60 @@ export function cleaned(raw: Record<string, unknown>): Setup {
     ...(instructions && { instructions }),
   }
 }
+
+/** What chats do with setups: pick one, and follow a setup that's saved again or removed. */
+export function openChatSetups(deps: {
+  setups: Pick<ReturnType<typeof openSetups>, 'find' | 'list' | 'save' | 'remove'>
+  chats: ReadonlyMap<string, Chat>
+  broadcast: (message: CoreMessage) => void
+  updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
+  familyOf: (chat: Chat) => Chat[]
+  setupOf: (chat: Chat) => Setup | undefined
+  /** Chats that follow their model list move with it. */
+  followModels: () => void
+  /** The chat's panels and commands, which its setup's extensions decide. */
+  extensionsOf: (chat: Chat) => CoreMessage
+}) {
+  const { setups: jobSetups, chats, broadcast, updateChat, familyOf, setupOf, followModels, extensionsOf } = deps
+  // A setup by id or name, for a spawn or a picker.
+  const setupNamed = (name: unknown) => {
+    const setup = typeof name === 'string' ? jobSetups.find(name) : undefined
+    if (setup) return setup
+    const names = jobSetups.list().map((s) => `"${s.name}"`)
+    throw new Error(`Unknown setup "${name}". ${names.length ? `The setups are ${names.join(', ')}.` : 'There are no setups.'}`)
+  }
+
+  // The setup a chat uses from its next message, or none.
+  const setChatSetup = (chat: Chat, name: unknown) => {
+    if (chat.info.worker) throw new Error(WORKER_SETUP)
+    const setup = name === undefined || name === '' ? undefined : setupNamed(name)
+    updateChat(chat, { setup: setup?.id })
+    followModels()
+    familyOf(chat).forEach((c) => broadcast(extensionsOf(c)))
+  }
+
+  const saveSetup = (input: unknown) => {
+    const setup = jobSetups.save(input)
+    followModels()
+    setupChanged(setup.id)
+    return setup
+  }
+
+  // Chats that used a removed setup go back to Settings.
+  const removeSetup = (id: unknown) => {
+    jobSetups.remove(id)
+    const using = [...chats.values()].filter((chat) => chat.info.setup === id)
+    for (const chat of using) updateChat(chat, { setup: undefined })
+    followModels()
+    using.flatMap(familyOf).forEach((chat) => broadcast(extensionsOf(chat)))
+  }
+
+  // A setup's extensions changed: the chats using it get their panels and commands again.
+  const setupChanged = (id: string) => {
+    for (const chat of chats.values()) if (setupOf(chat)?.id === id) broadcast(extensionsOf(chat))
+  }
+
+  return { setupNamed, setChatSetup, saveSetup, removeSetup }
+}
+
+export const WORKER_SETUP = "A worker uses its space's setup and can't have its own"

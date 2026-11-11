@@ -23,7 +23,7 @@ import type {
   SpaceDetail,
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
-import { openSetups } from './setups.ts'
+import { openChatSetups, openSetups, WORKER_SETUP } from './setups.ts'
 import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
 import { messagesOf, windowView } from './memory.ts'
 import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
@@ -80,7 +80,6 @@ export const STOP_GRACE_MS = 60_000
 const PARENT_VIEW_FILE = 'parent-view.md'
 // A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
-const WORKER_SETUP = "A worker uses its space's setup and can't have its own"
 const REVEAL_TIMEOUT_MS = 10_000
 
 
@@ -1121,43 +1120,16 @@ function openLockedCore(options: {
     return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
   }
 
-  // A setup by id or name, for a spawn or a picker.
-  const setupNamed = (name: unknown) => {
-    const setup = typeof name === 'string' ? jobSetups.find(name) : undefined
-    if (setup) return setup
-    const names = jobSetups.list().map((s) => `"${s.name}"`)
-    throw new Error(`Unknown setup "${name}". ${names.length ? `The setups are ${names.join(', ')}.` : 'There are no setups.'}`)
-  }
-
-  // The setup a chat uses from its next message, or none.
-  const setChatSetup = (chat: Chat, name: unknown) => {
-    if (chat.info.worker) throw new Error(WORKER_SETUP)
-    const setup = name === undefined || name === '' ? undefined : setupNamed(name)
-    updateChat(chat, { setup: setup?.id })
-    followModels()
-    familyOf(chat).forEach((c) => broadcast(extensionsOf(c)))
-  }
-
-  const saveSetup = (input: unknown) => {
-    const setup = jobSetups.save(input)
-    followModels()
-    setupChanged(setup.id)
-    return setup
-  }
-
-  // Chats that used a removed setup go back to Settings.
-  const removeSetup = (id: unknown) => {
-    jobSetups.remove(id)
-    const using = [...chats.values()].filter((chat) => chat.info.setup === id)
-    for (const chat of using) updateChat(chat, { setup: undefined })
-    followModels()
-    using.flatMap(familyOf).forEach((chat) => broadcast(extensionsOf(chat)))
-  }
-
-  // A setup's extensions changed: the chats using it get their panels and commands again.
-  const setupChanged = (id: string) => {
-    for (const chat of chats.values()) if (setupOf(chat)?.id === id) broadcast(extensionsOf(chat))
-  }
+  const { setupNamed, setChatSetup, saveSetup, removeSetup } = openChatSetups({
+    setups: jobSetups,
+    chats,
+    broadcast,
+    updateChat: (chat, change) => updateChat(chat, change),
+    familyOf,
+    setupOf,
+    followModels,
+    extensionsOf,
+  })
 
   const updateChat = (chat: Chat, change: Partial<ChatInfo>) => {
     const merged = Object.entries({ ...chat.info, ...change }).filter(([, value]) => value !== undefined)
