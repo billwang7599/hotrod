@@ -132,6 +132,20 @@ A Stop, a usage limit or any other error ends the turn as before.
 
 ### Browser: your profile, in the background
 
+**Which browser.** Settings → Extensions → Browser → **Browser** picks what runs Kothar's own profile: **Google
+Chrome (installed)**, the default, or **Bundled Chromium** (Playwright's Chrome for Testing, installed from the same
+page). Chrome runs on a profile of Kothar's own per space (`<data folder>/extensions/browser/chrome-profiles/<space>/`),
+never your everyday Chrome profile, its cookies or its tabs. Without Chrome installed, the bundled Chromium runs, and
+the settings page says so. The two keep separate folders, since Chrome refuses a profile a newer version last opened,
+so switching starts the other one logged out (the old folder stays until you switch back or delete the space).
+
+**Signing in.** Google, and some other sites, refuse to sign you in on a browser that software controls. So signing
+in happens in a plain window: **Sign in…** in a chat's General tab or on the Browser row in Processes, and an agent's
+`ask_user_in_browser`, open the space's profile as an ordinary browser window, with no remote debugging and nothing of
+Kothar's attached, on the agent's tabs. Sign in, then click **Done** (or quit the browser): it closes, and the agents'
+browser goes on in the background on the same profile, signed in, with the tabs the window had. Kothar can't see into
+that window, so closing its last window doesn't end it on macOS; Done or quitting does.
+
 **Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
 space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
 have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
@@ -155,10 +169,11 @@ read. When a space's browser starts, Kothar copies the profile's login state int
   background, so the next browse takes a fresh copy.
 
 **In the background.** Agents' browsers run headless: no window, no Dock icon, and they never take focus, so you can
-keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away.
+keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away, and they
+don't tell pages they're automated (`navigator.webdriver`). Nothing fakes a fingerprint beyond that.
 
-**When you're needed.** An agent calls `ask_user_in_browser` (log in, CAPTCHA, payment) or `show_browser` (look at
-this). The browser opens in a window with the agent's tabs, in front of your other apps, the chat shows **Open
+**When you're needed.** An agent calls `ask_user_in_browser` (log in, CAPTCHA, payment: a plain window, as above) or
+`show_browser` (look at this). The browser opens in a window with the agent's tabs, in front of your other apps, the chat shows **Open
 browser** and **Done** (with a notification if you're away from Kothar), and Done puts it back in the background
 where you left it. You can look at any time: **Show browser** in a chat's General tab,
 or **Show** on the Browser row in Processes; **Hide** puts it back.
