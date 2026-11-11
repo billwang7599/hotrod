@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, realpathSync } from 'node:fs'
-import { isAbsolute, join, resolve } from 'node:path'
+import { join } from 'node:path'
 import type { ChatDetail, Extension, ExtensionContext, SpaceDetail } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups } from './setups.ts'
@@ -40,12 +40,12 @@ import type { Chat } from './chat.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
-import { openTerminal } from './terminal.ts'
+import { openFolderAccess, realOr } from './folder-access.ts'
 import { openCheckouts } from './checkouts.ts'
 import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, saveChatFile } from './chat-store.ts'
-import { within, messageOf } from './util.ts'
+import { messageOf } from './util.ts'
 import { openTurns, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
 
 // Kept here too, for code that imports them from the core.
@@ -54,21 +54,20 @@ export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
 export const STOP_GRACE_MS = 60_000
 // A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
-const REVEAL_TIMEOUT_MS = 10_000
 
 
 export type Core = ReturnType<typeof openCore>
 
-type CoreOptions = Parameters<typeof openLockedCore>[0]
+type CoreOptions = Parameters<typeof assembleCore>[0]
 
 // The core holds its garage from before it reads anything until it closes (garage-lock.ts), so a second core on the
 // same garage fails here and changes nothing.
 export function openCore(options: CoreOptions) {
   mkdirSync(options.garage, { recursive: true })
   const release = lockGarage(realpathSync(options.garage))
-  let core: ReturnType<typeof openLockedCore>
+  let core: ReturnType<typeof assembleCore>
   try {
-    core = openLockedCore(options)
+    core = assembleCore(options)
   } catch (error) {
     release()
     throw error
@@ -84,7 +83,11 @@ export function openCore(options: CoreOptions) {
   return core
 }
 
-function openLockedCore(options: {
+// Builds the core over a garage this process already holds (openCore locks it first): opens each module, wires them
+// together with plain functions, loads the chats, and returns what the server and main.ts use. Each module says what it
+// does at its top; this function only connects them. A function passed as `(x) => f(x)` refers to something opened
+// further down, which runs only after everything is open.
+function assembleCore(options: {
   garage: string
   adapters: Adapter[]
   defaultEngine: string
@@ -449,54 +452,17 @@ function openLockedCore(options: {
     for (const extension of watchersOf(hook)) callExtension(extension, () => run(extension, contextOf(extension)))
   }
 
-  // Every folder a chat's Open in Terminal may open: its context folders, its space's work folder, and the checkouts
-  // of its space and the chats above it.
-  const terminalRoots = (chat: Chat) => {
-    return chainOf(chat).flatMap(({ info }) =>
-      info.extension
-        ? []
-        : [
-            ...info.folders,
-            ...(info.workDir ? [info.workDir] : []),
-            ...Object.values(info.worktrees ?? {}).map((w) => w.path),
-          ],
-    )
-  }
-  const realOr = (path: string) => {
-    try {
-      return realpathSync(path)
-    } catch {
-      return resolve(path)
-    }
-  }
-  const openTerminalAt = (path: string) =>
-    (options.openTerminal ?? ((dir, choice) => openTerminal(dir, { choice, home })))(path, settings.terminal)
-  const terminalFor = async (chat: Chat, rawPath: unknown) => {
-    const path = typeof rawPath === 'string' ? rawPath : ''
-    if (!isAbsolute(path) || !terminalRoots(chat).some((root) => realOr(root) === realOr(path))) {
-      throw new Error(`${path || 'That'} isn't one of this chat's folders`)
-    }
-    await openTerminalAt(path)
-  }
-
-  // Show in Finder reaches only Kothar's own folders: the garage, the work folder, and each chat's folders, files, work
-  // folder and checkouts. Anything else is refused, so an extension can't point Finder anywhere it likes.
-  const revealRoots = () => [
+  const { terminalRoots, openTerminalAt, terminalFor, reveal } = openFolderAccess({
     garage,
-    ...(settings.workFolder ? [settings.workFolder] : []),
-    ...shownChats().flatMap((chat) => [...terminalRoots(chat), ...chat.info.files]),
-  ]
-  const reveal = async (rawPath: unknown) => {
-    const path = typeof rawPath === 'string' ? rawPath : ''
-    const real = realOr(path)
-    if (!isAbsolute(path) || !revealRoots().map(realOr).some((root) => within(real, root))) {
-      throw new Error(`${path || 'That'} isn't in Kothar's data folder, the work folder or a space's folders`)
-    }
-    if (!existsSync(real)) throw new Error(`${path} doesn't exist`)
-    if (options.reveal) return options.reveal(real)
-    const { code, stderr } = await machine.run('open', ['-R', real], { cwd: '/', timeoutMs: REVEAL_TIMEOUT_MS })
-    if (code !== 0) throw new Error(stderr.trim() || `Couldn't show ${path} in Finder`)
-  }
+    home,
+    machine,
+    workFolder: () => settings.workFolder,
+    terminal: () => settings.terminal,
+    chainOf,
+    shownChats,
+    ...(options.openTerminal && { openTerminal: options.openTerminal }),
+    ...(options.reveal && { reveal: options.reveal }),
+  })
 
   const seesAll = (chatId: string) => extensionChats.some((chat) => chat.id === chatId && chat.seesAll)
   // Whether caller may reach chat, by the rule the core's own reach tools use; both must be chats the user can see.
