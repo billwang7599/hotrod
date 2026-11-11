@@ -195,6 +195,7 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
                 </header>
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-16">
                   <ExtensionViewer
+                    extension={panel.extension}
                     view={view}
                     error={shown?.error}
                     act={(action) =>

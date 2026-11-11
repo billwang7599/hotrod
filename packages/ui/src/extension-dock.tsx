@@ -139,6 +139,7 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-12">
         <ExtensionViewer
+          extension={panel.extension}
           view={shown?.view}
           error={shown?.error}
           act={(action) => send({ type: 'extension.panel.action', chatId, extension: panel.extension, panel: panel.id, action })}

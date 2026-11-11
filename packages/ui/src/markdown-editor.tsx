@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { EditorSelection, EditorState, type Extension, Prec, type Range, StateField } from '@codemirror/state'
+import { EditorSelection, EditorState, type Extension, Facet, Prec, type Range, StateField } from '@codemirror/state'
 import {
   Decoration,
   type DecorationSet,
@@ -140,6 +140,45 @@ class Checkbox extends WidgetType {
   }
 }
 
+/**
+ * Where a picture that isn't on the web is read from: the editor's files folder and the window's file URL for it (see
+ * MarkdownEditor's files), or undefined when the editor has none. A function, so it reads the editor's current props.
+ */
+const pictureSource = Facet.define<(src: string) => string | undefined, (src: string) => string | undefined>({
+  combine: (values) => values[0] ?? (() => undefined),
+})
+
+// Pictures pasted here, by their path in the files folder, until the extension has saved them: the editor shows its own
+// copy meanwhile.
+const pasted = new Map<string, string>()
+
+/** A picture's path as written in the text, read against the files folder: relative, without a scheme. */
+export function picturePath(folder: string, src: string): string | undefined {
+  if (!src || /^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')) return undefined
+  let path: string
+  try {
+    path = decodeURI(src.replace(/^<|>$/g, ''))
+  } catch {
+    return undefined
+  }
+  if (path.startsWith('/')) return path
+  return `${folder.replace(/\/+$/, '')}/${path.replace(/^\.\//, '')}`
+}
+
+const PASTE_TYPES: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' }
+export const MAX_PASTE_BYTES = 10 * 1024 * 1024
+
+/** A pasted picture's file name: pasted-<date>-<time>, then -2, -3… if the editor already used it. */
+export function pastedName(type: string, at = new Date(), taken: (name: string) => boolean = () => false) {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${at.getFullYear()}${pad(at.getMonth() + 1)}${pad(at.getDate())}-${pad(at.getHours())}${pad(at.getMinutes())}${pad(at.getSeconds())}`
+  const ext = PASTE_TYPES[type] ?? 'png'
+  for (let i = 1; ; i++) {
+    const name = `pasted-${stamp}${i > 1 ? `-${i}` : ''}.${ext}`
+    if (!taken(name)) return name
+  }
+}
+
 // A picture from the web or a data: URL, in place of its ![alt](url).
 class Picture extends WidgetType {
   readonly url: string
@@ -268,9 +307,10 @@ export function previewDecorations(state: EditorState, active: Set<number>, from
         const url = node.node.getChild('URL')
         const href = url ? doc.sliceString(url.from, url.to) : ''
         const alt = /^!\[([^\]]*)\]/.exec(doc.sliceString(node.from, node.to))?.[1] ?? ''
-        // Only pictures the window can load by themselves; a file path stays as text.
-        if (!isActive(node.from) && /^(https:|data:image\/)/i.test(href)) {
-          found.push(Decoration.replace({ widget: new Picture(href, alt) }).range(node.from, node.to))
+        // Pictures the window can load by themselves, and ones in the editor's files folder; another path stays text.
+        const src = /^(https:|data:image\/)/i.test(href) ? href : state.facet(pictureSource)(href)
+        if (!isActive(node.from) && src) {
+          found.push(Decoration.replace({ widget: new Picture(src, alt) }).range(node.from, node.to))
           return false
         }
         return
@@ -497,6 +537,19 @@ export function continueList(view: EditorView): boolean {
 
 type TreeNode = ReturnType<ReturnType<typeof syntaxTree>['resolveInner']>
 
+/** The pictures among a paste's or a drop's files. */
+function picturesIn(data: DataTransfer | null): File[] {
+  return [...(data?.files ?? [])].filter((file) => file.type in PASTE_TYPES)
+}
+
+/** A file's bytes in base64. */
+async function base64Of(file: Blob): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
+
 /** Ticks or unticks the task whose [ ] starts at pos. */
 export function toggleTask(view: EditorView, pos: number) {
   const marker = view.state.doc.sliceString(pos, pos + 3)
@@ -556,22 +609,26 @@ type EditorProps = {
   onKeep?: (theirs: string) => void
   /** Puts the cursor at the start of this line (from 1) and scrolls it to the top, once per key. */
   jump?: { key: string; line: number }
+  /** The folder relative pictures are read from, and the window's URL for a file in it (served by the core). */
+  files?: { folder: string; url: (path: string) => string }
+  /** A picture pasted or dropped: its path in the files folder (attachments/<name>), type and base64 bytes, to save. */
+  onPaste?: (picture: { path: string; mimeType: string; data: string }) => void
 }
 
 export const EDITOR_SAVE_MS = 400
 
 type Suggest = { from: number; items: string[]; index: number; left: number; top: number }
 
-export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, completions, onChange, onLink, onTag, onKeep, jump }: EditorProps) {
+export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, completions, onChange, onLink, onTag, onKeep, jump, files, onPaste }: EditorProps) {
   const wrap = useRef<HTMLDivElement>(null)
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   // What the extension and the editor last agreed the text is: the last text sent or taken in.
   const agreed = useRef(text)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  const handlers = useRef({ onChange, onLink, onTag, onKeep, completions })
+  const handlers = useRef({ onChange, onLink, onTag, onKeep, completions, files, onPaste })
   useLayoutEffect(() => {
-    handlers.current = { onChange, onLink, onTag, onKeep, completions }
+    handlers.current = { onChange, onLink, onTag, onKeep, completions, files, onPaste }
   })
   // A text that came from the extension (changed on disk) while the user had unsent typing: until they pick one, the
   // editor keeps theirs and saves nothing but on close.
@@ -638,6 +695,28 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, co
   useLayoutEffect(() => {
     completeRef.current = complete
   })
+
+  const canPaste = () => !!handlers.current.files && !!handlers.current.onPaste
+  // Each picture: shown at once from its own bytes, written into the text as ![](attachments/<name>), and sent to the
+  // extension to save. Too big or not a picture: left out.
+  const insertPictures = async (editor: EditorView, pictures: File[], from: number, to: number) => {
+    const own = handlers.current.files!
+    const used = new Set<string>()
+    const lines: string[] = []
+    for (const picture of pictures) {
+      if (picture.size > MAX_PASTE_BYTES || !PASTE_TYPES[picture.type]) continue
+      const name = pastedName(picture.type, new Date(), (n) => used.has(n) || pasted.has(picturePath(own.folder, `attachments/${n}`)!))
+      used.add(name)
+      const path = `attachments/${name}`
+      const data = await base64Of(picture)
+      pasted.set(picturePath(own.folder, path)!, URL.createObjectURL(picture))
+      handlers.current.onPaste!({ path, mimeType: picture.type, data })
+      lines.push(`![](${path})`)
+    }
+    if (!lines.length || view.current !== editor) return
+    const insert = lines.join('\n')
+    editor.dispatch({ changes: { from, to, insert }, selection: { anchor: from + insert.length }, userEvent: 'input.paste' })
+  }
 
   // One editor per key: a new key flushes the old text and starts over.
   useEffect(() => {
@@ -719,6 +798,12 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, co
           ...(placeholder ? [placeholderText(placeholder)] : []),
           preview,
           tables,
+          pictureSource.of((src) => {
+            const own = handlers.current.files
+            const path = own && picturePath(own.folder, src)
+            if (!own || !path) return undefined
+            return pasted.get(path) ?? own.url(path)
+          }),
           EditorView.domEventHandlers({
             mousedown(e, v) {
               const target = e.target instanceof Element ? e.target : null
@@ -739,8 +824,24 @@ export function MarkdownEditor({ docKey, text, label, placeholder, autofocus, co
               const editing = v.hasFocus && pos !== null && activeLines(v.state).has(v.state.doc.lineAt(pos).number)
               return follow(e, editing)
             },
+            // A picture pasted goes in the files folder (see insertPictures).
+            drop(e, v) {
+              const pictures = picturesIn(e.dataTransfer)
+              if (!pictures.length || !canPaste()) return false
+              e.preventDefault()
+              const at = v.posAtCoords({ x: e.clientX, y: e.clientY }) ?? v.state.selection.main.head
+              void insertPictures(v, pictures, at, at)
+              return true
+            },
             // A URL pasted over selected text makes it a link to the URL.
             paste(e, v) {
+              const pictures = picturesIn(e.clipboardData)
+              if (pictures.length && canPaste()) {
+                e.preventDefault()
+                const range = v.state.selection.main
+                void insertPictures(v, pictures, range.from, range.to)
+                return true
+              }
               const pasted = e.clipboardData?.getData('text/plain')?.trim() ?? ''
               const range = v.state.selection.main
               if (range.empty || !/^https?:\/\/\S+$/.test(pasted)) return false

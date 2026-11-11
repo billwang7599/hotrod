@@ -13,6 +13,9 @@ import {
   linkQuery,
   linkTarget,
   MarkdownEditor,
+  MAX_PASTE_BYTES,
+  pastedName,
+  picturePath,
   previewDecorations,
   rankCompletions,
   tableDecorations,
@@ -366,4 +369,67 @@ test('a jump puts the cursor at the start of its line and takes focus, once per 
   // A line past the end goes to the last.
   render({ text, jump: { key: 'j2', line: 99 } })
   expect(view().state.selection.main.head).toBe(text.indexOf('more'))
+})
+
+test('a picture path is read against the files folder; a URL, a scheme or a bad escape is not', () => {
+  expect(picturePath('/g/notes', 'attachments/a%20b.png')).toBe('/g/notes/attachments/a b.png')
+  expect(picturePath('/g/notes/', './a.png')).toBe('/g/notes/a.png')
+  expect(picturePath('/g/notes', '/abs/a.png')).toBe('/abs/a.png')
+  for (const src of ['https://x/a.png', 'file:///etc/a.png', 'javascript:alert(1)', '//host/a.png', '%E0%A4%A', '']) {
+    expect(picturePath('/g', src), src).toBeUndefined()
+  }
+})
+
+test('a pasted picture is named by its time, and never takes a name already used', () => {
+  const at = new Date(2026, 10, 10, 9, 5, 7)
+  expect(pastedName('image/png', at)).toBe('pasted-20261110-090507.png')
+  expect(pastedName('image/jpeg', at, (n) => n === 'pasted-20261110-090507.jpg')).toBe('pasted-20261110-090507-2.jpg')
+})
+
+test('with files, a relative picture shows from the files URL; without, it stays text', () => {
+  const text = 'x\n\n![cat](attachments/cat.png)\n'
+  const { view } = mount({ text, files: { folder: '/g/notes', url: (p) => `http://core/f?path=${p}` } })
+  expect(host.querySelector<HTMLImageElement>('img.cm-md-image')?.src).toBe('http://core/f?path=/g/notes/attachments/cat.png')
+  expect(view().state.doc.toString()).toBe(text)
+  act(() => root.unmount())
+  root = createRoot(host)
+  mount({ text })
+  expect(host.querySelector('img.cm-md-image')).toBeNull()
+})
+
+test('pasting a picture writes its link into the text, shows it at once, and sends its bytes to save', async () => {
+  const blobUrls: string[] = []
+  vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+    blobUrls.push(`blob:${blobUrls.length}`)
+    return blobUrls.at(-1)!
+  })
+  const saved: { path: string; mimeType: string; data: string }[] = []
+  const { view } = mount({ text: 'Before ', files: { folder: '/g/n1', url: (p) => `http://core/f?path=${p}` }, onPaste: (p) => saved.push(p) })
+  act(() => view().dispatch({ selection: { anchor: 7 } }))
+  const picture = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' })
+  const tooBig = new File([new Uint8Array(1)], 'big.png', { type: 'image/png' })
+  Object.defineProperty(tooBig, 'size', { value: MAX_PASTE_BYTES + 1 })
+  const notPicture = new File(['hi'], 'a.txt', { type: 'text/plain' })
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, 'clipboardData', { value: { files: [picture, tooBig, notPicture], getData: () => '' } })
+  await act(async () => {
+    view().contentDOM.dispatchEvent(paste)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  expect(paste.defaultPrevented).toBe(true)
+  expect(saved).toEqual([{ path: expect.stringMatching(/^attachments\/pasted-\d{8}-\d{6}\.png$/), mimeType: 'image/png', data: 'iVBORw==' }])
+  expect(view().state.doc.toString()).toBe(`Before ![](${saved[0]!.path})`)
+  // Off the line being edited, it draws from the editor's own copy until the extension has saved it.
+  act(() => view().contentDOM.blur())
+  expect(host.querySelector<HTMLImageElement>('img.cm-md-image')?.getAttribute('src')).toBe('blob:0')
+})
+
+test('without files or a paste action, a pasted picture adds nothing', () => {
+  const saved: unknown[] = []
+  const { view } = mount({ text: 'x', onPaste: (p) => saved.push(p) })
+  const paste = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(paste, 'clipboardData', { value: { files: [new File(['p'], 'a.png', { type: 'image/png' })], getData: () => '' } })
+  act(() => view().contentDOM.dispatchEvent(paste))
+  expect(view().state.doc.toString()).toBe('x')
+  expect(saved).toEqual([])
 })

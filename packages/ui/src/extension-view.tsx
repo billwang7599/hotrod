@@ -6,6 +6,7 @@ import { highlightLines } from './highlight.ts'
 import { HtmlFrame } from './html-frame.tsx'
 import { Markdown } from './markdown.tsx'
 import { MarkdownEditor } from './markdown-editor.tsx'
+import { windowExtensionFileUrl } from './connection.ts'
 
 /**
  * Draws an extension's panel from the view tree its core side sends (ExtensionView in @kothar/extension-api), with
@@ -45,6 +46,8 @@ const SetValueContext = createContext<SetValue | undefined>(undefined)
 // Show in Finder for a text with reveal; the core checks the path (host.reveal's rule).
 type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
+// The extension whose view this is, so its pictures can be read from its own folders (an editor's files).
+const ExtensionIdContext = createContext<string | undefined>(undefined)
 
 // The desktop app's picker for a button's pick, or undefined in a browser tab, where there's none. A file picker gives
 // the first file chosen.
@@ -621,21 +624,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
     case 'search':
       return <Search node={node} act={act} />
     case 'editor':
-      return (
-        <MarkdownEditor
-          docKey={node.key}
-          text={node.text}
-          label={node.label}
-          placeholder={node.placeholder}
-          autofocus={node.autofocus}
-          completions={node.completions}
-          jump={node.jump}
-          onKeep={node.keep ? (theirs) => act({ name: node.keep!, value: theirs }) : undefined}
-          onChange={(text) => act({ name: node.change, value: text })}
-          onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
-          onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
-        />
-      )
+      return <Editor node={node} act={act} />
     case 'html':
       return (
         <HtmlFrame
@@ -663,15 +652,40 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   }
 }
 
-type ViewerProps = { view?: ExtensionView; error?: string; act: Act; set?: SetValue; reveal?: Reveal }
+function Editor({ node, act }: { node: Extract<ExtensionView, { type: 'editor' }>; act: Act }) {
+  const extension = useContext(ExtensionIdContext)
+  const files = node.files && extension ? { folder: node.files, url: (path: string) => windowExtensionFileUrl(extension, path) } : undefined
+  return (
+    <MarkdownEditor
+      docKey={node.key}
+      text={node.text}
+      label={node.label}
+      placeholder={node.placeholder}
+      autofocus={node.autofocus}
+      completions={node.completions}
+      jump={node.jump}
+      files={files}
+      onPaste={files && node.paste ? (picture) => act({ name: node.paste!, value: picture }) : undefined}
+      onKeep={node.keep ? (theirs) => act({ name: node.keep!, value: theirs }) : undefined}
+      onChange={(text) => act({ name: node.change, value: text })}
+      onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
+      onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
+    />
+  )
+}
 
-export function ExtensionViewer({ view, error, act, set, reveal }: ViewerProps) {
+// extension: whose view it is, for pictures read from its folders (an editor's files); without it they stay text.
+type ViewerProps = { view?: ExtensionView; error?: string; act: Act; set?: SetValue; reveal?: Reveal; extension?: string }
+
+export function ExtensionViewer({ view, error, act, set, reveal, extension }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>
   return (
     <SetValueContext.Provider value={set}>
       <RevealContext.Provider value={reveal}>
-        <Node node={view} act={act} />
+        <ExtensionIdContext.Provider value={extension}>
+          <Node node={view} act={act} />
+        </ExtensionIdContext.Provider>
       </RevealContext.Provider>
     </SetValueContext.Provider>
   )

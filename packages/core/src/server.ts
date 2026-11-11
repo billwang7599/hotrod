@@ -23,6 +23,7 @@ const CONTENT_TYPES: Record<string, string> = {
 }
 
 const ATTACHMENT_PATH = /^\/chats\/([^/]+)\/attachments\/([^/]+)$/
+const EXTENSION_FILE_PATH = /^\/extensions\/([a-z0-9-]+)\/files$/
 
 export async function startServer(options: {
   core: Core
@@ -65,6 +66,23 @@ export async function startServer(options: {
         'access-control-allow-origin': uiOrigin,
         ...(!inline && { 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.name)}` }),
       })
+      return void createReadStream(found.path).pipe(response)
+    }
+    // A picture from an extension's own folders (core.extensionFile), such as one pasted into a note.
+    const extensionFile = url.pathname.match(EXTENSION_FILE_PATH)
+    if (extensionFile) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return response.writeHead(405).end()
+      if (!sameToken(url.searchParams.get('token') ?? '', token)) return response.writeHead(401).end()
+      const found = core.extensionFile(extensionFile[1]!, url.searchParams.get('path') ?? '')
+      if (!found) return response.writeHead(404).end()
+      response.writeHead(200, {
+        'content-type': found.mimeType,
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': 'sandbox',
+        'cache-control': 'no-cache',
+        'access-control-allow-origin': uiOrigin,
+      })
+      if (request.method === 'HEAD') return response.end()
       return void createReadStream(found.path).pipe(response)
     }
     serveUi(request, response)

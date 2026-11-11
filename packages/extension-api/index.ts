@@ -543,6 +543,15 @@ export type ExtensionView =
       // Moves the cursor to the start of a line (numbered from 1) and scrolls it to the top, such as a heading picked in
       // an outline; the editor takes focus. Each new key jumps once; the same key again does nothing.
       jump?: { key: string; line: number }
+      // A folder of the extension's own (in host.storage.dir or a chat's chatStorage folder) that pictures in the text
+      // are read from: ![alt](attachments/a.png) shows <files>/attachments/a.png. Kothar serves only plain pictures (PNG,
+      // JPEG, GIF, WebP) inside the extension's folders, outside the core's own files; anything else stays text.
+      files?: string
+      // With files: pasting or dropping a picture puts ![](attachments/pasted-<time>.png) in the text at once and sends
+      // this action with value { path, mimeType, data }: path relative to files (always attachments/<name>, the name made
+      // of letters, digits and dashes), data the picture's bytes in base64. The extension saves it there; until it does,
+      // the editor shows its own copy. Pictures over 10 MB are refused.
+      paste?: string
     }
   // A page of HTML, such as a chart or a mockup an agent made, drawn in a sandboxed frame. Its scripts run, but in an
   // origin of their own: they can't reach Kothar's window, storage, token or core, open windows or popups, submit forms

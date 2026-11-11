@@ -818,6 +818,7 @@ export function ContextPanel(props: ContextPanelProps) {
         )}
         {extensionTab && (
           <ExtensionViewer
+            extension={extensionTab.extension}
             view={panelView?.view}
             error={panelView?.error}
             act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}

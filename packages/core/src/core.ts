@@ -57,6 +57,7 @@ import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
 import { openTerminal } from './terminal.ts'
 import { openCheckouts } from './checkouts.ts'
+import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, quitMidTurn, readChat, saveChatFile, storedChatIds } from './chat-store.ts'
 import { within, messageOf } from './util.ts'
@@ -1101,6 +1102,18 @@ function openLockedCore(options: {
       const path = join(attachmentsDirOf(chat), file)
       const sent = chat.entries.flatMap((e) => (e.type === 'user.message' ? (e.attachments ?? []) : []))
       return [...sent, ...chat.queue.flatMap((q) => q.attachments ?? [])].find((a) => a.path === path)
+    },
+    // A picture in one of an extension's own folders, for the window to show (extension-files.ts); undefined if it may
+    // not be served, or the extension is unknown or off.
+    extensionFile(extensionId: string, path: string) {
+      const extension = extensions.find((e) => e.id === extensionId)
+      if (!extension || !isOn(extension)) return undefined
+      const found = extensionPicture(path, {
+        storage: extensionStorageDir(garage, extension.id),
+        chatDirs: [...chats.values()].map((chat) => chat.dir),
+        chatOwnFiles: CHAT_OWN_FILES,
+      })
+      return 'error' in found ? undefined : found
     },
     serveMcp(url: string) {
       mcpUrl = url
