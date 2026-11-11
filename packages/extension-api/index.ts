@@ -56,8 +56,9 @@ export type EngineEvent =
   // A message the core passed to Session.steer entered the running turn here, or is handed back unsent.
   | { type: 'steer.landed'; id: string }
   | { type: 'steer.returned'; id: string }
-  | { type: 'turn.completed'; error?: string }
-  | { type: 'session.ended'; error?: string }
+  // errorKind (here and on session.ended): why it failed, as the engine's adapter reads its error (see TurnErrorKind).
+  | { type: 'turn.completed'; error?: string; errorKind?: TurnErrorKind }
+  | { type: 'session.ended'; error?: string; errorKind?: TurnErrorKind }
 
 export type PermissionRequest = Extract<EngineEvent, { type: 'permission.requested' }>
 
@@ -318,10 +319,17 @@ export type LimitReached = {
 // continued.
 export type TurnStart = { chat: ChatDetail; text: string; continued: boolean }
 
+// Why a turn failed, so extensions needn't read engines' error text: Stop (interrupted), a usage or rate limit
+// (rate_limit), the connection (network), the engine's service overloaded or down (overloaded, as 502/503/504/529), or
+// anything else (other). Each adapter reads its own engine's errors; absent when nothing labelled the error.
+export type TurnErrorKind = 'interrupted' | 'rate_limit' | 'network' | 'overloaded' | 'other'
+
 // A turn as it ended. text is its last reply; files are the paths its edit tools named, in order, without repeats.
+// errorKind is set with error: see TurnErrorKind.
 export type TurnSummary = {
   chat: ChatDetail
   error?: string
+  errorKind?: TurnErrorKind
   text: string
   tools: { name: string; kind: ToolKind; summary: string; path?: string; isError?: boolean }[]
   files: string[]

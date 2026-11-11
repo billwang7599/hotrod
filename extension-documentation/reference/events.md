@@ -86,6 +86,7 @@ A turn is one message and the agent's work on it. Each message runs its own engi
 | `chat` | The chat, as a [`ChatDetail`](types.md#chats). |
 | `text` | The turn's last reply. |
 | `error` | Set if the turn failed. |
+| `errorKind` | Why it failed, read by the engine's adapter: `interrupted` (Stop), `rate_limit`, `network`, `overloaded` (the engine's service is busy or down) or `other`. Absent if nothing labelled the error. |
 | `tools` | Each tool call: `{ name, kind, summary, path?, isError? }`. |
 | `files` | The paths the turn's edit tools named, in order, without repeats. |
 

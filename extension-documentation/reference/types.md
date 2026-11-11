@@ -91,8 +91,8 @@ all of them.
 | `limit.reached` | `message`, `resetsAt?` | The account ran into a usage or rate limit. |
 | `steer.landed` | `id` | A message you sent mid-turn entered the running turn. |
 | `steer.returned` | `id` | A message you sent mid-turn was handed back unsent. |
-| `turn.completed` | `error?` | A turn ended. |
-| `session.ended` | `error?` | The engine session ended. |
+| `turn.completed` | `error?`, `errorKind?` | A turn ended. `errorKind` says why it failed (see [`onTurnCompleted`](events.md)). |
+| `session.ended` | `error?`, `errorKind?` | The engine session ended. |
 
 A tool's `kind` is one of `shell`, `edit`, `read`, `search`, `fetch`, `mcp` or `other`, the same across engines. So one
 permission policy works for every engine.
