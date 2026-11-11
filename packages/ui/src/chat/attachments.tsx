@@ -5,7 +5,8 @@ import { Dialog } from 'radix-ui'
 import { IMAGE_TYPES, type Attachment, type ClientMessage, type ContextItem, type Upload } from '@kothar/core/shared'
 import { attachmentUrl, coreUrl, readToken } from '../connection.ts'
 import { Button, Hint, MOTION } from '../controls.tsx'
-import { formatBytes, MAX_PREVIEW_BYTES, pinState, previewText, type ChatView } from '../state.ts'
+import { MAX_PREVIEW_BYTES, pinState, previewText, type ChatView } from '../state.ts'
+import { formatBytes } from '../format.ts'
 
 export const FILE_CHIP = 'flex max-w-200 min-w-0 items-center rounded-lg border px-10'
 /** The ::after stretches the hit area to 24px tall, the size of the icon buttons, without changing the look. */

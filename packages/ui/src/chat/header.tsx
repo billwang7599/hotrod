@@ -3,7 +3,8 @@ import { editsAnywhere, type ClientMessage, type EngineAccounts, type WorkFolder
 import { Hint, PanelToggle, Select } from '../controls.tsx'
 import { usePathsShown } from '../paths.ts'
 import type { SettingsPage } from '../settings.tsx'
-import { accountLabel, listedAccounts, type ChatView } from '../state.ts'
+import { type ChatView } from '../state.ts'
+import { accountLabel, listedAccounts } from '../accounts.ts'
 
 const MANAGE_ACCOUNTS = '__manage'
 const WARNING_CHIP = 'shrink-0 cursor-help rounded-full bg-warning-bg px-8 py-2 text-xs text-amber'

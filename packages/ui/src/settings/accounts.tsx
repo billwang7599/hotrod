@@ -2,7 +2,7 @@
 import { useState, type FormEvent } from 'react'
 import type { Account, ClientMessage, EngineAccounts } from '@kothar/core/shared'
 import { Button, confirm, ErrorText, GROUP, Select } from '../controls.tsx'
-import { accountLabel, listedAccounts } from '../state.ts'
+import { accountLabel, listedAccounts } from '../accounts.ts'
 import { SettingRow } from './rows.tsx'
 
 type EngineAccountsProps = { accounts: EngineAccounts; connected: boolean; send: (m: ClientMessage) => void }

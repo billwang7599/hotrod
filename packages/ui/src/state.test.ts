@@ -2,34 +2,28 @@ import { describe, expect, it } from 'vitest'
 import type { ChatEntry, ChatState, ContextItem, CoreMessage, ExtensionInfo, ThinkingLevel } from '@kothar/core/shared'
 import type { Account, EngineAccounts } from '@kothar/core/shared'
 import {
-  accountLabel,
   chatTree,
-  COLUMN_PX,
-  columnSlider,
-  dockedPanels,
   modelChoices,
   familyOf,
   folderName,
   foldSteps,
   folderOf,
-  formatBytes,
   initialState,
-  listedAccounts,
   MAX_PREVIEW_BYTES,
-  MIN_WINDOW_PX,
   modelKey,
   modelMenu,
-  PANEL_PX,
   pinState,
   previewText,
   reduce,
-  storedColumn,
   storedFlag,
   type Action,
   type ChatView,
   type Item,
   type State,
 } from './state.ts'
+import { accountLabel, listedAccounts } from './accounts.ts'
+import { formatBytes } from './format.ts'
+import { COLUMN_PX, columnSlider, dockedPanels, MIN_WINDOW_PX, PANEL_PX, storedColumn } from './layout.ts'
 
 const MAIN_CHAT_ID = 'main'
 const at = '2026-11-06T00:00:00.000Z'

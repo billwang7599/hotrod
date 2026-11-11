@@ -1,7 +1,7 @@
 // Files waiting to go with the next message: picked, pasted or dropped, checked against the size limits, read in.
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { IMAGE_TYPES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES } from '@kothar/core/shared'
-import { formatBytes } from '../state.ts'
+import { formatBytes } from '../format.ts'
 import type { Pending } from './attachments.tsx'
 
 /** The files waiting to be sent; attach reads new ones in, telling the user (notify) about any it refuses. */

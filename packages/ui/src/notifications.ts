@@ -67,12 +67,6 @@ export function setNotificationPref(key: keyof NotificationPrefs, on: boolean) {
   for (const listener of listeners) listener()
 }
 
-/** Rereads the saved choices, for tests that clear storage. */
-export function reloadNotificationPrefs() {
-  prefs = readPrefs()
-  for (const listener of listeners) listener()
-}
-
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
   return () => listeners.delete(listener)

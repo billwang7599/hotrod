@@ -24,7 +24,6 @@ import { ReportsOpen, StepsOpen, useReportsShown, useStepsShown } from './steps.
 import { confirm, Hint, MOTION, SidePanel, useSettled } from './controls.tsx'
 import type { SettingsPage } from './settings.tsx'
 import {
-  columnSlider,
   engineName,
   fromModelKey,
   foldSteps,
@@ -35,6 +34,7 @@ import {
   waitsBelow,
   workerRequests,
 } from './state.ts'
+import { columnSlider } from './layout.ts'
 import { localNth, revealIn, takeReveal, type Reveal } from './search.tsx'
 import { ArchivedNote, EngineNote, QueuedMessages, Waits, WorkerBar, WorkerRequests } from './chat/above-composer.tsx'
 import { ChatHeader } from './chat/header.tsx'

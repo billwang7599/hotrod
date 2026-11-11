@@ -2,7 +2,6 @@ import type { ExtensionAction, ExtensionNoteCard, ExtensionView } from '@kothar/
 import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
   RestartState,
-  Account,
   Answers,
   Attachment,
   InstalledItem,
@@ -583,28 +582,6 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
 }
 
-export const MIN_WINDOW_PX = { width: 375, height: 600 }
-export const PANEL_PX = { sidebar: 232, context: 320 }
-const PANE_PADDING_PX = 24
-/** The chat column's width. It never exceeds the pane (CSS caps it at 100%); `max` only bounds a saved value. */
-export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, max: 2400, default: 760 }
-
-export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
-  const sidebar = widths.sidebar + MIN_WINDOW_PX.width
-  if (windowPx >= sidebar + widths.context) return 'both'
-  return windowPx >= sidebar ? 'sidebar' : 'none'
-}
-
-export function storedColumn(value: string | null) {
-  const px = Number(value ?? NaN)
-  return Number.isFinite(px) ? Math.min(Math.max(Math.round(px), COLUMN_PX.min), COLUMN_PX.max) : COLUMN_PX.default
-}
-
-export function columnSlider(savedPx: number, paneColumnPx: number) {
-  const max = Math.max(Math.floor(paneColumnPx), COLUMN_PX.min)
-  return { min: COLUMN_PX.min, max, value: Math.min(Math.max(savedPx, COLUMN_PX.min), max) }
-}
-
 export const storedFlag = (value: string | null, fallback: boolean) =>
   value === 'true' || value === 'false' ? value === 'true' : fallback
 
@@ -666,12 +643,6 @@ export function modelMenu(chat: ChatView, engines: EngineInfo[]) {
   }
 }
 
-export function formatBytes(bytes: number) {
-  if (bytes < 1000) return `${bytes} B`
-  const [value, unit] = bytes < 1_000_000 ? [bytes / 1000, 'KB'] : [bytes / 1_000_000, 'MB']
-  return `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)} ${unit}`
-}
-
 export const MAX_PREVIEW_BYTES = 1_000_000
 
 export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
@@ -682,23 +653,6 @@ export function pinState(chat: ChatView, items: ContextItem[] | undefined, path:
 
 export const previewText = (bytes: Uint8Array) =>
   looksBinary(bytes) ? undefined : new TextDecoder().decode(bytes.subarray(0, MAX_PREVIEW_BYTES), { stream: true })
-
-export function accountLabel(account: Account) {
-  if (account.id === 'default') return (account.signedIn && account.label) || 'Not signed in'
-  const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'
-  if (account.signedIn === false) return `${account.name} (${missing})`
-  return account.label ? `${account.name} (${account.label})` : account.name
-}
-
-export function listedAccounts({ active, accounts }: EngineAccounts) {
-  const own = accounts.find((a) => a.id === 'default')
-  // A label names the person signed in, except on engines with providers, where it names the provider.
-  const sameLogin = (a: Account) =>
-    a !== own && a.kind === 'login' && !a.provider && a.signedIn && a.label === own?.label
-  const twin = own?.signedIn && own.label && accounts.find(sameLogin)
-  if (!own || !twin) return { active, accounts }
-  return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
-}
 
 // One key per installable thing: a theme and an extension may share an id.
 export const marketKey = (kind: MarketKind, id: string) => `${kind}:${id}`

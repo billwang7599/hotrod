@@ -22,17 +22,8 @@ import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { isLooking, useLooking, useMarkRead } from './unread.ts'
 import { createNotifier, deliver } from './notifications.ts'
-import {
-  dockedPanels,
-  folderName,
-  folderOf,
-  initialState,
-  MIN_WINDOW_PX,
-  reduce,
-  storedColumn,
-  type Action,
-  storedFlag,
-} from './state.ts'
+import { folderName, folderOf, initialState, reduce, type Action, storedFlag } from './state.ts'
+import { dockedPanels, MIN_WINDOW_PX, storedColumn } from './layout.ts'
 import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'

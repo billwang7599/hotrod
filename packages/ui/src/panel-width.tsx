@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from 'react'
-import { PANEL_PX } from './state.ts'
+import { PANEL_PX } from './layout.ts'
 
 /** The left sidebar and the right panel, each resized by dragging its inner edge; widths saved in localStorage. */
 export type Panel = keyof typeof PANEL_PX | 'dock'
