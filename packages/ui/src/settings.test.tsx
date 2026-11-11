@@ -16,7 +16,8 @@ import {
 } from '@kothar/core/shared'
 import type { ExtensionSetting } from '@kothar/extension-api'
 import { PERMISSIONS } from './context-panel.tsx'
-import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
+import { SettingsDialog, type SettingsPage } from './settings.tsx'
+import { WorkFolderDialog } from './settings/work-folder.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
