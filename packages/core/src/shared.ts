@@ -741,7 +741,3 @@ export const previewOf = (theme: ThemeFile): ThemePreview => ({
   dark: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.dark[token]])) as ThemePreview['dark'],
   light: Object.fromEntries(PREVIEW_TOKENS.map((token) => [token, theme.light[token]])) as ThemePreview['light'],
 })
-
-// The UI checks a theme it kept in localStorage with checkTheme and still imports it from here. New code imports it from
-// catalog-check.ts (`@kothar/core/catalog-check`); this line goes once the UI does.
-export { checkTheme } from './catalog-check.ts'
