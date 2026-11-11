@@ -7,6 +7,7 @@ import {
   type ChatInfo,
   type CoreMessage,
   type EngineInfo,
+  type EngineStatus,
   type MemorySettings,
   type ModelLists,
   type ModelRole,
@@ -15,6 +16,7 @@ import {
   type Setup,
   type ThinkingLevel,
 } from './shared.ts'
+import type { Chat } from './chat.ts'
 
 // Model choice, in one place. Settings keep one priority list per role, each an ordered list of {engine, model,
 // thinking} rows that can mix engines; this module reads and writes them and decides what every chat, worker and
@@ -291,4 +293,49 @@ export function migrateModels(
       }),
     )
   return Object.fromEntries(MODEL_ROLES.map((role) => [role, rowsOf(rowsFor(role))])) as ModelLists
+}
+
+// A chat that follows its model list sits on the engine the list picks, so its engine, accounts and notes are right;
+// any chat whose run changed is shown again (showRun).
+export function followModels(
+  chats: Iterable<Chat>,
+  deps: { runOf: (chat: Chat) => Run | undefined; setEngine: (chat: Chat, engine: string) => void; showRun: (chat: Chat) => void },
+) {
+  for (const chat of chats) {
+    const run = deps.runOf(chat)
+    const follows = chat.info.model === undefined && chat.status === 'idle'
+    if (follows && run && run.engine !== chat.info.engine) deps.setEngine(chat, run.engine)
+    else if (JSON.stringify(run) !== chat.shownRun) deps.showRun(chat)
+  }
+}
+
+// An engine's detected status with its models named and ordered for the UI: Claude models by family and newest first
+// ("Opus 5.5"), dated snapshots dropped, other ids as they are; each provider's models stay together.
+const CLAUDE_FAMILIES = ['fable', 'opus', 'sonnet', 'haiku']
+const CLAUDE_ID = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/
+// A dated snapshot like claude-haiku-4-5-20251001 repeats the model its alias names.
+const SNAPSHOT_ID = /-\d{8}$/
+
+const providerOf = (id: string) => id.slice(0, id.lastIndexOf('/') + 1)
+
+function describeModel(id: string) {
+  const [, family = '', major = '', minor] = id.slice(providerOf(id).length).match(CLAUDE_ID) ?? []
+  const known = CLAUDE_FAMILIES.indexOf(family)
+  const rank = known < 0 ? CLAUDE_FAMILIES.length : known
+  if (!family) return { label: id, rank, version: 0 }
+  const label = `${family[0]!.toUpperCase()}${family.slice(1)} ${major}${minor === undefined ? '' : `.${minor}`}`
+  return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
+}
+
+export function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
+  const { models, defaultModel, modelThinking, ...rest } = status
+  if (!models) return { ...rest, ...(defaultModel && { defaultModel }) }
+  const providers = [...new Set(models.map(providerOf))]
+  const named = models
+    .filter((id) => !SNAPSHOT_ID.test(id))
+    .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
+    .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
+  const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
+  const options = named.map(({ id, label }) => ({ id, label, ...(modelThinking?.[id] && { thinking: modelThinking[id] }) }))
+  return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
 }

@@ -12,12 +12,13 @@ import type {
   ChatDetail,
   Extension,
   ExtensionContext,
-  ExtensionInstructionsFor,
   SpaceDetail,
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups, WORKER_SETUP } from './setups.ts'
-import { openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
+import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
+import { WORKERS_EXTENSION, workersFor } from './workers.ts'
+import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { messagesOf, windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
 import { readApprovals } from './approvals.ts'
@@ -33,7 +34,6 @@ import {
   type CompletionRequest,
   type CoreMessage,
   type EngineInfo,
-  type EngineStatus,
   type Machine,
   type ModelRole,
   type MarketKind,
@@ -43,7 +43,7 @@ import {
   type NewChat,
   type Setup,
 } from './shared.ts'
-import { openModels } from './models.ts'
+import { followModels as followChatModels, nameModels, openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
 import { openExtensionSwitches } from './extension-switches.ts'
@@ -59,14 +59,13 @@ import { openTerminal } from './terminal.ts'
 import { openCheckouts } from './checkouts.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, quitMidTurn, readChat, saveChatFile, storedChatIds } from './chat-store.ts'
-import { within, messageOf, readBytes } from './util.ts'
-import { openTurns, type SessionParts, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
+import { within, messageOf } from './util.ts'
+import { openTurns, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
 
 // Kept here too, for code that imports them from the core.
 export { CHECKOUT_RULES, WRITE_RULES } from './instructions.ts'
 
 export const STOP_GRACE_MS = 60_000
-const PARENT_VIEW_FILE = 'parent-view.md'
 // A chat's own files, which extensions' chat storage can't touch.
 const CHAT_OWN_FILES = ['chat.json', 'log.jsonl', 'AGENTS.md', PARENT_VIEW_FILE, 'attachments']
 const REVEAL_TIMEOUT_MS = 10_000
@@ -246,16 +245,13 @@ function openLockedCore(options: {
   const chats = new Map<string, Chat>()
   let quitting = false
   let mcpUrl: string | undefined
-  // A chat that follows its model list sits on the engine the list picks, so its engine, accounts and notes are right;
-  // any chat whose run changed shows it.
-  const followModels = () => {
-    for (const chat of chats.values()) {
-      const run = models.runOf(choosesOf(chat))
-      const follows = chat.info.model === undefined && chat.status === 'idle'
-      if (follows && run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
-      else if (JSON.stringify(run) !== chat.shownRun) broadcast({ type: 'chat.updated', chat: withRun(chat) })
-    }
-  }
+  // See models.ts followModels.
+  const followModels = () =>
+    followChatModels(chats.values(), {
+      runOf: (chat) => models.runOf(choosesOf(chat)),
+      setEngine: (chat, engine) => updateChat(chat, { engine }),
+      showRun: (chat) => broadcast({ type: 'chat.updated', chat: withRun(chat) }),
+    })
   const {
     extensionInfo,
     settingsViewChanged,
@@ -382,20 +378,6 @@ function openLockedCore(options: {
     }
     return windowView(messages)
   }
-  const memoryInstructions = (forSession: ExtensionInstructionsFor, chat: Chat) => {
-    const extension = memoryExtension(chat)
-    if (!extension?.memory?.instructions) return []
-    try {
-      const text = extension.memory.instructions(forSession, contextOf(extension))
-      if (text === undefined || text === null) return []
-      if (typeof text !== 'string') throw new Error('memory.instructions must return text')
-      return text.trim() ? [text.trim()] : []
-    } catch (error) {
-      extensionError(extension, error)
-      return []
-    }
-  }
-
   const chatFor = (chatId: string) => {
     const chat = chats.get(chatId)
     if (!chat || !shown(chat)) throw new Error(`Unknown chat "${chatId}"`)
@@ -542,30 +524,18 @@ function openLockedCore(options: {
     return !!caller && shown(caller) && shown(chat) && reaches(caller.info, chat.info, seesAll(callerId))
   }
 
-  // What a session is told, worked out as its turn starts: context items, then role, parent view, setup, workers,
-  // memory and each extension's instructions.
-  const instructionPartsOf = (chat: Chat, zoomable: boolean): SessionParts => {
-    const items = contextItems(chat).filter((item) => item.enabled)
-    const setup = setupOf(chat)
-    const role = extensionChatOf(chat)?.instructions
-    const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
-    const spawns = zoomable && !chat.info.worker && isOnFor(WORKERS_EXTENSION, chat)
-    const forSession = { chat: detailOf(chat), tools: zoomable }
-    const workers = spawns ? String(extensionValues(WORKERS_EXTENSION).instructions) : undefined
-    const memory = memoryInstructions(forSession, chat)
-    const extensionInstructions = watchersOf('instructions', chat).flatMap((extension) => {
-      try {
-        const text = extension.instructions!(forSession, contextOf(extension))
-        if (text === undefined || text === null) return []
-        if (typeof text !== 'string') throw new Error('instructions must return text')
-        return text.trim() ? [text.trim()] : []
-      } catch (error) {
-        extensionError(extension, error)
-        return []
-      }
-    })
-    return { role, extensions: extensionInstructions, workers, memory, parentView, setup, items }
-  }
+  const { instructionPartsOf } = openInstructionParts({
+    contextItems: (chat) => contextItems(chat),
+    setupOf,
+    roleOf: (chat) => extensionChatOf(chat)?.instructions,
+    isOnFor,
+    valuesOf: extensionValues,
+    detailOf: (chat) => detailOf(chat),
+    memoryExtension,
+    watchersOf: (hook, chat) => watchersOf(hook, chat),
+    contextOf: (extension) => contextOf(extension),
+    extensionError: (extension, error) => extensionError(extension, error),
+  })
 
   const {
     send,
@@ -624,7 +594,7 @@ function openLockedCore(options: {
     checkoutOf: (space, folder, workDir, sandboxed) => checkoutOf(space, folder, workDir, sandboxed),
     sweepMergedWorktrees: (space) => sweepMergedWorktrees(space),
     viewOf,
-    instructionPartsOf: (chat, zoomable) => instructionPartsOf(chat, zoomable),
+    instructionPartsOf,
   })
 
   const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
@@ -1009,11 +979,7 @@ function openLockedCore(options: {
       return idle ? 'sent' : steers ? 'steered' : 'queued'
     },
     stop: (chatId) => interrupt(chatFor(chatId), false),
-    workers: (chatId?: string) => {
-      const { enabled, values } = extensionInfo(WORKERS_EXTENSION)
-      const chat = chatId === undefined ? undefined : chats.get(chatId)
-      return { enabled: enabled && isOnFor(WORKERS_EXTENSION, chat), limit: Number(values.limit) }
-    },
+    workers: (chatId?: string) => workersFor(chatId === undefined ? undefined : chats.get(chatId), { isOnFor, extensionInfo }),
     extensionTools: (chatId: string) =>
       extensions
         .filter((extension) => isOnFor(extension, chats.get(chatId)))
@@ -1153,36 +1119,6 @@ function openLockedCore(options: {
     },
   }
 }
-
-const CLAUDE_FAMILIES = ['fable', 'opus', 'sonnet', 'haiku']
-const CLAUDE_ID = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?$/
-// A dated snapshot like claude-haiku-4-5-20251001 repeats the model its alias names.
-const SNAPSHOT_ID = /-\d{8}$/
-
-const providerOf = (id: string) => id.slice(0, id.lastIndexOf('/') + 1)
-
-function describeModel(id: string) {
-  const [, family = '', major = '', minor] = id.slice(providerOf(id).length).match(CLAUDE_ID) ?? []
-  const known = CLAUDE_FAMILIES.indexOf(family)
-  const rank = known < 0 ? CLAUDE_FAMILIES.length : known
-  if (!family) return { label: id, rank, version: 0 }
-  const label = `${family[0]!.toUpperCase()}${family.slice(1)} ${major}${minor === undefined ? '' : `.${minor}`}`
-  return { label, rank, version: Number(major) * 100 + Number(minor ?? 0) }
-}
-
-function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
-  const { models, defaultModel, modelThinking, ...rest } = status
-  if (!models) return { ...rest, ...(defaultModel && { defaultModel }) }
-  const providers = [...new Set(models.map(providerOf))]
-  const named = models
-    .filter((id) => !SNAPSHOT_ID.test(id))
-    .map((id) => ({ id, provider: providers.indexOf(providerOf(id)), ...describeModel(id) }))
-    .sort((a, b) => a.provider - b.provider || a.rank - b.rank || b.version - a.version)
-  const shown = defaultModel && (named.some((m) => m.id === defaultModel) ? defaultModel : named[0]?.id)
-  const options = named.map(({ id, label }) => ({ id, label, ...(modelThinking?.[id] && { thinking: modelThinking[id] }) }))
-  return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
-}
-
 
 const checkName = (name: unknown) => {
   const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''

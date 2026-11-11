@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { ChatSummary, Extension, ExtensionHost, ExtensionTool, ExtensionValues } from '@kothar/extension-api'
+import type { ChatSummary, ExtensionHost, ExtensionTool, ExtensionValues } from '@kothar/extension-api'
 import { NodeStreamableHTTPServerTransport } from '@modelcontextprotocol/node'
 import { fromJsonSchema, McpServer } from '@modelcontextprotocol/server'
 import * as z from 'zod'
@@ -9,41 +9,6 @@ import type { ChatInfo, ChatState, ModelRole } from './shared.ts'
 
 export const READ_CHAT_DEFAULT_LAST = 20
 export const WORKER_NAME_MAX_CHARS = 40
-
-export const WORKER_INSTRUCTIONS =
-  'Delegate by default. Any task that needs more than a few tool calls (exploring code, making a change, running ' +
-  'tests, researching) goes to a worker you start with spawn_worker, not to you, so you stay free to keep ' +
-  'talking with the user while it runs. Split the work into as many workers as it needs, each with a whole task ' +
-  "it can finish on its own, independent of the others. You can edit the same files, just ensure they're in " +
-  'different worktrees, and make a stack PR so we have less merge conflicts. Do the work yourself only for quick ' +
-  "answers and one-line changes. Each worker's final reply comes back to you as a message, so don't wait for it " +
-  'or poll it; tell the user what you started and carry on. To stop a worker you no longer need, use stop_chat.'
-
-export const WORKERS_EXTENSION: Extension = {
-  id: 'workers',
-  name: 'Workers',
-  description: 'Chats can hand a task to a new chat that reports back when it ends.',
-  enabledByDefault: true,
-  settings: [
-    {
-      key: 'limit',
-      label: 'Max running per chat',
-      description: 'How many workers one chat can run at once. -1 for no limit.',
-      type: 'number',
-      default: 4,
-      min: -1,
-      integer: true,
-    },
-    {
-      key: 'instructions',
-      label: 'Instructions',
-      description: 'What every chat that can start workers is told about them.',
-      type: 'text',
-      default: WORKER_INSTRUCTIONS,
-      rows: 6,
-    },
-  ],
-}
 
 type Hub = {
   chats(): ChatState[]

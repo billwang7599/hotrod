@@ -20,7 +20,7 @@ import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type Fake
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { LOCK_FILE } from './garage-lock.ts'
-import { WORKERS_EXTENSION } from './kothar-mcp.ts'
+import { WORKERS_EXTENSION } from './workers.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import { WINDOW_MAX_CHARS } from './memory.ts'

@@ -16,7 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './kothar-mcp.ts'
+import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './workers.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
