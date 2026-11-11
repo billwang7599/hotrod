@@ -419,13 +419,19 @@ export type ContextItem = {
   // Folders that aren't git repos: how agents may write in it, and why they can't when Kothar refuses the mode.
   mode?: FolderMode
   blocked?: string
+  // Set to Work on a copy, once the copy is made: its path in the work folder.
+  copy?: string
 }
+
+/** A file the agents changed in a folder's copy. conflict: the original changed since the copy was made. */
+export type CopyChange = { path: string; kind: 'added' | 'changed' | 'deleted'; conflict?: true }
 
 /**
  * How agents may write in an attached folder that isn't a git repo. edit: in the folder itself, inside the sandbox.
- * readOnly: nowhere. Git folders are checked out in the work folder instead (design rule 10).
+ * copy: in a copy the core makes in the work folder, which the user copies back. readOnly: nowhere. Git folders are
+ * checked out in the work folder instead (design rule 10).
  */
-export const FOLDER_MODES = ['edit', 'readOnly'] as const
+export const FOLDER_MODES = ['edit', 'copy', 'readOnly'] as const
 export type FolderMode = (typeof FOLDER_MODES)[number]
 export const DEFAULT_FOLDER_MODE: FolderMode = 'edit'
 
@@ -516,6 +522,11 @@ export type ClientMessage =
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
   | { type: 'context.folderMode'; chatId: string; path: string; mode: FolderMode }
+  // A folder set to Work on a copy: what changed in its copy (replies context.copyChanges), and copying the picked
+  // files back into the folder (replies context.copyChanges again, or with error). overwrite: the user confirmed
+  // overwriting originals that changed since the copy was made.
+  | { type: 'context.copyChanges'; chatId: string; path: string }
+  | { type: 'context.copyBack'; chatId: string; path: string; files: string[]; overwrite?: boolean }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
@@ -656,6 +667,8 @@ export type CoreMessage =
   | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
+  // copied: how many files the last copyBack copied back.
+  | { type: 'context.copyChanges'; chatId: string; path: string; changes: CopyChange[]; copied?: number; error?: string }
   // The answer to files.check: each path asked about, to its absolute path or null if it isn't there.
   | { type: 'files.checked'; chatId: string; paths: Record<string, string | null> }
 

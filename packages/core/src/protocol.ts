@@ -18,6 +18,7 @@ import {
   type ClientMessage,
   type ContextItem,
   type ContextSection,
+  type CopyChange,
   type CoreMessage,
   type MarketKind,
   type NewChat,
@@ -65,6 +66,8 @@ export type ProtocolDeps = {
   removeContext: (chat: Chat, section: 'folders' | 'files', path: unknown) => void
   setContext: (chat: Chat, path: unknown, enabled: boolean) => void
   setFolderMode: (chat: Chat, path: unknown, mode: unknown) => void
+  copyChanges: (chat: Chat, path: unknown) => Promise<CopyChange[]>
+  copyBack: (chat: Chat, path: unknown, files: unknown, overwrite: boolean) => Promise<number>
   writeContext: (chat: Chat, text: string) => void
   writeInstructions: (text: string) => void
   setContextDefault: (section: ContextSection, enabled: boolean) => void
@@ -190,6 +193,26 @@ export function openProtocol(deps: ProtocolDeps) {
     'context.remove': (message) => deps.removeContext(chatFor(message.chatId), addable(message.section), message.path),
     'context.set': (message) => deps.setContext(chatFor(message.chatId), message.path, message.enabled === true),
     'context.folderMode': (message) => deps.setFolderMode(chatFor(message.chatId), message.path, message.mode),
+    'context.copyChanges': (message, reply) => {
+      const chat = chatFor(message.chatId)
+      const answer = { type: 'context.copyChanges' as const, chatId: chat.info.id, path: String(message.path ?? '') }
+      return void deps.copyChanges(chat, message.path).then(
+        (changes) => reply({ ...answer, changes }),
+        (error) => reply({ ...answer, changes: [], error: messageOf(error) }),
+      )
+    },
+    'context.copyBack': (message, reply) => {
+      const chat = chatFor(message.chatId)
+      const answer = { type: 'context.copyChanges' as const, chatId: chat.info.id, path: String(message.path ?? '') }
+      // The changes are sent again either way, so the list the user sees is never stale.
+      return void deps.copyBack(chat, message.path, message.files, message.overwrite === true).then(
+        async (copied) => reply({ ...answer, changes: await deps.copyChanges(chat, message.path), copied }),
+        async (error) => {
+          const changes = await deps.copyChanges(chat, message.path).catch(() => [])
+          reply({ ...answer, changes, error: messageOf(error) })
+        },
+      )
+    },
     'context.write': (message) => {
       if (typeof message.text !== 'string') throw new Error('Context text is missing')
       return deps.writeContext(chatFor(message.chatId), message.text)

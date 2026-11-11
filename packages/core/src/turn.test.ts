@@ -39,6 +39,13 @@ describe('sessionPlaceOf', () => {
     ])
   })
 
+  it("tells the session where each folder's copy is, and reaches the copy rather than the folder", () => {
+    const place = sessionPlaceOf({ ...plan, places: [{ path: '/notes', mode: 'copy' }] }, [], { '/notes': '/work/s/notes' })
+    expect(place.extraDirs).toEqual([])
+    expect(place.instructions).toContain('- /notes: Work on a copy. Write only in your copy at /work/s/notes;')
+    expect(place.folderPlaces).toEqual([{ path: '/notes', mode: 'copy', where: '/work/s/notes' }])
+  })
+
   it('keeps the plan sandbox read-only paths after the checkouts', () => {
     const sandbox = { ...plan.sandbox, readOnly: ['/notes/.ssh'] }
     const place = sessionPlaceOf({ ...plan, sandbox }, [checkout('/repo', '/work/s/repo')])

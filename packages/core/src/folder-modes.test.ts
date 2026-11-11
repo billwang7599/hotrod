@@ -89,6 +89,14 @@ describe('what agents are told', () => {
         { path: '/b', mode: 'readOnly' },
       ]),
     ).toEqual(['- /a: Edit in place. Write in it directly.', '- /b: Read only.'])
+    expect(folderLines([{ path: '/c', mode: 'copy', where: '/work/c' }])).toEqual([
+      '- /c: Work on a copy. Write only in your copy at /work/c; the user copies your changes back.',
+    ])
+  })
+
+  it('points an edit in a folder set to Work on a copy at the copy', () => {
+    const message = refusedEditWhy('/c/x', '/work', [{ path: '/c', mode: 'copy', where: '/work/c' }], 'ADVICE')
+    expect(message).toBe('Kothar lets this chat edit only inside /work. /c is set to Work on a copy: edit your copy at /work/c instead.')
   })
 
   it('names the mode setting when an edit in a Read only folder is refused', () => {

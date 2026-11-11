@@ -43,6 +43,7 @@ import { lockGarage } from './garage-lock.ts'
 import { openFolderAccess, realOr } from './folder-access.ts'
 import { openFileLinks } from './file-links.ts'
 import { openCheckouts } from './checkouts.ts'
+import { openFolderCopies } from './folder-copies.ts'
 import { placeAccess, placesOf } from './folder-modes.ts'
 import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
@@ -550,6 +551,8 @@ function assembleCore(options: {
     sandboxIn,
     attachmentsDirOf: (chat) => attachmentsDirOf(chat),
     checkoutOf: (space, folder, workDir, sandboxed) => checkoutOf(space, folder, workDir, sandboxed),
+    copyOf: (space, folder, workDir) =>
+      copies.copyOf(space, folder, workDir).finally(() => broadcastContext(space)),
     viewOf,
     instructionPartsOf,
   })
@@ -718,21 +721,35 @@ function assembleCore(options: {
     if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
   }
 
-  const { contextDefaults, contextItems, addContext, removeContext, setContext, setFolderMode, writeContext, setContextDefault, writeInstructions } =
-    openContext({
-      garage,
-      home,
-      settings,
-      saveSettings,
-      broadcast,
-      parentOf,
-      chainOf,
-      familyOf,
-      checkActive,
-      saveChat,
-      updateChat,
-      extensionsOf,
-    })
+  const copies = openFolderCopies<Chat>({ now })
+  const {
+    contextDefaults,
+    contextItems,
+    addContext,
+    removeContext,
+    setContext,
+    setFolderMode,
+    copyChanges,
+    copyBack,
+    broadcastContext,
+    writeContext,
+    setContextDefault,
+    writeInstructions,
+  } = openContext({
+    garage,
+    home,
+    settings,
+    saveSettings,
+    broadcast,
+    parentOf,
+    chainOf,
+    familyOf,
+    checkActive,
+    saveChat,
+    updateChat,
+    extensionsOf,
+    copies,
+  })
 
 
   const attachmentsDirOf = (chat: Chat) => join(chat.dir, 'attachments')
@@ -823,6 +840,8 @@ function assembleCore(options: {
     removeContext,
     setContext,
     setFolderMode,
+    copyChanges,
+    copyBack,
     writeContext,
     writeInstructions,
     setContextDefault,

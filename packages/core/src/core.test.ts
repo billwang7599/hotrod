@@ -3354,6 +3354,44 @@ describe('context', () => {
     expect(JSON.parse(readFileSync(chatFile(t, app.id), 'utf8')).folderModes).toEqual({})
   })
 
+  it('copies a folder set to Work on a copy before the session, points the agent there, and copies changes back', async () => {
+    const t = setup(textScript)
+    const docs = folderWith('')
+    writeFileSync(join(docs, 'a.md'), 'A')
+    const app = createChat(t, { name: 'App', folders: [docs] })
+    t.handle({ type: 'context.folderMode', chatId: app.id, path: docs, mode: 'copy' })
+    const copy = join(t.garage, 'work', app.id, basename(docs))
+    const options = await sessionOf(t, app.id)
+    expect(readFileSync(join(copy, 'a.md'), 'utf8')).toBe('A')
+    expect(options.extraDirs ?? []).not.toContain(docs)
+    expect(options.instructions).toContain(`- ${docs}: Work on a copy. Write only in your copy at ${copy};`)
+    expect(itemsOf(t, app.id).find((i) => i.path === docs)).toMatchObject({ mode: 'copy', copy })
+
+    writeFileSync(join(copy, 'a.md'), 'A2')
+    const answer = async (message: Parameters<typeof t.handle>[0]) => {
+      const before = t.replies.length
+      t.handle(message)
+      await until(() => t.replies.slice(before).some((r) => r.type === 'context.copyChanges'))
+      return t.replies.slice(before).find((r) => r.type === 'context.copyChanges')
+    }
+    expect(await answer({ type: 'context.copyChanges', chatId: app.id, path: docs })).toEqual({
+      type: 'context.copyChanges',
+      chatId: app.id,
+      path: docs,
+      changes: [{ path: 'a.md', kind: 'changed' }],
+    })
+    expect(await answer({ type: 'context.copyBack', chatId: app.id, path: docs, files: ['a.md'] })).toMatchObject({
+      changes: [],
+      copied: 1,
+    })
+    expect(readFileSync(join(docs, 'a.md'), 'utf8')).toBe('A2')
+
+    t.handle({ type: 'context.folderMode', chatId: app.id, path: docs, mode: 'edit' })
+    expect(await answer({ type: 'context.copyChanges', chatId: app.id, path: docs })).toMatchObject({
+      error: expect.stringContaining('set to Work on a copy'),
+    })
+  })
+
   it("keeps git folders on their checkout and never lets a folder holding Kothar's data be written", () => {
     const t = setup(textScript)
     const repo = folderWith('')

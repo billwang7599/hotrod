@@ -20,6 +20,7 @@ import {
   type Worktree,
 } from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
+import { CopyRow } from './folder-copies.tsx'
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
@@ -109,6 +110,12 @@ const FOLDER_MODE_UI: Record<FolderMode, { label: string; about: string }> = {
     about:
       'Agents write in this folder itself, still sandboxed. Logins, keys and .env files in it still ask. It has no ' +
       'git history, so an edit can’t be undone.',
+  },
+  copy: {
+    label: 'Work on a copy',
+    about:
+      'Kothar copies this folder into the work folder once, and agents write only there. You review their changes ' +
+      'and copy them back. node_modules and .git folders inside it aren’t copied.',
   },
   readOnly: { label: 'Read only', about: 'Agents read this folder but never write in it.' },
 }
@@ -320,6 +327,9 @@ function PathCard({
         />
       </div>
       {folder && item.mode && <FolderModeRow item={item} mode={item.mode} chatId={chatId} disabled={readOnly} send={send} />}
+      {folder && item.mode === 'copy' && !item.blocked && (
+        <CopyRow chatId={chatId} path={item.path} copy={item.copy} disabled={readOnly} send={send} />
+      )}
       {folder && <TerminalError chatId={chatId} path={item.path} errors={terminalErrors} />}
       <CardBody collapsed={collapsed} className="gap-4 pt-4">
         {paths.context && (

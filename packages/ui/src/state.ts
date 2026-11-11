@@ -497,6 +497,8 @@ export function reduce(state: State, action: Action): State {
     case 'extension.panel.show':
     // Kept by the file link cache, so a check's answer re-renders only the messages that asked.
     case 'files.checked':
+    // Kept by Copy changes back (folder-copies.tsx), the only one that reads it.
+    case 'context.copyChanges':
       return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }

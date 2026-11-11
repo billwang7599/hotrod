@@ -9,7 +9,7 @@ import { within } from './util.ts'
 export const HOLDS_KOTHAR_DATA = "it holds Kothar's own data, which agents never write"
 export const MODE_SETTING = "its mode in the chat's Context panel"
 
-/** A folder of a turn as its session sees it: a mode, or a git folder's checkout (where: the checkout's path). */
+/** A folder of a turn as its session sees it: a mode, or a git folder's checkout. where: the checkout's or copy's path. */
 export type FolderPlace = { path: string; mode: FolderMode | 'checkout'; where?: string; blocked?: string }
 
 /** A folder's mode for a chat, from its chain nearest first: its own pick, else the nearest chat above's. */
@@ -49,7 +49,7 @@ export const placeAccess = (places: FolderPlace[], home: string, garage: string)
 export const placeOf = (target: string, places: FolderPlace[]) =>
   places.find((place) => within(target, realPath(place.path)))
 
-const MODE_LINES: Record<FolderMode, string> = {
+const MODE_LINES: Record<Exclude<FolderMode, 'copy'>, string> = {
   edit: 'Edit in place. Write in it directly.',
   readOnly: 'Read only.',
 }
@@ -59,7 +59,9 @@ export const folderLines = (places: FolderPlace[]) =>
   places.map(({ path, mode, where, blocked }) =>
     mode === 'checkout'
       ? `- ${path}: checked out at ${where}. Write in the checkout.`
-      : `- ${path}: ${blocked ? `Read only, since ${blocked}.` : MODE_LINES[mode]}`,
+      : mode === 'copy'
+        ? `- ${path}: Work on a copy. Write only in your copy at ${where}; the user copies your changes back.`
+        : `- ${path}: ${blocked ? `Read only, since ${blocked}.` : MODE_LINES[mode]}`,
   )
 
 /** Why an edit at target (an absolute real path) is refused, naming the setting that would allow it. */
@@ -69,6 +71,7 @@ export const refusedEditWhy = (target: string, workDir: string, places: FolderPl
   const place = placeOf(target, places)
   if (!place) return `${allowed} ${advice}`
   if (place.mode === 'checkout') return `${allowed} ${place.path} is a git folder: edit its checkout at ${place.where} instead.`
+  if (place.mode === 'copy') return `${allowed} ${place.path} is set to Work on a copy: edit your copy at ${place.where} instead.`
   if (place.blocked) return `${allowed} ${place.path} can't be edited, since ${place.blocked}.`
   return `${allowed} ${place.path} is set to Read only. Work in the work folder, or ask the user to set the folder to Edit in place (${MODE_SETTING}).`
 }

@@ -25,6 +25,7 @@ import { createNotifier, deliver } from './notifications.ts'
 import { folderName, folderOf, initialState, reduce, type Action, storedFlag } from './state.ts'
 import { dockedPanels, MIN_WINDOW_PX, storedColumn } from './layout.ts'
 import { fileLinksChecked } from './file-links.tsx'
+import { receiveCopyChanges } from './folder-copies.tsx'
 import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'
@@ -95,6 +96,7 @@ function App() {
         notifier.observe(action, { ...seenRef.current, looking: isLooking() })
       }
       if (action.type === 'files.checked') return fileLinksChecked(action)
+      if (action.type === 'context.copyChanges') return receiveCopyChanges(action)
       if (action.type === 'extension.panel.show') {
         const { chats, selectedId } = seenRef.current
         if (!showsFor(chats, selectedId, action.chatId)) return

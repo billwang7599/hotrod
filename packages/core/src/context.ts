@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'no
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
+import type { openFolderCopies } from './folder-copies.ts'
 import { blockedWhy, checkMode, modeOf } from './folder-modes.ts'
 import { GLOBAL_CONTEXT, looksBinary, type ChatInfo, type ContextItem, type ContextSection, type CoreMessage } from './shared.ts'
 import { readBytes } from './util.ts'
@@ -23,10 +24,12 @@ export type ContextDeps = {
   updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
   /** The chat's panels and commands, sent again with its context: a setup or item can change them. */
   extensionsOf: (chat: Chat) => CoreMessage
+  /** The copies of folders set to Work on a copy, kept per space (folder-copies.ts). */
+  copies: Pick<ReturnType<typeof openFolderCopies<Chat>>, 'savedCopy' | 'changesOf' | 'copyBack'>
 }
 
 export function openContext(deps: ContextDeps) {
-  const { garage, home, settings, saveSettings, broadcast, parentOf, chainOf, familyOf, checkActive, saveChat, updateChat, extensionsOf } =
+  const { garage, home, settings, saveSettings, broadcast, parentOf, chainOf, familyOf, checkActive, saveChat, updateChat, extensionsOf, copies } =
     deps
   const globalAgentsFile = join(garage, 'AGENTS.md')
   const contextDefaults = (): Record<ContextSection, boolean> => ({
@@ -70,7 +73,24 @@ export function openContext(deps: ContextDeps) {
     if (existsSync(join(path, '.git'))) return { git: true as const }
     const blocked = blockedWhy(path, garage)
     const nearestFirst = chainOf(chat).map((c) => c.info).reverse()
-    return { mode: modeOf(nearestFirst, path), ...(blocked && { blocked }) }
+    const mode = modeOf(nearestFirst, path)
+    const copy = mode === 'copy' ? copies.savedCopy(chainOf(chat)[0]!, path)?.path : undefined
+    return { mode, ...(blocked && { blocked }), ...(copy && { copy }) }
+  }
+
+  // The folder, if it's one of the chat's folders set to Work on a copy.
+  const copiedFolder = (chat: Chat, path: unknown) => {
+    const item = contextItems(chat).find((i) => i.section === 'folders' && i.path === path)
+    if (item?.mode !== 'copy' || item.blocked) throw new Error(`${path} isn't one of this chat's folders set to Work on a copy`)
+    return item.path
+  }
+
+  const copyChanges = async (chat: Chat, path: unknown) =>
+    (await copies.changesOf(chainOf(chat)[0]!, copiedFolder(chat, path))).changes
+
+  const copyBack = async (chat: Chat, path: unknown, files: unknown, overwrite: boolean) => {
+    checkActive(chat)
+    return copies.copyBack(chainOf(chat)[0]!, copiedFolder(chat, path), files, overwrite)
   }
 
   // The mode is the chat's own, so its workers take it too; a chat below can pick another.
@@ -151,6 +171,9 @@ export function openContext(deps: ContextDeps) {
     removeContext,
     setContext,
     setFolderMode,
+    copyChanges,
+    copyBack,
+    broadcastContext,
     writeContext,
     setContextDefault,
     writeInstructions: (text: string) => writeAgentsFile(globalAgentsFile, text),

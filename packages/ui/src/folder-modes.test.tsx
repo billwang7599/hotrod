@@ -7,6 +7,7 @@ import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { ClientMessage, ContextItem } from '@kothar/core/shared'
 import { ContextPanel } from './context-panel.tsx'
+import { receiveCopyChanges } from './folder-copies.tsx'
 import type { ChatView } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -103,4 +104,42 @@ test('an archived chat shows the mode but cannot change it', () => {
   render([{ ...docs, mode: 'readOnly' }], true)
   expect(modeSelect('/docs')!.textContent).toBe('Read only')
   expect(modeSelect('/docs')!.disabled).toBe(true)
+})
+
+test('a folder set to Work on a copy shows its copy, and Copy changes back copies the picked files', () => {
+  render([{ ...docs, mode: 'copy', copy: '/work/space/docs' }])
+  expect(host.textContent).toContain('Copy at /work/space/docs')
+  act(() => [...host.querySelectorAll('button')].find((b) => b.textContent === 'Copy changes back…')!.click())
+  expect(sent).toEqual([{ type: 'context.copyChanges', chatId: 'space', path: '/docs' }])
+  act(() =>
+    receiveCopyChanges({
+      type: 'context.copyChanges',
+      chatId: 'space',
+      path: '/docs',
+      changes: [
+        { path: 'a.md', kind: 'changed' },
+        { path: 'b.md', kind: 'changed', conflict: true },
+      ],
+    }),
+  )
+  const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+  const apply = () => [...dialog.querySelectorAll('button')].find((b) => b.textContent?.startsWith('Copy back'))!
+  expect(dialog.textContent).toContain('Original changed')
+  // A file whose original changed since starts unpicked.
+  expect(apply().textContent).toBe('Copy back 1 file')
+  const boxes = () => [...dialog.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+  act(() => boxes()[1]!.click())
+  expect(apply().disabled).toBe(true)
+  act(() => boxes()[2]!.click())
+  expect(apply().disabled).toBe(false)
+  act(() => apply().click())
+  expect(sent.at(-1)).toEqual({ type: 'context.copyBack', chatId: 'space', path: '/docs', files: ['a.md', 'b.md'], overwrite: true })
+  act(() => receiveCopyChanges({ type: 'context.copyChanges', chatId: 'space', path: '/docs', changes: [], copied: 2 }))
+  expect(dialog.textContent).toContain('Copied back 2 files.')
+})
+
+test('a copy not made yet says when it will be, with nothing to copy back', () => {
+  render([{ ...docs, mode: 'copy' }])
+  expect(host.textContent).toContain('Copied into the work folder at the chat’s next message')
+  expect([...host.querySelectorAll('button')].some((b) => b.textContent === 'Copy changes back…')).toBe(false)
 })

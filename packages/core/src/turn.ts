@@ -102,6 +102,7 @@ export type TurnDeps = {
   sandboxIn: (dir: string) => Sandbox | undefined
   attachmentsDirOf: (chat: Chat) => string
   checkoutOf: (space: Chat, folder: string, workDir: string, sandboxed: boolean) => Promise<Checkout>
+  copyOf: (space: Chat, folder: string, workDir: string) => Promise<{ path: string }>
 
   // What a session is told
   viewOf: (chat: Chat, messages: MemoryMessage[], tools: boolean) => string
@@ -134,8 +135,14 @@ export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts' | 'fol
 // Where a turn's session runs and what it's told, once its checkouts are ready: the first checkout (else the work
 // folder) as its folder, the other folders it may reach, its sandbox widened by the checkouts' git folders, and every
 // attached folder's place for the permission answers.
-export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'places' | 'sandbox'>, checkouts: Checkout[]) {
-  const { workDir, parts, attachmentsDir, folders, repos, places, sandbox } = plan
+// copies: each folder set to Work on a copy, by the path of its copy in the work folder.
+export function sessionPlaceOf(
+  plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'places' | 'sandbox'>,
+  checkouts: Checkout[],
+  copies: Record<string, string> = {},
+) {
+  const { workDir, parts, attachmentsDir, folders, repos, sandbox } = plan
+  const places = plan.places.map((place) => (place.mode === 'copy' ? { ...place, where: copies[place.path] } : place))
   const cwd = checkouts[0]?.worktree.path ?? workDir
   const instructions = buildInstructions({
     ...parts,
@@ -146,7 +153,7 @@ export function sessionPlaceOf(plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attac
   const extraDirs = [
     ...(cwd === workDir ? [] : [workDir]),
     ...checkouts.slice(1).map((c) => c.worktree.path),
-    ...folders.filter((folder) => !repos.includes(folder)),
+    ...folders.filter((folder) => !repos.includes(folder) && copies[folder] === undefined),
     ...(existsSync(attachmentsDir) ? [attachmentsDir] : []),
   ]
   const readOnly = [...(sandbox?.readOnly ?? []), ...checkouts.flatMap((c) => c.readOnly)]
@@ -200,6 +207,7 @@ export function openTurns(deps: TurnDeps) {
     sandboxIn,
     attachmentsDirOf,
     checkoutOf,
+    copyOf,
     viewOf,
   } = deps
   const allStoppedWaiters: (() => void)[] = []
@@ -475,20 +483,24 @@ export function openTurns(deps: TurnDeps) {
     mkdirSync(workDir, { recursive: true })
     const { prompt, zoomable } = logTurn(chat, adapter, { text, attachments, reports, continuation })
     const plan: TurnPlan = { run, adapter, prompt, zoomable, attachments, ...planSession(chat, workDir, zoomable, editAnywhere) }
-    const start = (checkouts: Checkout[]) => openSession(chat, plan, checkouts)
-    const { repos, sandbox } = plan
+    const start = (checkouts: Checkout[], copies: Record<string, string> = {}) => openSession(chat, plan, checkouts, copies)
+    const { repos, places, sandbox } = plan
+    const copied = places.filter((place) => place.mode === 'copy').map((place) => place.path)
 
     const turn = ++chat.turns
-    if (!repos.length) return start([])
+    if (!repos.length && !copied.length) return start([])
     const space = chainOf(chat)[0]!
     const stillStarting = () => chat.turns === turn && chat.status === 'running' && !chat.session && !isQuitting()
-    const checkOut = async () => {
+    // Checkouts and copies are made once, before the first session that needs them, and kept.
+    const prepare = async () => {
       const checkouts: Checkout[] = []
       for (const folder of repos) checkouts.push(await checkoutOf(space, folder, workDir, sandbox !== undefined))
-      return checkouts
+      const copies: Record<string, string> = {}
+      for (const folder of copied) copies[folder] = (await copyOf(space, folder, workDir)).path
+      return { checkouts, copies }
     }
-    checkOut().then(
-      (checkouts) => stillStarting() && start(checkouts),
+    prepare().then(
+      ({ checkouts, copies }) => stillStarting() && start(checkouts, copies),
       (error) => {
         if (!stillStarting()) return
         endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: messageOf(error) })
@@ -556,9 +568,9 @@ export function openTurns(deps: TurnDeps) {
 
   // The turn's session, once its checkouts are ready: where it runs (sessionPlaceOf), how each event it sends is handled
   // (sessionEvents), and starting it. Its session and tools live here, one per turn.
-  const openSession = (chat: Chat, plan: TurnPlan, checkouts: Checkout[]) => {
+  const openSession = (chat: Chat, plan: TurnPlan, checkouts: Checkout[], copies: Record<string, string>) => {
     const { run, adapter, prompt, zoomable, attachments, workDir, readFiles } = plan
-    const { cwd, instructions, extraDirs, jail, folderPlaces } = sessionPlaceOf(plan, checkouts)
+    const { cwd, instructions, extraDirs, jail, folderPlaces } = sessionPlaceOf(plan, checkouts, copies)
     // Read at each request, so a switch flipped mid-turn counts at once. Folder modes count from the next turn, as
     // the sandbox does.
     const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage, folders: folderPlaces })
