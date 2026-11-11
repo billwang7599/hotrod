@@ -17,11 +17,12 @@ import type {
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups, WORKER_SETUP } from './setups.ts'
-import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
+import { openKotharMcp, WORKERS_EXTENSION, summaryOf } from './kothar-mcp.ts'
 import { messagesOf, windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
 import { readApprovals } from './approvals.ts'
-import { type CommunityEntry, type CommunityExtension, type ExtensionHook, stubOf, valuesOf } from './extensions.ts'
+import { type CommunityExtension, type ExtensionHook, valuesOf } from './extensions.ts'
+import { gatherExtensions } from './community-load.ts'
 import {
   bySpaceOrder,
   editsAnywhere,
@@ -135,57 +136,10 @@ function openLockedCore(options: {
     }
   }
   checkEngine(defaultEngine)
-  const extensions = [...(options.extensions ?? []), WORKERS_EXTENSION]
-  const extensionChats = extensions.flatMap((extension) => (extension.chats ?? []).map((chat) => ({ ...chat, extension })))
-  const toolNames = [...CORE_TOOL_NAMES, ...extensions.flatMap((extension) => (extension.tools ?? []).map((tool) => tool.name))]
-  for (const [what, ids] of [
-    ['extensions', extensions.map((extension) => extension.id)],
-    ['extension chats', extensionChats.map((chat) => chat.id)],
-    ['tools', toolNames],
-  ] as const) {
-    const twin = ids.find((id, i) => ids.indexOf(id) !== i)
-    if (twin !== undefined) throw new Error(`Two ${what} have the id "${twin}"`)
-  }
-  // Community extensions come after the built-in ones. One that clashes with a built-in extension's id isn't listed;
-  // one whose tool or chat is taken doesn't run. An extension that didn't load (off, or broken) is listed as a stub
-  // with no hooks, so it can be turned on or off; it runs from the next start.
-  const builtInIds = new Set(extensions.map((extension) => extension.id))
-  const community = new Map<string, CommunityEntry>()
-  // The community extensions this run imported (whether or not they loaded), by id with their name, and those installed
-  // again since; what's pending a restart is worked out from these and the settings.
-  const imported = new Map<string, string>()
-  const reinstalled = new Set<string>()
-  for (const found of options.community ?? []) {
-    const { manifest, item } = found
-    if (builtInIds.has(manifest.id) || community.has(manifest.id)) {
-      console.error(`Skipped the community extension "${manifest.id}": an extension already has that id`)
-      continue
-    }
-    let { extension, loadError } = found
-    if (extension || loadError) imported.set(manifest.id, manifest.name)
-    const clash =
-      extension &&
-      ((extension.tools ?? []).map((tool) => tool.name).find((name) => toolNames.includes(name)) ??
-        (extension.chats ?? []).map((chat) => chat.id).find((id) => extensionChats.some((chat) => chat.id === id)))
-    if (clash) {
-      loadError = `its tool or chat "${clash}" is already taken`
-      extension = undefined
-    }
-    community.set(manifest.id, {
-      manifest,
-      item,
-      ...(extension && { running: manifest.version }),
-      ...(loadError && { loadError }),
-      ...(found.held && { held: found.held }),
-    })
-    if (!extension) {
-      extensions.push(stubOf(manifest))
-      continue
-    }
-    extensions.push(extension)
-    extensionChats.push(...(extension.chats ?? []).map((chat) => ({ ...chat, extension: extension! })))
-    toolNames.push(...(extension.tools ?? []).map((tool) => tool.name))
-  }
+  const { extensions, extensionChats, builtInIds, community, imported, reinstalled } = gatherExtensions(
+    [...(options.extensions ?? []), WORKERS_EXTENSION],
+    options.community ?? [],
+  )
   const marketplace = openMarketplace({
     garage,
     url: options.marketplaceUrl,
