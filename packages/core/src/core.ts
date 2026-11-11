@@ -4,10 +4,8 @@ import {
   mkdirSync,
   realpathSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type {
   ChatDetail,
@@ -34,7 +32,6 @@ import { type CommunityExtension, type ExtensionHook, panelTabOf, valuesOf } fro
 import {
   bySpaceOrder,
   editsAnywhere,
-  PERMISSION_SWITCHES,
   settingProblem,
   type Adapter,
   type ChatEntry,
@@ -59,17 +56,17 @@ import {
   type RestartState,
   type Setup,
   type SetupState,
-  type WorkFolder,
 } from './shared.ts'
 import { openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
+import { openAppSettings } from './settings.ts'
 import { checkPath, openContext } from './context.ts'
 import type { Chat } from './chat.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
-import { AUTOMATIC, MAC_TERMINALS, openTerminal } from './terminal.ts'
+import { openTerminal } from './terminal.ts'
 import { openCheckouts } from './checkouts.ts'
 import { openExtensionHosts } from './extension-host.ts'
 import { appendEntry, openSettings, quitMidTurn, readChat, saveChatFile, storedChatIds } from './chat-store.ts'
@@ -363,29 +360,25 @@ function openLockedCore(options: {
     !(chat && setupOf(chat)?.extensionsOff?.includes(extension.id) && !ownsChat(extension, chat))
   const chatsDir = join(garage, 'chats')
   mkdirSync(chatsDir, { recursive: true })
-  const defaultWorkFolder = join(garage, 'work')
-  const workFolder = (): WorkFolder => ({
-    ...(settings.workFolder && { path: settings.workFolder }),
-    defaultPath: defaultWorkFolder,
+  const { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal } = openAppSettings({
+    garage,
+    settings,
+    saveSettings,
+    broadcast,
     canSandbox: machine.canSandbox,
-    ...(settings.terminal && settings.terminal !== AUTOMATIC && { terminal: settings.terminal }),
-    ...(process.platform === 'darwin' && { terminals: MAC_TERMINALS.map(({ id, name }) => ({ id, name })) }),
-    ...Object.fromEntries(
-      PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
-    ),
+    adapterFor,
+    checkEngine,
+    checkEnabled,
+    offersModel,
+    engineInfo,
+    models,
+    followModels: () => followModels(),
+    startExtensions: () => startExtensions(),
   })
   const sandboxIn = (dir: string) => (machine.canSandbox ? { writable: [dir], tmpDir: join(dir, '.tmp') } : undefined)
   const chats = new Map<string, Chat>()
   let quitting = false
   let mcpUrl: string | undefined
-  const setEngineEnabled = (engine: string, enabled: boolean) => {
-    checkEngine(engine)
-    settings.engines = { ...settings.engines, [engine]: enabled }
-    saveSettings()
-    broadcast({ type: 'engine.updated', engine: engineInfo(engine) })
-    models.settle()
-    followModels()
-  }
   // A chat that follows its model list sits on the engine the list picks, so its engine, accounts and notes are right;
   // any chat whose run changed shows it.
   const followModels = () => {
@@ -478,40 +471,6 @@ function openLockedCore(options: {
     const extensionValues = { ...space.info.extensionValues, [extension.id]: { ...space.info.extensionValues?.[extension.id], [key]: value } }
     updateChat(space, { extensionValues })
     refreshExtension(extension)
-  }
-  const setMemory = (engine?: string, model?: string) => {
-    if (engine === undefined && model !== undefined) throw new Error('Pick the engine for summaries with its model')
-    if (engine !== undefined) {
-      checkEngine(engine)
-      if (!adapterFor(engine)?.complete) throw new Error(`Engine "${engine}" can't write summaries`)
-      checkEnabled(engine)
-      if (model !== undefined && !offersModel(engine, model)) {
-        throw new Error(`Engine "${engine}" offers no model "${model}"`)
-      }
-    }
-    settings.memory = { ...(engine && { engine }), ...(model && { model }) }
-    saveSettings()
-    broadcast({ type: 'memory.updated', memory: settings.memory })
-  }
-  // A work folder holding the garage would let an agent write chat.json, settings and accounts.
-  const checkWorkFolder = (path: string) => {
-    const reachesGarage = within(garage, path) || (within(path, garage) && path !== defaultWorkFolder)
-    if (reachesGarage || [homedir(), realpathSync(homedir())].includes(path)) {
-      throw new Error(`${path} can't be the work folder: pick a folder of its own, outside Kothar's`)
-    }
-  }
-  const setWorkFolder = (rawPath: unknown) => {
-    const typed = String(rawPath ?? '').trim().replace(/^~(?=$|\/)/, homedir())
-    if (!isAbsolute(typed)) throw new Error(`The path must be absolute: ${rawPath}`)
-    checkWorkFolder(resolve(typed))
-    if (existsSync(typed) && !statSync(typed).isDirectory()) throw new Error(`Not a folder: ${rawPath}`)
-    mkdirSync(typed, { recursive: true })
-    const path = realpathSync(typed)
-    checkWorkFolder(path)
-    settings.workFolder = path
-    saveSettings()
-    broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
-    startExtensions()
   }
   const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
@@ -1473,8 +1432,6 @@ function openLockedCore(options: {
   })
 
   const handle = openProtocol({
-    settings,
-    saveSettings,
     broadcast,
     isQuitting: () => quitting,
     restart: options.restart,
@@ -1502,7 +1459,8 @@ function openLockedCore(options: {
     setContextDefault,
     setEngineEnabled,
     setWorkFolder,
-    workFolder,
+    setPermissionDefault,
+    setTerminal,
     setMemory,
     models,
     followModels,

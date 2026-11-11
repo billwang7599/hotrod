@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import type { Extension, ExtensionAction, ExtensionUse, ExtensionWaitAnswer } from '@kothar/extension-api'
 import type { openAccounts } from './accounts.ts'
 import type { Chat } from './chat.ts'
-import { readJson, type Settings } from './chat-store.ts'
+import { readJson } from './chat-store.ts'
 import { pageOf } from './history.ts'
 import type { openMarketplace } from './marketplace.ts'
 import type { openModels } from './models.ts'
@@ -13,7 +13,6 @@ import { searchChats } from './search.ts'
 import {
   CONTEXT_SECTIONS,
   isUnread,
-  PERMISSION_SWITCHES,
   type ChatInfo,
   type ClientMessage,
   type ContextItem,
@@ -21,12 +20,10 @@ import {
   type CoreMessage,
   type MarketKind,
   type NewChat,
-  type PermissionSwitch,
   type QueuedMessage,
   type Setup,
-  type WorkFolder,
 } from './shared.ts'
-import { AUTOMATIC, MAC_TERMINALS } from './terminal.ts'
+import { checkSwitch } from './settings.ts'
 import { messageOf } from './util.ts'
 
 export type Reply = (message: CoreMessage) => void
@@ -35,8 +32,6 @@ type Marketplace = ReturnType<typeof openMarketplace>
 type Accounts = ReturnType<typeof openAccounts>
 
 export type ProtocolDeps = {
-  settings: Settings
-  saveSettings: () => void
   broadcast: (message: CoreMessage) => void
   isQuitting: () => boolean
   /** Restarts Kothar; without it, the user restarts it themselves. */
@@ -73,7 +68,8 @@ export type ProtocolDeps = {
   // Settings
   setEngineEnabled: (engine: string, enabled: boolean) => void
   setWorkFolder: (path: unknown) => void
-  workFolder: () => WorkFolder
+  setPermissionDefault: (name: unknown, enabled: boolean) => void
+  setTerminal: (terminal: unknown) => void
   setMemory: (engine?: string, model?: string) => void
   models: Pick<ReturnType<typeof openModels>, 'setList'>
   followModels: () => void
@@ -116,7 +112,7 @@ type Handlers = {
 }
 
 export function openProtocol(deps: ProtocolDeps) {
-  const { settings, saveSettings, broadcast, chatFor, marketplace, accounts } = deps
+  const { broadcast, chatFor, marketplace, accounts } = deps
 
   const handlers = {
     // Chats
@@ -225,21 +221,8 @@ export function openProtocol(deps: ProtocolDeps) {
     // Settings
     'engine.setEnabled': (message) => deps.setEngineEnabled(String(message.engine), message.enabled === true),
     'workFolder.set': (message) => deps.setWorkFolder(message.path),
-    'permission.setDefault': (message) => {
-      settings[checkSwitch(message.name)] = message.enabled === true
-      saveSettings()
-      return broadcast({ type: 'workFolder.updated', workFolder: deps.workFolder() })
-    },
-    'terminal.set': (message) => {
-      const terminal = String(message.terminal ?? '')
-      if (terminal !== AUTOMATIC && !MAC_TERMINALS.some((t) => t.id === terminal)) {
-        throw new Error(`Unknown terminal "${terminal}"`)
-      }
-      if (terminal === AUTOMATIC) delete settings.terminal
-      else settings.terminal = terminal
-      saveSettings()
-      return broadcast({ type: 'workFolder.updated', workFolder: deps.workFolder() })
-    },
+    'permission.setDefault': (message) => deps.setPermissionDefault(message.name, message.enabled === true),
+    'terminal.set': (message) => deps.setTerminal(message.terminal),
     'memory.set': (message) => deps.setMemory(optionalText(message.engine), optionalText(message.model)),
     'models.setList': (message) => {
       deps.models.setList(message.role, message.models)
@@ -374,10 +357,6 @@ export function openProtocol(deps: ProtocolDeps) {
 
 const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
 
-const checkSwitch = (name: unknown) => {
-  if (!PERMISSION_SWITCHES.includes(name as PermissionSwitch)) throw new Error(`Unknown permission switch "${name}"`)
-  return name as PermissionSwitch
-}
 
 const addable = (section: unknown) => {
   if (section !== 'folders' && section !== 'files') {
