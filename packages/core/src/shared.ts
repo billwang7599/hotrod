@@ -473,6 +473,18 @@ export type PanelTab = {
   sidebar?: boolean
 }
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
+// An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.
+export type MessageActionInfo = {
+  extension: string
+  id: string
+  label: string
+  activeLabel?: string
+  icon: 'pin' | 'bookmark' | 'star'
+  hint?: string
+  activeHint?: string
+  kinds: ('user' | 'work' | 'talk')[]
+  marked: number[]
+}
 
 export type ChatState = ChatInfo & {
   run?: Run
@@ -517,6 +529,8 @@ export type ClientMessage =
   | { type: 'extension.panel.action'; chatId: string; extension: string; panel: string; action: ExtensionAction }
   | { type: 'extension.space.set'; chatId: string; extension: string; key: string; value: string | number | boolean }
   | { type: 'extension.command'; chatId: string; extension: string; command: string }
+  // One of an extension's message actions, on the message at entry in the chat's log.
+  | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
@@ -634,7 +648,14 @@ export type CoreMessage =
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.waits'; chatId: string; waits: ChatWait[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
-  | { type: 'chat.extensions'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  | {
+      type: 'chat.extensions'
+      chatId: string
+      panels: PanelTab[]
+      commands: CommandInfo[]
+      // Absent: none.
+      messageActions?: MessageActionInfo[]
+    }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }

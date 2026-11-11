@@ -31,6 +31,7 @@ after it cover each group in detail.
 | `instructions` | Text added to each session's instructions | [Tools, MCP servers, instructions and memory](agents.md#instructions) |
 | `panels` | Tabs in the right sidebar | [Panels and commands](panels.md#panels) |
 | `commands` | Actions in a chat's General tab | [Panels and commands](panels.md#commands) |
+| `messageActions` | Buttons on each message in the transcript, such as Pin | [Panels and commands](panels.md#message-actions) |
 | `chats` | Chats of the extension's own | [Chats](#chats), below |
 | `memory` | What each session sees of its chat's history | [Tools, MCP servers, instructions and memory](agents.md#memory) |
 | `onStart`, `onStop` | Start and stop background work | [Events and hooks](events.md#background-work) |

@@ -2,7 +2,7 @@
 import type { ExtensionAction, ExtensionNoteCard } from '@kothar/extension-api'
 import { Fragment, useContext, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import type { ClientMessage, ContextItem } from '@kothar/core/shared'
+import type { ClientMessage, ContextItem, MessageActionInfo } from '@kothar/core/shared'
 import { Chevron, CopyBlock, CopyButton, ErrorText, MOTION } from '../controls.tsx'
 import { LinkedText, NoFileLinks } from '../file-links.tsx'
 import { Markdown } from '../markdown.tsx'
@@ -11,6 +11,7 @@ import { useReveal, type RevealFrom } from '../smooth.ts'
 import { openReportCard, reportCardKey, ReportsOpen, useReportCardChoice } from '../steps.ts'
 import type { ChatView, Item } from '../state.ts'
 import { SentAttachment } from './attachments.tsx'
+import { MessageActions } from './message-actions.tsx'
 import { ASSISTANT, BODY, Dots, Row } from './parts.tsx'
 import { PermissionPrompt, PILL, Verdict, VERDICT_COLORS, VERDICTS } from './permission.tsx'
 import { QuestionCard } from './question.tsx'
@@ -51,6 +52,8 @@ type ItemProps = {
   openPanel?: (extension: string, panel: string, action?: ExtensionAction) => void
   // The item's index in the chat, for choices kept per item (a report card's fold).
   at?: number
+  // Extensions' buttons on messages, such as Pin.
+  messageActions?: readonly MessageActionInfo[]
 }
 
 /** An extension's note drawn as a card, such as an artifact an agent made: click to open it in the extension's panel. */
@@ -90,7 +93,9 @@ function NoteCard({ card, text, open }: { card: ExtensionNoteCard; text: string;
 type Report = Extract<Item, { kind: 'report' }>
 
 /** A worker's report: unfolded or folded by the chat's setting until the user opens or closes it. */
-function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; at?: number; open?: () => void }) {
+type ReportProps = { item: Report; chatId: string; at?: number; open?: () => void; actions?: ReactNode }
+
+function ReportCard({ item, chatId, at, open, actions }: ReportProps) {
   const opens = useContext(ReportsOpen)
   const key = at === undefined ? undefined : reportCardKey(chatId, at)
   const chosen = useReportCardChoice(key ?? '')
@@ -123,6 +128,7 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
           Worker {name} reported
           {item.error && <span> · ended early: {item.error}</span>}
         </span>
+        {actions}
         {!shown && (
           <button type="button" className="min-w-0 truncate text-left text-faint hover:text-muted" onClick={toggle}>
             {preview}
@@ -147,9 +153,29 @@ function ReportCard({ item, chatId, at, open }: { item: Report; chatId: string; 
 export function ItemView(props: ItemProps) {
   const { item, chat, contextItems, connected, send, space, select, openChat, revealOf, openPanel } = props
   const promptProps = { chat, connected, send, space, select }
+  const actions = (kind: 'user' | 'work' | 'talk', entry?: number, className?: string) =>
+    props.messageActions?.length ? (
+      <MessageActions
+        actions={props.messageActions}
+        chatId={chat.id}
+        entry={entry}
+        kind={kind}
+        connected={connected}
+        send={send}
+        className={className}
+      />
+    ) : null
   switch (item.kind) {
     case 'report':
-      return <ReportCard item={item} chatId={chat.id} at={props.at} open={openChat?.(item.chatId)} />
+      return (
+        <ReportCard
+          item={item}
+          chatId={chat.id}
+          at={props.at}
+          open={openChat?.(item.chatId)}
+          actions={actions('work', item.entry)}
+        />
+      )
     case 'user':
       return (
         <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
@@ -170,6 +196,7 @@ export function ItemView(props: ItemProps) {
           {item.midTurn && <span className="text-xs text-faint">Sent mid-turn</span>}
           {item.text && (
             <div className="flex items-start gap-6">
+              {actions('user', item.entry, 'mt-6')}
               <CopyButton label="Copy message" text={item.text} className="mt-6" />
               <div className="min-w-0 rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
                 <UserText text={item.text} />
@@ -180,11 +207,15 @@ export function ItemView(props: ItemProps) {
       )
     case 'text':
       return (
-        <div className="flex flex-col gap-2">
-          <Revealed item={item} revealOf={revealOf}>
-            {(text) => <Markdown className={ASSISTANT} text={text} />}
-          </Revealed>
-          <CopyButton label="Copy reply" text={item.text} className="self-start" />
+        // Wraps so Copy and the extensions' buttons sit in one line under the reply, all children of what's hovered.
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
+          <div className="w-full min-w-0">
+            <Revealed item={item} revealOf={revealOf}>
+              {(text) => <Markdown className={ASSISTANT} text={text} />}
+            </Revealed>
+          </div>
+          <CopyButton label="Copy reply" text={item.text} />
+          {actions('talk', item.entry)}
         </div>
       )
     case 'error':

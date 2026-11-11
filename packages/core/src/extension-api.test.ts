@@ -764,6 +764,107 @@ describe('panels and commands', () => {
   })
 })
 
+describe('message actions', () => {
+  const view = (text: string): ExtensionView => ({ type: 'text', text })
+  // A pin-like action: it keeps the entries it was run on, marks them, and draws a panel listing them.
+  function marking(extra: Partial<Extension> = {}) {
+    const marked = new Set<number>()
+    const ran: unknown[] = []
+    const t = start({
+      messageActions: [
+        {
+          id: 'mark',
+          label: 'Mark',
+          activeLabel: 'Unmark',
+          icon: 'pin',
+          hint: 'Mark this message',
+          marked: () => [...marked],
+          run(message) {
+            ran.push(message)
+            if (!marked.delete(message.entry)) marked.add(message.entry)
+          },
+        },
+        { id: 'replies', label: 'Star', icon: 'star', kinds: ['talk'], run: () => {} },
+      ],
+      panels: [{ id: 'marks', title: 'Marks', render: () => view([...marked].join(',')) }],
+      ...extra,
+    })
+    const listed = () => t.messages.findLast((m) => m.type === 'chat.extensions')
+    return { ...t, ran, listed }
+  }
+
+  it('list a chat’s message actions with the entries each marks', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    t.handle({ type: 'context.get', chatId: id })
+    expect(t.replies.findLast((m) => m.type === 'chat.extensions')).toMatchObject({
+      messageActions: [
+        { extension: 'test', id: 'mark', label: 'Mark', activeLabel: 'Unmark', icon: 'pin', hint: 'Mark this message', kinds: ['user', 'work', 'talk'], marked: [] },
+        { extension: 'test', id: 'replies', label: 'Star', icon: 'star', kinds: ['talk'], marked: [] },
+      ],
+    })
+  })
+
+  it('run on a message by its log entry, then mark it and draw open panels again', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    const reply = entries.findIndex((e) => e.type === 'text.completed')
+    t.handle({ type: 'extension.panel.get', chatId: id, extension: 'test', panel: 'marks' })
+    await t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action: 'mark', entry: reply })
+    expect(t.ran).toEqual([{ entry: reply, kind: 'talk', at: expect.any(String), text: 'Done' }])
+    expect(t.listed()).toMatchObject({ chatId: id, messageActions: [{ id: 'mark', marked: [reply] }, { id: 'replies' }] })
+    await until(() => t.messages.some((m) => m.type === 'extension.panel' && m.view?.type === 'text' && m.view.text === String(reply)))
+    await t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action: 'mark', entry: asked })
+    expect(t.ran.at(-1)).toMatchObject({ entry: asked, kind: 'user', text: 'Hello' })
+    expect(t.listed()).toMatchObject({ messageActions: [{ marked: [reply, asked] }, { id: 'replies' }] })
+  })
+
+  it('refuse an entry that isn’t a message, a kind the action isn’t offered on, and an unknown action', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    const notMessage = entries.findIndex((e) => e.type === 'turn.started' || e.type === 'turn.completed')
+    const act = (action: string, entry: number) =>
+      t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action, entry }) as unknown as Promise<void>
+    await expect(act('mark', notMessage)).rejects.toThrow('That message isn’t in the chat')
+    await expect(act('mark', 999)).rejects.toThrow('That message isn’t in the chat')
+    await expect(act('replies', asked)).rejects.toThrow('Star isn’t offered on that message')
+    await expect(act('nope', asked)).rejects.toThrow('Test extension has no message action "nope" here')
+    expect(t.ran).toEqual([])
+  })
+
+  it('leave out a broken action and show its error, keeping the others', () => {
+    const errors: string[] = []
+    const t = marking({
+      messageActions: [
+        { id: 'bad', label: 'Bad', icon: 'nope' as 'pin', run: () => {} },
+        { id: 'ok', label: 'Fine', icon: 'bookmark', marked: () => [3, 3, -1, 1.5, 'x' as unknown as number], run: () => {} },
+      ],
+    })
+    t.core.onMessage((m) => void (m.type === 'error' && errors.push(m.message)))
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    expect(t.replies.findLast((m) => m.type === 'chat.extensions')).toMatchObject({ messageActions: [{ id: 'ok', marked: [3] }] })
+  })
+
+  it('give a message by entry through the host', async () => {
+    const t = withHost()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    expect(t.host().message(id, asked)).toEqual({ entry: asked, kind: 'user', at: expect.any(String), text: 'Hello' })
+    expect(t.host().message(id, asked + 1)).toBeUndefined()
+    expect(t.host().message(id, -1)).toBeUndefined()
+  })
+})
+
 describe('space settings', () => {
   const spaceSettings: Extension['spaceSettings'] = [
     { key: 'auto', label: 'Run on its own', type: 'boolean', default: false },

@@ -3,6 +3,7 @@ import { AnimatePresence, m } from 'motion/react'
 import { Dialog } from 'radix-ui'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, Hint, MOTION } from './controls.tsx'
+import { revealLater } from './search.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
 import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
 import { clampPopup, type PopupSize, POPUP_DEFAULT_WIDTH, POPUP_MIN, POPUP_MARGIN, POPUP_STEP, POPUP_TOP, resetPopupSize, setPopupSize, usePopupSize } from './popup-size.ts'
@@ -203,6 +204,10 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
                     }
                     set={(key, value) => send({ type: 'extension.space.set', chatId, extension: panel.extension, key, value })}
                     reveal={(path) => send({ type: 'reveal', path })}
+                  showMessage={(entry) => {
+                      revealLater({ chatId, entry })
+                      openPopup(null)
+                    }}
                   />
                 </div>
                 {!size.max && <PopupResizer id={tabId!} title={panel.title} box={content} saved={size} />}

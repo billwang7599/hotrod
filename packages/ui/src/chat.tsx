@@ -10,6 +10,7 @@ import {
   type ClientMessage,
   type ContextItem,
   type ContextSection,
+  type MessageActionInfo,
   type EngineAccounts,
   type EngineInfo,
   type ModelLists,
@@ -29,13 +30,14 @@ import {
   foldSteps,
   modelMenu,
   type ChatView,
+  type Item,
   type State,
   lineOf,
   waitsBelow,
   workerRequests,
 } from './state.ts'
 import { columnSlider } from './layout.ts'
-import { localNth, revealIn, takeReveal, type Reveal } from './search.tsx'
+import { localNth, onReveal, revealIn, takeReveal, type Reveal } from './search.tsx'
 import { ArchivedNote, EngineNote, QueuedMessages, Waits, WorkerBar, WorkerRequests } from './chat/above-composer.tsx'
 import { ChatHeader } from './chat/header.tsx'
 import { useRevealNumbers } from './chat/reveal-numbers.ts'
@@ -97,6 +99,8 @@ type ChatProps = {
 }
 
 const NO_PANELS: PanelTab[] = []
+const NO_ACTIONS: MessageActionInfo[] = []
+const entryOf = (item: Item) => ('entry' in item && item.entry !== undefined ? [item.entry] : [])
 
 export function Chat(props: ChatProps) {
   const { chat, folder, engines, accounts, connected, send, openSettings, workFolder } = props
@@ -192,6 +196,9 @@ export function Chat(props: ChatProps) {
   // Opened from a message match in the search palette: show that message instead of the bottom, loading the history
   // back to it first if it's older than what's loaded.
   const revealing = useRef<Reveal | null>(null)
+  // A reveal for the chat that's open already (a message an extension's panel quotes, say) shows at once.
+  const [revealAsked, setRevealAsked] = useState(0)
+  useEffect(() => onReveal(() => setRevealAsked((n) => n + 1)), [])
   useLayoutEffect(() => {
     const reveal = revealing.current ?? takeReveal(chat.id)
     revealing.current = null
@@ -203,12 +210,14 @@ export function Chat(props: ChatProps) {
       return latest.current.loadOlder(reveal.entry)
     }
     const { entries } = latest.current
-    const nth = reveal.entry === undefined || !entries ? reveal.nth : localNth(entries, from, reveal)
-    if (!revealIn(list, { ...reveal, nth })) return
+    const shown = !('query' in reveal)
+      ? reveal
+      : { ...reveal, nth: reveal.entry === undefined || !entries ? reveal.nth : localNth(entries, from, reveal) }
+    if (!revealIn(list, shown)) return
     following.current = false
     measure()
     // The view is keyed by chat id (main.tsx); it runs again when an older page it asked for lands.
-  }, [chat.id, from])
+  }, [chat.id, from, revealAsked])
 
   useLayoutEffect(() => {
     const list = listRef.current
@@ -286,6 +295,7 @@ export function Chat(props: ChatProps) {
     contextItems: props.contextItems,
     connected,
     send,
+    messageActions: props.extensionUi?.chatId === chat.id ? (props.extensionUi.messageActions ?? NO_ACTIONS) : NO_ACTIONS,
     ...(viewOnly && space !== chat && { space, select: props.select }),
     openChat: (chatId: string) => {
       const select = props.select
@@ -369,10 +379,14 @@ export function Chat(props: ChatProps) {
                   const kind = 'item' in row ? row.item.kind : 'steps'
                   // Keyed from the first item loaded, so a page added in front leaves the rows already shown alone.
                   const at = row.at - shift
+                  const logged = 'steps' in row ? row.steps.flatMap(entryOf) : []
                   return (
                     <m.div
                       key={kind === 'steps' ? `steps-${at}` : at}
                       data-item-kind={kind}
+                      data-entry={'item' in row ? entryOf(row.item)[0] : undefined}
+                      data-entry-first={logged[0]}
+                      data-entry-last={logged.at(-1)}
                       className={`group/item flex flex-col rounded transition-colors duration-700 data-revealed:bg-accent/10 ${kind === 'user' || kind === 'report' ? 'mt-14 first:mt-0' : ''}`}
                       initial={kind !== 'text' && at >= 0 && enter}
                       animate={MOTION.rise.animate}

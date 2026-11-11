@@ -153,7 +153,8 @@ const COPY_RESULTS = {
   copied: { text: 'Copied', color: 'text-green' },
   failed: { text: "Couldn't copy", color: 'text-red' },
 }
-const COPY_REVEAL = 'opacity-0 [:hover>&]:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
+// Shown while its parent is hovered or it has keyboard focus, and always on touch screens.
+export const COPY_REVEAL = 'opacity-0 [:hover>&]:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
 
 type CopyButtonProps = { text: string; label: string; className?: string }
 

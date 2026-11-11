@@ -126,6 +126,31 @@ export type ChatEntry = { at: string } & (
 export type MessageKind = 'user' | 'work' | 'talk' | 'tool' | 'echo' | 'note'
 export type MemoryMessage = { id: number; kind: MessageKind; at: string; text: string }
 
+// A message the transcript draws on its own: the user's (user), a worker's report (work) or the agent's reply (talk).
+// entry: where it is in the chat's log (host.read's index), which never changes, since the log only grows. text as
+// logged: a report without the line Kothar adds for the agent.
+export type ExtensionMessage = { entry: number; kind: 'user' | 'work' | 'talk'; at: string; text: string }
+
+// A small button on each message in the transcript, beside Copy: shown on hover or keyboard focus. A message marked()
+// lists keeps the button in view with its icon filled, as a mark (such as a pin), and offers activeLabel instead.
+export type ExtensionMessageAction = {
+  id: string
+  // Such as "Pin", and "Unpin" on a marked message; both default to label.
+  label: string
+  activeLabel?: string
+  icon: 'pin' | 'bookmark' | 'star'
+  hint?: string
+  activeHint?: string
+  // The kinds of message it's offered on; all three without it.
+  kinds?: ExtensionMessage['kind'][]
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  // The messages of the chat to mark, by entry. Called when the chat's extensions draw: on opening it, after a run and
+  // on host.refresh; keep it quick.
+  marked?(chat: ChatDetail, context: ExtensionContext): number[]
+  // Then the chat's extensions draw again (marks and open panels), as on host.refresh(chat.id).
+  run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
+
 // A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
@@ -278,6 +303,8 @@ export type ExtensionHost = {
   now(): Date
   // The chat's log as numbered memory messages, oldest first.
   messages(chatId: string): MemoryMessage[]
+  // The message at entry in the chat's log, if a message is there (see ExtensionMessage).
+  message(chatId: string, entry: number): ExtensionMessage | undefined
   // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
   // folder. Rejects when no engine that is on can make one.
   complete(request: CompletionRequest): Promise<string>
@@ -589,6 +616,11 @@ export type ExtensionView =
       theme?: boolean
       libraries?: HtmlLibrary[]
     }
+  // A message of the panel's chat, quoted: author and time (ISO, shown short) above its text, drawn as Markdown and
+  // folded with Show more when long. Clicking the author line scrolls the chat to the message at entry (loading older
+  // history first if needed) and flashes it. buttons: small views beside the author line, such as an Unpin button or
+  // a copy.
+  | { type: 'message'; entry: number; author: string; at: string; text: string; buttons?: ExtensionView[]; hint?: string }
   // A button that copies text, such as a file's contents, to the clipboard.
   | { type: 'copy'; text: string; label: string; hint?: string }
   // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
@@ -689,6 +721,7 @@ export type Extension = {
   setup?: ExtensionSetup
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
+  messageActions?: ExtensionMessageAction[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
   // that. For background work, such as summarizing chats.
@@ -769,6 +802,7 @@ export type ExtensionUse =
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
+  // commands, messageActions
   | 'commands'
   // settings, spaceSettings, migrateSettings, settingsView, onSettingsChanged, and host.spaceValues, setSpaceValue
   | 'settings'
@@ -776,7 +810,7 @@ export type ExtensionUse =
   | 'setup'
   // memory, and host.chatStorage, everyChatStorage
   | 'memory'
-  // Host calls: chats, chat, read, space, messages, reaches, reachable.
+  // Host calls: chats, chat, read, space, messages, message, reaches, reachable.
   | 'readChats'
   // send, createChat, retry, continue, interrupt, addContextFile
   | 'sendMessages'

@@ -21,6 +21,7 @@ import type {
 import type { openAccounts } from './accounts.ts'
 import { guardHost } from './extensions.ts'
 import { messagesOf } from './memory.ts'
+import { messageAt } from './message-actions.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
 import { within } from './util.ts'
 
@@ -253,6 +254,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       home: deps.home,
       now: () => deps.now(),
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
+      message: (chatId, entry) => messageAt(chatFor(chatId).entries, Number(entry)),
       complete: (request) => deps.complete(request),
       refresh: (chatId) => deps.refresh(extension, chatId),
       showPanel(chatId, panel) {

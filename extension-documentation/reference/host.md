@@ -35,6 +35,7 @@ Built-in extensions aren't held to `uses`.
 | `chat(chatId)` | One chat, or `undefined`. |
 | `read(chatId, { last? })` | The chat's log, oldest first, as [`ChatEntry`](types.md#log-entries)s. `last` keeps only the newest entries. |
 | `messages(chatId)` | The chat's log as numbered [memory messages](types.md#memory-messages), oldest first. |
+| `message(chatId, entry)` | The message at `entry` in the chat's log (the index in `read`), as an [`ExtensionMessage`](panels.md#message-actions), or `undefined` when that entry isn't the user's message, a worker's report or a reply. |
 | `space(chatId)` | The space the chat is in (the chat itself for a space), as a [`SpaceDetail`](types.md#spaces), or `undefined`. |
 | `reaches(callerId, chatId)` | Whether chat `callerId` may reach chat `chatId`. See below. |
 | `reachable(callerId)` | Every chat `callerId` may reach, by the same rule. |

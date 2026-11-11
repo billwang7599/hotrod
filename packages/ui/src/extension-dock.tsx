@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { m } from 'motion/react'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, Hint, TRANSITION } from './controls.tsx'
+import { revealLater } from './search.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
 import { extensionTabId, openDock, useDock, widenDock } from './panel-tab.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
@@ -145,6 +146,7 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
           act={(action) => send({ type: 'extension.panel.action', chatId, extension: panel.extension, panel: panel.id, action })}
           set={(key, value) => send({ type: 'extension.space.set', chatId, extension: panel.extension, key, value })}
           reveal={(path) => send({ type: 'reveal', path })}
+        showMessage={(entry) => revealLater({ chatId, entry })}
         />
       </div>
     </m.aside>

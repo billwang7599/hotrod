@@ -48,6 +48,12 @@ type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
 // The extension whose view this is, so its pictures can be read from its own folders (an editor's files).
 const ExtensionIdContext = createContext<string | undefined>(undefined)
+// Scrolls the panel's chat to the message at an entry of its log, for a quoted message.
+type ShowMessage = (entry: number) => void
+const ShowMessageContext = createContext<ShowMessage | undefined>(undefined)
+// A quoted message longer than this is folded, with Show more.
+const FOLD_CHARS = 600
+const FOLD_LINES = 10
 
 // The desktop app's picker for a button's pick, or undefined in a browser tab, where there's none. A file picker gives
 // the first file chosen.
@@ -637,6 +643,8 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           onError={node.errors ? (error) => act({ name: node.errors!, value: error }) : undefined}
         />
       )
+    case 'message':
+      return <QuotedMessage node={node} act={act} />
     case 'copy':
       return <CopyText node={node} />
     case 'download': {
@@ -650,6 +658,78 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
     default:
       return null
   }
+}
+
+const shortTime = (iso: string) => {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return { short: '', full: '' }
+  const today = date.toDateString() === new Date().toDateString()
+  const short = today
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return { short, full: date.toLocaleString() }
+}
+
+// Clicks on the message's own controls (a link, a code block's Copy, its buttons) or a text selection don't jump.
+const jumpsFrom = (target: EventTarget) =>
+  !(target as Element).closest?.('a,button,input,textarea,[role="button"]') && !window.getSelection()?.toString()
+
+function QuotedMessage({ node, act }: { node: Extract<ExtensionView, { type: 'message' }>; act: Act }) {
+  const show = useContext(ShowMessageContext)
+  const [open, setOpen] = useState(false)
+  const long = node.text.length > FOLD_CHARS || node.text.split('\n').length > FOLD_LINES
+  const folded = long && !open
+  const { short, full } = shortTime(node.at)
+  const head = (
+    <span className="flex min-w-0 items-baseline gap-6">
+      <span className="min-w-0 truncate font-medium">{node.author}</span>
+      {short && (
+        <time className="shrink-0 text-xs text-faint" dateTime={node.at} title={full}>
+          {short}
+        </time>
+      )}
+    </span>
+  )
+  return (
+    <article
+      className={`flex min-w-0 flex-col gap-4 rounded-lg border bg-bg px-10 py-8 ${show ? 'cursor-pointer transition-colors hover:bg-hover' : ''}`}
+      data-quoted-entry={node.entry}
+      onClick={show ? (e) => jumpsFrom(e.target) && show(node.entry) : undefined}
+    >
+      <div className="flex min-w-0 items-center gap-4">
+        {show ? (
+          <Hint text={node.hint ?? 'Show in the chat'} align="start">
+            <button
+              type="button"
+              className="-mx-4 flex min-w-0 flex-1 rounded px-4 text-left"
+              aria-label={`Show ${node.author}'s message${short ? ` from ${short}` : ''} in the chat`}
+              onClick={() => show(node.entry)}
+            >
+              {head}
+            </button>
+          </Hint>
+        ) : (
+          <div className="flex min-w-0 flex-1">{head}</div>
+        )}
+        {node.buttons?.map((child, i) => (
+          <Node key={i} node={child} act={act} />
+        ))}
+      </div>
+      <div className={folded ? 'relative max-h-[180px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]' : ''}>
+        <Markdown text={node.text} className="min-w-0 text-body leading-[1.6]" />
+      </div>
+      {long && (
+        <button
+          type="button"
+          className="w-fit rounded text-sm text-accent hover:underline"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </article>
+  )
 }
 
 function Editor({ node, act }: { node: Extract<ExtensionView, { type: 'editor' }>; act: Act }) {
@@ -675,16 +755,27 @@ function Editor({ node, act }: { node: Extract<ExtensionView, { type: 'editor' }
 }
 
 // extension: whose view it is, for pictures read from its folders (an editor's files); without it they stay text.
-type ViewerProps = { view?: ExtensionView; error?: string; act: Act; set?: SetValue; reveal?: Reveal; extension?: string }
+// showMessage: scrolls the chat the panel belongs to, for a quoted message; without it, a quote doesn't jump.
+type ViewerProps = {
+  view?: ExtensionView
+  error?: string
+  act: Act
+  set?: SetValue
+  reveal?: Reveal
+  extension?: string
+  showMessage?: ShowMessage
+}
 
-export function ExtensionViewer({ view, error, act, set, reveal, extension }: ViewerProps) {
+export function ExtensionViewer({ view, error, act, set, reveal, extension, showMessage }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>
   return (
     <SetValueContext.Provider value={set}>
       <RevealContext.Provider value={reveal}>
         <ExtensionIdContext.Provider value={extension}>
-          <Node node={view} act={act} />
+          <ShowMessageContext.Provider value={showMessage}>
+            <Node node={view} act={act} />
+          </ShowMessageContext.Provider>
         </ExtensionIdContext.Provider>
       </RevealContext.Provider>
     </SetValueContext.Provider>

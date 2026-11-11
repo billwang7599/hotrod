@@ -1299,3 +1299,35 @@ test("an extension's card stays in view when the turn folds, and opens its panel
   expect(currentDock().open).toBe('extension:artifacts/artifacts')
   act(() => openDock(null))
 })
+
+test("extensions' message actions sit beside Copy on messages with a log entry, marked ones stay shown", () => {
+  const sent: ClientMessage[] = []
+  const messageActions = [
+    { extension: 'pins', id: 'pin', label: 'Pin', activeLabel: 'Unpin', icon: 'pin' as const, kinds: ['user' as const, 'work' as const, 'talk' as const], marked: [2] },
+    { extension: 'stars', id: 'star', label: 'Star', icon: 'star' as const, kinds: ['talk' as const], marked: [] },
+  ]
+  render(
+    {
+      items: [
+        { kind: 'user', text: 'Hi', entry: 0 },
+        { kind: 'text', text: 'Hello', entry: 2 },
+        { kind: 'user', text: 'Not logged yet' },
+      ],
+    },
+    (m) => sent.push(m),
+    { extensionUi: { chatId: 'c1', panels: [], commands: [], messageActions } },
+  )
+  const buttons = (selector: string) => [...container.querySelectorAll<HTMLButtonElement>(`[data-entry="${selector}"] [data-message-action]`)]
+  expect(buttons('0').map((b) => b.getAttribute('aria-label'))).toEqual(['Pin'])
+  expect(buttons('2').map((b) => b.getAttribute('aria-label'))).toEqual(['Unpin', 'Star'])
+  // Marked: in view without hover, and filled.
+  const unpin = buttons('2')[0]!
+  expect(unpin.dataset.marked).toBe('true')
+  expect(unpin.className).not.toContain('opacity-0')
+  expect(buttons('0')[0]!.className).toContain('opacity-0')
+  expect(buttons('0')[0]!.className).toContain('focus-visible:opacity-100')
+  // A message the view can't place in the log gets none.
+  expect(container.querySelectorAll('[data-message-action]')).toHaveLength(3)
+  act(() => unpin.click())
+  expect(sent.at(-1)).toEqual({ type: 'extension.message.action', chatId: 'c1', extension: 'pins', action: 'pin', entry: 2 })
+})

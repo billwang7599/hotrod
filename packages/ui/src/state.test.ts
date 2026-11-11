@@ -100,8 +100,8 @@ describe('reduce', () => {
     expect(state.selectedId).toBe(MAIN_CHAT_ID)
     expect(state.chats.map((c) => c.id)).toEqual([MAIN_CHAT_ID, 'a', 'b'])
     expect(items(state)).toEqual([
-      { kind: 'user', text: 'hi' },
-      { kind: 'text', text: 'hello' },
+      { kind: 'user', text: 'hi', entry: 0 },
+      { kind: 'text', text: 'hello', entry: 2 },
       { kind: 'tool', toolId: 't1', name: 'Bash', summary: 'ls', state: 'done', output: 'README.md' },
       { kind: 'error', text: 'boom' },
     ])
@@ -125,7 +125,7 @@ describe('reduce', () => {
     expect(items(state).slice(-3)).toEqual([
       { kind: 'error', text: 'Out of usage' },
       { kind: 'note', text: 'Switched to Spare' },
-      { kind: 'user', text: 'hi' },
+      { kind: 'user', text: 'hi', entry: 7 },
     ])
     const rows = foldSteps(items(state), false)
     expect(rows.slice(1).map((row) => ('steps' in row ? 'steps' : row.item.kind))).toEqual([
@@ -165,10 +165,10 @@ describe('reduce', () => {
       entry('a', { type: 'worker.report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' }),
     )
     expect(items(state)).toEqual([
-      { kind: 'report', chatId: 'ab12cd34', name: 'Docs', text: 'Found **it**\n\nin the FAQ' },
-      { kind: 'report', chatId: 'ab12cd35', name: 'Lint', text: '', error: 'Interrupted' },
-      { kind: 'user', text: '[subagent: not a report' },
-      { kind: 'report', chatId: 'ab12cd36', name: 'Tests', text: 'All green' },
+      { kind: 'report', chatId: 'ab12cd34', name: 'Docs', text: 'Found **it**\n\nin the FAQ', entry: 0 },
+      { kind: 'report', chatId: 'ab12cd35', name: 'Lint', text: '', error: 'Interrupted', entry: 1 },
+      { kind: 'user', text: '[subagent: not a report', entry: 2 },
+      { kind: 'report', chatId: 'ab12cd36', name: 'Tests', text: 'All green', entry: 3 },
     ])
   })
 
@@ -352,7 +352,7 @@ describe('reduce', () => {
     )
     expect(items(state, 'a')).toEqual([])
     expect(items(state, 'b')).toEqual([
-      { kind: 'user', text: 'hi' },
+      { kind: 'user', text: 'hi', entry: 0 },
       { kind: 'tool', toolId: 't1', name: 'Edit', summary: '/x', state: 'error', output: 'no such file' },
     ])
   })
@@ -364,7 +364,7 @@ describe('reduce', () => {
       entry('a', { type: 'user.message', text: '', attachments: [shot] }),
       { type: 'chat.queue', chatId: 'a', queue: [{ id: 'q1', text: 'next', attachments: [shot] }] },
     )
-    expect(items(state)).toEqual([{ kind: 'user', text: '', attachments: [shot] }])
+    expect(items(state)).toEqual([{ kind: 'user', text: '', attachments: [shot], entry: 0 }])
     expect(state.chats[1]?.queue).toEqual([{ id: 'q1', text: 'next', attachments: [shot] }])
   })
 
@@ -377,7 +377,7 @@ describe('reduce', () => {
     expect(streaming.chats[0]!.draft).toBe('Hello')
     const done = reduce(streaming, entry('a', { type: 'text.completed', text: 'Hello' }))
     expect(done.chats[0]!.draft).toBe('')
-    expect(items(done)).toEqual([{ kind: 'text', text: 'Hello' }])
+    expect(items(done)).toEqual([{ kind: 'text', text: 'Hello', entry: 0 }])
   })
 
   it('continues the draft a snapshot carries from a turn in progress', () => {
@@ -461,7 +461,7 @@ describe('reduce', () => {
       entry('a', { type: 'question.asked', requestId: 'q1', toolId: 't1', questions }),
     )
     const question = { kind: 'question', requestId: 'q1', questions, outcome: 'pending' }
-    expect(items(asked)).toEqual([{ kind: 'user', text: 'go' }, question])
+    expect(items(asked)).toEqual([{ kind: 'user', text: 'go', entry: 0 }, question])
 
     const answers = { 'Format?': ['Summary'] }
     const done = [
@@ -469,7 +469,7 @@ describe('reduce', () => {
       entry('a', { type: 'tool.completed', toolId: 't1', output: 'answered', isError: false }),
       entry('a', { type: 'turn.completed' }),
     ].reduce(reduce, asked)
-    expect(items(done)).toEqual([{ kind: 'user', text: 'go' }, { ...question, outcome: 'answered', answers }])
+    expect(items(done)).toEqual([{ kind: 'user', text: 'go', entry: 0 }, { ...question, outcome: 'answered', answers }])
 
     const skipped = reduce(asked, entry('a', { type: 'question.resolved', requestId: 'q1' }))
     expect(items(skipped)[1]).toEqual({ ...question, outcome: 'skipped' })

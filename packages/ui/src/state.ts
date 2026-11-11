@@ -12,6 +12,7 @@ import type {
   ChatState,
   ChatStatus,
   CommandInfo,
+  MessageActionInfo,
   ContextItem,
   ContextSection,
   CoreMessage,
@@ -41,10 +42,12 @@ export type Permission = {
   auto?: true
 }
 
+// entry: where a message (the user's, a report or a reply) is in the chat's log, for extensions' message actions and
+// jumps to it; absent when the view can't tell.
 export type Item =
-  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true }
-  | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
-  | { kind: 'text'; text: string }
+  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true; entry?: number }
+  | { kind: 'report'; chatId: string; name: string; text: string; error?: string; entry?: number }
+  | { kind: 'text'; text: string; entry?: number }
   | { kind: 'thinking'; text: string }
   | {
       kind: 'tool'
@@ -118,7 +121,7 @@ export type State = {
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's extension panels and commands, and the views of the panels it has opened (panelKey).
-  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[]; messageActions?: MessageActionInfo[] }
   panelViews: Record<string, { view?: ExtensionView; error?: string }>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
@@ -160,7 +163,9 @@ const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pendi
 const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
 const NO_REPLY = '(No reply)'
 
-function applyEntry(items: Item[], entry: Shown): Item[] {
+// logged: where the entry is in the chat's log.
+function applyEntry(items: Item[], entry: Shown, logged?: number): Item[] {
+  const at = logged === undefined ? {} : { entry: logged }
   switch (entry.type) {
     case 'thinking.shown': {
       const last = items.at(-1)
@@ -174,16 +179,19 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
       if (old) {
         const [, name, chatId, reply, error] = old as unknown as string[]
         const replyText = reply === NO_REPLY ? '' : reply!
-        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
+        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }), ...at }]
       }
-      return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
+      return [
+        ...items,
+        { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }), ...at },
+      ]
     }
     case 'worker.report': {
       const { chatId, name, text, error } = entry
-      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
+      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }), ...at }]
     }
     case 'text.completed':
-      return [...items, { kind: 'text', text: entry.text }]
+      return [...items, { kind: 'text', text: entry.text, ...at }]
     case 'tool.started':
       return [
         ...items,
@@ -265,9 +273,17 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
   }
 }
 
+const logged = (entries: readonly Shown[]) => entries.filter((e) => e.type !== 'thinking.shown').length
+
+// The items of the loaded entries, which start at `from` in the log; streamed thinking isn't in the log.
+function itemsOf(entries: readonly Shown[], from: number): Item[] {
+  let at = from
+  return entries.reduce<Item[]>((items, e) => (e.type === 'thinking.shown' ? applyEntry(items, e) : applyEntry(items, e, at++)), [])
+}
+
 const toView = ({ entries, from, ...chat }: ChatState): ChatView => ({
   ...chat,
-  items: entries.reduce(applyEntry, []),
+  items: itemsOf(entries, from ?? 0),
   entries,
   from: from ?? 0,
   shift: 0,
@@ -286,7 +302,7 @@ const withThinking = (entries: Shown[], text: string): Shown[] => {
 function withOlder(chat: ChatView, page: Extract<CoreMessage, { type: 'chat.history' }>): ChatView {
   if (page.before !== chat.from || page.from >= page.before) return chat
   const entries = [...page.entries, ...(chat.entries ?? [])]
-  const items = entries.reduce(applyEntry, [])
+  const items = itemsOf(entries, page.from)
   return { ...chat, entries, items, from: page.from, shift: (chat.shift ?? 0) + items.length - chat.items.length }
 }
 
@@ -397,7 +413,7 @@ export function reduce(state: State, action: Action): State {
     case 'chat.entry':
       return updateChat(state, action.chatId, (c) => ({
         ...c,
-        items: applyEntry(c.items, action.entry),
+        items: applyEntry(c.items, action.entry, c.entries && (c.from ?? 0) + logged(c.entries)),
         ...(c.entries && { entries: [...c.entries, action.entry] }),
         draft: endsText(action.entry) ? '' : c.draft,
       }))
@@ -424,8 +440,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, context: { chatId: action.chatId, items: action.items } }
     case 'chat.extensions': {
       if (action.chatId !== state.selectedId) return state
-      const { chatId, panels, commands } = action
-      return { ...state, extensionUi: { chatId, panels, commands } }
+      const { chatId, panels, commands, messageActions } = action
+      return { ...state, extensionUi: { chatId, panels, commands, ...(messageActions && { messageActions }) } }
     }
     case 'extension.panel': {
       if (action.chatId !== state.selectedId) return state

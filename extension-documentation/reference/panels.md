@@ -116,6 +116,7 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `search` | `action`, `key?`, `value?`, `placeholder?`, `label?` | A search box. As the user types, it sends `{ name: action, value: text }` after a short pause. What's typed stays as the panel redraws; a new `key` starts over at `value`. |
 | `editor` | `key`, `text`, `change`, `links?`, `tags?`, `label?`, `placeholder?`, `autofocus?` | A Markdown editor with live preview. See below. |
 | `html` | `html`, `label`, `web?`, `height?` | A page of HTML, such as a chart an agent made, in a sandboxed frame. See below. |
+| `message` | `entry`, `author`, `at`, `text`, `buttons?`, `hint?` | A message of the panel's chat, quoted: `author` and its time (`at`, ISO) above `text`, drawn as Markdown and folded with **Show more** when long. Clicking it scrolls the chat to the message at `entry` in its log (loading older history first) and flashes it. `buttons` are small views beside the author line, such as an Unpin button. |
 | `copy` | `text`, `label`, `hint?` | A button that copies `text` to the clipboard, such as a file's contents. |
 | `download` | `text`, `filename`, `label`, `mimeType?`, `hint?` | A button that saves `text` as a file through the browser's download (a save dialog in the desktop app). `mimeType` defaults to `text/plain`. |
 
@@ -281,3 +282,51 @@ export default summarize
 | `run(chat, context)` | Runs when the user clicks it. A throw or rejection shows as an error. |
 
 List `commands` in the manifest's `uses`. This example also calls `host.send`, so it lists `sendMessages` too.
+
+## Message actions
+
+`messageActions` adds a small button to each message in the transcript, beside **Copy**: the user's messages,
+workers' reports and the agent's replies. It shows on hover or keyboard focus. A message the action marks keeps the
+button in view, filled, as a mark (a pin, say), and the button then reads `activeLabel`.
+
+```ts
+const pins = new Set<number>()
+
+const pinMessages: Extension = {
+  id: 'pin-messages',
+  name: 'Pin messages',
+  description: 'Pin messages to find them again.',
+  enabledByDefault: false,
+  messageActions: [
+    {
+      id: 'pin',
+      label: 'Pin',
+      activeLabel: 'Unpin',
+      icon: 'pin',
+      marked: () => [...pins],
+      run(message) {
+        if (!pins.delete(message.entry)) pins.add(message.entry)
+      },
+    },
+  ],
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `label`, `activeLabel?` | The button's name, and its name on a marked message (defaults to `label`). |
+| `icon` | `pin`, `bookmark` or `star`. |
+| `hint?`, `activeHint?` | Shown on hover, unmarked and marked. |
+| `kinds?` | Which messages get it: `user`, `work` (a worker's report), `talk` (a reply). All three without it. |
+| `shown(chat, context)` | Optional. Whether this chat gets the action. |
+| `marked(chat, context)` | Optional. The entries of the chat's messages to mark. Asked when the chat's extensions draw: on opening it, after a run and on [`host.refresh`](host.md#refresh). Keep it quick. |
+| `run(message, chat, context)` | Runs on a click, with the message as an `ExtensionMessage`. Then the chat's marks and open panels draw again. |
+
+An `ExtensionMessage` is `{ entry, kind, at, text }`. `entry` is where the message is in the chat's log (its index in
+[`host.read`](host.md#reading-chats)), which never changes, since the log only grows, so it's the key to keep. Read a
+message again with [`host.message`](host.md#reading-chats), and quote one in a panel with a `message` view, which
+scrolls the chat to it when clicked.
+
+List `commands` in the manifest's `uses` for `messageActions`.
+

@@ -13,7 +13,8 @@ import type {
 } from '@kothar/extension-api'
 import type { Chat } from './chat.ts'
 import { panelTabOf } from './extensions.ts'
-import type { CommandInfo, CoreMessage, PanelTab } from './shared.ts'
+import { messageActionInfo, messageAt } from './message-actions.ts'
+import type { CommandInfo, CoreMessage, MessageActionInfo, PanelTab } from './shared.ts'
 import { messageOf } from './util.ts'
 
 export type PanelDeps = {
@@ -74,7 +75,18 @@ export function openPanels(deps: PanelDeps) {
         offeredBy(extension, c, chat) ? [{ extension: extension.id, id: c.id, label: c.label, ...(c.hint && { hint: c.hint }) }] : [],
       ),
     )
-    return { type: 'chat.extensions', chatId: chat.info.id, panels, commands }
+    const messageActions = on.flatMap((extension) =>
+      (extension.messageActions ?? []).flatMap((a): MessageActionInfo[] => {
+        if (!offeredBy(extension, a, chat)) return []
+        try {
+          return [messageActionInfo(extension.id, a, a.marked?.(detailOf(chat), contextOf(extension)))]
+        } catch (error) {
+          extensionError(extension, error)
+          return []
+        }
+      }),
+    )
+    return { type: 'chat.extensions', chatId: chat.info.id, panels, commands, ...(messageActions.length && { messageActions }) }
   }
   const openPanels = new Map<string, Set<string>>()
   const renders = new Map<string, number>()
@@ -171,9 +183,28 @@ export function openPanels(deps: PanelDeps) {
     if (!command || !offeredBy(extension, command, chat)) throw new Error(`${extension.name} has no command "${commandId}" here`)
     callExtension(extension, () => command.run(detailOf(chat), contextOf(extension)))
   }
+  // Runs one of an extension's message actions on a message, then draws the chat's extensions again (its marks and
+  // open panels).
+  const runMessageAction = async (chat: Chat, extensionId: unknown, actionId: unknown, entry: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
+    const action = extension.messageActions?.find((a) => a.id === actionId)
+    if (!action || !offeredBy(extension, action, chat)) throw new Error(`${extension.name} has no message action "${actionId}" here`)
+    const message = messageAt(chat.entries, Number(entry))
+    if (!message) throw new Error('That message isn’t in the chat')
+    if (action.kinds && !action.kinds.includes(message.kind)) throw new Error(`${action.label} isn’t offered on that message`)
+    try {
+      await action.run(message, detailOf(chat), contextOf(extension))
+    } catch (error) {
+      extensionError(extension, error)
+    }
+    if (chats.has(chat.info.id)) refreshExtension(extension, chat.info.id)
+  }
 
   return {
     extensionsOf,
+    runMessageAction,
     panelOf,
     openPanel,
     panelAction,

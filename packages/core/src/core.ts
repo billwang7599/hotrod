@@ -607,7 +607,7 @@ function assembleCore(options: {
   })
 
   // Extension panels and commands: which a chat gets, and the views of panels the UI has asked for.
-  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, forgetChat } =
+  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, runMessageAction, forgetChat } =
     openPanels({
       extensions,
       extensionFor,
@@ -863,6 +863,7 @@ function assembleCore(options: {
     panelAction,
     setSpaceValue,
     runCommand,
+    runMessageAction,
     answerWait,
     setExtensionEnabled,
     setExtensionValue,

@@ -25,6 +25,7 @@ import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
+import { revealLater } from './search.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
 import { SETUP_HINT } from './setups-page.tsx'
 import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
@@ -876,6 +877,10 @@ export function ContextPanel(props: ContextPanelProps) {
             act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}
             set={(key, value) => send({ type: 'extension.space.set', chatId, extension: extensionTab.extension, key, value })}
             reveal={(path) => send({ type: 'reveal', path })}
+          showMessage={(entry) => {
+              revealLater({ chatId, entry })
+              hide?.()
+            }}
           />
         )}
       </div>
