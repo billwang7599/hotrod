@@ -251,7 +251,7 @@ describe('codex adapter', () => {
     await s.pump()
     expect(s.sent('turn/interrupt')[0].params).toEqual({ threadId: expect.any(String), turnId: s.turnId })
     s.feed(2)
-    expect(s.events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+    expect(s.events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' })
 
     const early = startSession()
     early.session.prompt('hi')
@@ -353,7 +353,7 @@ describe('codex adapter', () => {
     s.session.prompt('hi')
     s.fake.exit(1, 'WARNING: could not create PATH aliases\nError: config failed\n')
     await s.pump()
-    expect(s.events).toEqual([{ type: 'turn.started' }, { type: 'session.ended', error: 'Error: config failed' }])
+    expect(s.events).toEqual([{ type: 'turn.started' }, { type: 'session.ended', error: 'Error: config failed', errorKind: 'other' }])
     const closed = startSession()
     closed.session.close()
     expect(closed.fake.state).toEqual({ stdinClosed: true, killed: true })

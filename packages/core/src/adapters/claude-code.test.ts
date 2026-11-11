@@ -357,10 +357,11 @@ describe('claudeCode adapter', () => {
       'to it. Run --model to pick a different model.'
     expect(events).toEqual([
       { type: 'turn.started' },
-      { type: 'turn.completed', error: message },
+      { type: 'turn.completed', error: message, errorKind: 'other' },
       {
         type: 'session.ended',
         error: 'starting\n[claude-code:unrecognized_model] {"model":"claude-nonexistent-9"}',
+        errorKind: 'other',
       },
     ])
   })
@@ -383,7 +384,7 @@ describe('claudeCode adapter', () => {
         message: "The account's 5-hour usage limit is reached",
         resetsAt: '2030-03-17T17:46:40.000Z',
       }
-      const ended = { type: 'turn.completed', error: "You've hit your 5-hour limit · resets 3pm" }
+      const ended = { type: 'turn.completed', error: "You've hit your 5-hour limit · resets 3pm", errorKind: 'rate_limit' }
       expect(events.slice(1)).toEqual([limit, ended])
 
       session.prompt('again')
@@ -416,7 +417,7 @@ describe('claudeCode adapter', () => {
   it('names the exit code when stderr is empty', () => {
     const { fake, events } = startSession()
     fake.exit(1)
-    expect(events).toEqual([{ type: 'session.ended', error: 'Claude Code exited with code 1' }])
+    expect(events).toEqual([{ type: 'session.ended', error: 'Claude Code exited with code 1', errorKind: 'other' }])
   })
 
   it('sends an interrupt and reports the turn as interrupted', () => {
@@ -425,7 +426,7 @@ describe('claudeCode adapter', () => {
     session.interrupt()
     expect(fake.sent()[1]).toMatchObject({ type: 'control_request', request: { subtype: 'interrupt' } })
     fake.stdout(fixture('interrupted'))
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' })
   })
 
   it('writes a steered message with a uuid and reports where the turn took it in', () => {

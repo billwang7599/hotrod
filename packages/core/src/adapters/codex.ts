@@ -13,6 +13,20 @@ import {
 import { onJsonLines } from './jsonl.ts'
 import { rpcClient } from './rpc.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
+import { type EngineErrors, withKind } from './error-kind.ts'
+
+// Codex's own wording (0.167): reqwest's "error sending request", hyper's DNS and TCP errors, an SSE stream cut off;
+// but a content filter ending the stream isn't the connection's fault.
+export const CODEX_ERRORS: EngineErrors = {
+  network: new RegExp(
+    [
+      'error sending request|dns error|tcp connect error|idle timeout (?:waiting|sending)|stream closed before',
+      'stream ended (?:without|before)|websocket (?:closed|error)|http2 request did not get a response',
+    ].join('|'),
+    'i',
+  ),
+  notNetwork: /content_filter/i,
+}
 
 // Codex, driven through `codex app-server`: JSON-RPC 2.0 (without the "jsonrpc" field) over stdio, one message a line.
 // Written against codex-cli 0.167's own schema (`codex app-server generate-ts`).
@@ -497,7 +511,7 @@ export function createCodex(user: UserEnv = processUserEnv()): Adapter {
         for (const { id } of unsent.splice(0)) emit({ type: 'steer.returned', id })
         const limitHit = typeof info === 'string' && LIMIT_INFO.has(info)
         if (error && error !== 'Interrupted' && (limitHit || LIMIT_ERROR.test(error))) limit(error)
-        emit({ type: 'turn.completed', ...(error && { error }) })
+        emit({ type: 'turn.completed', ...withKind(error, CODEX_ERRORS) })
       }
 
       const interruptTurn = (id: string) => {
@@ -639,7 +653,7 @@ export function createCodex(user: UserEnv = processUserEnv()): Adapter {
         client.abandon('Codex has stopped')
         if (code === 0 || closed) return emit({ type: 'session.ended' })
         const tail = stderrTail.replace(ANSI, '').split('\n').filter((l) => l.trim() && !/^WARNING:/.test(l)).slice(-3).join('\n')
-        emit({ type: 'session.ended', error: tail.trim() || `Codex exited with code ${code}` })
+        emit({ type: 'session.ended', ...withKind(tail.trim() || `Codex exited with code ${code}`, CODEX_ERRORS) })
       })
 
       const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')

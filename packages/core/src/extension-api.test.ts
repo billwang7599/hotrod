@@ -156,6 +156,20 @@ describe('lifecycle hooks', () => {
     expect(ended).toEqual(['The engine quit', 'The engine quit'])
   })
 
+  it("carry why a turn failed, as the engine's adapter labelled it, without logging it", async () => {
+    const turns: unknown[] = []
+    const t = start(
+      { onTurnCompleted: ({ error, errorKind }) => void turns.push({ error, errorKind }) },
+      [{ type: 'turn.completed', error: 'socket hang up', errorKind: 'network' }],
+    )
+    const id = t.create()
+    await t.send(id)
+    expect(turns).toEqual([{ error: 'socket hang up', errorKind: 'network' }])
+    const log = readFileSync(join(t.garage, 'chats', id, 'log.jsonl'), 'utf8')
+    expect(log).toContain('socket hang up')
+    expect(log).not.toContain('errorKind')
+  })
+
   it('show a hook that throws or rejects as an error, and the chat carries on', async () => {
     const t = start({
       onTurnStarted() {

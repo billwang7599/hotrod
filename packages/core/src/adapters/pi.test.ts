@@ -148,6 +148,7 @@ describe('pi adapter', () => {
         error:
           '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},' +
           '"request_id":"req_011Cgnpak7k1PTbanzGJJQ4d"}',
+        errorKind: 'other',
       },
     ])
   })
@@ -170,7 +171,7 @@ describe('pi adapter', () => {
     fake.stdout(line({ type: 'agent_settled', aborted: false }))
     expect(events).toEqual([
       { type: 'limit.reached', message: limited },
-      { type: 'turn.completed', error: limited },
+      { type: 'turn.completed', error: limited, errorKind: 'rate_limit' },
     ])
     fake.stdout(failed('529 overloaded'))
     fake.stdout(line({ type: 'agent_settled', aborted: false }))
@@ -217,7 +218,7 @@ describe('pi adapter', () => {
     fake.stdout(line({ type: 'agent_settled', aborted: true }))
     expect(events.slice(-2)).toEqual([
       { type: 'steer.returned', id: 's2' },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
@@ -232,7 +233,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'bash', kind: 'shell', summary: 'sleep 30', input: { command: 'sleep 30', timeout: 60 } },
       { type: 'tool.completed', toolId, output: 'Command aborted', isError: true },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
@@ -249,14 +250,14 @@ describe('pi adapter', () => {
     expect(events).toEqual([
       { type: 'text.delta', text: '1\n2' },
       { type: 'text.completed', text: '1\n2' },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
   it('ends the turn when pi rejects the prompt', () => {
     const { fake, events } = startSession()
     fake.stdout(line({ type: 'response', command: 'prompt', success: false, error: 'Agent is busy' }))
-    expect(events).toEqual([{ type: 'turn.completed', error: 'Agent is busy' }])
+    expect(events).toEqual([{ type: 'turn.completed', error: 'Agent is busy', errorKind: 'other' }])
   })
 
   it('ends the turn when pi handles the prompt without a run', () => {
@@ -357,13 +358,13 @@ describe('pi adapter', () => {
   it('reports a startup failure with the stderr tail', () => {
     const { fake, events } = startSession()
     fake.exit(1, 'Error: Model "x" is ambiguous across providers\n')
-    expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers' }])
+    expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers', errorKind: 'other' }])
   })
 
   it('names the exit code when stderr is empty', () => {
     const { fake, events } = startSession()
     fake.exit(1)
-    expect(events).toEqual([{ type: 'session.ended', error: 'pi exited with code 1' }])
+    expect(events).toEqual([{ type: 'session.ended', error: 'pi exited with code 1', errorKind: 'other' }])
   })
 
   it('closes stdin and kills the process', () => {

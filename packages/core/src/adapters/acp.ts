@@ -1,6 +1,7 @@
 import type { McpServer } from '@kothar/extension-api'
 import type { EngineEvent, EngineProcess, ImageInput, Session, ThinkingLevel, ToolKind } from '../shared.ts'
 import { type RpcError, rpcClient } from './rpc.ts'
+import { type EngineErrors, withKind } from './error-kind.ts'
 
 // The Agent Client Protocol (agentclientprotocol.com): JSON-RPC 2.0 over an agent's stdio, one message per line. This
 // module is the protocol half any ACP engine needs: one session mapped to Kothar's events, over the JSON-RPC client in
@@ -53,6 +54,8 @@ export type AcpHooks = {
   line?(line: string, turn: AcpTurn): void
   // The turn's error when the agent ended it without saying why (ACP has no error stop reason).
   turnError?(): string | undefined
+  // The agent's own wording for its errors, so each one says why it failed (see error-kind.ts).
+  errors?: EngineErrors
   // A new turn starts.
   turnStarted?(): void
 }
@@ -154,7 +157,7 @@ export function startAcpSession(
     running = false
     const reason = interrupted ? 'Interrupted' : (error ?? hooks.turnError?.())
     interrupted = false
-    emit({ type: 'turn.completed', ...(reason && { error: reason }) })
+    emit({ type: 'turn.completed', ...withKind(reason, hooks.errors) })
   }
 
   const startTool = (call: AcpToolCall, fallbackInput?: unknown) => {
@@ -332,7 +335,7 @@ export function startAcpSession(
     client.abandon(`${options.name} exited`)
     const error = code === 0 || closed ? undefined : stderrTail.trim() || otherLines.join('\n').trim() || `${options.name} exited with code ${code}`
     if (running) endTurn(error ?? `${options.name} exited`)
-    emit({ type: 'session.ended', ...(error && { error }) })
+    emit({ type: 'session.ended', ...withKind(error, hooks.errors) })
   })
 
   return {

@@ -2,6 +2,10 @@ import { join } from 'node:path'
 import { type Adapter, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 import { onJsonLines } from './jsonl.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
+import { type EngineErrors, withKind } from './error-kind.ts'
+
+// pi's own wording (pi-ai 1.1): a provider stream cut off ("Anthropic stream ended before message_stop").
+export const PI_ERRORS: EngineErrors = { network: /stream ended (?:without|before)/i }
 
 const KINDS: Record<string, ToolKind> = {
   bash: 'shell',
@@ -183,7 +187,7 @@ export function createPi(user: UserEnv = processUserEnv()): Adapter {
         for (const id of steers) emit({ type: 'steer.returned', id })
         steers = []
         if (error && error !== 'Interrupted' && LIMIT_ERROR.test(error)) emit({ type: 'limit.reached', message: error })
-        emit({ type: 'turn.completed', ...(error && { error }) })
+        emit({ type: 'turn.completed', ...withKind(error, PI_ERRORS) })
       }
 
       const handle = (msg: any) => {
@@ -236,7 +240,7 @@ export function createPi(user: UserEnv = processUserEnv()): Adapter {
       proc.onExit((code, stderrTail) => {
         lines.flush()
         if (code === 0 || closed) return emit({ type: 'session.ended' })
-        emit({ type: 'session.ended', error: stderrTail.trim() || `pi exited with code ${code}` })
+        emit({ type: 'session.ended', ...withKind(stderrTail.trim() || `pi exited with code ${code}`, PI_ERRORS) })
       })
 
       return {

@@ -183,9 +183,9 @@ describe('OpenCode adapter', () => {
     await tick()
     fake.stdout(created(MODEL_OPTIONS))
     await tick()
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: "OpenCode doesn't offer the model nope/model" })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: "OpenCode doesn't offer the model nope/model", errorKind: 'other' })
     session.prompt('again')
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: "OpenCode doesn't offer the model nope/model" })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: "OpenCode doesn't offer the model nope/model", errorKind: 'other' })
   })
 
   it('streams a turn: thinking, text, a command it asks for, its output and the reply', async () => {
@@ -276,14 +276,14 @@ describe('OpenCode adapter', () => {
     // OpenCode answers the prompt with end_turn.
     fake.stdout(rest.slice(5).join('\n') + '\n')
     await tick()
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' })
   })
 
   it('ends a turn that is interrupted before the session exists without sending it', async () => {
     const { fake, events, session } = startSession()
     session.prompt('hello')
     session.interrupt()
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' })
     fake.stdout(INITIALIZED)
     await tick()
     fake.stdout(created())
@@ -354,7 +354,7 @@ describe('OpenCode adapter', () => {
     fake.stdout([warning, other, broken].join('\n') + '\n')
     fake.stdout(line({ jsonrpc: '2.0', id: 3, result: { stopReason: 'end_turn' } }))
     await tick()
-    expect(events.slice(1)).toEqual([{ type: 'turn.completed', error: 'The model is broken' }])
+    expect(events.slice(1)).toEqual([{ type: 'turn.completed', error: 'The model is broken', errorKind: 'other' }])
     session.prompt('again')
     fake.stdout(broken + '\n')
     fake.stdout(
@@ -380,7 +380,7 @@ describe('OpenCode adapter', () => {
     expect(fake.sent().at(-1)).toEqual({ jsonrpc: '2.0', id: 7, error: { code: -32601, message: 'Method not found: fs/read_text_file' } })
     fake.stdout(line({ jsonrpc: '2.0', id: 3, error: { code: -32603, message: 'Internal error', data: { message: 'disk full' } } }))
     await tick()
-    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Internal error: disk full' })
+    expect(events.at(-1)).toEqual({ type: 'turn.completed', error: 'Internal error: disk full', errorKind: 'other' })
   })
 
   it('ends the session, with the last log lines when OpenCode fails, or quietly when closed', async () => {
@@ -390,8 +390,8 @@ describe('OpenCode adapter', () => {
     failing.fake.exit(1)
     await tick()
     expect(failing.events.slice(1)).toEqual([
-      { type: 'turn.completed', error: 'Error: config is invalid' },
-      { type: 'session.ended', error: 'Error: config is invalid' },
+      { type: 'turn.completed', error: 'Error: config is invalid', errorKind: 'other' },
+      { type: 'session.ended', error: 'Error: config is invalid', errorKind: 'other' },
     ])
     const closing = startSession()
     closing.session.close()

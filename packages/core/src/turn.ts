@@ -226,8 +226,11 @@ export function openTurns(deps: TurnDeps) {
   const endTurn = (chat: Chat, ended: Extract<ChatEntry, { type: 'turn.completed' | 'session.ended' }>) => {
     const { limit, account, runModel } = chat
     chat.limit = undefined
-    // A turn the core stopped for its limit shows the limit, not "Interrupted".
-    const end = limit && ended.error ? { ...ended, error: limit.message } : ended
+    // Why it failed goes to extensions, not the log. A turn the core stopped for its limit shows the limit, not
+    // "Interrupted".
+    const { errorKind: engineKind, ...entry } = ended
+    const end = limit && entry.error ? { ...entry, error: limit.message } : entry
+    const errorKind = limit && entry.error ? 'rate_limit' : engineKind
     if (chat.unsavedText) completeText(chat, end.at, chat.unsavedText)
     chat.unsavedText = ''
     append(chat, end)
@@ -243,7 +246,7 @@ export function openTurns(deps: TurnDeps) {
     chat.turn = undefined
     const detail = detailOf(chat)
     const files = [...new Set(turn.tools.flatMap((t) => (t.kind === 'edit' && t.path ? [t.path] : [])))]
-    const summary = { chat: detail, ...(end.error && { error: end.error }), ...turn, files }
+    const summary = { chat: detail, ...(end.error && { error: end.error, ...(errorKind && { errorKind }) }), ...turn, files }
     const sessionError = end.type === 'session.ended' ? end.error : undefined
     chat.ending = true
     try {
@@ -422,7 +425,7 @@ export function openTurns(deps: TurnDeps) {
   // gone goes the way lostChat sends it.
   const forceStop = (chat: Chat) => {
     try {
-      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: 'Interrupted' })
+      endTurn(chat, { at: now().toISOString(), type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' })
     } catch (error) {
       lostChat(chat, error)
     }

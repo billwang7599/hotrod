@@ -12,6 +12,11 @@ import {
 } from '../shared.ts'
 import { acpStdioServer, kindOfAcp, levelsOfEfforts, startAcpSession, type AcpMcpServer, type AcpToolCall } from './acp.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
+import type { EngineErrors } from './error-kind.ts'
+
+// OpenCode's own wording (1.17, Bun's fetch): "Unable to connect. Is the computer able to access the url?", a dropped
+// socket.
+export const OPENCODE_ERRORS: EngineErrors = { network: /unable to connect\. is the computer|socket connection was closed/i }
 
 // OpenCode (opencode.ai) runs as `opencode acp`: the Agent Client Protocol over stdio (acp.ts). Its sessions take
 // Kothar's MCP servers in session/new and ask before edits and commands with session/request_permission. Each session
@@ -510,6 +515,7 @@ export function createOpencode(user: UserEnv = processUserEnv()): Adapter {
             if (LIMIT_ERROR.test(error)) turn.limit(error)
           },
           turnError: () => lastError,
+          errors: OPENCODE_ERRORS,
         },
         (event) => {
           if (event.type === 'text.delta' || event.type === 'thinking.delta') lastError = undefined

@@ -3,6 +3,14 @@ import { join } from 'node:path'
 import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 import { onJsonLines } from './jsonl.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
+import { type EngineErrors, withKind } from './error-kind.ts'
+
+// Claude Code's own wording (2.1): "Unable to connect to API", but not its TLS and certificate errors, which waiting
+// won't fix; and the service shedding load in words that would otherwise read as a usage limit.
+export const CLAUDE_ERRORS: EngineErrors = {
+  network: /unable to connect to api(?!: ssl)/i,
+  notLimit: /temporarily limiting requests|not your usage limit/i,
+}
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -412,7 +420,7 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
                 : undefined
             interrupted = false
             returnSteers()
-            emit({ type: 'turn.completed', ...(error && { error }) })
+            emit({ type: 'turn.completed', ...withKind(error, CLAUDE_ERRORS) })
           }
         }
       }
@@ -421,7 +429,7 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
       proc.onExit((code, stderrTail) => {
         lines.flush()
         if (code === 0 || closed) return emit({ type: 'session.ended' })
-        emit({ type: 'session.ended', error: stderrTail.trim() || `Claude Code exited with code ${code}` })
+        emit({ type: 'session.ended', ...withKind(stderrTail.trim() || `Claude Code exited with code ${code}`, CLAUDE_ERRORS) })
       })
 
       return {
