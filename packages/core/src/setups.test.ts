@@ -8,16 +8,12 @@ import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import { startServer } from './server.ts'
 import type { ClientMessage, CoreMessage, SessionOptions } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
-
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
 
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
 

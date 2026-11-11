@@ -27,6 +27,7 @@ import {
   type SessionOptions,
   type ThinkingLevel,
 } from './shared.ts'
+import { until as waitUntil } from './test-wait.ts'
 
 const origin = 'http://localhost:4318'
 const token = 'test-token-0123456789'
@@ -71,10 +72,7 @@ function connect(url: string, headers: { origin?: string }) {
   return { socket, messages }
 }
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean) => waitUntil(check, { tries: 200 })
 
 it('rejects other origins', async () => {
   const { url } = await start()

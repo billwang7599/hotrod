@@ -14,6 +14,7 @@ import { serveEndpoints } from './endpoint.ts'
 import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
 import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL } from './index.ts'
 import { type BrowserOps, SpaceBrowser } from './space-browser.ts'
+import { until as waitUntil } from '@kothar/core/test-wait'
 
 const dirs: string[] = []
 const tempDir = (prefix: string) => {
@@ -33,10 +34,7 @@ const run: ExtensionRun = (command, args, options = {}) => sandboxingMachine.run
 const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
 const valueAfter = (args: string[] = [], flag: string) =>
   args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
-const until = async (check: () => boolean | Promise<boolean>, ms = 4000) => {
-  for (let waited = 0; waited < ms && !(await check()); waited += 10) await new Promise((r) => setTimeout(r, 10))
-  expect(await check()).toBe(true)
-}
+const until = (check: () => boolean | Promise<boolean>, ms = 4000) => waitUntil(check, { tries: ms / 10, everyMs: 10 })
 
 // A fake browser: each launch is a "browser" with tabs the test can see and change, so the window step runs without
 // a window. ops reads and writes the same tabs, as the CDP calls would.

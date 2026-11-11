@@ -44,6 +44,7 @@ import {
   type ThinkingLevel,
 } from './shared.ts'
 import { cantSandbox, cantWriteTmp, needs } from './test-env.ts'
+import { until as waitUntil } from './test-wait.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
@@ -178,10 +179,7 @@ function snapshot(dir: string): Record<string, string> {
   return out
 }
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean) => waitUntil(check, { tries: 200 })
 
 const withoutRules = (instructions = '') =>
   instructions

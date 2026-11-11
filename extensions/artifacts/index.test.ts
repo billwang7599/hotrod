@@ -8,16 +8,14 @@ import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kotha
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
 import { ago, applyEdits, createArtifactsExtension, diffLines, MAX_CONTENT_BYTES, openerFor, slugOf } from './index.ts'
+import { until as waitUntil } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 600 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean) => waitUntil(check, { tries: 600 })
 
 async function start() {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-av-')))

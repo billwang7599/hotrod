@@ -3,6 +3,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathS
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
+import { until } from '@kothar/core/test-wait'
 import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
 import {
   chromiumMajor,
@@ -187,7 +188,7 @@ it('leaves the hidden Playwright tools out of the list and refuses calls to them
   })
   const call = async (id: number, method: string, params: object = {}) => {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
-    for (let waited = 0; !replies.has(id) && waited < 5000; waited += 10) await new Promise((r) => setTimeout(r, 10))
+    await until(() => replies.has(id), { tries: 500, everyMs: 10, what: `a reply to ${method}` })
     return replies.get(id)!
   }
   try {

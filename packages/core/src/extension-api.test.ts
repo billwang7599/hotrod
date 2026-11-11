@@ -8,6 +8,7 @@ import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import type { ClientMessage, CoreMessage, Machine, Sandbox, SessionOptions } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -18,11 +19,6 @@ function tempDir() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-modapi-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
-}
-
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
 }
 
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]

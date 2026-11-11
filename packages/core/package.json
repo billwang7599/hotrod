@@ -8,7 +8,8 @@
     "./catalog-check": "./src/catalog-check.ts",
     "./main": "./src/main.ts",
     "./fake": "./src/adapters/fake.ts",
-    "./test-machine": "./src/adapters/test-machine.ts"
+    "./test-machine": "./src/adapters/test-machine.ts",
+    "./test-wait": "./src/test-wait.ts"
   },
   "scripts": {
     "dev": "node --watch src/main.ts"

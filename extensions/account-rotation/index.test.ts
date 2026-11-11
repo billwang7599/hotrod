@@ -7,6 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import rotation, { CONTINUE_PROMPT, createAccountRotation, providerOf, resetText, UNKNOWN_RESET_MS } from './index.ts'
+import { until } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -16,10 +17,6 @@ afterEach(async () => {
 const HOUR = 60 * 60_000
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
 
 // Accounts in `limited` run out of usage, resetting `resetsIn` ms from the extension's clock (undefined: the engine
 // doesn't say); the rest reply. `before` plays ahead of the limit on a limited account.

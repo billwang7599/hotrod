@@ -6,6 +6,7 @@ import { afterEach, expect, it } from 'vitest'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import type { Adapter, CoreMessage } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const dirs: string[] = []
 const cores: Core[] = []
@@ -36,11 +37,6 @@ function holdingEngine() {
     },
   }
   return { adapter, end: () => turns.at(-1)!({ type: 'turn.completed' }) }
-}
-
-const until = async (check: () => boolean) => {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
-  expect(check()).toBe(true)
 }
 
 function start(extensions: Extension[]) {

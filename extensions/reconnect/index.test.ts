@@ -7,6 +7,7 @@ import { createFakeAdapter, type FakeStep } from '@kothar/core/fake'
 import { startCore } from '@kothar/core/main'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import reconnect, { CONTINUE_PROMPT, createReconnect, delayOf, MAX_TRIES, reasonOf } from './index.ts'
+import { until } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -20,10 +21,6 @@ const dropped = (error = 'API Error: Connection error.', errorKind: TurnErrorKin
   { type: 'turn.completed', error, errorKind },
 ]
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // Each session plays the next plan, then replies. The network is up while `online` is true.
