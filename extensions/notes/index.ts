@@ -292,7 +292,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
             },
           ],
         },
-        { type: 'search', key: chat.id, value: state.query, placeholder: 'Search notes', action: 'search' },
+        { type: 'search', key: chat.id, value: state.query, placeholder: 'Search or make a note', action: 'search', submit: 'go' },
         ...(offerNew
           ? [
               {
@@ -483,6 +483,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
           label: note.name,
           placeholder: 'Start typing. The first line names the note. [[Another note]] links, #tag tags',
           autofocus: !state.renaming && !state.quiet,
+          completions: [...new Set(notes.filter((n) => n.key !== note.key).map((n) => n.name))].sort((a, b) => a.localeCompare(b)),
         },
         ...(backlinks.length
           ? [
@@ -640,6 +641,21 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
             case 'open':
               openNote(state, noteOf(action.value).key)
               return
+            // Enter in the search box: the best match opens, or a note named as typed is made, as a quick switcher does.
+            case 'go': {
+              const query = oneLine(action.value)
+              state.query = String(action.value ?? '')
+              if (!query) return
+              const best = searchNotes(notes, query, safeBody, true).find((note) => !state.tag || tagsIn(safeBody(note)).includes(state.tag))
+              if (best) {
+                openNote(state, best.key)
+                return
+              }
+              const made = saveNote(host, chat.id, { name: query, body: '', scope: spaceNotes ? 'space' : 'global' }, undefined, 'refuse', true)
+              openNote(state, made.key)
+              state.query = ''
+              break
+            }
             case 'new':
             case 'create': {
               const asked = (action.value ?? {}) as { name?: unknown; scope?: unknown }

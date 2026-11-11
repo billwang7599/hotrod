@@ -549,3 +549,58 @@
 .tok-operator {
   color: var(--muted);
 }
+.markdown-editor .cm-md-link[data-url] {
+  cursor: pointer;
+}
+.markdown-editor .cm-md-task {
+  width: 14px;
+  height: 14px;
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.markdown-editor .cm-md-done {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+.markdown-editor .cm-md-image {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  margin: 6px 0;
+  border-radius: 6px;
+}
+.markdown-editor .cm-md-table {
+  padding: 6px 0;
+  overflow-x: auto;
+  cursor: text;
+}
+.markdown-editor .cm-md-table table {
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.markdown-editor .cm-md-table th,
+.markdown-editor .cm-md-table td {
+  border: 1px solid var(--border);
+  padding: 3px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-editor .cm-md-table th {
+  font-weight: 600;
+  background: var(--raised);
+}
+.markdown-editor .cm-tok-keyword {
+  color: var(--accent);
+}
+.markdown-editor .cm-tok-string {
+  color: var(--green);
+}
+.markdown-editor .cm-tok-number {
+  color: var(--amber);
+}
+.markdown-editor .cm-tok-comment {
+  color: var(--faint);
+  font-style: italic;
+}

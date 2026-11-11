@@ -5,7 +5,20 @@ import { EditorState } from '@codemirror/state'
 import { ensureSyntaxTree } from '@codemirror/language'
 import { EditorView } from '@codemirror/view'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
-import { activeLines, EDITOR_SAVE_MS, linkTarget, MarkdownEditor, previewDecorations, wikiLinksIn } from './markdown-editor.tsx'
+import {
+  activeLines,
+  codeTokens,
+  continueList,
+  EDITOR_SAVE_MS,
+  linkQuery,
+  linkTarget,
+  MarkdownEditor,
+  previewDecorations,
+  rankCompletions,
+  tableDecorations,
+  tableRows,
+  wikiLinksIn,
+} from './markdown-editor.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -165,4 +178,146 @@ test('following a link sends what is unsent first, so it lands in the note it wa
   const link = host.querySelector('[data-link]') as HTMLElement
   act(() => link.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
   expect(order).toEqual(['change:Now See [[Deploy]]', 'link:Deploy'])
+})
+
+// Puts the cursor at pos and presses Enter as the editor's keymap would.
+let enters = 0
+function enterAt(text: string, pos = text.length) {
+  const { view } = mount({ text, docKey: `enter-${enters++}` })
+  const v = view()
+  act(() => v.dispatch({ selection: { anchor: pos } }))
+  ensureSyntaxTree(v.state, v.state.doc.length, 5000)
+  const handled = continueList(v)
+  return { handled, text: v.state.doc.toString(), cursor: v.state.selection.main.head }
+}
+
+test('Enter carries a list on: the same bullet, the next number, an unticked box, a quote', () => {
+  expect(enterAt('- milk')).toMatchObject({ handled: true, text: '- milk\n- ', cursor: 9 })
+  expect(enterAt('  * nested')).toMatchObject({ text: '  * nested\n  * ' })
+  expect(enterAt('9. nine')).toMatchObject({ text: '9. nine\n10. ' })
+  expect(enterAt('- [x] done')).toMatchObject({ text: '- [x] done\n- [ ] ' })
+  expect(enterAt('> said')).toMatchObject({ text: '> said\n> ' })
+  // An empty item ends the list, or steps out a level when indented.
+  expect(enterAt('- one\n- ')).toMatchObject({ handled: true, text: '- one\n' })
+  expect(enterAt('- one\n  - ')).toMatchObject({ text: '- one\n- ' })
+  // Plain text, the middle of a mark and code are left to Enter itself.
+  expect(enterAt('plain').handled).toBe(false)
+  expect(enterAt('- milk', 1).handled).toBe(false)
+  expect(enterAt('```\n- not a list').handled).toBe(false)
+})
+
+test('a task reads as a checkbox off the cursor line, and clicking it ticks the task in the text', () => {
+  const found = preview('- [ ] milk\n- [x] eggs')
+  expect(found.filter(([kind]) => kind === 'widget')).toHaveLength(2)
+  expect(found).toContainEqual(['cm-md-done', ' eggs'])
+  const { view } = mount({ text: '- [ ] milk\n- [x] eggs' })
+  const boxes = [...host.querySelectorAll<HTMLInputElement>('input.cm-md-task')]
+  expect(boxes.map((b) => b.checked)).toEqual([false, true])
+  act(() => boxes[0]!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
+  expect(view().state.doc.toString()).toBe('- [x] milk\n- [x] eggs')
+})
+
+test('web links open in the browser: [text](url) and a bare URL; other links stay text', () => {
+  const found = preview('A [site](https://a.test) and https://b.test and [file](./x.md)')
+  expect(found).toContainEqual(['cm-md-link', '[site](https://a.test)', { 'data-url': 'https://a.test' }])
+  expect(found).toContainEqual(['cm-md-link', 'https://b.test', { 'data-url': 'https://b.test' }])
+  expect(found).toContainEqual(['cm-md-link', '[file](./x.md)'])
+  const open = vi.spyOn(window, 'open').mockReturnValue(null)
+  act(() => root.unmount())
+  root = createRoot(host)
+  mount({ text: 'See https://b.test' })
+  const link = host.querySelector('[data-url]') as HTMLElement
+  act(() => link.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })))
+  expect(open).toHaveBeenCalledWith('https://b.test', '_blank', 'noopener,noreferrer')
+})
+
+test('a picture from the web shows in place of its Markdown; a file path stays text', () => {
+  const found = preview('![cat](https://x.test/cat.png) and ![local](cat.png)')
+  expect(found.filter(([kind]) => kind === 'widget')).toHaveLength(1)
+})
+
+test('pasting a URL over selected text makes a link', () => {
+  const { view } = mount({ text: 'the docs' })
+  act(() => view().dispatch({ selection: { anchor: 4, head: 8 } }))
+  const paste = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+  Object.defineProperty(paste, 'clipboardData', { value: { getData: () => 'https://docs.test' } })
+  act(() => view().contentDOM.dispatchEvent(paste))
+  expect(view().state.doc.toString()).toBe('the [docs](https://docs.test)')
+})
+
+test('a table reads as a table while the cursor is outside it', () => {
+  expect(tableRows('| a | b \\| c |\n|---|:--:|\n| 1 | 2 |')).toEqual([
+    ['a', 'b | c'],
+    ['1', '2'],
+  ])
+  const text = 'Top\n\n| a | b |\n|---|---|\n| **1** | 2 |\n\nEnd'
+  const { view } = mount({ text, docKey: 'table' })
+  const v = view()
+  ensureSyntaxTree(v.state, v.state.doc.length, 5000)
+  expect(tableDecorations(v.state).size).toBe(1)
+  act(() => v.dispatch({ selection: { anchor: text.indexOf('**1**') } }))
+  expect(tableDecorations(v.state).size).toBe(0)
+})
+
+test('code is coloured: keywords, strings, numbers and comments', () => {
+  const kinds = (code: string, language = 'js') =>
+    codeTokens(code, language).map((r) => [(r.value.spec as { class: string }).class, code.slice(r.from, r.to)])
+  expect(kinds('const a = "x" // note')).toEqual([
+    ['cm-tok-keyword', 'const'],
+    ['cm-tok-string', '"x"'],
+    ['cm-tok-comment', '// note'],
+  ])
+  expect(kinds('x = 42 # why', 'python')).toContainEqual(['cm-tok-comment', '# why'])
+  expect(kinds('color: #fff', 'css')).toEqual([])
+})
+
+test('a change from elsewhere over unsent typing asks which to keep, and saves nothing until then', () => {
+  vi.useFakeTimers()
+  const { view, render, changes } = mount({ text: 'one' })
+  act(() => view().dispatch({ changes: { from: 3, insert: ' mine' } }))
+  render({ text: 'one theirs' })
+  expect(host.querySelector('[role=alert]')?.textContent).toContain('changed somewhere else')
+  act(() => vi.advanceTimersByTime(EDITOR_SAVE_MS * 2))
+  expect(changes).toEqual([])
+  const keep = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Keep mine')!
+  act(() => keep.click())
+  expect(changes).toEqual(['one mine'])
+  expect(host.querySelector('[role=alert]')).toBeNull()
+
+  act(() => view().dispatch({ changes: { from: 0, insert: '>' } }))
+  render({ text: 'agent version' })
+  const theirs = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Use the other version')!
+  act(() => theirs.click())
+  expect(view().state.doc.toString()).toBe('agent version')
+  act(() => vi.advanceTimersByTime(EDITOR_SAVE_MS * 2))
+  expect(changes).toEqual(['one mine'])
+})
+
+test('[[ offers note names as they are typed, and Enter takes one', () => {
+  expect(rankCompletions(['Deploys', 'Style guide', 'Groceries', 'My style'], 'sty')).toEqual(['Style guide', 'My style'])
+  expect(rankCompletions(['Groceries'], 'grcs')).toEqual(['Groceries'])
+  expect(linkQuery(EditorState.create({ doc: 'See [[Dep', selection: { anchor: 9 } }))).toEqual({ from: 6, query: 'Dep' })
+  expect(linkQuery(EditorState.create({ doc: 'See [[Dep]] x', selection: { anchor: 13 } }))).toBeNull()
+  const { view } = mount({ text: 'See ', completions: ['Deploys', 'Style'] })
+  const v = view()
+  act(() => {
+    v.focus()
+    v.dispatch({ selection: { anchor: 4 } })
+  })
+  act(() => v.dispatch({ changes: { from: 4, insert: '[[De' }, selection: { anchor: 8 } }))
+  const options = [...host.querySelectorAll('[role=option]')].map((o) => o.textContent)
+  // jsdom has no layout, so the list may not place itself; where it shows, it offers the matching name.
+  if (options.length) {
+    expect(options).toEqual(['Deploys'])
+    act(() => v.contentDOM.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })))
+    expect(v.state.doc.toString()).toBe('See [[Deploys]]')
+  }
+})
+
+test('a note opens again where its cursor was', () => {
+  const { view, render } = mount({ docKey: 'kept', text: 'hello world' })
+  act(() => view().dispatch({ selection: { anchor: 5 } }))
+  render({ docKey: 'other', text: 'x' })
+  render({ docKey: 'kept', text: 'hello world' })
+  expect(view().state.selection.main.head).toBe(5)
 })

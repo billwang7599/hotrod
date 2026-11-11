@@ -744,3 +744,17 @@ it('names a note from its first line, counts words and shows times as a notes li
   expect(shortTime(now - 3 * 3_600_000, now)).toBe('3h')
   expect(shortTime(now - 30 * 3_600_000, now)).toBe('yesterday')
 })
+
+it('opens the best match on Enter in the search box, or makes the note typed, and offers note names to [[', async () => {
+  const { garage, create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Groceries', body: 'milk' })
+  await tool(app, 'write_note', { name: 'Deploys', body: 'Ship' })
+  const best = JSON.stringify(await panel(app, { name: 'go', value: 'grc' }))
+  expect(best).toContain(`"key":"${app}:groceries.md","label":"Groceries","selected":true`)
+  expect(best).toContain('"submit":"go"')
+  // The editor offers the other notes' names.
+  expect(best).toContain('"completions":["Deploys"]')
+  await panel(app, { name: 'go', value: 'Packing list' })
+  expect(existsSync(join(garage, 'chats', app, 'notes', 'packing-list.md'))).toBe(true)
+})

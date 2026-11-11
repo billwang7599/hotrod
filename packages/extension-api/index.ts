@@ -505,8 +505,9 @@ export type ExtensionView =
   | { type: 'split'; side: ExtensionView; main: ExtensionView }
   // A search box. As the user types it sends the action named action with value: the text (after a short pause), so the
   // panel can draw what matches. key: a new key starts over at value; otherwise what's typed stays as the panel draws
-  // again.
-  | { type: 'search'; key?: string; value?: string; placeholder?: string; label?: string; action: string }
+  // again. submit: Enter sends this action with value: the text, at once (such as opening the best match). ArrowDown
+  // moves to the first list below it, and the arrows move along a list.
+  | { type: 'search'; key?: string; value?: string; placeholder?: string; label?: string; action: string; submit?: string }
   // A Markdown editor with live preview, as in Obsidian: the text stays plain Markdown, but outside the line being
   // edited its marks are hidden and it's drawn as it reads (headings, bold, italics, code, quotes, lists, links). It
   // sends the action named change with value: the whole text, a moment after the user stops typing and when the
@@ -525,6 +526,8 @@ export type ExtensionView =
       tags?: string
       // Puts the cursor in it when it first shows.
       autofocus?: boolean
+      // Names typing [[ offers, such as every note's: the arrows pick one, Enter or Tab puts it in as [[name]].
+      completions?: string[]
     }
   // A page of HTML, such as a chart or a mockup an agent made, drawn in a sandboxed frame. Its scripts run, but in an
   // origin of their own: they can't reach Kothar's window, storage, token or core, open windows or popups, submit forms

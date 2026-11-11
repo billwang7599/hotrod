@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactElement, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactElement, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
@@ -227,10 +227,23 @@ function Card({ node, act }: { node: Extract<ExtensionView, { type: 'card' }>; a
   )
 }
 
+// The arrows move along a list's rows; up from the first goes back to a search box above it.
+const ROW_BUTTONS = ':scope > li button'
+function moveAlong(e: KeyboardEvent<HTMLUListElement>) {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>(ROW_BUTTONS)]
+  const at = rows.indexOf(document.activeElement as HTMLButtonElement)
+  if (at < 0) return
+  e.preventDefault()
+  const next = rows[at + (e.key === 'ArrowDown' ? 1 : -1)]
+  if (next) return next.focus()
+  if (e.key === 'ArrowUp') e.currentTarget.closest('[data-split-side]')?.querySelector<HTMLInputElement>('input[type=search]')?.focus()
+}
+
 function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; act: Act }) {
   if (!node.items.length) return node.empty ? <p className="text-sm text-faint">{node.empty}</p> : null
   return (
-    <ul className="flex flex-col" aria-label={node.label}>
+    <ul className="flex flex-col" aria-label={node.label} onKeyDown={moveAlong}>
       {node.items.map((item) => {
         const body = (
           <>
@@ -365,6 +378,25 @@ function Search({ node, act }: { node: SearchNode; act: Act }) {
       spellCheck={false}
       value={text}
       onChange={(e) => setTyped({ start, text: e.target.value })}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && node.submit) {
+          e.preventDefault()
+          // What's typed goes first, so the panel searches the same text it's asked to act on.
+          if (text !== sent.current) {
+            sent.current = text
+            latest.current({ name: node.action, value: text })
+          }
+          latest.current({ name: node.submit, value: text })
+        } else if (e.key === 'ArrowDown') {
+          // To the first list row after the box, in the same column.
+          const column = e.currentTarget.closest('[data-split-side]') ?? e.currentTarget.parentElement
+          const first = column?.querySelector<HTMLButtonElement>('ul li button')
+          if (first) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
+      }}
     />
   )
 }
@@ -527,7 +559,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
         // Side by side once there's room; in a narrow panel the side sits above.
         <div className="@container flex min-h-0 min-w-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-12 @min-[560px]:flex-row" data-split>
-            <div className="flex min-h-0 min-w-0 flex-col gap-8 @min-[560px]:w-240 @min-[560px]:shrink-0 @min-[560px]:overflow-y-auto @min-[560px]:border-r @min-[560px]:pr-12">
+            <div data-split-side className="flex min-h-0 min-w-0 flex-col gap-8 @min-[560px]:w-240 @min-[560px]:shrink-0 @min-[560px]:overflow-y-auto @min-[560px]:border-r @min-[560px]:pr-12">
               <Node node={node.side} act={act} />
             </div>
             <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-8 @min-[560px]:overflow-y-auto">
@@ -546,6 +578,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           label={node.label}
           placeholder={node.placeholder}
           autofocus={node.autofocus}
+          completions={node.completions}
           onChange={(text) => act({ name: node.change, value: text })}
           onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
           onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
