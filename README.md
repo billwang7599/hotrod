@@ -56,9 +56,27 @@ here. Its README says how to publish and submit a theme or an extension.
 
 ## Status
 
-Early development. Nothing to install yet.
+Kothar is in early development, and there's no released build yet. It runs from source on macOS, in a browser tab or
+as the desktop app; see [Running from source](CONTRIBUTING.md#running-from-source).
 
-**Building the Mac app:** `npm run package` builds `packages/desktop/release/Kothar-<version>-arm64.dmg` (Apple
+What works today:
+
+- **Engines:** Claude Code, Codex, OpenCode and pi, with saved accounts for each.
+- **Spaces:** a folder becomes a space whose lead agent streams its replies, tool calls and permission requests. Chats
+  survive a restart.
+- **Home:** a personal assistant that sees every space and can make new ones.
+- **Workers:** a lead can hand tasks to workers that run beside it.
+- **Memory:** every chat has its own.
+- **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
+- **Permissions:** switches decide what runs without asking.
+- **Setups, themes, the marketplace,** and the built-in extensions in `extensions/`: Artifacts, Browser, Git, Home,
+  Memory, Notes, Processes, Reconnect, Skills and Account rotation.
+
+Not built yet: remote machines, sandboxing outside macOS, a signed release, and sync.
+
+## Building the Mac app
+
+`npm run package` builds `packages/desktop/release/Kothar-<version>-arm64.dmg` (Apple
 Silicon). With no signing setup it's ad-hoc signed, which runs on the Mac that built it; elsewhere macOS blocks it until
 it's opened with right-click → Open. Signing and notarization switch on with environment variables:
 
