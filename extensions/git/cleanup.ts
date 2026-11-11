@@ -1,8 +1,11 @@
-import type { Checkout, ExtensionHost } from '@kothar/extension-api'
+import { existsSync, realpathSync } from 'node:fs'
+import type { Checkout, ExtensionHost, SpaceDetail } from '@kothar/extension-api'
 
-// Removing a space's checkout once its work is merged. The checkout's folder is the user's own checkout and is never
-// touched; a checkout with any uncommitted or untracked file stays. The core makes a fresh checkout at the space's
-// next message.
+// Removing a space's checkout once its work is merged, and other worktrees an agent made in the space's work folder.
+// The checkout's folder is the user's own checkout and is never touched; a checkout with any uncommitted or untracked
+// file stays. The core makes a fresh checkout at the space's next message. The core still removes a deleted space's
+// checkouts itself, since it made them (design rule 10); only this optional cleanup of merged work lives here. The
+// Machine is this computer for now, so the file system can tell what exists.
 
 type Run = ExtensionHost['run']
 const GIT_TIMEOUT_MS = 30_000
@@ -90,4 +93,46 @@ export async function cleanupCheckout(
   const deleted = (await tryGit(run, folder, ['branch', '-D', branch])) !== undefined
   if (made) await tryGit(run, folder, ['branch', '-D', checkout.branch])
   return { removed: true, branch, reason, ...(!deleted && { branchKept: true as const }) }
+}
+
+const realOr = (path: string) => {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+// Removes worktrees in the space's work folder that aren't its own checkouts (an agent's `git worktree add`), once
+// their branch is merged and gone upstream, they have nothing uncommitted, and the space is still idle. One repo at a
+// time; returns the paths it removed. A worktree git won't remove stays, and doesn't stop the others.
+export async function cleanupStrayWorktrees(
+  run: Run,
+  space: Pick<SpaceDetail, 'workDir' | 'checkouts'>,
+  stillIdle: () => boolean = () => true,
+): Promise<string[]> {
+  const { workDir } = space
+  if (!workDir || !stillIdle()) return []
+  const own = space.checkouts.map((c) => realOr(c.path))
+  const removed: string[] = []
+  for (const folder of new Set(space.checkouts.map((c) => c.folder))) {
+    await tryGit(run, folder, ['fetch', '--prune', '--quiet'], FETCH_TIMEOUT_MS)
+    const listed = await tryGit(run, folder, ['worktree', 'list', '--porcelain'])
+    for (const entry of (listed ?? '').split('\n\n')) {
+      const path = entry.match(/^worktree (.+)$/m)?.[1]
+      const branch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]
+      if (!path || !branch || !existsSync(path)) continue
+      if (own.includes(realOr(path)) || !within(realOr(path), realOr(workDir))) continue
+      const ref = `refs/heads/${branch}`
+      if ((await tryGit(run, folder, ['for-each-ref', '--format=%(upstream:track)', ref])) !== '[gone]') continue
+      if (!(await tryGit(run, folder, ['for-each-ref', '--contains', ref, '--format=%(refname)', 'refs/remotes/']))) continue
+      if ((await tryGit(run, path, ['status', '--porcelain'])) !== '') continue
+      if (!stillIdle()) return removed
+      // Without --force, git itself refuses a worktree that changed since the status above.
+      if ((await tryGit(run, folder, ['worktree', 'remove', path])) === undefined) continue
+      await tryGit(run, folder, ['branch', '-D', branch])
+      removed.push(path)
+    }
+  }
+  return removed
 }

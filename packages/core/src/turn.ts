@@ -101,7 +101,6 @@ export type TurnDeps = {
   sandboxIn: (dir: string) => Sandbox | undefined
   attachmentsDirOf: (chat: Chat) => string
   checkoutOf: (space: Chat, folder: string, workDir: string, sandboxed: boolean) => Promise<Checkout>
-  sweepMergedWorktrees: (space: Chat) => void
 
   // What a session is told
   viewOf: (chat: Chat, messages: MemoryMessage[], tools: boolean) => string
@@ -194,7 +193,6 @@ export function openTurns(deps: TurnDeps) {
     sandboxIn,
     attachmentsDirOf,
     checkoutOf,
-    sweepMergedWorktrees,
     viewOf,
   } = deps
   const allStoppedWaiters: (() => void)[] = []
@@ -296,7 +294,6 @@ export function openTurns(deps: TurnDeps) {
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
-    sweepMergedWorktrees(chainOf(chat)[0]!)
   }
 
   // A write for an engine event failed. If the chat's folder is gone, its session stops and it goes idle; either way

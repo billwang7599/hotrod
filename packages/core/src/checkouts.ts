@@ -1,9 +1,9 @@
 // Git checkouts of a space's folders in its work folder (design rule 10: worktrees are made in code), what a sandboxed
-// chat may write to use them, and cleaning them up. The core passes in the machine and how to save a space's
+// chat may write to use them, and removing them with a deleted space. Removing merged work while the space lives is
+// the Git extension's (extensions/git/cleanup.ts). The core passes in the machine and how to save a space's
 // worktrees; nothing here keeps chats.
 import { existsSync, rmSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { realPath } from './machine.ts'
 import type { ChatInfo, Machine, Worktree } from './shared.ts'
 import { within, messageOf } from './util.ts'
 
@@ -24,10 +24,8 @@ export function openCheckouts<S extends Space>(deps: {
   machine: Pick<Machine, 'run'>
   /** Saves a space's worktrees in its chat.json. */
   saveWorktrees: (space: S, worktrees: Record<string, Worktree>) => void
-  /** Whether every chat of the space is idle, so its checkouts may be cleaned up. */
-  isIdle: (space: S) => boolean
 }) {
-  const { machine, saveWorktrees, isIdle } = deps
+  const { machine, saveWorktrees } = deps
 
   const git = async (folder: string, ...args: string[]) => {
     const options = { cwd: folder, timeoutMs: GIT_TIMEOUT_MS }
@@ -99,45 +97,7 @@ export function openCheckouts<S extends Space>(deps: {
     rmSync(workDir, { recursive: true, force: true })
   }
 
-  // Removes worktrees in the space's work folder that aren't its own, once their branch is merged and gone upstream,
-  // they have nothing uncommitted, and the space is idle.
-  const sweeps = new Map<string, Promise<void>>()
-  const sweepMergedWorktrees = (space: S) => {
-    const idle = () => isIdle(space)
-    const workDir = ownWorkDirOf(space)
-    if (!workDir || !idle()) return
-    const own = Object.values(space.info.worktrees ?? {}).map((w) => realPath(w.path))
-    const sweepRepo = async (folder: string) => {
-      await git(folder, 'fetch', '--prune', '--quiet').catch(() => {})
-      const listed = await git(folder, 'worktree', 'list', '--porcelain')
-      for (const entry of listed.split('\n\n')) {
-        const path = entry.match(/^worktree (.+)$/m)?.[1]
-        const branch = entry.match(/^branch refs\/heads\/(.+)$/m)?.[1]
-        if (!path || !branch || !existsSync(path)) continue
-        if (own.includes(realPath(path)) || !within(realPath(path), realPath(workDir))) continue
-        try {
-          const ref = `refs/heads/${branch}`
-          if ((await git(folder, 'for-each-ref', '--format=%(upstream:track)', ref)) !== '[gone]') continue
-          if (!(await git(folder, 'for-each-ref', '--contains', ref, '--format=%(refname)', 'refs/remotes/'))) continue
-          if (await git(path, 'status', '--porcelain')) continue
-          if (!idle()) return
-          await git(folder, 'worktree', 'remove', path)
-          await git(folder, 'branch', '-D', branch)
-        } catch (error) {
-          console.error(`Couldn't clean up the worktree ${path}: ${messageOf(error)}`)
-        }
-      }
-    }
-    for (const folder of Object.keys(space.info.worktrees ?? {})) {
-      const swept = (sweeps.get(folder) ?? Promise.resolve())
-        .then(() => sweepRepo(folder))
-        .catch((error) => console.error(`Couldn't clean up the worktrees of ${folder}: ${messageOf(error)}`))
-        .finally(() => sweeps.get(folder) === swept && sweeps.delete(folder))
-      sweeps.set(folder, swept)
-    }
-  }
-
-  return { checkoutOf, gitAccess, removeWorkDir, sweepMergedWorktrees }
+  return { checkoutOf, gitAccess, removeWorkDir }
 }
 
 /** Only a folder Kothar made for this space, whatever chat.json says. */

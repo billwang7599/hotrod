@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { basename } from 'node:path'
 import type { ChatDetail, Checkout, Extension, ExtensionHost, ExtensionListItem, ExtensionTone, ExtensionValues, ExtensionView } from '@kothar/extension-api'
-import { cleanupCheckout } from './cleanup.ts'
+import { cleanupCheckout, cleanupStrayWorktrees } from './cleanup.ts'
 
 // The Changes tab shows each git folder of a space as its agents left it, and a note follows a turn that
 // changed files. Agents already use git and gh through their shell, so this adds no tools and no buttons that change
@@ -336,6 +336,7 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
   }
   // Removes the space's checkouts whose branch is merged, once nothing in the space runs.
   const sweeping = new Set<string>()
+  const repoSweeps = new Map<string, Promise<unknown>>()
   const sweep = async (host: ExtensionHost, chat: ChatDetail) => {
     const space = host.space(chat.id) ?? (chat.parentId === undefined ? undefined : host.space(chat.parentId))
     if (!space || sweeping.has(space.id)) return
@@ -355,6 +356,18 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
         forget(host, space.id)
         host.refresh(space.id)
       }
+      // Other worktrees in the work folder, one repo at a time across spaces, since they share its worktree list.
+      await Promise.all(
+        [...new Set(space.checkouts.map((c) => c.folder))].map((folder) => {
+          const one = { ...space, checkouts: space.checkouts.filter((c) => c.folder === folder) }
+          const swept = (repoSweeps.get(folder) ?? Promise.resolve())
+            .then(() => cleanupStrayWorktrees(host.run, one, idle))
+            .catch(() => [])
+            .finally(() => repoSweeps.get(folder) === swept && repoSweeps.delete(folder))
+          repoSweeps.set(folder, swept)
+          return swept
+        }),
+      )
     } finally {
       sweeping.delete(space.id)
     }
@@ -401,7 +414,8 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
         description:
           'After a turn, a space’s checkout goes, with its local branch, once the branch’s pull request is merged or ' +
           'the branch is merged into the default branch and deleted on the remote. Never your own checkout, one with ' +
-          'uncommitted changes, or one in use by a running chat. The next message makes a fresh checkout.',
+          'uncommitted changes, or one in use by a running chat. The next message makes a fresh checkout. Other ' +
+          'worktrees an agent made in the space’s work folder go too, once their branch is merged and deleted on the remote.',
         type: 'boolean',
         default: true,
       },
@@ -511,6 +525,12 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
       shownStates.delete(chat.id)
       reuse.delete(chat.id)
       stopLive(chat.id)
+    },
+    // The core removes a deleted space's checkouts; what's cached about them goes too.
+    onSpaceRemoved(space) {
+      for (const { path } of space.checkouts) {
+        for (const key of prs.keys()) if (key.startsWith(`${path}\n`)) prs.delete(key)
+      }
     },
     onStop() {
       for (const chatId of [...live.keys()]) stopLive(chatId)

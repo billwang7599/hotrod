@@ -33,8 +33,8 @@ const spaceAt = (workDir: string, name = 'My Space'): Space => ({
   info: { id: 'abc123', name, folders: [], files: [], workDir } as unknown as ChatInfo,
 })
 
-// The checkouts with saving and idleness kept in plain test state, no core.
-const checkoutsFor = (idle = () => true) => {
+// The checkouts with saving kept in plain test state, no core.
+const checkoutsFor = () => {
   const saved: Record<string, Worktree>[] = []
   const checkouts = openCheckouts<Space>({
     machine: localMachine,
@@ -42,7 +42,6 @@ const checkoutsFor = (idle = () => true) => {
       space.info.worktrees = worktrees
       saved.push(worktrees)
     },
-    isIdle: idle,
   })
   return { ...checkouts, saved }
 }

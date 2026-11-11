@@ -1,14 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Checkout, ExtensionHost } from '@kothar/extension-api'
 import { createFakeAdapter, type FakeStep } from '@kothar/core/fake'
 import { startCore } from '@kothar/core/main'
 import type { Machine, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import { cleanupCheckout } from './cleanup.ts'
+import { cleanupCheckout, cleanupStrayWorktrees } from './cleanup.ts'
 import { createGitExtension } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -183,6 +183,13 @@ describe('after a turn, with real git', () => {
         sh(options.cwd, 'add', '.')
         sh(options.cwd, 'commit', '-q', '-m', 'feature')
         sh(options.cwd, 'push', '-q', '-u', 'origin', 'feat/x')
+        // A worktree of the agent's own beside the checkout, pushed too.
+        const stray = join(dirname(options.cwd), 'stray')
+        sh(options.cwd, 'worktree', 'add', '-q', '-b', 'stray', stray, 'main')
+        writeFileSync(join(stray, 'c.txt'), 'c\n')
+        sh(stray, 'add', '.')
+        sh(stray, 'commit', '-q', '-m', 'stray')
+        sh(stray, 'push', '-q', '-u', 'origin', 'stray')
       }
       return [{ type: 'text.completed', text: 'Done' }]
     }
@@ -217,10 +224,12 @@ describe('after a turn, with real git', () => {
     const elsewhere = tempDir()
     execFileSync('git', ['clone', '-q', origin, elsewhere])
     sh(elsewhere, 'merge', '-q', '--no-ff', '-m', 'Merge feat/x', 'origin/feat/x')
-    sh(elsewhere, 'push', '-q', 'origin', 'main', ':feat/x')
+    sh(elsewhere, 'merge', '-q', '--no-ff', '-m', 'Merge stray', 'origin/stray')
+    sh(elsewhere, 'push', '-q', 'origin', 'main', ':feat/x', ':stray')
+    const stray = join(dirname(path), 'stray')
     await send()
     const notes = () => chat().entries.flatMap((e) => (e.type === 'extension.note' ? [e.text] : []))
-    return { repo, path, chat, notes, send }
+    return { repo, path, stray, chat, notes, send }
   }
 
   it('removes the merged checkout and its branch, notes it, and the next message makes a new checkout', async () => {
@@ -231,6 +240,8 @@ describe('after a turn, with real git', () => {
     expect(sh(t.repo, 'branch', '--list', 'feat/x')).toBe('')
     // The user's own checkout is as it was.
     expect(sh(t.repo, 'symbolic-ref', '--short', 'HEAD').trim()).toBe('main')
+    // The agent's own merged worktree goes too.
+    await until(() => !existsSync(t.stray) && sh(t.repo, 'branch', '--list', 'stray') === '')
     await t.send()
     expect(existsSync(t.chat().worktrees![t.repo]!.path)).toBe(true)
   })
@@ -239,6 +250,101 @@ describe('after a turn, with real git', () => {
     const t = await merged(false)
     await new Promise((r) => setTimeout(r, 300))
     expect(existsSync(t.path)).toBe(true)
+    expect(existsSync(t.stray)).toBe(true)
     expect(t.notes().some((n) => n.startsWith('Removed'))).toBe(false)
+  })
+})
+
+describe("cleaning up an agent's other worktrees, with real git", () => {
+  const repoWithOrigin = () => {
+    const origin = tempDir()
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin])
+    const repo = tempDir()
+    sh(repo, 'init', '-q', '-b', 'main')
+    writeFileSync(join(repo, 'a.txt'), 'a\n')
+    sh(repo, 'add', '.')
+    sh(repo, 'commit', '-q', '-m', 'first')
+    sh(repo, 'remote', 'add', 'origin', origin)
+    sh(repo, 'push', '-q', '-u', 'origin', 'main')
+    return { origin, repo }
+  }
+  // A worktree on a new branch with one commit; pushed, merged into main and deleted on the remote unless told not.
+  const branchIn = (
+    { origin, repo }: { origin: string; repo: string },
+    path: string,
+    branch: string,
+    { push = true, merge = true, gone = true } = {},
+  ) => {
+    if (!existsSync(path)) sh(repo, 'worktree', 'add', '-q', '-b', branch, path, 'main')
+    writeFileSync(join(path, `${branch.replace('/', '-')}.txt`), 'work\n')
+    sh(path, 'add', '-A')
+    sh(path, 'commit', '-q', '-m', branch)
+    if (push) sh(path, 'push', '-q', '-u', 'origin', branch)
+    if (merge) {
+      sh(repo, 'merge', '-q', '--no-ff', '-m', `Merge ${branch}`, branch)
+      sh(repo, 'push', '-q', 'origin', 'main')
+    }
+    if (push && gone) execFileSync('git', ['-C', origin, 'update-ref', '-d', `refs/heads/${branch}`])
+    return path
+  }
+  const run: ExtensionHost['run'] = async (command, args, options) => {
+    try {
+      const stdout = execFileSync(command, args, { cwd: options?.cwd, encoding: 'utf8', stdio: 'pipe' })
+      return { code: 0, stdout, stderr: '' }
+    } catch (error) {
+      const e = error as { status?: number; stdout?: string; stderr?: string }
+      return { code: e.status ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? '' }
+    }
+  }
+  const spaceOf = (remote: { repo: string }) => {
+    const workDir = tempDir()
+    const own = branchIn({ ...remote, origin: '' }, join(workDir, 'repo'), 'kothar/app', { push: false, merge: false })
+    const checkouts: Checkout[] = [{ folder: remote.repo, path: own, branch: 'kothar/app' }]
+    return { workDir, own, space: { workDir, checkouts } }
+  }
+
+  it('removes one in the work folder once its branch is merged and gone upstream, and keeps every other', async () => {
+    const remote = repoWithOrigin()
+    const { repo } = remote
+    const { workDir, own, space } = spaceOf(remote)
+    const merged = branchIn(remote, join(workDir, 'merged'), 'merged')
+    const dirty = branchIn(remote, join(workDir, 'dirty'), 'dirty')
+    writeFileSync(join(dirty, 'notes.txt'), 'not committed\n')
+    const unmerged = branchIn(remote, join(workDir, 'unmerged'), 'unmerged', { merge: false })
+    const local = branchIn(remote, join(workDir, 'local'), 'local', { push: false })
+    const outside = branchIn(remote, join(tempDir(), 'outside'), 'outside')
+
+    expect(await cleanupStrayWorktrees(run, space)).toEqual([merged])
+    expect(existsSync(merged)).toBe(false)
+    expect(sh(repo, 'worktree', 'list', '--porcelain')).not.toContain(merged)
+    expect(sh(repo, 'branch', '--format=%(refname:short)').trim().split('\n')).toEqual([
+      'dirty',
+      'kothar/app',
+      'local',
+      'main',
+      'outside',
+      'unmerged',
+    ])
+    for (const kept of [own, dirty, unmerged, local, outside]) expect(existsSync(kept), kept).toBe(true)
+    expect(sh(repo, 'branch', '-r')).not.toContain('origin/merged')
+  })
+
+  it('keeps it when a chat in the space starts running before the removal, and does nothing while one runs', async () => {
+    const remote = repoWithOrigin()
+    const { workDir, space } = spaceOf(remote)
+    const merged = branchIn(remote, join(workDir, 'merged'), 'merged')
+
+    expect(await cleanupStrayWorktrees(run, space, () => false)).toEqual([])
+    let checks = 0
+    // Idle when asked first; running by the time it would remove the worktree.
+    expect(await cleanupStrayWorktrees(run, space, () => checks++ === 0)).toEqual([])
+    expect(checks).toBe(2)
+    expect(existsSync(merged)).toBe(true)
+  })
+
+  it('does nothing for a space without a work folder', async () => {
+    const remote = repoWithOrigin()
+    const { space } = spaceOf(remote)
+    expect(await cleanupStrayWorktrees(run, { ...space, workDir: undefined })).toEqual([])
   })
 })

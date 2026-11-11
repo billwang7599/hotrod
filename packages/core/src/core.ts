@@ -539,7 +539,6 @@ function assembleCore(options: {
     sandboxIn,
     attachmentsDirOf: (chat) => attachmentsDirOf(chat),
     checkoutOf: (space, folder, workDir, sandboxed) => checkoutOf(space, folder, workDir, sandboxed),
-    sweepMergedWorktrees: (space) => sweepMergedWorktrees(space),
     viewOf,
     instructionPartsOf,
   })
@@ -735,10 +734,9 @@ function assembleCore(options: {
     return space.info.workDir!
   }
 
-  const { checkoutOf, gitAccess, removeWorkDir, sweepMergedWorktrees } = openCheckouts<Chat>({
+  const { checkoutOf, gitAccess, removeWorkDir } = openCheckouts<Chat>({
     machine,
     saveWorktrees: (space, worktrees) => updateChat(space, { worktrees }),
-    isIdle: (space) => familyOf(space).every((c) => c.status === 'idle'),
   })
 
   // Where a command an extension starts for a chat runs, and its sandbox: the chat's own, over the space's work folder
