@@ -23,12 +23,23 @@ const BASE_POLICY = [
   "manifest-src 'none'",
 ]
 
-/** The frame's policy: inline only, or (web) loads from https: too, still with nothing that connects. */
-export function frameCsp(web = false) {
+// Libraries Kothar serves itself, offline, that a page may load (frame-libraries.ts): each is one exact URL.
+export const FRAME_LIBRARIES = ['react', 'mermaid', 'tailwind'] as const
+export type FrameLibrary = (typeof FRAME_LIBRARIES)[number]
+
+const libraryUrl = (name: FrameLibrary) => new URL(`/frame/${name}.js`, location.origin).href
+const librariesOf = (names: readonly string[] = []) => FRAME_LIBRARIES.filter((name) => names.includes(name))
+
+/**
+ * The frame's policy: inline only, or (web) loads from https: too, still with nothing that connects. libraries: the
+ * exact URLs of those Kothar serves are allowed as scripts too, and no other path of Kothar's.
+ */
+export function frameCsp(web = false, libraries: readonly FrameLibrary[] = []) {
   const from = web ? ' https:' : ''
+  const own = librariesOf(libraries).map((name) => ` ${libraryUrl(name)}`).join('')
   return [
     ...BASE_POLICY,
-    `script-src 'unsafe-inline'${from}`,
+    `script-src 'unsafe-inline'${own}${from}`,
     `style-src 'unsafe-inline'${from}`,
     `img-src data: blob:${from}`,
     `font-src data:${from}`,
@@ -51,7 +62,7 @@ const ERROR_KEY = 'kotharFrameError'
 // postMessage is the one way out of the sandbox, and it carries only a string the window cuts to size.
 const ERROR_REPORTER = `<script>(()=>{const send=(text)=>{try{parent.postMessage({${ERROR_KEY}:String(text)},'*')}catch(e){}};addEventListener('error',(e)=>send((e.error&&e.error.stack)||(e.message+(e.lineno?' (line '+e.lineno+')':''))));addEventListener('unhandledrejection',(e)=>{const r=e.reason;send('Unhandled promise rejection: '+((r&&(r.stack||r.message))||r))})})()</script>`
 
-type FrameOptions = { web?: boolean; errors?: boolean; theme?: boolean }
+type FrameOptions = { web?: boolean; errors?: boolean; theme?: boolean; libraries?: readonly FrameLibrary[] }
 
 /**
  * The page with the policy as its first element: right after any doctype, before its own <html> or <head>. errors: the
@@ -59,11 +70,15 @@ type FrameOptions = { web?: boolean; errors?: boolean; theme?: boolean }
  * default colours follow Kothar's.
  */
 export function sandboxedDocument(html: string, options: boolean | FrameOptions = {}) {
-  const { web = false, errors = false, theme = false } = typeof options === 'boolean' ? { web: options } : options
-  const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(frameCsp(web))}">`
+  const { web = false, errors = false, theme = false, libraries = [] } = typeof options === 'boolean' ? { web: options } : options
+  const meta = `<meta http-equiv="Content-Security-Policy" content="${escapeAttribute(frameCsp(web, libraries))}">`
+  // After the reporter, so a library that fails to start is reported; before the page, so it can use them.
+  const scripts = librariesOf(libraries)
+    .map((name) => `<script src="${escapeAttribute(libraryUrl(name))}"></script>`)
+    .join('')
   const scheme = theme ? '<meta name="color-scheme" content="light dark">' : ''
   const lead = LEAD.exec(html)?.[0] ?? ''
-  return `${lead}${meta}${scheme}${errors ? ERROR_REPORTER : ''}${html.slice(lead.length)}`
+  return `${lead}${meta}${scheme}${errors ? ERROR_REPORTER : ''}${scripts}${html.slice(lead.length)}`
 }
 
 /** The error a message from a frame carries, cut to size, or undefined if it isn't one from the reporter. */
@@ -81,10 +96,12 @@ type HtmlFrameProps = {
   onError?: (error: string) => void
   // The page follows Kothar's light or dark scheme: no white sheet behind it, and prefers-color-scheme inside matches.
   theme?: boolean
+  // Libraries Kothar serves itself that the page loads first, such as React.
+  libraries?: readonly FrameLibrary[]
 }
 
-export function HtmlFrame({ html, label, web, height, onError, theme }: HtmlFrameProps) {
-  const csp = frameCsp(web)
+export function HtmlFrame({ html, label, web, height, onError, theme, libraries }: HtmlFrameProps) {
+  const csp = frameCsp(web, libraries)
   const frame = useRef<HTMLIFrameElement>(null)
   const dark = useAppearance().dark
   const report = useRef(onError)
@@ -92,7 +109,7 @@ export function HtmlFrame({ html, label, web, height, onError, theme }: HtmlFram
     report.current = onError
   })
   const errors = !!onError
-  const doc = sandboxedDocument(html, { web, errors, theme })
+  const doc = sandboxedDocument(html, { web, errors, theme, ...(libraries && { libraries }) })
   useEffect(() => {
     if (!errors) return
     // Counted per page: a new document (a new version, the same one reloaded) starts again.

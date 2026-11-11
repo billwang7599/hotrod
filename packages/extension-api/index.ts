@@ -523,8 +523,19 @@ export type ExtensionView =
   // there is one) is sent as the action named errors with value: the error's text, at most 2000 characters and 20 per
   // page load. The page could send any text this way, so treat it as the page's, not Kothar's. theme: the page draws in
   // Kothar's light or dark scheme (prefers-color-scheme inside matches it, and there's no white sheet behind it), for
-  // pages made to follow it; without it a page draws on white, as in a browser.
-  | { type: 'html'; html: string; label: string; web?: boolean; height?: number; errors?: string; theme?: boolean }
+  // pages made to follow it; without it a page draws on white, as in a browser. libraries: libraries Kothar ships and
+  // serves itself, offline, loaded before the page's own scripts (and allowed by the policy, which stays closed to the
+  // network otherwise): see HtmlLibrary.
+  | {
+      type: 'html'
+      html: string
+      label: string
+      web?: boolean
+      height?: number
+      errors?: string
+      theme?: boolean
+      libraries?: HtmlLibrary[]
+    }
   // A button that copies text, such as a file's contents, to the clipboard.
   | { type: 'copy'; text: string; label: string; hint?: string }
   // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
@@ -544,6 +555,14 @@ export type ExtensionView =
       value?: string | number
       options?: { value: string | number; label: string }[]
     }
+
+// Libraries an html view's page can load from Kothar, offline:
+// - react: React 19 and ReactDOM. The page puts its component in <script type="text/jsx"> (JSX and TypeScript work;
+//   only react and react-dom can be imported) and its default export is drawn into #root.
+// - mermaid: every element with class "mermaid" is drawn as a Mermaid diagram, in the frame's scheme, with Mermaid's
+//   strict security.
+// - tailwind: Tailwind CSS's browser build styles the page's utility classes.
+export type HtmlLibrary = 'react' | 'mermaid' | 'tailwind'
 
 // A tab beside General and Context in the right sidebar, or a popup over the chat.
 export type ExtensionPanel = {

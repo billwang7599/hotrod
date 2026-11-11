@@ -512,6 +512,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
           web={node.web}
           height={node.height}
           theme={node.theme}
+          libraries={node.libraries}
           onError={node.errors ? (error) => act({ name: node.errors!, value: error }) : undefined}
         />
       )

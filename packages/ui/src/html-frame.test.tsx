@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { ExtensionAction, ExtensionView } from '@kothar/extension-api'
 import { Tooltip } from 'radix-ui'
 import { ExtensionViewer } from './extension-view.tsx'
-import { FRAME_ERROR_CHARS, FRAME_ERRORS_PER_LOAD, frameCsp, frameErrorOf, sandboxedDocument } from './html-frame.tsx'
+import { FRAME_LIBRARIES, FRAME_ERROR_CHARS, FRAME_ERRORS_PER_LOAD, frameCsp, frameErrorOf, sandboxedDocument } from './html-frame.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -160,4 +160,24 @@ test('a plain page draws on white; a themed one on the panel, in Kothar’s sche
   const themed = host.querySelector('iframe')!
   expect(themed.style.backgroundColor).toBe('transparent')
   expect(['light', 'dark']).toContain(themed.style.colorScheme)
+})
+
+test('a page loads only the libraries Kothar serves, each by its exact URL, before its own scripts', () => {
+  const origin = location.origin
+  const csp = frameCsp(false, ['react', 'tailwind'])
+  expect(csp).toContain(`script-src 'unsafe-inline' ${origin}/frame/react.js ${origin}/frame/tailwind.js;`)
+  // Still nothing that connects, and no other path of Kothar's.
+  expect(csp).toContain("connect-src 'none'")
+  expect(csp).not.toContain(`${origin}/ `)
+  const unknown = ['react', 'evil'] as unknown as (typeof FRAME_LIBRARIES)[number][]
+  expect(frameCsp(false, unknown)).not.toContain('evil')
+  const doc = sandboxedDocument('<script type="text/jsx">export default () => <p/></script>', { errors: true, libraries: ['react'] })
+  const scripts = [...new DOMParser().parseFromString(doc, 'text/html').querySelectorAll('script')]
+  expect(scripts.map((s) => s.getAttribute('src') ?? s.getAttribute('type') ?? 'inline')).toEqual([
+    'inline',
+    `${origin}/frame/react.js`,
+    'text/jsx',
+  ])
+  show({ type: 'html', label: 'App', html: '<p/>', libraries: ['mermaid'] })
+  expect(host.querySelector('iframe')!.getAttribute('csp')).toBe(frameCsp(false, ['mermaid']))
 })
