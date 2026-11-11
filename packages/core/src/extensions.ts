@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Extension, ExtensionHost, ExtensionPanel, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
+import type { Extension, ExtensionHost, ExtensionManifest, ExtensionPanel, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
 import { type CommunityInstall, installedExtensions, EXTENSION_MAIN } from './marketplace.ts'
 import { approvalsFor, logHistory, reviewOf } from './approvals.ts'
-import { EXTENSION_USES, type PanelTab, settingProblem, sortUses } from './shared.ts'
+import { EXTENSION_USES, type InstalledItem, type PanelTab, settingProblem, sortUses } from './shared.ts'
 
 const MISSING_PACKAGE = /^Cannot find (?:package|module) '((?:@[^/']+\/)?[^/'.:][^/':]*)(?:\/[^']*)?'/
 
@@ -293,3 +293,6 @@ export async function loadCommunityExtensions(
 export type ExtensionHook = {
   [K in keyof Extension]-?: NonNullable<Extension[K]> extends (...args: never[]) => unknown ? K : never
 }[keyof Extension]
+
+/** A community extension as the core keeps it: what's installed, the version running, and why it didn't load or start. */
+export type CommunityEntry = { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string; held?: string }

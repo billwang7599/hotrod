@@ -10,11 +10,9 @@ import { isAbsolute, join, resolve } from 'node:path'
 import type {
   ChatDetail,
   Extension,
-  ExtensionAction,
   ExtensionContext,
   ExtensionManifest,
   ExtensionInstructionsFor,
-  ExtensionRun,
   ExtensionUse,
   SpaceDetail,
 } from '@kothar/extension-api'
@@ -24,11 +22,10 @@ import { CORE_TOOL_NAMES, openKotharMcp, WORKERS_EXTENSION, summaryOf } from './
 import { messagesOf, windowView } from './memory.ts'
 import { type Fetch, installedExtensions, openMarketplace } from './marketplace.ts'
 import { type Approval, approve, forget, logHistory, logInstall, readApprovals, reviewOf } from './approvals.ts'
-import { type CommunityExtension, type ExtensionHook, valuesOf } from './extensions.ts'
+import { type CommunityEntry, type CommunityExtension, type ExtensionHook, valuesOf } from './extensions.ts'
 import {
   bySpaceOrder,
   editsAnywhere,
-  settingProblem,
   type Adapter,
   type ChatEntry,
   type ChatInfo,
@@ -39,7 +36,6 @@ import {
   type EngineStatus,
   type Machine,
   type ModelRole,
-  type InstalledItem,
   type MarketKind,
   type MemoryMessage,
   EXTENSION_USES,
@@ -49,11 +45,11 @@ import {
   type RestartChange,
   type RestartState,
   type Setup,
-  type SetupState,
 } from './shared.ts'
 import { openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
+import { openExtensionSettings } from './extension-settings.ts'
 import { openPanels } from './panels.ts'
 import { openAppSettings } from './settings.ts'
 import { checkPath, openContext } from './context.ts'
@@ -153,10 +149,7 @@ function openLockedCore(options: {
   // one whose tool or chat is taken doesn't run. An extension that didn't load (off, or broken) is listed as a stub
   // with no hooks, so it can be turned on or off; it runs from the next start.
   const builtInIds = new Set(extensions.map((extension) => extension.id))
-  const community = new Map<
-    string,
-    { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string; held?: string }
-  >()
+  const community = new Map<string, CommunityEntry>()
   // The community extensions this run imported (whether or not they loaded), by id with their name, and those installed
   // again since; what's pending a restart is worked out from these and the settings.
   const imported = new Map<string, string>()
@@ -226,81 +219,6 @@ function openLockedCore(options: {
     return typeof saved === 'boolean' ? saved : extension.enabledByDefault
   }
   const extensionValues = (extension: Extension) => valuesOf(extension, settings.extensions?.[extension.id])
-  const setups = new Map<string, Omit<SetupState, 'description'>>()
-  const installs = new Map<string, AbortController>()
-  const extensionInfo = (extension: Extension): ExtensionInfo => {
-    const { id, name, description, settings: declared = [] } = extension
-    const values = extensionValues(extension)
-    const about = extension.setup?.description
-    const setup = extension.setup && {
-      description: typeof about === 'function' ? about(values) : about!,
-      ...(setups.get(id) ?? { status: 'checking' }),
-    }
-    // A community extension shows its own switch; the master switch is beside it in the UI.
-    const enabled = community.has(id) ? ownSwitch(extension) : isOn(extension)
-    const settingsError = settingsErrors.get(id)
-    const view = settingsViewOf(extension)
-    const info = {
-      id,
-      name,
-      description,
-      enabled,
-      settings: declared,
-      values,
-      ...(view && { settingsView: view }),
-      ...(settingsError && { loadError: settingsError }),
-      ...(extension.chats?.length && { ownsChat: true }),
-    }
-    const from = community.get(id)
-    const { version, author, uses } = from?.manifest ?? {}
-    const { source, repo, path, tag } = from?.item ?? {}
-    const approval = approvals[id]
-    const communityFields = from && {
-      community: {
-        version: version!,
-        author: author!,
-        uses: uses!,
-        source: source === 'local' ? ('local' as const) : ('marketplace' as const),
-        ...(repo && { repo }),
-        ...(tag && { tag }),
-        ...(path && { path }),
-        ...(from.running && { running: from.running }),
-        ...(approval && {
-          approved: { version: approval.version, uses: approval.uses, ...(approval.tag && { tag: approval.tag }) },
-        }),
-        ...(from.held && { held: from.held }),
-      },
-      ...(from.loadError && { loadError: from.loadError }),
-    }
-    return { ...info, ...(setup && { setup }), ...communityFields }
-  }
-  // An extension's settings view, drawn now: a built-in extension's even while it's off, a community one's only while
-  // it runs.
-  const settingsViewOf = (extension: Extension): ExtensionInfo['settingsView'] => {
-    if (!extension.settingsView || (community.has(extension.id) && !isOn(extension))) return undefined
-    try {
-      const view = extension.settingsView.render(contextOf(extension))
-      if (view instanceof Promise) throw new Error('A settings view renders synchronously')
-      return { view }
-    } catch (error) {
-      return { error: messageOf(error) }
-    }
-  }
-  const settingsViewChanged = (extension: Extension) => {
-    if (extension.settingsView) broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
-  }
-  const settingsViewAction = async (extension: Extension, action: ExtensionAction) => {
-    if (!extension.settingsView || (community.has(extension.id) && !isOn(extension))) {
-      throw new Error(`${extension.name} has no settings view`)
-    }
-    if (typeof action?.name !== 'string') throw new Error('A settings action needs a name')
-    try {
-      await extension.settingsView.onAction?.(action, contextOf(extension))
-    } catch (error) {
-      extensionError(extension, error)
-    }
-    settingsViewChanged(extension)
-  }
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
@@ -383,89 +301,38 @@ function openLockedCore(options: {
       else if (JSON.stringify(run) !== chat.shownRun) broadcast({ type: 'chat.updated', chat: withRun(chat) })
     }
   }
-  const saveExtension = (extension: Extension, change: Record<string, unknown>) => {
-    settings.extensions = { ...settings.extensions, [extension.id]: { ...settings.extensions?.[extension.id], ...change } }
-    saveSettings()
-    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
-  }
-  const setSetup = (extension: Extension, state: Omit<SetupState, 'description'>) => {
-    setups.set(extension.id, state)
-    broadcast({ type: 'extension.updated', extension: extensionInfo(extension) })
-  }
-  const runFor =
-    (signal?: AbortSignal): ExtensionRun =>
-    (command, args, options) =>
-      // A setup that runs several commands stops at its next one once cancelled.
-      signal?.aborted
-        ? Promise.reject(new Error('Cancelled'))
-        : machine.run(command, args, { cwd: '/', ...options, ...(signal && { signal }) })
-  const checkSetup = async (extension: Extension, installError?: string) => {
-    if (!extension.setup || installs.has(extension.id)) return
-    const { message } = setups.get(extension.id) ?? {}
-    setSetup(extension, { status: 'checking', ...(message && { message }) })
-    let checked: Omit<SetupState, 'description'>
-    try {
-      const result = await extension.setup.check(runFor(), extensionValues(extension))
-      checked = { status: result.ready ? 'ready' : 'missing', ...(result.message && { message: result.message }) }
-    } catch (error) {
-      checked = { status: 'missing', error: messageOf(error) }
-    }
-    if (checked.status === 'missing' && installError) checked.error = installError
-    if (!installs.has(extension.id)) setSetup(extension, checked)
-  }
-  const install = (extension: Extension) => {
-    if (!extension.setup) throw new Error(`${extension.name} has nothing to install`)
-    if (installs.has(extension.id)) throw new Error(`${extension.name} is already installing`)
-    if (setups.get(extension.id)?.status === 'ready') throw new Error(`${extension.name} is already installed`)
-    const controller = new AbortController()
-    installs.set(extension.id, controller)
-    const { message } = setups.get(extension.id) ?? {}
-    setSetup(extension, { status: 'installing', ...(message && { message }) })
-    const report = ({ text, progress }: { text?: string; progress?: number }) => {
-      if (installs.get(extension.id) !== controller) return
-      const update = { ...(text && { progressText: text }), ...(progress !== undefined && { progress }) }
-      setSetup(extension, { ...setups.get(extension.id)!, ...update })
-    }
-    void extension.setup.install(runFor(controller.signal), report, extensionValues(extension)).then(
-      () => {
-        installs.delete(extension.id)
-        return checkSetup(extension)
-      },
-      (error) => {
-        installs.delete(extension.id)
-        return checkSetup(extension, controller.signal.aborted ? undefined : messageOf(error))
-      },
-    )
-  }
-  const setExtensionValue = (extension: Extension, key: string, value: unknown) => {
-    const setting = extension.settings?.find((s) => s.key === key)
-    if (!setting) throw new Error(`${extension.name} has no setting "${key}"`)
-    const problem = settingProblem(setting, value)
-    if (problem) throw new Error(`${setting.label} ${problem}`)
-    const previous = extensionValues(extension)[key]
-    saveExtension(extension, { [key]: value })
-    if (isOn(extension)) void checkSetup(extension)
-    // An extension with background work hears of it only once that work has started; onStart reads the values itself.
-    const running = isOn(extension) && (!extension.onStart || startedExtensions.has(extension.id))
-    if (running && previous !== value && extension.onSettingsChanged) {
-      callExtension(extension, () => extension.onSettingsChanged!({ key, value, previous }, contextOf(extension)))
-      settingsViewChanged(extension)
-    }
-  }
-  // A space's own values for an extension's spaceSettings: the space a worker is in, else the chat itself.
-  const spaceChat = (chat: Chat) => chainOf(chat)[0]!
-  const spaceValuesOf = (extension: Extension, chat: Chat) =>
-    valuesOf(extension, spaceChat(chat).info.extensionValues?.[extension.id], extension.spaceSettings)
-  const setSpaceValue = (extension: Extension, chat: Chat, key: string, value: unknown) => {
-    const setting = extension.spaceSettings?.find((s) => s.key === key)
-    if (!setting) throw new Error(`${extension.name} has no space setting "${key}"`)
-    const problem = settingProblem(setting, value)
-    if (problem) throw new Error(`${setting.label} ${problem}`)
-    const space = spaceChat(chat)
-    const extensionValues = { ...space.info.extensionValues, [extension.id]: { ...space.info.extensionValues?.[extension.id], [key]: value } }
-    updateChat(space, { extensionValues })
-    refreshExtension(extension)
-  }
+  const {
+    extensionInfo,
+    settingsViewChanged,
+    settingsViewAction,
+    saveExtension,
+    runFor,
+    checkSetup,
+    install,
+    cancelInstall,
+    setupReady,
+    setExtensionValue,
+    spaceValuesOf,
+    setSpaceValue,
+  } = openExtensionSettings({
+    settings,
+    saveSettings,
+    broadcast,
+    machine,
+    community,
+    approvalOf: (id) => approvals[id],
+    settingsErrors,
+    isOn,
+    ownSwitch,
+    extensionValues,
+    isStarted: (extension) => startedExtensions.has(extension.id),
+    contextOf: (extension) => contextOf(extension),
+    extensionError: (extension, error) => extensionError(extension, error),
+    callExtension: (extension, run) => callExtension(extension, run),
+    refreshExtension: (extension, chatId) => refreshExtension(extension, chatId),
+    chainOf: (chat) => chainOf(chat),
+    updateChat: (chat, change) => updateChat(chat, change),
+  })
   const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
   const withRun = (chat: Chat) => {
@@ -505,7 +372,7 @@ function openLockedCore(options: {
   const extensionServers = (chat: Chat, workDir: string, sandboxed: boolean) => {
     const session = { chat: summaryOf(chat.info), workDir, sandboxed }
     const servers = extensions
-      .filter((extension) => isOnFor(extension, chat) && (!extension.setup || setups.get(extension.id)?.status === 'ready'))
+      .filter((extension) => isOnFor(extension, chat) && (!extension.setup || setupReady(extension)))
       .flatMap((extension) => extension.mcpServers?.({ ...session, values: extensionValues(extension) }) ?? [])
     const names = ['kothar', ...servers.map((server) => server.name)]
     const twin = names.find((name, i) => names.indexOf(name) !== i)
@@ -1343,7 +1210,7 @@ function openLockedCore(options: {
     setExtensionEnabled,
     setExtensionValue,
     install,
-    cancelInstall: (extension) => installs.get(extension.id)?.abort(),
+    cancelInstall,
     settingsViewChanged,
     settingsViewAction,
     setCommunityExtensions,
