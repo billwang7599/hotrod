@@ -26,7 +26,6 @@ import type {
   PermissionRequest,
   PermissionVerdict,
   SpaceDetail,
-  TurnSummary,
 } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
 import { openSetups } from './setups.ts'
@@ -37,7 +36,6 @@ import { type Approval, approve, forget, logHistory, logInstall, readApprovals, 
 import { type CommunityExtension, panelTabOf, valuesOf } from './extensions.ts'
 import {
   bySpaceOrder,
-  CONTEXT_SECTIONS,
   editsAnywhere,
   GLOBAL_CONTEXT,
   IMAGE_TYPES,
@@ -45,7 +43,6 @@ import {
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   PERMISSION_SWITCHES,
-  isUnread,
   settingProblem,
   type Adapter,
   type Answers,
@@ -55,7 +52,6 @@ import {
   type ChatState,
   type ChatWait,
   type ChatStatus,
-  type ClientMessage,
   type CommandInfo,
   type CompletionRequest,
   type ContextItem,
@@ -74,7 +70,6 @@ import {
   MODEL_ROLES,
   type NewChat,
   type PanelTab,
-  type PermissionSwitch,
   type QueuedMessage,
   type RestartChange,
   type RestartState,
@@ -86,7 +81,8 @@ import {
 } from './shared.ts'
 import { openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
-import { searchChats } from './search.ts'
+import { openProtocol } from './protocol.ts'
+import type { Chat } from './chat.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
@@ -95,7 +91,7 @@ import { verdictOf } from './permissions.ts'
 import { buildInstructions } from './instructions.ts'
 import { type Checkout, openCheckouts } from './checkouts.ts'
 import { openExtensionHosts } from './extension-host.ts'
-import { appendEntry, openSettings, quitMidTurn, readChat, readJson, saveChatFile, storedChatIds } from './chat-store.ts'
+import { appendEntry, openSettings, quitMidTurn, readChat, saveChatFile, storedChatIds } from './chat-store.ts'
 import { within, messageOf } from './util.ts'
 
 // Kept here too, for code that imports them from the core.
@@ -110,37 +106,6 @@ const REVEAL_TIMEOUT_MS = 10_000
 // Where the Machine can't sandbox (Linux, Windows for now), a chat runs only once the user allows edits anywhere.
 const UNSANDBOXED_NEEDS_EDIT_ANYWHERE = true
 
-type Chat = {
-  info: ChatInfo
-  dir: string
-  context: Record<string, boolean>
-  entries: ChatEntry[]
-  status: ChatStatus
-  session?: Session
-  unsavedText: string
-  stopTimer?: ReturnType<typeof setTimeout>
-  pendingRequests: Map<string, 'permission' | 'question'>
-  // What extensions wait on the user for while the turn runs (ExtensionHost.wait), by extension id.
-  waits: Map<string, ExtensionWait>
-  // The turn has ended and extensions hear of it (onSessionEnded, onTurnCompleted): a wait now holds the chat.
-  ending?: boolean
-  // An extension's wait holds the chat after its turn ended: it shows waiting, a worker hasn't reported and queued
-  // messages wait, until the wait ends. error is the turn's, for the report.
-  held?: { error?: string }
-  mcpToken?: string
-  queue: QueuedMessage[]
-  turns: number
-  // The account and model the running turn started on, and the limit it ran into, if any.
-  account?: string
-  runModel?: string
-  limit?: { message: string; resetsAt?: string }
-  // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
-  produced?: boolean
-  // What the running turn has done so far, for onTurnCompleted.
-  turn?: { text: string; tools: TurnSummary['tools'] }
-  // The run the UI last got for this chat (JSON), so a change in Settings or an engine resends only the chats it moves.
-  shownRun?: string
-}
 
 export type Core = ReturnType<typeof openCore>
 
@@ -2162,6 +2127,68 @@ function openLockedCore(options: {
     settle(chat, { ...entry, ...(given && { answers: given }) }).answer?.(requestId, given)
   }
 
+  const handle = openProtocol({
+    settings,
+    saveSettings,
+    broadcast,
+    isQuitting: () => quitting,
+    restart: options.restart,
+    chatFor,
+    shownChats,
+    createChat,
+    renameChat,
+    archiveChat,
+    moveChat,
+    deleteChat,
+    updateChat,
+    checkActive,
+    setModel,
+    sendMessage,
+    setQueue,
+    interrupt,
+    respond,
+    answer,
+    contextItems,
+    addContext,
+    removeContext,
+    setContext,
+    writeContext,
+    writeInstructions: (text) => writeAgentsFile(globalAgentsFile, text),
+    setContextDefault,
+    setEngineEnabled,
+    setWorkFolder,
+    workFolder,
+    setMemory,
+    models,
+    followModels,
+    saveSetup,
+    removeSetup,
+    setChatSetup,
+    accounts,
+    extensionFor,
+    extensionsOf,
+    openPanel,
+    panelOf,
+    panelAction,
+    setSpaceValue,
+    runCommand,
+    answerWait,
+    setExtensionEnabled,
+    setExtensionValue,
+    install,
+    cancelInstall: (extension) => installs.get(extension.id)?.abort(),
+    settingsViewChanged,
+    settingsViewAction,
+    setCommunityExtensions,
+    marketplace,
+    builtInIds,
+    communityChanged,
+    marketChanged,
+    uninstallExtension,
+    reveal,
+    terminalFor,
+  })
+
   for (const extension of extensions.filter(isOn)) void checkSetup(extension)
 
   return {
@@ -2220,245 +2247,7 @@ function openLockedCore(options: {
       mcpUrl = url
       return mcp.handle
     },
-    handle(message: ClientMessage, reply: (message: CoreMessage) => void) {
-      switch (message.type) {
-        case 'engine.setEnabled':
-          return setEngineEnabled(String(message.engine), message.enabled === true)
-        case 'chat.create':
-          return void createChat({
-            name: message.name,
-            engine: optionalText(message.engine),
-            folders: message.folders,
-            files: message.files,
-          })
-        case 'chat.rename':
-          return renameChat(chatFor(message.chatId), message.name)
-        case 'chat.archive':
-          return archiveChat(chatFor(message.chatId), message.archived === true)
-        case 'chat.move':
-          return moveChat(chatFor(message.chatId), message.pinned === true, message.index)
-        case 'chat.delete':
-          return deleteChat(chatFor(message.chatId))
-        case 'chat.read': {
-          const chat = chatFor(message.chatId)
-          return isUnread(chat.info) ? updateChat(chat, { readAt: new Date().toISOString() }) : undefined
-        }
-        case 'chat.history': {
-          const { chatId, before, to } = message
-          const page = pageOf(chatFor(chatId).entries, Number(before), to === undefined ? undefined : Number(to))
-          return reply({ type: 'chat.history', chatId, before: page.from + page.entries.length, ...page })
-        }
-        case 'setup.save': {
-          let answer: CoreMessage
-          try {
-            answer = { type: 'setup.saved', setup: saveSetup(message.setup) }
-          } catch (error) {
-            answer = { type: 'setup.refused', error: messageOf(error) }
-          }
-          return reply(answer)
-        }
-        case 'setup.remove':
-          return removeSetup(message.id)
-        case 'chat.setSetup':
-          return setChatSetup(chatFor(message.chatId), message.setup)
-        case 'chat.setModel':
-          return setModel(
-            chatFor(message.chatId),
-            optionalText(message.engine),
-            optionalText(message.model),
-            optionalText(message.thinking),
-          )
-        case 'chat.setPermission': {
-          const chat = chatFor(message.chatId)
-          const name = checkSwitch(message.name)
-          checkActive(chat)
-          return updateChat(chat, { [name]: typeof message.enabled === 'boolean' ? message.enabled : undefined })
-        }
-        case 'chat.send':
-          return sendMessage(chatFor(message.chatId), message.text, message.attachments, message.steer === true)
-        case 'chat.unqueue': {
-          const chat = chatFor(message.chatId)
-          const removed = chat.queue.find((q) => q.id === message.id)
-          if (!removed) return
-          if (removed.steering) throw new Error('That message is already with the engine, so it can no longer be taken back')
-          for (const { path } of removed.attachments ?? []) rmSync(path, { force: true })
-          return setQueue(chat, chat.queue.filter((q) => q !== removed))
-        }
-        case 'chat.interrupt':
-          return interrupt(chatFor(message.chatId), message.force === true)
-        case 'context.get': {
-          const chat = chatFor(message.chatId)
-          reply({ type: 'chat.context', chatId: chat.info.id, items: contextItems(chat) })
-          return reply(extensionsOf(chat))
-        }
-        case 'extension.panel.get':
-          return openPanel(chatFor(message.chatId), message.extension, message.panel)
-        case 'extension.panel.action': {
-          const chat = chatFor(message.chatId)
-          panelOf(chat, message.extension, message.panel)
-          return void panelAction(chat, message.extension, message.panel, message.action).catch((error) =>
-            broadcast({ type: 'error', message: messageOf(error) }),
-          )
-        }
-        case 'extension.space.set':
-          return setSpaceValue(extensionFor(String(message.extension)), chatFor(message.chatId), String(message.key), message.value)
-        case 'extension.command':
-          return runCommand(chatFor(message.chatId), message.extension, message.command)
-        case 'extension.wait.answer':
-          return answerWait(chatFor(message.chatId), String(message.extension), { button: String(message.button) })
-        case 'context.add':
-          return addContext(chatFor(message.chatId), addable(message.section), message.path)
-        case 'context.remove':
-          return removeContext(chatFor(message.chatId), addable(message.section), message.path)
-        case 'context.set':
-          return setContext(chatFor(message.chatId), message.path, message.enabled === true)
-        case 'context.write':
-          if (typeof message.text !== 'string') throw new Error('Context text is missing')
-          return writeContext(chatFor(message.chatId), message.text)
-        case 'instructions.write':
-          if (typeof message.text !== 'string') throw new Error('Instructions text is missing')
-          return writeAgentsFile(globalAgentsFile, message.text)
-        case 'workFolder.set':
-          return setWorkFolder(message.path)
-        case 'permission.setDefault':
-          settings[checkSwitch(message.name)] = message.enabled === true
-          saveSettings()
-          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
-        case 'context.setDefault':
-          if (!CONTEXT_SECTIONS.includes(message.section)) {
-            throw new Error(`Unknown context section "${message.section}"`)
-          }
-          return setContextDefault(message.section, message.enabled === true)
-        case 'extension.setEnabled':
-          return setExtensionEnabled(extensionFor(String(message.extensionId)), message.enabled === true)
-        case 'extension.setValue':
-          return setExtensionValue(extensionFor(String(message.extensionId)), String(message.key), message.value)
-        case 'extension.install':
-          return install(extensionFor(String(message.extensionId)))
-        case 'extension.settingsView.get':
-          return settingsViewChanged(extensionFor(String(message.extensionId)))
-        case 'extension.settingsView.action':
-          return settingsViewAction(extensionFor(String(message.extensionId)), message.action)
-        case 'extension.cancelInstall':
-          return installs.get(extensionFor(String(message.extensionId)).id)?.abort()
-        case 'communityExtensions.setEnabled':
-          return setCommunityExtensions(message.enabled === true)
-        case 'app.restart':
-          if (!options.restart) throw new Error('This Kothar can\'t restart itself. Stop it and start it again.')
-          if (quitting) return
-          return options.restart()
-        case 'memory.set':
-          return setMemory(optionalText(message.engine), optionalText(message.model))
-        case 'models.setList':
-          models.setList(message.role, message.models)
-          return followModels()
-        case 'permission.respond':
-          return respond(chatFor(message.chatId), message.requestId, message.allow === true)
-        case 'question.respond':
-          return answer(chatFor(message.chatId), message.requestId, message.answers)
-        case 'account.login':
-          return accounts.login(
-            String(message.engine),
-            String(message.name ?? ''),
-            optionalText(message.provider),
-            optionalText(message.method),
-          )
-        case 'account.addApiKey':
-          return accounts.addApiKey(
-            String(message.engine),
-            String(message.name ?? ''),
-            String(message.key ?? ''),
-            optionalText(message.provider),
-            optionalText(message.method),
-          )
-        case 'account.code':
-          return accounts.submitCode(String(message.engine), String(message.code ?? ''))
-        case 'account.cancelLogin':
-          return accounts.cancelLogin(String(message.engine))
-        case 'account.use':
-          return accounts.use(String(message.engine), String(message.accountId))
-        case 'account.remove':
-          return accounts.remove(String(message.engine), String(message.accountId), reply)
-        case 'marketplace.list':
-          return void marketplace.listing().then(
-            (entries) => reply({ type: 'marketplace.catalog', entries }),
-            (error) => reply({ type: 'marketplace.catalog', error: messageOf(error) }),
-          )
-        case 'themes.get':
-          return reply({ type: 'themes.updated', themes: marketplace.themes() })
-        case 'market.install': {
-          const { kind } = message
-          const id = String(message.id)
-          if (kind === 'extension' && builtInIds.has(id)) {
-            return reply({ type: 'market.installFailed', kind, id, error: `A built-in extension is already called "${id}"` })
-          }
-          return void marketplace.install(kind, id).then(
-            ({ added }) => {
-              if (kind === 'extension') communityChanged(id, added)
-              marketChanged(kind)
-            },
-            (error) => reply({ type: 'market.installFailed', kind, id, error: messageOf(error) }),
-          )
-        }
-        case 'market.installLocal': {
-          const path = String(message.path ?? '')
-          let result: ReturnType<typeof marketplace.installLocal>
-          try {
-            // A broken manifest is the marketplace's to explain.
-            const id = (() => {
-              try {
-                return (readJson(join(path.trim(), 'manifest.json')) as { id?: unknown }).id
-              } catch {
-                return undefined
-              }
-            })()
-            if (typeof id === 'string' && builtInIds.has(id)) throw new Error(`A built-in extension is already called "${id}"`)
-            result = marketplace.installLocal(path)
-          } catch (error) {
-            return reply({ type: 'market.localFailed', path, error: messageOf(error) })
-          }
-          const { kind, ids, added } = result
-          if (kind === 'extension') communityChanged(ids[0]!, added)
-          marketChanged(kind)
-          return reply({ type: 'market.localInstalled', path, kind, ids })
-        }
-        case 'market.uninstall':
-          if (message.kind === 'extension') uninstallExtension(String(message.id))
-          else marketplace.uninstall(message.kind, message.id)
-          return marketChanged(message.kind)
-        case 'search': {
-          const spaces = shownChats().filter((c) => !c.info.worker)
-          const hits = searchChats(
-            spaces.map((c) => ({ id: c.info.id, name: c.info.name, entries: c.entries })),
-            String(message.query ?? ''),
-          )
-          return reply({ type: 'search.results', id: Number(message.id), query: String(message.query ?? ''), hits })
-        }
-        case 'terminal.set': {
-          const terminal = String(message.terminal ?? '')
-          if (terminal !== AUTOMATIC && !MAC_TERMINALS.some((t) => t.id === terminal)) {
-            throw new Error(`Unknown terminal "${terminal}"`)
-          }
-          if (terminal === AUTOMATIC) delete settings.terminal
-          else settings.terminal = terminal
-          saveSettings()
-          return broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
-        }
-        // Show in Finder, from an extension's view (a text with reveal). Refused paths come back as an error.
-        case 'reveal':
-          return void reveal(message.path).catch((error) => reply({ type: 'error', message: messageOf(error) }))
-        case 'terminal.open': {
-          const chat = chatFor(message.chatId)
-          const path = String(message.path ?? '')
-          return void terminalFor(chat, message.path).then(
-            () => reply({ type: 'terminal.result', chatId: chat.info.id, path }),
-            (error) => reply({ type: 'terminal.result', chatId: chat.info.id, path, error: messageOf(error) }),
-          )
-        }
-        default:
-          throw new Error(`Unknown message type "${(message as { type: unknown }).type}"`)
-      }
-    },
+    handle,
     async close(force = false) {
       quitting = true
       for (const extension of extensions) stopExtension(extension)
@@ -2501,8 +2290,6 @@ function nameModels(status: EngineStatus): Omit<EngineInfo, 'id' | 'enabled'> {
   return { ...rest, models: options, ...(shown && { defaultModel: shown }) }
 }
 
-const optionalText = (value: unknown) => (typeof value === 'string' && value ? value : undefined)
-
 const readBytes = (file: string) => {
   try {
     return readFileSync(file)
@@ -2515,18 +2302,6 @@ const checkName = (name: unknown) => {
   const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''
   if (!trimmed) throw new Error('A chat needs a name')
   return trimmed
-}
-
-const checkSwitch = (name: unknown) => {
-  if (!PERMISSION_SWITCHES.includes(name as PermissionSwitch)) throw new Error(`Unknown permission switch "${name}"`)
-  return name as PermissionSwitch
-}
-
-const addable = (section: unknown) => {
-  if (section !== 'folders' && section !== 'files') {
-    throw new Error(`Only folders and files can be added, not "${section}"`)
-  }
-  return section
 }
 
 const checkPath = (rawPath: unknown, section: 'folders' | 'files') => {
