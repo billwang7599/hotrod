@@ -18,6 +18,10 @@ export type Settings = PermissionSwitches &
     communityExtensions?: boolean
     // The terminal Open in Terminal uses: 'auto' or absent for the system's, else one of MAC_TERMINALS by id.
     terminal?: string
+    // What file links open with: absent for the system's default app, 'custom' for editorCommand, else an EDITORS id.
+    editor?: string
+    // The user's own command for files, with {file}, {line} and {col}.
+    editorCommand?: string
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */

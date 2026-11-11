@@ -8,6 +8,7 @@ import type { Chat } from './chat.ts'
 import { readJson } from './chat-store.ts'
 import { pageOf } from './history.ts'
 import type { openMarketplace } from './marketplace.ts'
+import type { openFileLinks } from './file-links.ts'
 import type { openModels } from './models.ts'
 import { searchChats } from './search.ts'
 import {
@@ -107,6 +108,8 @@ export type ProtocolDeps = {
   // The computer
   reveal: (path: unknown) => Promise<void>
   terminalFor: (chat: Chat, path: unknown) => Promise<void>
+  fileLinks: ReturnType<typeof openFileLinks>
+  setEditor: (editor: unknown, command?: unknown) => void
 }
 
 type Handlers = {
@@ -225,6 +228,7 @@ export function openProtocol(deps: ProtocolDeps) {
     'workFolder.set': (message) => deps.setWorkFolder(message.path),
     'permission.setDefault': (message) => deps.setPermissionDefault(message.name, message.enabled === true),
     'terminal.set': (message) => deps.setTerminal(message.terminal),
+    'editor.set': (message) => deps.setEditor(message.editor, message.command),
     'memory.set': (message) => deps.setMemory(optionalText(message.engine), optionalText(message.model)),
     'models.setList': (message) => {
       deps.models.setList(message.role, message.models)
@@ -342,6 +346,18 @@ export function openProtocol(deps: ProtocolDeps) {
         () => reply({ type: 'terminal.result', chatId: chat.info.id, path }),
         (error) => reply({ type: 'terminal.result', chatId: chat.info.id, path, error: messageOf(error) }),
       )
+    },
+    'files.check': (message, reply) => {
+      const chat = chatFor(message.chatId)
+      return reply({ type: 'files.checked', chatId: chat.info.id, paths: deps.fileLinks.checkPaths(chat, message.paths) })
+    },
+    'file.open': (message, reply) => {
+      const chat = chatFor(message.chatId)
+      const opened =
+        message.in === 'terminal'
+          ? deps.fileLinks.openTerminalAtFile(chat, message.path)
+          : deps.fileLinks.openFile(chat, message.path, message.line, message.col)
+      return void opened.catch((error) => reply({ type: 'error', message: messageOf(error) }))
     },
   } satisfies Handlers
 

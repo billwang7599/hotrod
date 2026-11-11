@@ -41,6 +41,7 @@ import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
 import { lockGarage } from './garage-lock.ts'
 import { openFolderAccess, realOr } from './folder-access.ts'
+import { openFileLinks } from './file-links.ts'
 import { openCheckouts } from './checkouts.ts'
 import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
@@ -214,7 +215,7 @@ function assembleCore(options: {
     !(chat && setupOf(chat)?.extensionsOff?.includes(extension.id) && !ownsChat(extension, chat))
   const chatsDir = join(garage, 'chats')
   mkdirSync(chatsDir, { recursive: true })
-  const { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal } = openAppSettings({
+  const { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal, setEditor } = openAppSettings({
     garage,
     home,
     settings,
@@ -462,6 +463,15 @@ function assembleCore(options: {
     shownChats,
     ...(options.openTerminal && { openTerminal: options.openTerminal }),
     ...(options.reveal && { reveal: options.reveal }),
+  })
+  const fileLinks = openFileLinks({
+    home,
+    machine,
+    now,
+    chainOf,
+    terminalRoots,
+    openTerminalAt,
+    editor: () => ({ choice: settings.editor, command: settings.editorCommand }),
   })
 
   const seesAll = (chatId: string) => extensionChats.some((chat) => chat.id === chatId && chat.seesAll)
@@ -846,6 +856,8 @@ function assembleCore(options: {
     uninstallExtension,
     reveal,
     terminalFor,
+    fileLinks,
+    setEditor,
   })
 
   for (const extension of extensions.filter(isOn)) void checkSetup(extension)

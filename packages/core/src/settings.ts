@@ -1,11 +1,12 @@
-// Kothar's own settings in settings.json: which engines are on, the model for summaries, the work folder and the
-// terminal, and the default permission switches. Extensions' own settings aren't here.
+// Kothar's own settings in settings.json: which engines are on, the model for summaries, the work folder, the
+// terminal and the editor files open with, and the default permission switches. Extensions' own settings aren't here.
 import { existsSync, mkdirSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Settings } from './chat-store.ts'
 import type { openModels } from './models.ts'
 import { PERMISSION_SWITCHES, type Adapter, type CoreMessage, type EngineInfo, type PermissionSwitch, type WorkFolder } from './shared.ts'
 import { AUTOMATIC, MAC_TERMINALS } from './terminal.ts'
+import { CUSTOM_EDITOR, EDITORS, installedEditors, splitCommand, SYSTEM_EDITOR } from './editors.ts'
 import { within } from './util.ts'
 
 export type SettingsDeps = {
@@ -39,6 +40,9 @@ export function openAppSettings(deps: SettingsDeps) {
     canSandbox: deps.canSandbox,
     ...(settings.terminal && settings.terminal !== AUTOMATIC && { terminal: settings.terminal }),
     ...(process.platform === 'darwin' && { terminals: MAC_TERMINALS.map(({ id, name }) => ({ id, name })) }),
+    ...(settings.editor && settings.editor !== SYSTEM_EDITOR && { editor: settings.editor }),
+    ...(settings.editorCommand && { editorCommand: settings.editorCommand }),
+    editors: installedEditors(process.platform, home),
     ...Object.fromEntries(
       PERMISSION_SWITCHES.flatMap((name) => (settings[name] === undefined ? [] : [[name, settings[name]]])),
     ),
@@ -101,7 +105,25 @@ export function openAppSettings(deps: SettingsDeps) {
     broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
   }
 
-  return { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal }
+  // The editor file links open with; a custom command is kept even while another is picked, to switch back to.
+  const setEditor = (rawEditor: unknown, rawCommand?: unknown) => {
+    const editor = String(rawEditor ?? '')
+    if (![SYSTEM_EDITOR, CUSTOM_EDITOR].includes(editor) && !EDITORS.some((e) => e.id === editor)) {
+      throw new Error(`Unknown editor "${editor}"`)
+    }
+    if (rawCommand !== undefined) {
+      const command = String(rawCommand).trim()
+      splitCommand(command)
+      if (command) settings.editorCommand = command
+      else delete settings.editorCommand
+    }
+    if (editor === SYSTEM_EDITOR) delete settings.editor
+    else settings.editor = editor
+    saveSettings()
+    broadcast({ type: 'workFolder.updated', workFolder: workFolder() })
+  }
+
+  return { workFolder, setWorkFolder, setEngineEnabled, setMemory, setPermissionDefault, setTerminal, setEditor }
 }
 
 export const checkSwitch = (name: unknown) => {

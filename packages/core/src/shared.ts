@@ -287,13 +287,17 @@ export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>
 }
 
 // terminal: the app Open in Terminal uses, absent for automatic; terminals: the ones the user can pick, only where
-// there's a choice (macOS).
+// there's a choice (macOS). editor: what a file link opens with, absent for the system's default app ('custom' runs
+// editorCommand); editors: the installed editors Kothar knows.
 export type WorkFolder = PermissionSwitches & {
   path?: string
   defaultPath: string
   canSandbox: boolean
   terminal?: string
   terminals?: { id: string; name: string }[]
+  editor?: string
+  editorCommand?: string
+  editors?: { id: string; name: string }[]
 }
 
 // Layers nearest first: a chat, the chats above it, then the work folder's defaults.
@@ -547,6 +551,14 @@ export type ClientMessage =
   | { type: 'terminal.set'; terminal: string }
   // Show in Finder, for an extension view's text with reveal: only inside Kothar's own folders (host.reveal's rule).
   | { type: 'reveal'; path: string }
+  // Which of the paths a chat's messages mention exist in its folders, checkouts, work folder or garage folder, as
+  // written (relative or absolute, without :line). Replies files.checked.
+  | { type: 'files.check'; chatId: string; paths: string[] }
+  // Opens a path files.checked found: with the editor in settings (at line and col where it can), or a terminal at
+  // its folder. Errors come back as an error toast.
+  | { type: 'file.open'; chatId: string; path: string; line?: number; col?: number; in?: 'editor' | 'terminal' }
+  // 'system' for the system's default app, 'custom' for command, or one of WorkFolder.editors by id.
+  | { type: 'editor.set'; editor: string; command?: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.
@@ -627,6 +639,8 @@ export type CoreMessage =
   | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
+  // The answer to files.check: each path asked about, to its absolute path or null if it isn't there.
+  | { type: 'files.checked'; chatId: string; paths: Record<string, string | null> }
 
 // Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
 // strictly so a theme is only ever colours and can never carry CSS.

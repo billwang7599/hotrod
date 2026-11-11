@@ -495,6 +495,8 @@ export function reduce(state: State, action: Action): State {
     case 'notify':
     // Opens a dock or a tab (main.tsx), not kept in state.
     case 'extension.panel.show':
+    // Kept by the file link cache, so a check's answer re-renders only the messages that asked.
+    case 'files.checked':
       return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
