@@ -34,7 +34,7 @@ after it cover each group in detail.
 | `chats` | Chats of the extension's own | [Chats](#chats), below |
 | `memory` | What each session sees of its chat's history | [Tools, MCP servers, instructions and memory](agents.md#memory) |
 | `onStart`, `onStop` | Start and stop background work | [Events and hooks](events.md#background-work) |
-| `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
+| `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
 | `onPermissionRequested` | A policy that answers permission requests | [Events and hooks](events.md#onpermissionrequested) |
 | `transformMessage`, `transformOutput` | Rewrites of messages and replies | [Events and hooks](events.md#transforms) |
 | `onWaitAction` | The user's answer to the extension's wait on a chat | [The host](host.md#waiting-for-the-user) |

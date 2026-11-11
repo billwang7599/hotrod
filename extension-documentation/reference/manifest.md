@@ -50,19 +50,19 @@ extension and before you turn it on, and holds the extension to it:
 |---|---|---|
 | `run` | Runs programs on your computer | `host.run`, `host.spawn`, `host.openTerminal`, `host.reveal`; Node's `child_process`, `worker_threads`, `cluster` |
 | `network` | Reaches the internet | Node's own network APIs: `fetch`, `WebSocket`, `node:http`, `https`, `net`, `tls`, `dns`, `dgram`, `undici` |
-| `files` | Reads or writes your files | Node's `node:fs` and `fs/promises`, for anything beyond `host.storage` |
+| `files` | Reads or writes your files | `host.home`, and Node's `node:fs` and `fs/promises`, for anything beyond `host.storage` |
 | `setup` | Installs software it needs | `setup` |
 | `mcpServers` | Starts MCP servers for agents | `mcpServers` |
 | `permissions` | Approves or denies agents' requests for you | `onPermissionRequested` |
 | `sendMessages` | Sends messages and starts chats as you | `host.send`, `host.createChat`, `host.retry`, `host.continue`, `host.interrupt`, `host.addContextFile` |
 | `accounts` | Sees and switches your engine accounts | `host.accounts`, `host.useAccount` |
 | `models` | Makes model calls on your accounts | `host.complete` |
-| `memory` | Decides what agents remember of each chat | `memory`, `host.chatStorage` |
+| `memory` | Decides what agents remember of each chat | `memory`, `host.chatStorage`, `host.everyChatStorage` |
 | `readChats` | Reads your chats | `host.chats`, `host.chat`, `host.read`, `host.space`, `host.messages`, `host.reaches`, `host.reachable` |
 | `transforms` | Rewrites your messages or agents' replies | `transformMessage`, `transformOutput` |
 | `instructions` | Adds to every agent's instructions | `instructions` |
 | `tools` | Gives agents tools | `tools` |
-| `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onLimitReached`, `onStart`, `onStop` |
+| `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
 | `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
 | `commands` | Adds commands | `commands` |

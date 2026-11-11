@@ -159,6 +159,13 @@ the full API reference. Built-in extensions in `extensions/` follow the same API
   with tests beside it and a `package.json` named `@kothar/extension-<id>`.
 - It imports types from `@kothar/extension-api` only. `@kothar/core` is allowed as a test `devDependency`, never at
   runtime.
+- It reaches Kothar's data through the host, not around it:
+  - Use `host.storage`, `host.chatStorage` or `host.everyChatStorage` for files, not paths worked out from the
+    garage.
+  - Use `host.home` and `host.now()` for the home folder and the time, not `node:os` or `Date.now()`.
+  - Use `host.space(chatId).checkouts` and `onSpaceRemoved` for a space's checkouts.
+- The core creates every checkout and removes them when a space is deleted (design rule 10). Optional cleanup of merged
+  work belongs to an extension; see `extensions/git/cleanup.ts`.
 - If the API lacks something, add the smallest generic change to `packages/extension-api/index.ts` and the core in its
   own PR, update `extension-documentation/reference/`, then build the extension on top.
 
