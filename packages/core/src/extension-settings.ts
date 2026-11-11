@@ -230,3 +230,42 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
     setSpaceValue,
   }
 }
+
+// Once, as the core opens: each extension whose settings are saved at an older version than its settingsVersion
+// migrates them, the global values and every space's together, and they're saved with the new version. A throw saves
+// nothing and is kept in settingsErrors, shown on the extension like a load error.
+export function migrateExtensionSettings(deps: {
+  extensions: readonly Extension[]
+  settings: Settings
+  saveSettings: () => void
+  chats: () => Iterable<Chat>
+  saveChat: (chat: Chat) => void
+  settingsErrors: Map<string, string>
+  extensionError: (extension: Extension, error: unknown) => void
+}) {
+  const { settings } = deps
+  for (const extension of deps.extensions) {
+    const version = extension.settingsVersion
+    const from = settings.extensionVersions?.[extension.id] ?? 0
+    if (!version || from >= version) continue
+    try {
+      if (!extension.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
+      const global = settings.extensions?.[extension.id]
+      const migratedGlobal = global && extension.migrateSettings({ ...global }, from, {})
+      const spaces = [...deps.chats()].flatMap((chat) => {
+        const saved = chat.info.extensionValues?.[extension.id]
+        return saved ? [{ chat, values: extension.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
+      })
+      for (const { chat, values } of spaces) {
+        chat.info = { ...chat.info, extensionValues: { ...chat.info.extensionValues, [extension.id]: values } }
+        deps.saveChat(chat)
+      }
+      if (migratedGlobal) settings.extensions = { ...settings.extensions, [extension.id]: migratedGlobal }
+      settings.extensionVersions = { ...settings.extensionVersions, [extension.id]: version }
+      deps.saveSettings()
+    } catch (error) {
+      deps.settingsErrors.set(extension.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
+      deps.extensionError(extension, error)
+    }
+  }
+}

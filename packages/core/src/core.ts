@@ -1,31 +1,19 @@
-import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
-import {
-  existsSync,
-  mkdirSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { isAbsolute, join, resolve } from 'node:path'
-import type {
-  ChatDetail,
-  Extension,
-  ExtensionContext,
-  SpaceDetail,
-} from '@kothar/extension-api'
+import type { ChatDetail, Extension, ExtensionContext, SpaceDetail } from '@kothar/extension-api'
 import { openAccounts } from './accounts.ts'
-import { openChatSetups, openSetups, WORKER_SETUP } from './setups.ts'
+import { openChatSetups, openSetups } from './setups.ts'
+import { openChatLifecycle } from './chat-lifecycle.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
 import { WORKERS_EXTENSION, workersFor } from './workers.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
-import { messagesOf, windowView } from './memory.ts'
+import { windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
 import { readApprovals } from './approvals.ts'
 import { type CommunityExtension, type ExtensionHook, valuesOf } from './extensions.ts'
 import { gatherExtensions } from './community-load.ts'
 import {
-  bySpaceOrder,
   editsAnywhere,
   type Adapter,
   type ChatEntry,
@@ -35,22 +23,19 @@ import {
   type CoreMessage,
   type EngineInfo,
   type Machine,
-  type ModelRole,
   type MarketKind,
   type MemoryMessage,
   type ExtensionInfo,
-  MODEL_ROLES,
-  type NewChat,
   type Setup,
 } from './shared.ts'
 import { followModels as followChatModels, nameModels, openModels } from './models.ts'
 import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
 import { openExtensionSwitches } from './extension-switches.ts'
-import { openExtensionSettings } from './extension-settings.ts'
+import { migrateExtensionSettings, openExtensionSettings } from './extension-settings.ts'
 import { openPanels } from './panels.ts'
 import { openAppSettings } from './settings.ts'
-import { checkPath, openContext } from './context.ts'
+import { openContext } from './context.ts'
 import type { Chat } from './chat.ts'
 import { pageOf } from './history.ts'
 import { reaches } from './reach.ts'
@@ -59,7 +44,7 @@ import { openTerminal } from './terminal.ts'
 import { openCheckouts } from './checkouts.ts'
 import { extensionPicture, extensionStorageDir } from './extension-files.ts'
 import { openExtensionHosts } from './extension-host.ts'
-import { appendEntry, openSettings, quitMidTurn, readChat, saveChatFile, storedChatIds } from './chat-store.ts'
+import { appendEntry, openSettings, saveChatFile } from './chat-store.ts'
 import { within, messageOf } from './util.ts'
 import { openTurns, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
 
@@ -410,11 +395,6 @@ function openLockedCore(options: {
     ...[...chats.values()].filter((c) => c.info.parentId === chat.info.id).flatMap(familyOf),
   ]
 
-  const checkRemovable = (chat: Chat) => {
-    if (chat.info.extension) throw new Error(`${chat.info.name} cannot be archived or deleted`)
-    if (chat.status !== 'idle') throw new Error('Stop the running chat first')
-  }
-
   // model: what its next message runs on, as model choice works it out (models.runOf), while that's on its engine.
   // A chat busy with a turn when its model list moves to another engine stays on its engine until its next message
   // starts (send), so for that while model is left out rather than given next to an engine it doesn't run on.
@@ -663,149 +643,37 @@ function openLockedCore(options: {
       broadcast,
     })
 
-  const removeChats = (family: Chat[]) => {
-    for (const c of family) {
-      stopSession(c)
-      const detail = detailOf(c)
-      chats.delete(c.info.id)
-      forgetChat(c.info.id)
-      rmSync(c.dir, { recursive: true, force: true })
-      broadcast({ type: 'chat.removed', chatId: c.info.id })
-      removeWorkDir(c).catch((error) => broadcast({ type: 'error', message: String(error) }))
-      callExtensions('onChatRemoved', (extension, context) => extension.onChatRemoved!(detail, context))
-    }
-  }
-
-  const loadChat = (dir: string, fallback: ChatInfo) => {
-    const declared = extensionChats.find((chat) => chat.id === fallback.id)
-    const { info, context, entries, resave } = readChat(
-      dir,
-      fallback,
-      declared && { name: declared.name, extension: declared.extension.id },
-    )
-    const chat: Chat = {
-      info,
-      dir,
-      context,
-      entries,
-      status: 'idle',
-      unsavedText: '',
-      pendingRequests: new Map(),
-      waits: new Map(),
-      queue: [],
-      turns: 0,
-    }
-    if (resave) saveChat(chat)
-    chats.set(info.id, chat)
-    if (quitMidTurn(entries)) {
-      append(chat, { at: now().toISOString(), type: 'turn.completed', error: 'Kothar quit during this turn' })
-    }
-    return chat
-  }
-
-  const freshInfo = (id: string, name: string): ChatInfo => ({
-    id,
-    name,
-    folders: [],
-    files: [],
-    engine: models.engineFor(),
-    archived: false,
-    createdAt: now().toISOString(),
+  const { loadAll, createChat, createChild, renameChat, archiveChat, moveChat, removeChats, deleteChat } = openChatLifecycle({
+    chats,
+    chatsDir,
+    home,
+    now,
+    broadcast,
+    extensionChats,
+    models,
+    checkEngine,
+    checkEnabled,
+    chatFor,
+    parentOf,
+    familyOf,
+    checkActive: (chat) => checkActive(chat),
+    setupOf,
+    setupNamed: (name) => setupNamed(name),
+    saveChat,
+    updateChat: (chat, change) => updateChat(chat, change),
+    append,
+    shownState,
+    detailOf,
+    viewOf,
+    takesMcp,
+    callExtensions,
+    stopSession,
+    forgetChat,
+    removeWorkDir: (chat) => removeWorkDir(chat),
   })
+  loadAll()
 
-  for (const { id, name } of extensionChats) loadChat(join(chatsDir, id), freshInfo(id, name))
-  for (const id of storedChatIds(chatsDir)) {
-    if (chats.has(id)) continue
-    loadChat(join(chatsDir, id), freshInfo(id, id))
-  }
-  // Nothing runs yet, so a worker that has worked and is still here (Kothar quit or crashed mid-task, or an older
-  // Kothar kept it) goes now.
-  for (const chat of chats.values()) {
-    if (!chat.info.worker || !chat.entries.length) continue
-    chats.delete(chat.info.id)
-    rmSync(chat.dir, { recursive: true, force: true })
-  }
-
-  // Once at load: each extension whose settings are saved at an older version than its settingsVersion migrates them,
-  // the global values and every space's together, and they're saved with the new version. A throw saves nothing.
-  for (const extension of extensions) {
-    const version = extension.settingsVersion
-    const from = settings.extensionVersions?.[extension.id] ?? 0
-    if (!version || from >= version) continue
-    try {
-      if (!extension.migrateSettings) throw new Error(`settingsVersion ${version} needs a migrateSettings`)
-      const global = settings.extensions?.[extension.id]
-      const migratedGlobal = global && extension.migrateSettings({ ...global }, from, {})
-      const spaces = [...chats.values()].flatMap((chat) => {
-        const saved = chat.info.extensionValues?.[extension.id]
-        return saved ? [{ chat, values: extension.migrateSettings!({ ...saved }, from, { spaceId: chat.info.id }) }] : []
-      })
-      for (const { chat, values } of spaces) {
-        chat.info = { ...chat.info, extensionValues: { ...chat.info.extensionValues, [extension.id]: values } }
-        saveChat(chat)
-      }
-      if (migratedGlobal) settings.extensions = { ...settings.extensions, [extension.id]: migratedGlobal }
-      settings.extensionVersions = { ...settings.extensionVersions, [extension.id]: version }
-      saveSettings()
-    } catch (error) {
-      settingsErrors.set(extension.id, `Its saved settings couldn't be updated: ${messageOf(error)}`)
-      extensionError(extension, error)
-    }
-  }
-
-  const createChat = (spec: NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string }) => {
-    const name = checkName(spec.name)
-    const parent = spec.worker ? chatFor(spec.parentId ?? '') : undefined
-    if (parent && spec.setup !== undefined) throw new Error(WORKER_SETUP)
-    const setup = parent ? setupOf(parent) : spec.setup === undefined ? undefined : setupNamed(spec.setup)
-    if (spec.engine !== undefined) {
-      checkEngine(spec.engine)
-      checkEnabled(spec.engine)
-    }
-    const role = parent ? (spec.role ?? 'workers') : undefined
-    // Named engine: the chat's own pick of that engine's first model in its list, else the engine's default model.
-    // Otherwise it follows its list (a worker: its role's, else Workers', else Chat's).
-    const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
-    const engine = spec.engine ?? models.engineFor(role, setup)
-    if (parent) checkActive(parent)
-    if (parent?.info.worker) throw new Error('A worker cannot start chats')
-    const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders', home)))]
-    const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files', home)))]
-    let id = randomBytes(4).toString('hex')
-    while (chats.has(id)) id = randomBytes(4).toString('hex')
-    const parentMessages = parent && messagesOf(parent.entries)
-    const info: ChatInfo = {
-      id,
-      name,
-      ...(parent && parentMessages && {
-        parentId: parent.info.id,
-        worker: true,
-        role,
-        parentMessages: parentMessages.length,
-      }),
-      folders,
-      files,
-      engine,
-      archived: false,
-      createdAt: now().toISOString(),
-      ...pin,
-      ...(!parent && setup && { setup: setup.id }),
-    }
-    const chat = loadChat(join(chatsDir, id), info)
-    if (parent && parentMessages?.length) {
-      writeFileSync(join(chat.dir, PARENT_VIEW_FILE), viewOf(parent, parentMessages, takesMcp(engine)))
-    }
-    broadcast({ type: 'chat.added', chat: shownState(chat) })
-    callExtensions('onChatCreated', (extension, context) => extension.onChatCreated!(detailOf(chat), context))
-    return chat.info
-  }
-
-  // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
-  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
-    if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
-    if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
-    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
-  }
+  migrateExtensionSettings({ extensions, settings, saveSettings, chats: () => chats.values(), saveChat, settingsErrors, extensionError })
 
   const { setupNamed, setChatSetup, saveSetup, removeSetup } = openChatSetups({
     setups: jobSetups,
@@ -823,43 +691,6 @@ function openLockedCore(options: {
     chat.info = Object.fromEntries(merged) as ChatInfo
     saveChat(chat)
     broadcast({ type: 'chat.updated', chat: withRun(chat) })
-  }
-
-  const renameChat = (chat: Chat, name: unknown) => {
-    if (chat.info.extension) throw new Error(`${chat.info.name} cannot be renamed`)
-    updateChat(chat, { name: checkName(name) })
-  }
-
-  const archiveChat = (chat: Chat, archived: boolean) => {
-    const parent = parentOf(chat)
-    if (!archived && parent?.info.archived) throw new Error(`Unarchive "${parent.info.name}" first`)
-    const family = familyOf(chat)
-    family.forEach(checkRemovable)
-    family.forEach((c) => updateChat(c, { archived }))
-    for (const c of family) {
-      callExtensions('onChatArchived', (extension, context) => extension.onChatArchived!(detailOf(c), archived, context))
-    }
-  }
-
-  const moveChat = (chat: Chat, pinned: boolean, index: unknown) => {
-    if (chat.info.extension || chat.info.parentId) throw new Error('Only spaces can be moved or pinned')
-    if (chat.info.archived) throw new Error('This chat is archived. Unarchive it first.')
-    if (typeof index !== 'number' || !Number.isInteger(index)) throw new Error('The place to move to must be a number')
-    const group = [...chats.values()]
-      .map((c) => c.info)
-      .filter((c) => !c.extension && !c.parentId && !c.archived && !!c.pinned === pinned && c.id !== chat.info.id)
-      .sort(bySpaceOrder)
-    group.splice(Math.max(0, Math.min(index, group.length)), 0, chat.info)
-    group.forEach((info, order) => {
-      const c = chats.get(info.id)!
-      if (c.info.order !== order || !!c.info.pinned !== pinned) updateChat(c, { order, pinned: pinned || undefined })
-    })
-  }
-
-  const deleteChat = (chat: Chat) => {
-    const family = familyOf(chat)
-    family.forEach(checkRemovable)
-    removeChats(family)
   }
 
   const { setExtensionEnabled, setCommunityExtensions, restartState, communityChanged, uninstallExtension, approvalOf } =
@@ -1131,10 +962,4 @@ function openLockedCore(options: {
       await machine.stopAll()
     },
   }
-}
-
-const checkName = (name: unknown) => {
-  const trimmed = typeof name === 'string' ? name.trim().replace(/\s+/g, ' ') : ''
-  if (!trimmed) throw new Error('A chat needs a name')
-  return trimmed
 }
