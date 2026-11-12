@@ -179,12 +179,16 @@ function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
   )
 }
 
-// Every extension gets a page, settings or not: a header saying what it is, whether it's on and what it may do, then
-// its setup, its settings and its settings view, or a line saying it has none. A community extension's page shows
-// while community extensions are on (its switch and details are in Community hub too).
+// An extension with something to set (settings, a setup or a settings view) gets a page, as in Obsidian; one without
+// gets none. Each page starts with the same header, saying what it is, whether it's on and what it may do, then its
+// setup, settings and settings view. It keeps its page while off. A community extension's page shows while community
+// extensions are on (its switch and details are in Community hub too).
+export const hasPage = (extension: ExtensionInfo) =>
+  !!(extension.setup || extension.settings.length || extension.settingsView)
+
 export const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolean): Page[] =>
   extensions
-    .filter((extension) => !extension.community || communityExtensions)
+    .filter((extension) => (!extension.community || communityExtensions) && hasPage(extension))
     .map((extension) => ({
       id: `extension:${extension.id}`,
       group: 'Extensions',
@@ -192,11 +196,8 @@ export const extensionPages = (extensions: ExtensionInfo[], communityExtensions:
       body: ({ connected, send }: PageProps) => <ExtensionPage extension={extension} connected={connected} send={send} />,
     }))
 
-export const NO_SETTINGS = 'This extension has no settings of its own.'
-
 function ExtensionPage({ extension, connected, send }: SetupProps) {
   const { enabled, community } = extension
-  const own = !!(extension.setup || extension.settings.length || extension.settingsView)
   // A community extension's settings view draws only while it runs; a built-in's, while off too.
   const shownOff = !!extension.settingsView && !community
   const uses = community?.uses ?? extension.uses
@@ -235,8 +236,7 @@ function ExtensionPage({ extension, connected, send }: SetupProps) {
         />
       ))}
       {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
-      {!own && <p className="py-12 text-sm text-faint">{NO_SETTINGS}</p>}
-      {own && !enabled && !shownOff && (
+      {!enabled && !shownOff && (
         <p className="py-12 text-sm text-faint">Turn {extension.name} on to change its settings.</p>
       )}
     </div>
