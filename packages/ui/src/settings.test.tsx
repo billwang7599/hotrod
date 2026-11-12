@@ -457,3 +457,77 @@ test("Settings' scrolling nav and page keep their scrollbars inset, the page's b
   expect(page.classList).toContain('scroll-inset')
   expect(page.className).toContain('[--scroll-top:48px]')
 })
+
+test('every extension gets a page: one with no settings shows its header, its switch and a placeholder', () => {
+  const plain: ExtensionInfo = {
+    id: 'plain',
+    name: 'Plain',
+    description: 'Does one quiet thing.',
+    enabled: true,
+    settings: [],
+    values: {},
+    uses: ['events', 'tools'],
+  }
+  const sent = renderExtensions([plain], 'extension:plain')
+  const tabs = [...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)
+  expect(tabs).toContain('Plain')
+  const text = dialog().textContent
+  expect(text).toContain('Does one quiet thing.')
+  expect(text).toContain('Built-in extension')
+  expect(text).toContain('What it does')
+  expect(text).toContain('This extension has no settings of its own.')
+  const toggle = dialog().querySelector('[aria-label="Plain on"]') as HTMLButtonElement
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  act(() => toggle.click())
+  expect(sent).toEqual([{ type: 'extension.setEnabled', extensionId: 'plain', enabled: false }])
+})
+
+test("an off extension with settings keeps its page, saying to turn it on, and its settings stay hidden", () => {
+  const setting = { key: 'n', label: 'Count', type: 'number', default: 1 } satisfies ExtensionSetting
+  renderExtensions([{ id: 'off', name: 'Offish', description: '', enabled: false, settings: [setting], values: { n: 1 } }], 'extension:off')
+  expect(dialog().textContent).toContain('Turn Offish on to change its settings.')
+  expect(dialog().querySelector('input[aria-label="Count"]')).toBeNull()
+  expect(dialog().textContent).not.toContain('This extension has no settings of its own.')
+})
+
+test('a community extension gets a page too, with its version and author, while community extensions are on', () => {
+  const community: ExtensionInfo = {
+    id: 'counter',
+    name: 'Counter',
+    description: 'Counts words.',
+    enabled: true,
+    settings: [],
+    values: {},
+    community: { version: '1.2.0', author: 'Someone', uses: ['events'], source: 'marketplace' },
+  }
+  act(() =>
+    root.render(
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider>
+            <SettingsDialog
+              open
+              page="extension:counter"
+              openPage={() => {}}
+              close={() => {}}
+              engines={[]}
+              accounts={[]}
+              contextDefaults={{ agents: true, folders: true, files: true }}
+              extensions={[community]}
+              communityExtensions
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
+              workFolder={workFolder}
+              chooseWorkFolder={() => {}}
+              connected
+              send={() => {}}
+            />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
+    ),
+  )
+  const text = dialog().textContent
+  expect(text).toContain('Community extension · 1.2.0 by Someone')
+  expect(text).toContain('Uses')
+  expect(text).toContain('This extension has no settings of its own.')
+})

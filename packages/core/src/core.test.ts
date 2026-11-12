@@ -1,3 +1,4 @@
+import { usesOf } from './extensions.ts'
 import { execFileSync, spawn } from 'node:child_process'
 import {
   appendFileSync,
@@ -3819,7 +3820,7 @@ describe('extensions', () => {
   const defaultsOf = (extension: Extension) => Object.fromEntries((extension.settings ?? []).map((s) => [s.key, s.default]))
   const infoOf = (extension: Extension, enabled: boolean, values = defaultsOf(extension)) => {
     const { id, name, description, settings = [] } = extension
-    return { id, name, description, enabled, settings, values }
+    return { id, name, description, enabled, settings, values, uses: usesOf(extension) }
   }
   const savedExtensions = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).extensions
 

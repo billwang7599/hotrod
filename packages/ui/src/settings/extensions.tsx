@@ -1,4 +1,4 @@
-// The Built-in extensions page, an extension's setup (dialog and row), and the page each extension with settings gets.
+// The Built-in extensions page, an extension's setup (dialog and row), and the page every extension gets.
 import { useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { AlertDialog } from 'radix-ui'
@@ -179,38 +179,69 @@ function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
   )
 }
 
-// A built-in extension with a settings view keeps its page while off, showing only that view.
+// Every extension gets a page, settings or not: a header saying what it is, whether it's on and what it may do, then
+// its setup, its settings and its settings view, or a line saying it has none. A community extension's page shows
+// while community extensions are on (its switch and details are in Community hub too).
 export const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolean): Page[] =>
   extensions
-    .filter(
-      (extension) =>
-        (extension.enabled || (extension.settingsView && !extension.community)) &&
-        (!extension.community || communityExtensions) &&
-        (extension.settings.length || extension.setup || extension.settingsView),
-    )
+    .filter((extension) => !extension.community || communityExtensions)
     .map((extension) => ({
       id: `extension:${extension.id}`,
       group: 'Extensions',
       title: extension.name,
-      body: ({ connected, send }: PageProps) => (
-        <div className={GROUP}>
-          {extension.community && (
-            <SettingRow name="Uses" description={<UsesList uses={extension.community.uses} />} />
-          )}
-          {extension.enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
-          {extension.enabled && extension.settings.map((setting) => (
-            <ExtensionSettingRow
-              key={setting.key}
-              setting={setting}
-              value={extension.values[setting.key]}
-              disabled={!connected}
-              save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
-            />
-          ))}
-          {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
-        </div>
-      ),
+      body: ({ connected, send }: PageProps) => <ExtensionPage extension={extension} connected={connected} send={send} />,
     }))
+
+export const NO_SETTINGS = 'This extension has no settings of its own.'
+
+function ExtensionPage({ extension, connected, send }: SetupProps) {
+  const { enabled, community } = extension
+  const own = !!(extension.setup || extension.settings.length || extension.settingsView)
+  // A community extension's settings view draws only while it runs; a built-in's, while off too.
+  const shownOff = !!extension.settingsView && !community
+  const uses = community?.uses ?? extension.uses
+  return (
+    <div className={GROUP}>
+      <SettingRow
+        name={extension.name}
+        description={
+          <>
+            {extension.description}
+            <span className="block text-faint" data-testid="extension-kind">
+              {community
+                ? `Community extension · ${community.version}${community.author ? ` by ${community.author}` : ''}`
+                : 'Built-in extension'}
+            </span>
+          </>
+        }
+        below={extension.loadError && <ErrorText>Couldn't load: {extension.loadError}</ErrorText>}
+      >
+        <Switch
+          label={`${extension.name} on`}
+          checked={enabled}
+          disabled={!connected || (!community && extension.loadError !== undefined)}
+          onChange={(on) => send({ type: 'extension.setEnabled', extensionId: extension.id, enabled: on })}
+        />
+      </SettingRow>
+      {uses && <SettingRow name={community ? 'Uses' : 'What it does'} description={<UsesList uses={uses} />} />}
+      {enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
+      {enabled && extension.settings.map((setting) => (
+        <ExtensionSettingRow
+          key={setting.key}
+          setting={setting}
+          value={extension.values[setting.key]}
+          disabled={!connected}
+          save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
+        />
+      ))}
+      {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
+      {!own && <p className="py-12 text-sm text-faint">{NO_SETTINGS}</p>}
+      {own && !enabled && !shownOff && (
+        <p className="py-12 text-sm text-faint">Turn {extension.name} on to change its settings.</p>
+      )}
+    </div>
+  )
+}
 
 type ExtensionSettingProps = {
   setting: ExtensionSetting

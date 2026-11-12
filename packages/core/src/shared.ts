@@ -357,6 +357,8 @@ export type ExtensionInfo = {
   loadError?: string
   // It has a chat of its own (Home). A setup can't leave it out of that chat, so setup forms don't list it.
   ownsChat?: boolean
+  // A built-in extension's uses, read from the fields it sets, for its page (a community one's are community.uses).
+  uses?: ExtensionUse[]
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
   // the version this run of Kothar loaded, if any; extensions load only at startup.
   community?: {

@@ -5,7 +5,7 @@ import type { Extension, ExtensionAction, ExtensionContext, ExtensionRun } from 
 import type { Approval } from './approvals.ts'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
-import { type CommunityEntry, valuesOf } from './extensions.ts'
+import { type CommunityEntry, usesOf, valuesOf } from './extensions.ts'
 import { settingProblem, type ChatInfo, type CoreMessage, type ExtensionInfo, type Machine, type SetupState } from './shared.ts'
 import { messageOf } from './util.ts'
 
@@ -77,6 +77,8 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
       ...(view && { settingsView: view }),
       ...(settingsError && { loadError: settingsError }),
       ...(extension.chats?.length && { ownsChat: true }),
+      // A community extension's are its manifest's (community.uses).
+      ...(!community.has(id) && { uses: usesOf(extension) }),
     }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}
