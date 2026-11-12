@@ -478,6 +478,22 @@ export type ExtensionListItem = {
   button?: { label: string; action: ExtensionAction; hint?: string }
 }
 
+// An entry of a menu view: acts as a button does (confirm and pick too; an entry whose pick has no picker, in a
+// browser tab, isn't drawn). checked: a tick before it, such as the order a list is in. danger colours it red.
+// { type: 'divider' } draws a line between groups.
+export type ExtensionMenuItem =
+  | {
+      label: string
+      action: ExtensionAction
+      hint?: string
+      disabled?: boolean
+      checked?: boolean
+      danger?: boolean
+      confirm?: { text: string; body?: string; ok?: string; danger?: boolean }
+      pick?: { kind: 'folder' | 'file'; title?: string }
+    }
+  | { type: 'divider' }
+
 export type ExtensionView =
   | { type: 'stack'; children: ExtensionView[]; gap?: 'tight' | 'normal' | 'loose' }
   | { type: 'row'; children: ExtensionView[]; justify?: 'start' | 'between' | 'end' }
@@ -621,6 +637,9 @@ export type ExtensionView =
   // history first if needed) and flashes it. buttons: small views beside the author line, such as an Unpin button or
   // a copy.
   | { type: 'message'; entry: number; author: string; at: string; text: string; buttons?: ExtensionView[]; hint?: string }
+  // A ⋯ button that opens a menu of actions, for the rarer things a view can do (rename, move, delete) so they don't
+  // crowd it. label names the button for screen readers and on hover ("More for Project plan"). See ExtensionMenuItem.
+  | { type: 'menu'; label: string; items: ExtensionMenuItem[] }
   // A button that copies text, such as a file's contents, to the clipboard.
   | { type: 'copy'; text: string; label: string; hint?: string }
   // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
