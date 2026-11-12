@@ -151,12 +151,13 @@ const planOn = (host: ExtensionHost, chatId: string) => {
 const isUsersChat = (chat: Pick<ChatDetail, 'extension' | 'worker'>) => !chat.extension && !chat.worker
 
 const waitText = (plan: Plan) =>
-  `Plan ready: ${plan.goal.length > 90 ? plan.goal.slice(0, 89) + '…' : plan.goal} (${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'})`
+  `Plan ready: ${plan.goal.length > 90 ? plan.goal.slice(0, 89) + '…' : plan.goal} (${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}), in the Plan tab. Approve it?`
 
 export function createPlanExtension(): Extension {
   // Chats whose turn handed in a plan, so its end shows the bar.
   const handedIn = new Set<string>()
-  // Chats whose Plan tab shows the edit form.
+  // Chats whose Plan tab shows the edit form. As in Deep Research, Edit closes the bar: the plan then waits in the tab
+  // (Approve / Edit / Cancel), and the form's submit approves it.
   const editing = new Set<string>()
 
   const showWait = (host: ExtensionHost, chatId: string, plan: Plan) =>
@@ -164,7 +165,7 @@ export function createPlanExtension(): Extension {
       text: waitText(plan),
       buttons: [
         { id: 'approve', label: 'Approve', primary: true, closes: true, hint: 'Turn Plan first off and start the work with this plan' },
-        { id: 'edit', label: 'Edit', hint: 'Change the plan in the Plan tab, then approve it' },
+        { id: 'edit', label: 'Edit', closes: true, hint: 'Change the plan in the Plan tab, then approve it' },
         { id: 'cancel', label: 'Cancel', closes: true, hint: 'Drop this plan; Plan first stays on' },
       ],
     })
@@ -207,6 +208,7 @@ export function createPlanExtension(): Extension {
       }
     }
     if (editing.has(owner) && !chat.worker) {
+      const proposed = plan.status === 'proposed'
       return {
         type: 'stack',
         children: [
@@ -227,8 +229,9 @@ export function createPlanExtension(): Extension {
                 ...(values.requireTests !== false && { hint: 'Required' }),
               },
             ],
-            submit: { label: 'Save', action: 'save' },
-            cancel: { label: 'Cancel', action: { name: 'stopEditing' } },
+            // A plan waiting for the user: the form's submit approves it, as Deep Research's starts it. Cancel drops it.
+            submit: proposed ? { label: 'Approve and start', action: 'save' } : { label: 'Save', action: 'save' },
+            cancel: proposed ? { label: 'Cancel plan', action: { name: 'cancel' } } : { label: 'Back', action: { name: 'stopEditing' } },
           },
         ],
       }
@@ -251,7 +254,7 @@ export function createPlanExtension(): Extension {
                 type: 'menu' as const,
                 label: 'More for this plan',
                 items: [
-                  { label: 'Edit plan', action: { name: 'edit' } },
+                  ...(plan.status === 'proposed' ? [] : [{ label: 'Edit plan', action: { name: 'edit' } }]),
                   {
                     label: 'Clear plan',
                     action: { name: 'clear' },
@@ -280,9 +283,19 @@ export function createPlanExtension(): Extension {
       ...(plan.risks.length ? [{ type: 'card' as const, title: `Risks (${plan.risks.length})`, children: [{ type: 'markdown' as const, text: plan.risks.map((r) => `- ${r}`).join('\n') }] }] : []),
       ...(plan.tests ? [{ type: 'card' as const, title: 'Tests', children: [{ type: 'markdown' as const, text: plan.tests }] }] : []),
     ]
+    // The same three choices as the bar (and as Deep Research's plan), for when the bar was closed with Edit.
     const approveButton: ExtensionView[] =
       plan.status === 'proposed' && !chat.worker
-        ? [{ type: 'button', label: 'Approve and start', variant: 'primary', action: { name: 'approve' }, hint: 'Turn Plan first off and start the work with this plan' }]
+        ? [
+            {
+              type: 'row',
+              children: [
+                { type: 'button', label: 'Approve', variant: 'primary', action: { name: 'approve' }, hint: 'Turn Plan first off and start the work with this plan' },
+                { type: 'button', label: 'Edit', action: { name: 'edit' }, hint: 'Change the plan, then approve it' },
+                { type: 'button', label: 'Cancel', variant: 'ghost', action: { name: 'cancel' }, hint: 'Drop this plan; Plan first stays on' },
+              ],
+            },
+          ]
         : []
     return {
       type: 'stack',
@@ -446,6 +459,7 @@ export function createPlanExtension(): Extension {
           if (chat.worker) return
           const owner = chat.id
           if (action.name === 'approve') return approve(host, owner)
+          if (action.name === 'cancel') return cancel(host, owner)
           if (action.name === 'edit') {
             editing.add(owner)
             return host.refresh(owner)
@@ -469,14 +483,8 @@ export function createPlanExtension(): Extension {
             if ('error' in next) return host.error(next.error)
             plans.write(next)
             editing.delete(owner)
-            // The bar, if it's up, says the new goal and step count.
-            if (next.status === 'proposed' && host.chat(owner)?.status === 'waiting') {
-              try {
-                showWait(host, owner, next)
-              } catch {
-                // Nothing to replace: the bar had gone.
-              }
-            }
+            // A waiting plan's form submits as Approve and start.
+            if (next.status === 'proposed') return approve(host, owner)
             return host.refresh(owner)
           }
         },

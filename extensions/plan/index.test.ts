@@ -197,7 +197,7 @@ describe('Plan', () => {
     await t.waiting(id)
     const [wait] = t.chatOf(id).waits!
     expect(wait!.text).toContain('Add a dark mode switch to Settings')
-    expect(wait!.buttons.map((b) => [b.label, !!b.closes])).toEqual([['Approve', true], ['Edit', false], ['Cancel', true]])
+    expect(wait!.buttons.map((b) => [b.label, !!b.closes])).toEqual([['Approve', true], ['Edit', true], ['Cancel', true]])
     expect(t.stored(id)).toMatchObject({ status: 'proposed', steps: [{ text: 'Add a theme setting', status: 'todo' }, {}, {}] })
   })
 
@@ -235,20 +235,45 @@ describe('Plan', () => {
     expect(t.chatOf(id).waits ?? []).toEqual([])
   })
 
-  it('Edit opens the form in the Plan tab, and saving changes the stored plan and the bar', async () => {
+  it('Edit closes the bar and opens the form in the Plan tab; its submit saves the plan and approves it', async () => {
     const t = await start()
     const id = t.create('Space')
     t.flip(id, true)
     t.send(id, 'Add dark mode', t.submit())
     await t.waiting(id)
     t.answer(id, 'edit')
-    expect(JSON.stringify(await t.panel(id))).toContain('"type":"form"')
+    await t.settled(id)
+    expect(t.chatOf(id).waits ?? []).toEqual([])
+    expect(t.stored(id)?.status).toBe('proposed')
+    const form = JSON.stringify(await t.panel(id))
+    expect(form).toContain('"type":"form"')
+    expect(form).toContain('Approve and start')
+    expect(form).toContain('Cancel plan')
+    const before = t.sessions.length
     const value = { goal: 'Dark mode, toggled in Settings', steps: 'Add a theme setting\nDraw the switch', files: 'src/settings.tsx', risks: '', tests: 'A settings test' }
     await t.panelAction(id, { name: 'save', value })
-    await until(() => t.stored(id)?.goal === value.goal)
-    expect(t.stored(id)).toMatchObject({ status: 'proposed', steps: [{ text: 'Add a theme setting' }, { text: 'Draw the switch' }], files: ['src/settings.tsx'], risks: [] })
-    expect(t.chatOf(id).waits![0]!.text).toContain('Dark mode, toggled in Settings (2 steps)')
+    await until(() => t.sessions.length > before)
+    await t.settled(id)
+    expect(t.stored(id)).toMatchObject({ status: 'approved', goal: value.goal, steps: [{ text: 'Add a theme setting' }, { text: 'Draw the switch' }], files: ['src/settings.tsx'], risks: [] })
+    expect(t.isOn(id)).toBe(false)
+    expect(t.sessions.at(-1)!.options.instructions).toContain('Dark mode, toggled in Settings')
     expect(JSON.stringify(await t.panel(id))).not.toContain('"type":"form"')
+  })
+
+  it('after Edit closed the bar, the Plan tab offers Approve, Edit and Cancel; Cancel keeps Plan first on', async () => {
+    const t = await start()
+    const id = t.create('Space')
+    t.flip(id, true)
+    t.send(id, 'Add dark mode', t.submit())
+    await t.waiting(id)
+    t.answer(id, 'edit')
+    await t.settled(id)
+    await t.panelAction(id, { name: 'stopEditing' })
+    const tab = JSON.stringify(await t.panel(id))
+    for (const label of ['"Approve"', '"Edit"', '"Cancel"']) expect(tab).toContain(label)
+    await t.panelAction(id, { name: 'cancel' })
+    await until(() => t.stored(id)?.status === 'cancelled')
+    expect(t.isOn(id)).toBe(true)
   })
 
   it('turns away a plan without a tests step, unless that setting is off', async () => {
