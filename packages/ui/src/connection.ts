@@ -27,6 +27,19 @@ export function attachmentUrl(socketUrl: string, chatId: string, path: string) {
   return url.href
 }
 
+/** Where a picture in an extension's own folders is served (core.extensionFile); the core checks the path. */
+export function extensionFileUrl(socketUrl: string, extension: string, path: string) {
+  const url = new URL(socketUrl)
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:'
+  url.pathname = `/extensions/${encodeURIComponent(extension)}/files`
+  url.searchParams.set('path', path)
+  return url.href
+}
+
+/** The URL of a picture in an extension's own folders, from this window (its core and token). */
+export const windowExtensionFileUrl = (extension: string, path: string) =>
+  extensionFileUrl(coreUrl(import.meta.env, location, readToken('', sessionStorage)), extension, path)
+
 type TokenStorage = { getItem(key: string): string | null; setItem(key: string, value: string): void }
 
 export function readToken(hash: string, storage: TokenStorage) {

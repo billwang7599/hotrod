@@ -31,8 +31,10 @@ The built-in extensions today:
 | Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
-| Notes | Yes | Saved Markdown notes that agents find and read when they're relevant, global or per space. Adds a Notes tab. |
+| Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
+| Artifacts | Yes | HTML that agents make for you, such as pages, mockups, small apps, charts and diagrams, kept per space with every version and shown sandboxed in a popup over the chat (⌘⇧A). |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
+| Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
 
 ### Where Memory keeps its summaries, and cleaning up
 
@@ -57,26 +59,60 @@ a copy button and **Show in Finder**, and how much disk each mode's summaries ta
 
 ### Notes
 
-A note is a Markdown file with a name and a one-line description, for something worth keeping across sessions, such as
-how to run a repo's tests. Each session's instructions list the notes that apply (name, description and file, never the
-text), and the agent reads one in full when it fits the task.
+Notes are yours, as in Obsidian: Markdown files you write and keep, global or per space. They open in a popup over the
+chat, with **⌘⇧N** (Ctrl+Shift+N elsewhere; change it in **Settings → Shortcuts**) or **Notes** in the sidebar. Esc
+closes it.
 
-- **Global notes** go to every chat. They're in `<data folder>/extensions/notes/<name>.md`.
-- **A space's notes** go to that space and its workers. They're in `<data folder>/chats/<space id>/notes/<name>.md`, so
-  they go when the space is deleted. Home keeps no notes of its own: it sees and writes global ones.
-- **The Notes tab** lists them, and makes, edits and deletes them. **Turn off here** leaves a note out of one chat and
-  its workers.
-- **Agents** have `list_notes`, `read_note`, `write_note` and `delete_note`. They save a note when you ask, or when what they learned is
-  clearly worth keeping. A note of the same name in the same place is replaced. A note's file is named from its name,
-  so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is refused, from the
-  panel too, rather than overwriting the first. The panel also refuses a new note or a rename to a name already taken.
-  `delete_note` deletes only a note with exactly the name given (letter case aside), never one that merely shares its
-  file; otherwise it refuses and names the closest note.
-  They delete a note when you ask, or when one they saved turned out wrong: from their space (a worker's is its space's)
-  or global notes. When both have a note of that name, they must say which.
+- **The popup** lists the notes on the left, this space's and global ones, with a search box that searches names,
+  descriptions and text. The open note is on the right in a live-preview editor: the Markdown is drawn as it reads, and
+  its marks show only on the line you're editing. It saves as you type.
+- **Links:** `[[Another note]]` links to a note by name (`[[Name|shown text]]` shows other text). Click it to open
+  that note, or to make it if there's none yet; on the line you're editing, ⌘-click. A note in this space wins over a
+  global one of the same name. Under the editor, **Linked from** lists the notes that link to the open one.
+- **Tags:** `#tag` anywhere in a note's text (not in code) tags it. The tags show as a row above the list: click one,
+  or a tag in the editor, to list only the notes that have it, and click it again to show them all.
+- **New note** makes an `Untitled` note in this space (**New global** for every space) and asks for its name.
+  **Rename** changes its name and its one-line description; **Delete** asks first.
+- **Add to context** puts the open note in this space's **Context → Files**, so the space's agents get it in full
+  from their next message, as any context file. Remove it there as usual. Home has no context, so no such button.
+- **Global notes** are in `<data folder>/extensions/notes/<name>.md`. **A space's notes** are in
+  `<data folder>/chats/<space id>/notes/<name>.md`, so they go when the space is deleted. Home keeps no notes of its
+  own: it sees global ones.
+- **Agents** get nothing from your notes in their prompts unless you add one to context. When you ask ("put that in my notes", "what did I write
+  about X"), they use `search_notes`, `list_notes`, `read_note`, `write_note` and `delete_note`. A note's file is named
+  from its name, so names that differ only in punctuation (`C++ tests`, `C tests`) would share one: the second is
+  refused rather than overwriting the first, and the popup refuses a rename to a name already taken. `delete_note`
+  deletes only a note with exactly the name given (letter case aside), and when this space and global notes both have
+  that name, the agent must say which.
 
-Notes are plain files: you can also edit them in any editor, or add a `.md` file to either folder. A file without the
-`---` front matter is named after the file. An open Notes tab shows such changes within a couple of seconds.
+Notes are plain files: you can also open either folder as an Obsidian vault, edit them in any editor, or add a `.md`
+file. A file without the `---` front matter is named after the file. An open popup shows such changes within a couple
+of seconds.
+
+### Artifacts
+
+Notes are your documents; artifacts are what agents build for you to look at or try: a page, a mockup, a small
+interactive app, a chart or a diagram, as one self-contained HTML page. Ask for one ("make me a chart of this", "mock up
+the settings page") and the agent makes it with a tool instead of pasting HTML into its reply.
+
+- **Opening:** **⌘⇧A** (Ctrl+Shift+A elsewhere; change it in **Settings → Shortcuts**) or **Artifacts** in the sidebar
+  opens a popup over the chat, and Esc closes it. When an agent makes or updates an artifact, a line in the chat says
+  so: click it to open the popup on that artifact.
+- **The popup** lists this space's artifacts on the left, the latest changed first. The open one is on the right, drawn
+  live. **Source** shows its HTML, **Copy HTML** and **Download** take it out, and **Delete** deletes every version
+  after asking.
+- **Versions:** an agent changing an artifact saves a new version and keeps the old ones. Pick one under the title to
+  see it; hover a version for what changed and when.
+- **Sandboxed:** an artifact's scripts run, but in a frame of its own. It can't reach Kothar, your token, your files or
+  the network: no fetch, no WebSockets, and no scripts, styles, images or fonts from the web. **Load from the web**,
+  under the list, lets this space's artifacts load those from `https:` sites, such as a chart library; they still can't
+  send or fetch data.
+- **Open in browser** opens the file in your default browser, outside Kothar's sandbox, where it can reach the web as any
+  local page can.
+- **Files:** a space's artifacts are in `<data folder>/chats/<space id>/artifacts/<name>/`: `v1.html`, `v2.html`…
+  and `artifact.json` (title, kind, description, versions). They go when the space is deleted. Home keeps none.
+- **Agents** get nothing about artifacts in their prompts. They use `create_artifact`, `update_artifact`,
+  `list_artifacts` and `read_artifact`; a worker shares its space's artifacts.
 
 ### When the connection drops
 
@@ -95,6 +131,20 @@ Engines retry short drops on their own. When a drop lasts longer, the turn ends 
 A Stop, a usage limit or any other error ends the turn as before.
 
 ### Browser: your profile, in the background
+
+**Which browser.** Settings → Extensions → Browser → **Browser** picks what runs Kothar's own profile: **Google
+Chrome (installed)**, the default, or **Bundled Chromium** (Playwright's Chrome for Testing, installed from the same
+page). Chrome runs on a profile of Kothar's own per space (`<data folder>/extensions/browser/chrome-profiles/<space>/`),
+never your everyday Chrome profile, its cookies or its tabs. Without Chrome installed, the bundled Chromium runs, and
+the settings page says so. The two keep separate folders, since Chrome refuses a profile a newer version last opened,
+so switching starts the other one logged out (the old folder stays until you switch back or delete the space).
+
+**Signing in.** Google, and some other sites, refuse to sign you in on a browser that software controls. So signing
+in happens in a plain window: **Sign in…** in a chat's General tab or on the Browser row in Processes, and an agent's
+`ask_user_in_browser`, open the space's profile as an ordinary browser window, with no remote debugging and nothing of
+Kothar's attached, on the agent's tabs. Sign in, then click **Done** (or quit the browser): it closes, and the agents'
+browser goes on in the background on the same profile, signed in, with the tabs the window had. Kothar can't see into
+that window, so closing its last window doesn't end it on macOS; Done or quitting does.
 
 **Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
 space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
@@ -119,10 +169,11 @@ read. When a space's browser starts, Kothar copies the profile's login state int
   background, so the next browse takes a fresh copy.
 
 **In the background.** Agents' browsers run headless: no window, no Dock icon, and they never take focus, so you can
-keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away.
+keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away, and they
+don't tell pages they're automated (`navigator.webdriver`). Nothing fakes a fingerprint beyond that.
 
-**When you're needed.** An agent calls `ask_user_in_browser` (log in, CAPTCHA, payment) or `show_browser` (look at
-this). The browser opens in a window with the agent's tabs, in front of your other apps, the chat shows **Open
+**When you're needed.** An agent calls `ask_user_in_browser` (log in, CAPTCHA, payment: a plain window, as above) or
+`show_browser` (look at this). The browser opens in a window with the agent's tabs, in front of your other apps, the chat shows **Open
 browser** and **Done** (with a notification if you're away from Kothar), and Done puts it back in the background
 where you left it. You can look at any time: **Show browser** in a chat's General tab,
 or **Show** on the Browser row in Processes; **Hide** puts it back.

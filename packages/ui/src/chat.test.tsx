@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { DRAFT_SAVE_MS } from './drafts.ts'
+import { currentDock, openDock } from './panel-tab.ts'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
 import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
@@ -100,6 +101,7 @@ type RenderOptions = {
   steering?: boolean
   engines?: EngineInfo[]
   modelLists?: ModelLists
+  extensionUi?: ComponentProps<typeof Chat>['extensionUi']
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -135,6 +137,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
                 ]
               }
               modelLists={options.modelLists}
+              extensionUi={options.extensionUi}
               connected
               send={send}
               openSettings={() => {}}
@@ -501,7 +504,7 @@ test("a permission shows on its tool's row: the prompt under it while pending, t
   const badges = rows.map((b) => b.querySelector('[data-verdict]')?.textContent)
   expect(badges).toEqual(['Allowed', 'Allowed automatically', 'Denied', 'Denied'])
   expect(container.textContent).not.toContain('Approve')
-  expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the work folder')
+  expect(await hintOf(rows[2]!.querySelector('[data-verdict]')!)).toContain('outside the folders this chat may write')
   act(() => showStepsByDefault(false))
   localStorage.clear()
   reloadSteps()
@@ -1263,4 +1266,68 @@ test("a chat whose own model can't run says so and offers to go back to Settings
   const back = [...container.querySelectorAll('button')].find((b) => b.textContent === "Use Settings' models")!
   act(() => back.click())
   expect(sent.at(-1)).toEqual({ type: 'chat.setModel', chatId: 'c1' })
+})
+
+test("an extension's card stays in view when the turn folds, and opens its panel on what it's about", () => {
+  const sent: ClientMessage[] = []
+  const tool = (toolId: string): Item => ({ kind: 'tool', toolId, name: 'create_artifact', summary: '', state: 'done', output: '' })
+  const card: Item = {
+    kind: 'note',
+    text: 'Made the artifact',
+    extension: 'artifacts',
+    panel: 'artifacts',
+    action: { name: 'open', value: 'chart' },
+    card: { title: 'Sales chart', badge: 'Chart', detail: 'v2' },
+  }
+  const panels = [{ extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock' as const }]
+  render({ items: [USER, tool('t1'), card, tool('t2'), { kind: 'text', text: 'Done' }] }, (m) => sent.push(m), {
+    extensionUi: { chatId: 'c1', panels, commands: [] },
+  })
+  const shown = container.querySelector('[data-note-card]') as HTMLButtonElement
+  expect(shown.textContent).toContain('Sales chart')
+  expect(shown.textContent).toContain('Chart')
+  expect(shown.textContent).toContain('v2')
+  expect(container.textContent).toContain('2 steps')
+  act(() => shown.click())
+  expect(sent).toContainEqual({
+    type: 'extension.panel.action',
+    chatId: 'c1',
+    extension: 'artifacts',
+    panel: 'artifacts',
+    action: { name: 'open', value: 'chart' },
+  })
+  expect(currentDock().open).toBe('extension:artifacts/artifacts')
+  act(() => openDock(null))
+})
+
+test("extensions' message actions sit beside Copy on messages with a log entry, marked ones stay shown", () => {
+  const sent: ClientMessage[] = []
+  const messageActions = [
+    { extension: 'pins', id: 'pin', label: 'Pin', activeLabel: 'Unpin', icon: 'pin' as const, kinds: ['user' as const, 'work' as const, 'talk' as const], marked: [2] },
+    { extension: 'stars', id: 'star', label: 'Star', icon: 'star' as const, kinds: ['talk' as const], marked: [] },
+  ]
+  render(
+    {
+      items: [
+        { kind: 'user', text: 'Hi', entry: 0 },
+        { kind: 'text', text: 'Hello', entry: 2 },
+        { kind: 'user', text: 'Not logged yet' },
+      ],
+    },
+    (m) => sent.push(m),
+    { extensionUi: { chatId: 'c1', panels: [], commands: [], messageActions } },
+  )
+  const buttons = (selector: string) => [...container.querySelectorAll<HTMLButtonElement>(`[data-entry="${selector}"] [data-message-action]`)]
+  expect(buttons('0').map((b) => b.getAttribute('aria-label'))).toEqual(['Pin'])
+  expect(buttons('2').map((b) => b.getAttribute('aria-label'))).toEqual(['Unpin', 'Star'])
+  // Marked: in view without hover, and filled.
+  const unpin = buttons('2')[0]!
+  expect(unpin.dataset.marked).toBe('true')
+  expect(unpin.className).not.toContain('opacity-0')
+  expect(buttons('0')[0]!.className).toContain('opacity-0')
+  expect(buttons('0')[0]!.className).toContain('focus-visible:opacity-100')
+  // A message the view can't place in the log gets none.
+  expect(container.querySelectorAll('[data-message-action]')).toHaveLength(3)
+  act(() => unpin.click())
+  expect(sent.at(-1)).toEqual({ type: 'extension.message.action', chatId: 'c1', extension: 'pins', action: 'pin', entry: 2 })
 })

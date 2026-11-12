@@ -1,6 +1,11 @@
 // One space's browser: a Chromium on the space's profile (Kothar's own, or a copy of the user's), headless while agents
 // work, relaunched with a window when the user takes over (a hand-off), and headless again once they're done. Every
 // change runs one at a time, so only one browser is ever on the profile.
+//
+// A hand-off for signing in (signIn) opens a plain window: the same profile with no remote debugging, which sites
+// can't tell from a browser the user opened, so Google and the like let them sign in. Kothar can't see into it, so it
+// ends when the user clicks Done (Kothar asks it to quit) or quits it, and the headless browser that follows reopens
+// its tabs from the profile's saved session.
 import * as cdp from './cdp.ts'
 import type { Launcher, Running } from './chromium.ts'
 
@@ -32,7 +37,8 @@ export type SpaceBrowserOptions = {
   handOffMs?: number
 }
 
-const KEEP = (url: string) => !!url && url !== 'about:blank' && !url.startsWith('devtools://')
+const KEEP = (url: string) =>
+  !!url && url !== 'about:blank' && !url.startsWith('devtools://') && !url.startsWith('chrome://new-tab-page') && !url.startsWith('chrome://newtab')
 
 export class SpaceBrowser {
   mode: Mode = 'off'
@@ -41,7 +47,14 @@ export class SpaceBrowser {
   reason?: string
   // The chat whose agent waits on the window, if one does.
   waitingChat?: string
+  // The window is plain (no DevTools), opened for signing in.
+  plain = false
   private running?: Running
+  // The cookies the browser had before a plain window, set again afterwards where the profile lacks them (session
+  // cookies, which a plain window's start doesn't get).
+  private beforePlain: cdp.Cookie[] = []
+  // A plain window opened since the last finish: the next headless start reopens its saved tabs.
+  private afterPlain = false
   private chain: Promise<unknown> = Promise.resolve()
   private tabs: SavedTab[] = []
   private poll?: ReturnType<typeof setInterval>
@@ -89,7 +102,7 @@ export class SpaceBrowser {
   // The tabs as the browser has them now (or as last seen, if it's gone), with the active one marked.
   private async snapshot(): Promise<{ tabs: SavedTab[]; cookies: cdp.Cookie[] }> {
     const running = this.running
-    if (!running) return { tabs: this.tabs, cookies: [] }
+    if (!running?.endpoint) return { tabs: this.tabs, cookies: [] }
     try {
       const open = (await this.ops.listTabs(running.endpoint)).filter((t) => KEEP(t.url))
       const active = await this.ops.activeTab(running.endpoint, open).catch(() => open[0])
@@ -106,15 +119,36 @@ export class SpaceBrowser {
   }
 
   // cold: from nothing, not a relaunch that carries a browser's tabs and cookies over.
-  private async start(headless: boolean, from: { tabs: SavedTab[]; cookies: cdp.Cookie[] }, cold = false) {
-    const running = await this.options.launch({ profile: this.options.profile, headless, cold })
+  // plain: a window with no DevTools, on the given tabs. afterPlain: headless again after one, on the tabs it saved.
+  private async start(
+    headless: boolean,
+    from: { tabs: SavedTab[]; cookies: cdp.Cookie[] },
+    cold = false,
+    how: { plain?: boolean; afterPlain?: boolean } = {},
+  ) {
+    const urls = from.tabs.map((t) => t.url)
+    const running = await this.options.launch({
+      profile: this.options.profile,
+      headless: headless && !how.plain,
+      cold,
+      ...(how.plain && { plain: true, ...(urls.length && { urls }) }),
+      ...(how.afterPlain && { restoreSession: true }),
+    })
     this.running = running
-    this.mode = headless ? 'headless' : 'window'
+    this.plain = !!how.plain
+    this.mode = headless && !how.plain ? 'headless' : 'window'
     this.since = Date.now()
     void running.exited.then(() => this.exited(running))
     if (cold && this.carried.length) {
       const carried = this.carried.splice(0)
       await this.ops.addMissingCookies(running.endpoint, carried).catch(() => {})
+    }
+    if (how.plain) return this.changed()
+    if (how.afterPlain) {
+      const before = this.beforePlain
+      this.beforePlain = []
+      if (before.length) await this.ops.addMissingCookies(running.endpoint, before).catch(() => {})
+      return this.changed()
     }
     const active = from.tabs.findIndex((t) => t.active)
     if (from.tabs.length || from.cookies.length) {
@@ -133,6 +167,7 @@ export class SpaceBrowser {
     const running = this.running
     this.running = undefined
     this.mode = 'off'
+    this.plain = false
     this.since = undefined
     await running?.stop()
   }
@@ -144,6 +179,7 @@ export class SpaceBrowser {
     const wasWindow = this.mode === 'window'
     this.running = undefined
     this.mode = 'off'
+    this.plain = false
     this.since = undefined
     this.stopWatching()
     this.changed()
@@ -199,21 +235,54 @@ export class SpaceBrowser {
       const running = this.running!
       await this.front(running)
       this.watch(running)
-      const limit = this.options.handOffMs ?? 60 * 60_000
-      this.timeout = setTimeout(() => void this.finish('timeout'), limit)
-    }).catch((error: unknown) => {
-      this.reason = undefined
-      this.waitingChat = undefined
-      this.changed()
-      const message = error instanceof Error ? error.message : String(error)
-      for (const resolve of this.waiters.splice(0)) resolve({ how: 'stopped', tabs: this.tabs, error: message })
-    })
+      this.limit()
+    }).catch((error: unknown) => this.failed(error))
     return result
+  }
+
+  // Hands the browser to the user for signing in: the same profile, tabs and logins in a plain window, with no
+  // DevTools (see the top of this file). A window already open, plain or not, is brought forward; one with DevTools
+  // stays as it is, so it needs Hide first to become plain. With chatId, that chat's agent waits on the result.
+  signIn(reason: string, chatId?: string): Promise<HandOffResult> {
+    const result = new Promise<HandOffResult>((resolve) => this.waiters.push(resolve))
+    void this.serial(async () => {
+      this.reason = reason
+      if (chatId) this.waitingChat = chatId
+      if (this.mode === 'window' && this.running) {
+        await this.front(this.running)
+        this.changed()
+        return
+      }
+      const cold = this.mode === 'off'
+      const from = await this.snapshot()
+      this.beforePlain = from.cookies
+      await this.halt()
+      await this.start(false, from, cold, { plain: true })
+      this.afterPlain = true
+      await this.front(this.running!)
+      this.limit()
+    }).catch((error: unknown) => this.failed(error))
+    return result
+  }
+
+  private limit() {
+    const limit = this.options.handOffMs ?? 60 * 60_000
+    this.timeout = setTimeout(() => void this.finish('timeout'), limit)
+  }
+
+  private failed(error: unknown) {
+    this.reason = undefined
+    this.waitingChat = undefined
+    this.afterPlain = false
+    this.beforePlain = []
+    this.changed()
+    const message = error instanceof Error ? error.message : String(error)
+    for (const resolve of this.waiters.splice(0)) resolve({ how: 'stopped', tabs: this.tabs, error: message })
   }
 
   // Its current tab in front, and its window in front of the user's other apps.
   private async front(running: Running) {
-    await this.ops.bringToFront(running.endpoint).catch(() => {})
+    if (running.endpoint) await this.ops.bringToFront(running.endpoint).catch(() => {})
     await running.activate?.().catch(() => {})
   }
 
@@ -228,6 +297,10 @@ export class SpaceBrowser {
     return this.serial(async () => {
       if (this.mode !== 'window' && !this.waiters.length) return
       let from: { tabs: SavedTab[]; cookies: cdp.Cookie[] } = { tabs: this.tabs, cookies: [] }
+      // A plain window can't be read; it saves its tabs to the profile as it quits, for the next start to reopen.
+      // One the user quit themselves did the same.
+      const plain = this.afterPlain
+      this.afterPlain = false
       if (this.mode === 'window') {
         from = await this.snapshot()
         await this.halt()
@@ -236,8 +309,11 @@ export class SpaceBrowser {
       // it again, on the same profile.
       let error: string | undefined
       if (how !== 'stopped' && this.mode === 'off') {
-        await this.start(true, from).catch((e: unknown) => (error = e instanceof Error ? e.message : String(e)))
+        const started = plain ? this.start(true, { tabs: [], cookies: [] }, false, { afterPlain: true }) : this.start(true, from)
+        await started.catch((e: unknown) => (error = e instanceof Error ? e.message : String(e)))
+        if (plain && !error) from = await this.snapshot()
       }
+      this.beforePlain = []
       this.reason = undefined
       this.waitingChat = undefined
       this.changed()
@@ -255,6 +331,8 @@ export class SpaceBrowser {
         if (keepCookies) this.carried = now.cookies
       }
       if (!keepCookies) this.carried = []
+      this.afterPlain = false
+      this.beforePlain = []
       await this.halt()
       this.reason = undefined
       this.waitingChat = undefined

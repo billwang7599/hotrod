@@ -7,6 +7,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { envVar, startCore } from './main.ts'
 import { BAD_TOKEN_CLOSE_CODE, type Adapter, type CoreMessage } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const port = 4451
 const adapters: Adapter[] = [
@@ -230,10 +231,4 @@ it('exits at once on a third signal and still kills engines that ignore SIGTERM'
   await waitFor(() => !alive(enginePid))
 })
 
-async function waitFor(check: () => boolean, timeoutMs = 2000) {
-  const start = performance.now()
-  while (!check()) {
-    if (performance.now() - start > timeoutMs) throw new Error('timed out waiting')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
+const waitFor = (check: () => boolean, timeoutMs = 2000) => until(check, { timeoutMs, everyMs: 20 })

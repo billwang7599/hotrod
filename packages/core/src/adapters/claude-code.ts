@@ -1,8 +1,16 @@
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 import { onJsonLines } from './jsonl.ts'
+import { processUserEnv, type UserEnv } from './user-env.ts'
+import { type EngineErrors, withKind } from './error-kind.ts'
+
+// Claude Code's own wording (2.1): "Unable to connect to API", but not its TLS and certificate errors, which waiting
+// won't fix; and the service shedding load in words that would otherwise read as a usage limit.
+export const CLAUDE_ERRORS: EngineErrors = {
+  network: /unable to connect to api(?!: ssl)/i,
+  notLimit: /temporarily limiting requests|not your usage limit/i,
+}
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
@@ -88,10 +96,10 @@ const accountEnv = (accountDir?: string, apiKey?: string): { env?: Record<string
 
 // Claude Code ignores TMPDIR, and needs its shell snapshots for Bash. A login refresh takes the refresh lock, then
 // the storage lock to save to the keychain; without the second, the new login is lost and the account signed out.
-function jailed(sandbox: Sandbox, accountDir?: string) {
-  const configDir = accountDir ?? process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
+function jailed(user: UserEnv, sandbox: Sandbox, accountDir?: string) {
+  const configDir = accountDir ?? user.env.CLAUDE_CONFIG_DIR ?? join(user.home, '.claude')
   const locks = [join(configDir, '.oauth_refresh.lock*'), join(configDir, '.storage-write.lock')]
-  const keychain = join(homedir(), 'Library', 'Keychains', 'login.keychain-db*')
+  const keychain = join(user.home, 'Library', 'Keychains', 'login.keychain-db*')
   const writable = [...sandbox.writable, join(configDir, 'shell-snapshots'), ...locks, keychain]
   return {
     sandbox: { ...sandbox, writable },
@@ -153,308 +161,312 @@ const contentOf = (text: string, images: { mimeType: string; base64: string }[] 
   return blocks.length ? [{ type: 'text', text }, ...blocks] : text
 }
 
-export const claudeCode: Adapter = {
-  id: 'claude-code',
-  name: 'Claude Code',
-  imageInput: true,
-  kotharMcp: true,
-  steering: true,
+export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
+  return {
+    id: 'claude-code',
+    name: 'Claude Code',
+    imageInput: true,
+    kotharMcp: true,
+    steering: true,
 
-  async detect(machine) {
-    const options = { cwd: '/' }
-    const version = await machine.run('claude', ['--version'], options).catch(() => null)
-    if (version?.code !== 0) return { installed: false, signedIn: false }
-    const { signedIn } = await authStatus(machine)
-    const detail = version.stdout.trim()
-    const offers = { models: MODELS, thinking: EFFORTS, modelThinking: MODEL_EFFORTS, ...DEFAULTS }
-    return { installed: true, signedIn, detail, ...offers }
-  },
+    async detect(machine) {
+      const options = { cwd: '/' }
+      const version = await machine.run('claude', ['--version'], options).catch(() => null)
+      if (version?.code !== 0) return { installed: false, signedIn: false }
+      const { signedIn } = await authStatus(machine)
+      const detail = version.stdout.trim()
+      const offers = { models: MODELS, thinking: EFFORTS, modelThinking: MODEL_EFFORTS, ...DEFAULTS }
+      return { installed: true, signedIn, detail, ...offers }
+    },
 
-  accounts: {
-    status: authStatus,
+    accounts: {
+      status: authStatus,
 
-    login(machine, accountDir, emit) {
-      const options = { cwd: accountDir, ...accountEnv(accountDir) }
-      const proc = machine.spawn('claude', ['auth', 'login', '--claudeai'], options)
-      let output = ''
-      let sentUrl = false
-      const collect = (chunk: string) => {
-        output = (output + chunk).slice(-OUTPUT_TAIL_CHARS)
-        const url = !sentUrl && output.match(LOGIN_URL)?.[0]
-        if (!url) return
-        sentUrl = true
-        emit({ type: 'url', url })
+      login(machine, accountDir, emit) {
+        const options = { cwd: accountDir, ...accountEnv(accountDir) }
+        const proc = machine.spawn('claude', ['auth', 'login', '--claudeai'], options)
+        let output = ''
+        let sentUrl = false
+        const collect = (chunk: string) => {
+          output = (output + chunk).slice(-OUTPUT_TAIL_CHARS)
+          const url = !sentUrl && output.match(LOGIN_URL)?.[0]
+          if (!url) return
+          sentUrl = true
+          emit({ type: 'url', url })
+        }
+        proc.onStdout(collect)
+        proc.onExit((code, stderrTail) => {
+          if (code === 0) return emit({ type: 'done' })
+          const text = (output + stderrTail).replace(ANSI, '')
+          const error = text.match(/Login failed:.*/)?.[0] ?? `Claude Code sign-in exited with code ${code}`
+          emit({ type: 'failed', error: error.trim() })
+        })
+        return {
+          submitCode: (code) => proc.write(code.trim() + '\n'),
+          cancel: () => proc.kill(),
+        }
+      },
+
+      async logout(machine, accountDir) {
+        await machine.run('claude', ['auth', 'logout'], { cwd: '/', ...accountEnv(accountDir) })
+      },
+
+      apiKeys: true,
+    },
+
+    async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey, sandbox }) {
+      const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
+      args.push('--system-prompt', system)
+      if (schema) args.push('--json-schema', JSON.stringify(schema))
+      const jail = sandbox && jailed(user, sandbox, accountDir)
+      const env = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
+      const options = {
+        cwd,
+        input: prompt,
+        timeoutMs,
+        ...(Object.keys(env).length && { env }),
+        ...(jail && { sandbox: jail.sandbox }),
       }
-      proc.onStdout(collect)
-      proc.onExit((code, stderrTail) => {
-        if (code === 0) return emit({ type: 'done' })
-        const text = (output + stderrTail).replace(ANSI, '')
-        const error = text.match(/Login failed:.*/)?.[0] ?? `Claude Code sign-in exited with code ${code}`
-        emit({ type: 'failed', error: error.trim() })
+      const { code, stdout, stderr } = await machine.run('claude', args, options)
+      let reply: any
+      try {
+        reply = JSON.parse(stdout)
+      } catch {}
+      if (code !== 0 || !reply || reply.is_error) {
+        throw new Error(reply?.result || stderr.trim() || `Claude Code exited with code ${code}`)
+      }
+      return reply.structured_output === undefined ? String(reply.result ?? '') : JSON.stringify(reply.structured_output)
+    },
+
+    start(machine, options, emit) {
+      const { cwd, instructions, accountDir, apiKey, kotharMcp, mcpServers = [], extraDirs = [], readFiles = [] } =
+        options
+      const { model, thinking, sandbox } = options
+      const args = [
+        '-p',
+        '--input-format', 'stream-json',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--include-partial-messages',
+        '--permission-prompt-tool', 'stdio',
+        ...CLEAN_ARGS,
+        // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
+        '--thinking-display', 'summarized',
+        // Claude Code's own subagents run out of sight, where the user can't open or stop them; Kothar's
+        // spawn_worker replaces them. `Task` is the tool's name before Claude Code 2.1.
+        '--disallowedTools', 'Agent', 'Task',
+        // Echoes a steered message, with its uuid, once a turn takes it in.
+        '--replay-user-messages',
+      ]
+      if (model) args.push('--model', model)
+      if (thinking) args.push('--effort', thinking)
+      for (const dir of extraDirs) args.push('--add-dir', dir)
+      const jail = sandbox && jailed(user, sandbox, accountDir)
+      const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
+      const servers: Record<string, object> = {}
+      if (kotharMcp) {
+        // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
+        const headers = { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' }
+        servers.kothar = { type: 'http', url: kotharMcp.url, headers }
+        env.KOTHAR_MCP_TOKEN = kotharMcp.token
+      }
+      for (const server of mcpServers) {
+        servers[server.name] = { type: 'stdio', command: server.command, args: server.args ?? [], env: server.env ?? {} }
+      }
+      if (Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: servers }))
+      const allowed = [
+        ...(kotharMcp ? ['mcp__kothar__*'] : []),
+        ...mcpServers.flatMap((server) => (server.allowTools ? [`mcp__${server.name}__*`] : [])),
+        // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
+        ...readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`),
+      ]
+      if (allowed.length) args.push('--allowedTools', ...allowed)
+      if (instructions) args.push('--append-system-prompt', instructions)
+      const proc = machine.spawn('claude', args, {
+        cwd,
+        ...(Object.keys(env).length && { env }),
+        ...(jail && { sandbox: jail.sandbox }),
       })
-      return {
-        submitCode: (code) => proc.write(code.trim() + '\n'),
-        cancel: () => proc.kill(),
+      const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
+      const pendingInputs = new Map<string, any>()
+      const reply = (requestId: string, decide: (input: any) => object) => {
+        if (!pendingInputs.has(requestId)) return
+        const response = decide(pendingInputs.get(requestId))
+        pendingInputs.delete(requestId)
+        send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
       }
-    },
-
-    async logout(machine, accountDir) {
-      await machine.run('claude', ['auth', 'logout'], { cwd: '/', ...accountEnv(accountDir) })
-    },
-
-    apiKeys: true,
-  },
-
-  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, apiKey, sandbox }) {
-    const args = ['-p', ...CLEAN_ARGS, '--tools', '', '--output-format', 'json', '--model', model]
-    args.push('--system-prompt', system)
-    if (schema) args.push('--json-schema', JSON.stringify(schema))
-    const jail = sandbox && jailed(sandbox, accountDir)
-    const env = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
-    const options = {
-      cwd,
-      input: prompt,
-      timeoutMs,
-      ...(Object.keys(env).length && { env }),
-      ...(jail && { sandbox: jail.sandbox }),
-    }
-    const { code, stdout, stderr } = await machine.run('claude', args, options)
-    let reply: any
-    try {
-      reply = JSON.parse(stdout)
-    } catch {}
-    if (code !== 0 || !reply || reply.is_error) {
-      throw new Error(reply?.result || stderr.trim() || `Claude Code exited with code ${code}`)
-    }
-    return reply.structured_output === undefined ? String(reply.result ?? '') : JSON.stringify(reply.structured_output)
-  },
-
-  start(machine, options, emit) {
-    const { cwd, instructions, accountDir, apiKey, kotharMcp, mcpServers = [], extraDirs = [], readFiles = [] } =
-      options
-    const { model, thinking, sandbox } = options
-    const args = [
-      '-p',
-      '--input-format', 'stream-json',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages',
-      '--permission-prompt-tool', 'stdio',
-      ...CLEAN_ARGS,
-      // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
-      '--thinking-display', 'summarized',
-      // Claude Code's own subagents run out of sight, where the user can't open or stop them; Kothar's
-      // spawn_worker replaces them. `Task` is the tool's name before Claude Code 2.1.
-      '--disallowedTools', 'Agent', 'Task',
-      // Echoes a steered message, with its uuid, once a turn takes it in.
-      '--replay-user-messages',
-    ]
-    if (model) args.push('--model', model)
-    if (thinking) args.push('--effort', thinking)
-    for (const dir of extraDirs) args.push('--add-dir', dir)
-    const jail = sandbox && jailed(sandbox, accountDir)
-    const env: Record<string, string> = { ...accountEnv(accountDir, apiKey).env, ...jail?.env }
-    const servers: Record<string, object> = {}
-    if (kotharMcp) {
-      // Claude Code expands ${VAR} in headers, so the token stays out of `ps`.
-      const headers = { Authorization: 'Bearer ${KOTHAR_MCP_TOKEN}' }
-      servers.kothar = { type: 'http', url: kotharMcp.url, headers }
-      env.KOTHAR_MCP_TOKEN = kotharMcp.token
-    }
-    for (const server of mcpServers) {
-      servers[server.name] = { type: 'stdio', command: server.command, args: server.args ?? [], env: server.env ?? {} }
-    }
-    if (Object.keys(servers).length) args.push('--mcp-config', JSON.stringify({ mcpServers: servers }))
-    const allowed = [
-      ...(kotharMcp ? ['mcp__kothar__*'] : []),
-      ...mcpServers.flatMap((server) => (server.allowTools ? [`mcp__${server.name}__*`] : [])),
-      // Read rules are gitignore patterns, `//` from the root; `*`, `?` and `\` can't be escaped in them.
-      ...readFiles.map((path) => `Read(/${path.replace(/[[\]]/g, '\\$&')})`),
-    ]
-    if (allowed.length) args.push('--allowedTools', ...allowed)
-    if (instructions) args.push('--append-system-prompt', instructions)
-    const proc = machine.spawn('claude', args, {
-      cwd,
-      ...(Object.keys(env).length && { env }),
-      ...(jail && { sandbox: jail.sandbox }),
-    })
-    const send = (message: unknown) => proc.write(JSON.stringify(message) + '\n')
-    const pendingInputs = new Map<string, any>()
-    const reply = (requestId: string, decide: (input: any) => object) => {
-      if (!pendingInputs.has(requestId)) return
-      const response = decide(pendingInputs.get(requestId))
-      pendingInputs.delete(requestId)
-      send({ type: 'control_response', response: { subtype: 'success', request_id: requestId, response } })
-    }
-    let interrupted = false
-    let closed = false
-    let interruptCount = 0
-    let limited = false
-    // Steered messages written mid-turn and not yet taken in: Kothar's id by the uuid Claude Code knows, oldest first.
-    const steers = new Map<string, string>()
-    let cancelCount = 0
-    const land = (uuid: unknown) => {
-      const id = typeof uuid === 'string' ? steers.get(uuid) : undefined
-      if (id === undefined) return
-      steers.delete(uuid as string)
-      emit({ type: 'steer.landed', id })
-    }
-    // A turn that ends with steers still waiting would run them as a turn of their own; Kothar queues them instead.
-    const returnSteers = () => {
-      for (const [uuid, id] of steers) {
-        const request = { subtype: 'cancel_async_message', message_uuid: uuid }
-        send({ type: 'control_request', request_id: `cancel-${++cancelCount}`, request })
-        emit({ type: 'steer.returned', id })
+      let interrupted = false
+      let closed = false
+      let interruptCount = 0
+      let limited = false
+      // Steered messages written mid-turn and not yet taken in: Kothar's id by the uuid Claude Code knows, oldest first.
+      const steers = new Map<string, string>()
+      let cancelCount = 0
+      const land = (uuid: unknown) => {
+        const id = typeof uuid === 'string' ? steers.get(uuid) : undefined
+        if (id === undefined) return
+        steers.delete(uuid as string)
+        emit({ type: 'steer.landed', id })
       }
-      steers.clear()
-    }
-    const limit = (message: string, resetsAt?: string) => {
-      if (limited) return
-      limited = true
-      emit({ type: 'limit.reached', message, ...(resetsAt && { resetsAt }) })
-    }
+      // A turn that ends with steers still waiting would run them as a turn of their own; Kothar queues them instead.
+      const returnSteers = () => {
+        for (const [uuid, id] of steers) {
+          const request = { subtype: 'cancel_async_message', message_uuid: uuid }
+          send({ type: 'control_request', request_id: `cancel-${++cancelCount}`, request })
+          emit({ type: 'steer.returned', id })
+        }
+        steers.clear()
+      }
+      const limit = (message: string, resetsAt?: string) => {
+        if (limited) return
+        limited = true
+        emit({ type: 'limit.reached', message, ...(resetsAt && { resetsAt }) })
+      }
 
-    const handle = (msg: any) => {
-      const subagent = msg.parent_tool_use_id != null
-      switch (msg.type) {
-        case 'rate_limit_event': {
-          const info = msg.rate_limit_info ?? {}
-          // Rejected but on overage (extra usage) means the turn goes on and is billed.
-          if (info.status !== 'rejected' || info.isUsingOverage === true) return
-          const name = LIMIT_NAMES[info.rateLimitType] ?? ''
-          return limit(`The account's ${name ? `${name} ` : ''}usage limit is reached`, isoOf(info.resetsAt))
-        }
-        case 'stream_event': {
-          const delta = msg.event?.delta
-          if (subagent) return
-          if (delta?.type === 'text_delta') emit({ type: 'text.delta', text: delta.text })
-          if (delta?.type === 'thinking_delta' && delta.thinking) emit({ type: 'thinking.delta', text: delta.thinking })
-          return
-        }
-        case 'assistant':
-          for (const block of msg.message?.content ?? []) {
-            // An API error arrives as a made-up reply, then again as the error result.
-            const reply = block.type === 'text' && !subagent && msg.is_api_error_message !== true
-            if (reply) emit({ type: 'text.completed', text: block.text })
-            if (block.type === 'tool_use') {
-              const kind = kindOf(block.name)
-              const summary = summarize(kind, block.input)
-              const named = block.input?.file_path ?? block.input?.notebook_path
-              const path = kind === 'edit' || kind === 'read' ? named : undefined
-              emit({
-                type: 'tool.started',
-                toolId: block.id,
-                name: block.name,
-                kind,
-                summary,
-                input: block.input,
-                ...(typeof path === 'string' && { path }),
-              })
+      const handle = (msg: any) => {
+        const subagent = msg.parent_tool_use_id != null
+        switch (msg.type) {
+          case 'rate_limit_event': {
+            const info = msg.rate_limit_info ?? {}
+            // Rejected but on overage (extra usage) means the turn goes on and is billed.
+            if (info.status !== 'rejected' || info.isUsingOverage === true) return
+            const name = LIMIT_NAMES[info.rateLimitType] ?? ''
+            return limit(`The account's ${name ? `${name} ` : ''}usage limit is reached`, isoOf(info.resetsAt))
+          }
+          case 'stream_event': {
+            const delta = msg.event?.delta
+            if (subagent) return
+            if (delta?.type === 'text_delta') emit({ type: 'text.delta', text: delta.text })
+            if (delta?.type === 'thinking_delta' && delta.thinking) emit({ type: 'thinking.delta', text: delta.thinking })
+            return
+          }
+          case 'assistant':
+            for (const block of msg.message?.content ?? []) {
+              // An API error arrives as a made-up reply, then again as the error result.
+              const reply = block.type === 'text' && !subagent && msg.is_api_error_message !== true
+              if (reply) emit({ type: 'text.completed', text: block.text })
+              if (block.type === 'tool_use') {
+                const kind = kindOf(block.name)
+                const summary = summarize(kind, block.input)
+                const named = block.input?.file_path ?? block.input?.notebook_path
+                const path = kind === 'edit' || kind === 'read' ? named : undefined
+                emit({
+                  type: 'tool.started',
+                  toolId: block.id,
+                  name: block.name,
+                  kind,
+                  summary,
+                  input: block.input,
+                  ...(typeof path === 'string' && { path }),
+                })
+              }
             }
-          }
-          return
-        case 'command_lifecycle':
-          if (msg.state === 'started') land(msg.command_uuid)
-          return
-        case 'user':
-          if (msg.isReplay === true) return land(msg.uuid)
-          if (!Array.isArray(msg.message?.content)) return
-          for (const block of msg.message.content) {
-            if (block.type !== 'tool_result') continue
-            const output =
-              typeof block.content === 'string'
-                ? block.content
-                : (block.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-            emit({ type: 'tool.completed', toolId: block.tool_use_id, output, isError: block.is_error === true })
-          }
-          return
-        case 'control_request': {
-          const request = msg.request ?? {}
-          if (request.subtype !== 'can_use_tool') {
-            // Claude Code waits forever on an unanswered control request.
-            send({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Unsupported' } })
+            return
+          case 'command_lifecycle':
+            if (msg.state === 'started') land(msg.command_uuid)
+            return
+          case 'user':
+            if (msg.isReplay === true) return land(msg.uuid)
+            if (!Array.isArray(msg.message?.content)) return
+            for (const block of msg.message.content) {
+              if (block.type !== 'tool_result') continue
+              const output =
+                typeof block.content === 'string'
+                  ? block.content
+                  : (block.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
+              emit({ type: 'tool.completed', toolId: block.tool_use_id, output, isError: block.is_error === true })
+            }
+            return
+          case 'control_request': {
+            const request = msg.request ?? {}
+            if (request.subtype !== 'can_use_tool') {
+              // Claude Code waits forever on an unanswered control request.
+              send({ type: 'control_response', response: { subtype: 'error', request_id: msg.request_id, error: 'Unsupported' } })
+              return
+            }
+            pendingInputs.set(msg.request_id, request.input)
+            const toolId = request.tool_use_id ? { toolId: request.tool_use_id } : {}
+            if (request.tool_name === 'AskUserQuestion') {
+              const questions = questionsOf(request.input)
+              emit({ type: 'question.asked', requestId: msg.request_id, ...toolId, questions })
+              return
+            }
+            const kind = kindOf(request.tool_name)
+            const path = pathOf(kind, request.input)
+            const command = kind === 'shell' ? request.input?.command : undefined
+            emit({
+              type: 'permission.requested',
+              requestId: msg.request_id,
+              ...toolId,
+              name: request.tool_name,
+              kind,
+              summary: summarize(kind, request.input),
+              ...(typeof path === 'string' && { path }),
+              ...(typeof command === 'string' && { command }),
+              input: request.input,
+            })
             return
           }
-          pendingInputs.set(msg.request_id, request.input)
-          const toolId = request.tool_use_id ? { toolId: request.tool_use_id } : {}
-          if (request.tool_name === 'AskUserQuestion') {
-            const questions = questionsOf(request.input)
-            emit({ type: 'question.asked', requestId: msg.request_id, ...toolId, questions })
-            return
+          case 'result': {
+            const failure = msg.is_error ? String(msg.result || msg.errors?.join('\n') || '') : ''
+            if (!interrupted && LIMIT_ERROR.test(failure)) {
+              const [text = failure, epoch] = failure.split('|')
+              limit(text.trim(), isoOf(epoch))
+            }
+            const error = interrupted
+              ? 'Interrupted'
+              : msg.is_error
+                ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
+                : undefined
+            interrupted = false
+            returnSteers()
+            emit({ type: 'turn.completed', ...withKind(error, CLAUDE_ERRORS) })
           }
-          const kind = kindOf(request.tool_name)
-          const path = pathOf(kind, request.input)
-          const command = kind === 'shell' ? request.input?.command : undefined
-          emit({
-            type: 'permission.requested',
-            requestId: msg.request_id,
-            ...toolId,
-            name: request.tool_name,
-            kind,
-            summary: summarize(kind, request.input),
-            ...(typeof path === 'string' && { path }),
-            ...(typeof command === 'string' && { command }),
-            input: request.input,
-          })
-          return
-        }
-        case 'result': {
-          const failure = msg.is_error ? String(msg.result || msg.errors?.join('\n') || '') : ''
-          if (!interrupted && LIMIT_ERROR.test(failure)) {
-            const [text = failure, epoch] = failure.split('|')
-            limit(text.trim(), isoOf(epoch))
-          }
-          const error = interrupted
-            ? 'Interrupted'
-            : msg.is_error
-              ? msg.result || msg.errors?.join('\n') || msg.subtype || 'Claude Code failed'
-              : undefined
-          interrupted = false
-          returnSteers()
-          emit({ type: 'turn.completed', ...(error && { error }) })
         }
       }
-    }
 
-    const lines = onJsonLines(proc, handle)
-    proc.onExit((code, stderrTail) => {
-      lines.flush()
-      if (code === 0 || closed) return emit({ type: 'session.ended' })
-      emit({ type: 'session.ended', error: stderrTail.trim() || `Claude Code exited with code ${code}` })
-    })
+      const lines = onJsonLines(proc, handle)
+      proc.onExit((code, stderrTail) => {
+        lines.flush()
+        if (code === 0 || closed) return emit({ type: 'session.ended' })
+        emit({ type: 'session.ended', ...withKind(stderrTail.trim() || `Claude Code exited with code ${code}`, CLAUDE_ERRORS) })
+      })
 
-    return {
-      prompt(text, images = []) {
-        limited = false
-        send({ type: 'user', message: { role: 'user', content: contentOf(text, images) } })
-        emit({ type: 'turn.started' })
-      },
-      // Written mid-turn, Claude Code takes it in after the turn's next tool step (priority "next", its default).
-      steer(id, text, images = []) {
-        const uuid = randomUUID()
-        steers.set(uuid, id)
-        send({ type: 'user', uuid, message: { role: 'user', content: contentOf(text, images) } })
-      },
-      interrupt() {
-        interrupted = true
-        send({ type: 'control_request', request_id: `interrupt-${++interruptCount}`, request: { subtype: 'interrupt' } })
-      },
-      respond(requestId, allow, message = 'The user denied this tool call.') {
-        reply(requestId, (input) => (allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }))
-      },
-      answer(requestId, answers) {
-        const joined = answers && Object.fromEntries(Object.entries(answers).map(([q, picked]) => [q, picked.join(', ')]))
-        reply(requestId, (input) =>
-          joined
-            ? { behavior: 'allow', updatedInput: { questions: input?.questions, answers: joined } }
-            : { behavior: 'deny', message: DECLINED },
-        )
-      },
-      close() {
-        closed = true
-        proc.closeStdin()
-        proc.kill()
-      },
-    }
-  },
+      return {
+        prompt(text, images = []) {
+          limited = false
+          send({ type: 'user', message: { role: 'user', content: contentOf(text, images) } })
+          emit({ type: 'turn.started' })
+        },
+        // Written mid-turn, Claude Code takes it in after the turn's next tool step (priority "next", its default).
+        steer(id, text, images = []) {
+          const uuid = randomUUID()
+          steers.set(uuid, id)
+          send({ type: 'user', uuid, message: { role: 'user', content: contentOf(text, images) } })
+        },
+        interrupt() {
+          interrupted = true
+          send({ type: 'control_request', request_id: `interrupt-${++interruptCount}`, request: { subtype: 'interrupt' } })
+        },
+        respond(requestId, allow, message = 'The user denied this tool call.') {
+          reply(requestId, (input) => (allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message }))
+        },
+        answer(requestId, answers) {
+          const joined = answers && Object.fromEntries(Object.entries(answers).map(([q, picked]) => [q, picked.join(', ')]))
+          reply(requestId, (input) =>
+            joined
+              ? { behavior: 'allow', updatedInput: { questions: input?.questions, answers: joined } }
+              : { behavior: 'deny', message: DECLINED },
+          )
+        },
+        close() {
+          closed = true
+          proc.closeStdin()
+          proc.kill()
+        },
+      }
+    },
+  }
 }
+
+export const claudeCode = createClaudeCode()

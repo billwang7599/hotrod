@@ -9,7 +9,8 @@ import { openCore, type Core } from './core.ts'
 import { communityDir, openMarketplace, type Fetch } from './marketplace.ts'
 import { FREE_HOST_CALLS, guardHost, HOST_USES, loadCommunityExtensions, nodeUsesOf, usesOf } from './extensions.ts'
 import { approvalsFile, historyFile } from './approvals.ts'
-import { checkExtensionManifest, type CatalogEntry, type CoreMessage } from './shared.ts'
+import { checkExtensionManifest } from './catalog-check.ts'
+import type { CatalogEntry, CoreMessage } from './shared.ts'
 import { CATALOG_URL, fakeGitHub } from './test-github.ts'
 import { runRestartable, savedOn, savedSwitch } from './main.ts'
 
@@ -716,6 +717,16 @@ describe('reviewed versions', () => {
     const next = await loadCommunityExtensions(garage, (id) => savedOn(garage, id), (id) => savedSwitch(garage, id))
     expect(next.find((c) => c.manifest.id === 'kept')!.extension?.id).toBe('kept')
     expect(next.find((c) => c.manifest.id === 'kept')).not.toHaveProperty('held')
+  })
+
+  it('stamps approvals and history with the clock it is given', async () => {
+    const garage = tempGarage()
+    install(garage, 'timed')
+    const at = new Date('2030-01-02T03:04:05.000Z')
+    await loadCommunityExtensions(garage, () => true, () => true, () => at)
+    expect(JSON.parse(readFileSync(approvalsFile(garage), 'utf8')).timed.approvedAt).toBe(at.toISOString())
+    const history = readFileSync(historyFile(garage), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+    expect(history.find((entry) => entry.event === 'approved')).toMatchObject({ id: 'timed', at: at.toISOString() })
   })
 
   it('approves nothing when the approvals file is unreadable', async () => {

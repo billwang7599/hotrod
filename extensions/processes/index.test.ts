@@ -9,6 +9,7 @@ import type { ClientMessage, CoreMessage, Machine, Sandbox } from '@kothar/core/
 import { sandboxingMachine as localMachine } from '@kothar/core/test-machine'
 import { elapsed } from '../../packages/ui/src/elapsed.ts'
 import { addressOf, createProcessesExtension, duration, endNote, LINE_MAX_CHARS, plain, portOf } from './index.ts'
+import { until as waitUntil } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -21,10 +22,7 @@ function tempDir() {
   return dir
 }
 
-async function until(check: () => boolean, tries = 600) {
-  for (let i = 0; i < tries && !check(); i++) await new Promise((r) => setTimeout(r, 10))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean, tries = 600) => waitUntil(check, { tries, everyMs: 10 })
 
 const alive = (pid: number) => {
   try {

@@ -20,6 +20,7 @@ import {
   type BrowserProfile,
   defaultPlaces,
   detectProfiles,
+  findChrome,
   FOLDER_PROFILE,
   folderProfile,
   KOTHAR_PROFILE,
@@ -31,7 +32,8 @@ import {
 import { type BrowserOps, type HandOffResult, SpaceBrowser } from './space-browser.ts'
 
 // Agents browse in the background: each space has one browser, headless, launched when an agent first browses and kept
-// between messages, so its tabs and logins stay. By default it's Playwright's Chromium on a profile of Kothar's own;
+// between messages, so its tabs and logins stay. By default it's the user's installed Google Chrome (else Playwright's
+// Chromium) on a profile of Kothar's own per space, never the user's own Chrome profile;
 // the user can pick one of their own browser profiles instead, which the agents' browser runs a copy of (profiles.ts),
 // never the profile itself or the user's running browser.
 // Playwright MCP attaches to it over CDP (see endpoint.ts). When a page needs the user, ask_user_in_browser hands the
@@ -74,11 +76,12 @@ export const BROWSER_INSTRUCTIONS =
 
 export const HAND_OFF_DESCRIPTION =
   "Hands this space's browser to the user, for what only they can or should do: log in, solve a CAPTCHA, enter a " +
-  '2FA code, pay, confirm. The browser opens in a window on their screen with your tabs, the current one in front, ' +
-  'and this call waits until they say they are done (or close the window, or send you a message). Then the browser ' +
-  'goes back to the background with their tabs and logins, and this returns the open tabs. Cookies, logins and site ' +
-  'storage carry over both ways, but anything typed into a form and not submitted is lost, so ask before filling a ' +
-  "form you can't finish. Afterwards your earlier page references are gone: take a browser_snapshot first."
+  '2FA code, pay, confirm. The browser opens on their screen as a plain window with your tabs, not under ' +
+  'automation, so sites such as Google let them sign in, and this call waits until they say they are done (or quit ' +
+  'the browser, or send you a message). Then the browser goes back to the background with their tabs and logins, and ' +
+  'this returns the open tabs. Cookies, logins and site storage carry over both ways, but anything typed into a form ' +
+  "and not submitted is lost, so ask before filling a form you can't finish. Afterwards your earlier page references " +
+  'are gone: take a browser_snapshot first.'
 
 export const SHOW_DESCRIPTION =
   "Shows this space's browser to the user so they can look at something: a page, a result, a problem you want them " +
@@ -117,6 +120,27 @@ export const PROFILE_FOLDER_SETTING: ExtensionSetting = {
   rows: 1,
 }
 
+export const CHROME_ENGINE = 'chrome'
+export const CHROMIUM_ENGINE = 'chromium'
+
+export const ENGINE_SETTING: ExtensionSetting = {
+  key: 'engine',
+  label: 'Browser',
+  description:
+    'What runs Kothar’s own profile. Google Chrome is the one installed on this computer, on a profile per space ' +
+    'apart from yours; Google lets you sign in on it. Without Chrome installed, the bundled Chromium runs instead.',
+  type: 'select',
+  options: [
+    { value: CHROME_ENGINE, label: 'Google Chrome (installed)' },
+    { value: CHROMIUM_ENGINE, label: 'Bundled Chromium' },
+  ],
+  default: CHROME_ENGINE,
+}
+
+export const SIGN_IN_HINT =
+  'Opens this space’s browser as a plain window, not under automation, so you can sign in to Google and other ' +
+  'sites. Click Done, or quit the browser, when you’re finished; agents then browse signed in.'
+
 export const BASE_SETTINGS: ExtensionSetting[] = [
   {
     key: 'askEachAction',
@@ -146,8 +170,9 @@ export type BrowserExtensionOptions = {
   ops?: BrowserOps
   pollMs?: number
   handOffMs?: number
-  // Where to look for the user's browsers.
+  // Where to look for the user's browsers, and the platform whose Chrome paths apply.
   places?: Places
+  platform?: NodeJS.Platform
 }
 
 // Detected profiles are read again at most this often, when Settings asks for the picker's options.
@@ -188,6 +213,18 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     return { kind: 'copy', label: profileLabel(found), dir: found.dir, executable: found.executable }
   }
   const mirrorOf = (spaceId: string) => join(host!.storage.dir, 'mirrors', spaceId)
+  // Chrome gets a folder of its own per space, apart from the bundled Chromium's: the two are different versions, and
+  // Chrome refuses a profile a newer version last opened.
+  const chromeProfileOf = (spaceId: string) => join(host!.storage.dir, 'chrome-profiles', spaceId)
+
+  // What runs Kothar's own profile: the installed Chrome when the setting picks it and it's there, else Chromium.
+  type Engine = { kind: 'chrome'; name: string; executable: string } | { kind: 'chromium'; missingChrome: boolean }
+  const engineOf = (values: ExtensionValues): Engine => {
+    const wanted = String(values.engine ?? CHROME_ENGINE)
+    if (wanted === CHROMIUM_ENGINE) return { kind: 'chromium', missingChrome: false }
+    const chrome = findChrome(places, options.platform)
+    return chrome ? { kind: 'chrome', ...chrome } : { kind: 'chromium', missingChrome: true }
+  }
 
   // Launches a space's browser on the profile the settings pick now: Kothar's own, or a copy of the user's, made
   // again from the source on each cold start, run on the source's own browser with the real Keychain.
@@ -196,7 +233,11 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     return async (given) => {
       const choice = choiceOf(current)
       if (choice.kind === 'error') throw new Error(`${choice.message}: pick a profile in Settings → Extensions → Browser`)
-      if (choice.kind === 'kothar') return launch(given)
+      if (choice.kind === 'kothar') {
+        const engine = engineOf(current)
+        if (engine.kind === 'chromium') return launch(given)
+        return launch({ ...given, profile: chromeProfileOf(spaceId), executable: engine.executable })
+      }
       const mirror = mirrorOf(spaceId)
       const copied = readMirror(mirror)
       if (given.cold || !copied || copied.source !== choice.dir) mirrorProfile(choice.dir, mirror)
@@ -312,7 +353,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   // Which browser and profile a space's browser runs, in words, for hints.
   const runsOn = () => {
     const choice = choiceOf(current)
-    return choice.kind === 'copy' ? `a copy of ${choice.label}` : "Kothar's own Chromium"
+    if (choice.kind === 'copy') return `a copy of ${choice.label}`
+    const engine = engineOf(current)
+    return engine.kind === 'chrome' ? `${engine.name}, on a profile of Kothar's own` : "Kothar's own Chromium"
   }
 
   const rowOf = (spaceId: string): ExtensionProcessRow[] => {
@@ -322,6 +365,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const actions: ExtensionProcessRow['actions'] = !window
       ? [
           { name: 'open', label: 'Show', hint: 'Show the agents’ tabs in a window, to look or take over' },
+          { name: 'signin', label: 'Sign in…', hint: SIGN_IN_HINT },
           { name: 'stop', label: 'Stop', hint: 'Close the browser; it starts again when an agent browses' },
         ]
       : browser.waitingChat
@@ -339,7 +383,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       {
         key: 'browser',
         label: 'Browser',
-        detail: window ? `Open for you${browser.reason ? `: ${browser.reason}` : ''}` : 'In the background',
+        detail: window
+          ? `Open for you${browser.plain ? ', not under automation' : ''}${browser.reason ? `: ${browser.reason}` : ''}`
+          : 'In the background',
         ...(browser.since !== undefined && { since: browser.since }),
         dot: window ? 'warning' : 'success',
         hint: `This space's browser, on ${runsOn()}. Agents' tabs and logins stay while it runs.`,
@@ -355,8 +401,16 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     void browser.handOff('opened by you')
   }
 
-  // A tool that hands the browser to the user and waits for them.
-  const handOffTool = (name: string, description: string, example: string): ExtensionTool => ({
+  // Opens the space's browser as a plain window for the user to sign in; no agent waits on it.
+  const signIn = (spaceId: string) => {
+    const browser = browserOf(spaceId)
+    if (browser.mode === 'window') return browser.show()
+    void browser.signIn('signing in')
+  }
+
+  // A tool that hands the browser to the user and waits for them: in a plain window (signIn) for what they must do,
+  // in one Kothar still reads (handOff) for what they should look at.
+  const handOffTool = (name: string, description: string, example: string, plain: boolean): ExtensionTool => ({
     name,
     description,
     inputSchema: {
@@ -376,7 +430,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         throw new Error('Another chat in this space is waiting on the user in the browser; try again after')
       }
       asked.set(caller.id, name)
-      const result = await browser.handOff(reason, caller.id)
+      const result = await (plain ? browser.signIn(reason, caller.id) : browser.handOff(reason, caller.id))
       asked.delete(caller.id)
       notified.delete(caller.id)
       try {
@@ -392,7 +446,20 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const children: ExtensionView[] = [{ type: 'heading', text: 'Profile', hint: PROFILE_HINT }]
     if (choice.kind === 'error') children.push({ type: 'text', text: choice.message, tone: 'error' })
     if (choice.kind === 'kothar') {
-      children.push({ type: 'text', text: "Kothar's own Chromium, a profile per space", tone: 'muted' })
+      const engine = engineOf(values)
+      const text =
+        engine.kind === 'chrome'
+          ? `${engine.name}, on a profile of Kothar’s own per space`
+          : "Kothar's own Chromium, a profile per space"
+      children.push({ type: 'text', text, tone: 'muted' })
+      if (engine.kind === 'chromium' && engine.missingChrome) {
+        children.push({
+          type: 'text',
+          text: 'Google Chrome isn’t installed, so the bundled Chromium runs instead. Google may not let you sign in on it.',
+          small: true,
+          tone: 'warning',
+        })
+      }
     }
     if (choice.kind === 'copy') {
       const copies = host ? join(host.storage.dir, 'mirrors') : undefined
@@ -462,8 +529,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     id: 'browser',
     name: 'Browser',
     description:
-      'Agents browse the web in the background: no window opens or takes focus. They use a profile of Kothar’s own ' +
-      'per space, or a copy of one of your Chrome, Brave, Edge or Arc profiles, so they’re logged in where you are. ' +
+      'Agents browse the web in the background: no window opens or takes focus. They use your installed Google Chrome ' +
+      'on a profile of Kothar’s own per space (Sign in… opens it for you to log in), or a copy of one of your Chrome, Brave, Edge or Arc profiles, so they’re logged in where you are. ' +
       'When a page needs you (a login, CAPTCHA, payment) or the agent wants to show you something, the browser opens ' +
       'in a window, and the agent carries on when you click Done.',
     enabledByDefault: false,
@@ -476,7 +543,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       return rest
     },
     get settings(): ExtensionSetting[] {
-      return [profileSetting(profiles()), PROFILE_FOLDER_SETTING, ...BASE_SETTINGS]
+      return [ENGINE_SETTING, profileSetting(profiles()), PROFILE_FOLDER_SETTING, ...BASE_SETTINGS]
     },
 
     settingsView: {
@@ -489,7 +556,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     onSettingsChanged({ key }, { values }) {
       current = values
       idleMs = Number(values.idleMinutes ?? 15) * 60_000
-      if (key === 'profile' || key === 'profileFolder') {
+      if (key === 'engine' || key === 'profile' || key === 'profileFolder') {
         restartBackground()
         for (const spaceId of browsers.keys()) host?.processesChanged(spaceId)
       }
@@ -499,14 +566,20 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       description: (values) =>
         choiceOf(values).kind === 'copy'
           ? 'Agents use your own browser’s app, on a copy of the profile you picked: nothing to install.'
-          : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's browser " +
+          : engineOf(values).kind === 'chrome'
+            ? 'Agents use your installed Google Chrome, on a profile of Kothar’s own per space: nothing to install.'
+            : "Install runs Playwright's own installer for its Chromium (Chrome for Testing), into Playwright's browser " +
             'folder, which other Playwright tools share. Nothing in it is removed.',
       async check(run, values) {
         // A copy of the user's profile runs on their own browser: nothing to install.
         const choice = choiceOf(values)
         if (choice.kind === 'copy') return { ready: true, message: `Uses ${choice.label}, in the background` }
+        const engine = engineOf(values)
+        if (engine.kind === 'chrome') return { ready: true, message: `Uses ${engine.name}, in the background` }
         const { ready, name } = await checkChromium(run)
-        return { ready, message: ready ? `${name} installed, in the background` : 'Browser not installed' }
+        const instead = engine.missingChrome ? 'Google Chrome isn’t installed; ' : ''
+        const message = ready ? `${instead}${name} installed, in the background` : `${instead}Browser not installed`
+        return { ready, message }
       },
       async install(run, report) {
         let downloading = 'the browser'
@@ -584,8 +657,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     tools: [
-      handOffTool(HAND_OFF_TOOL, HAND_OFF_DESCRIPTION, '"Log in to GitHub"'),
-      handOffTool(SHOW_TOOL, SHOW_DESCRIPTION, '"The chart on this page is empty"'),
+      handOffTool(HAND_OFF_TOOL, HAND_OFF_DESCRIPTION, '"Log in to GitHub"', true),
+      handOffTool(SHOW_TOOL, SHOW_DESCRIPTION, '"The chart on this page is empty"', false),
     ],
 
     // Show or hide the space's browser from the chat's General tab, at any time.
@@ -598,6 +671,16 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         run: (chat) => {
           const spaceId = spaceIdOf(chat.id)
           if (spaceId) return peek(spaceId)
+        },
+      },
+      {
+        id: 'sign-in-browser',
+        label: 'Sign in…',
+        hint: SIGN_IN_HINT,
+        shown: (chat) => !!endpoints && !!spaceIdOf(chat.id) && browsers.get(spaceIdOf(chat.id) ?? '')?.mode !== 'window',
+        run: (chat) => {
+          const spaceId = spaceIdOf(chat.id)
+          if (spaceId) return signIn(spaceId)
         },
       },
       {
@@ -626,6 +709,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       if (action === 'done') return browser.finish('done')
       // On demand: no agent waits; Hide (or closing the window) puts it back.
       if (action === 'open') return peek(spaceId)
+      if (action === 'signin') return signIn(spaceId)
     },
 
     onStatusChanged(chat: ChatDetail, status) {
@@ -641,10 +725,10 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       if (archived && chat.parentId === undefined) void stopSpace(chat.id)
     },
 
-    // The space's profile and its copy of the user's, logins with them, go with the space.
+    // The space's profiles and its copy of the user's, logins with them, go with the space.
     onChatRemoved(chat) {
       if (chat.parentId !== undefined || !host) return
-      const folders = [join(host.storage.dir, 'profiles', chat.id), mirrorOf(chat.id)]
+      const folders = [join(host.storage.dir, 'profiles', chat.id), chromeProfileOf(chat.id), mirrorOf(chat.id)]
       void Promise.resolve(stopSpace(chat.id)).finally(() => {
         for (const folder of folders) rmSync(folder, { recursive: true, force: true })
       })

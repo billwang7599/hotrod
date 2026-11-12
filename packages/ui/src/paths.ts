@@ -23,12 +23,6 @@ export function showPaths(place: PathPlace, shown: boolean) {
   for (const listener of listeners) listener()
 }
 
-/** Rereads the saved choice, for tests that clear storage. */
-export function reloadPaths() {
-  current = read()
-  for (const listener of listeners) listener()
-}
-
 const subscribe = (listener: () => void) => {
   listeners.add(listener)
   return () => listeners.delete(listener)

@@ -2,11 +2,12 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
-import type { Extension, ExtensionHost } from '@kothar/extension-api'
+import type { Extension, ExtensionHost, TurnErrorKind } from '@kothar/extension-api'
 import { createFakeAdapter, type FakeStep } from '@kothar/core/fake'
 import { startCore } from '@kothar/core/main'
 import { sandboxingMachine } from '@kothar/core/test-machine'
-import reconnect, { classify, CONTINUE_PROMPT, createReconnect, delayOf, MAX_TRIES } from './index.ts'
+import reconnect, { CONTINUE_PROMPT, createReconnect, delayOf, MAX_TRIES, reasonOf } from './index.ts'
+import { until } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -14,15 +15,12 @@ afterEach(async () => {
 })
 
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
-const dropped = (error = 'API Error: Connection error.'): FakeStep[] => [
+// A turn that ended early, with the error and its kind as the engine's adapter labels them.
+const dropped = (error = 'API Error: Connection error.', errorKind: TurnErrorKind = 'network'): FakeStep[] => [
   { type: 'text.completed', text: 'Half done' },
-  { type: 'turn.completed', error },
+  { type: 'turn.completed', error, errorKind },
 ]
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
 const pause = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // Each session plays the next plan, then replies. The network is up while `online` is true.
@@ -80,91 +78,11 @@ it('is on by default, with a longest-wait setting', () => {
   expect(reconnect.settings?.map((s) => s.key)).toEqual(['maxWait'])
 })
 
-it('tells network failures and an unavailable service from everything else', () => {
-  for (const error of [
-    'API Error: Connection error.',
-    'getaddrinfo ENOTFOUND api.anthropic.com',
-    'read ECONNRESET',
-    'connect ETIMEDOUT 160.79.104.10:443',
-    'TypeError: fetch failed',
-    'API Error: Request timed out.',
-    'socket hang up',
-  ]) {
-    expect(classify(error), error).toBe('network')
-  }
-  for (const error of [
-    'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
-    'API Error: 503 Service Unavailable',
-    '502 Bad Gateway',
-  ]) {
-    expect(classify(error), error).toBe('service')
-  }
-  for (const error of [
-    undefined,
-    'Interrupted',
-    "The account's 5-hour usage limit is reached",
-    'API Error: 429 rate_limit_error',
-    'Claude Code exited with code 1',
-    'Tool failed: file not found',
-  ]) {
-    expect(classify(error), String(error)).toBeUndefined()
-  }
-})
-
-// The wording each engine really uses, read from its own build: Claude Code 2.1, pi 1.1 (pi-ai), Codex 0.167 and
-// OpenCode 1.17.
-it("knows each engine's own network and overload errors", () => {
-  const network = {
-    'claude-code': [
-      'Unable to connect to API. Check your internet connection',
-      'Unable to connect to API (ECONNRESET)',
-      'Network error. Please check your internet connection.',
-    ],
-    pi: ['terminated', 'Connection error.', 'other side closed', 'upstream connect error or disconnect/reset before headers', 'Anthropic stream ended before message_stop'],
-    codex: [
-      'Connection failed: error sending request for url (https://chatgpt.com/backend-api/codex/responses)',
-      'stream disconnected before completion: error sending request for url (https://api.openai.com/v1/responses)',
-      'stream disconnected before completion: idle timeout waiting for SSE',
-      'stream disconnected before completion: stream closed before response.completed',
-      'error sending request: client error (Connect): dns error: failed to lookup address information',
-      'tcp connect error: Network unreachable',
-    ],
-    opencode: [
-      'Cannot connect to API: Unable to connect. Is the computer able to access the url?',
-      'Cannot connect to API: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()',
-      'ConnectionRefused',
-    ],
-  }
-  const service = {
-    'claude-code': [
-      'Repeated 529 Overloaded errors',
-      'Opus is experiencing high load, please use /model to switch to Sonnet',
-      'Server is temporarily limiting requests (not your usage limit)',
-    ],
-    pi: ['servers are currently busy', '{"type":"error","error":{"type":"server_busy"}}'],
-    codex: [
-      'Selected model is at capacity. Please try a different model.',
-      "We're currently experiencing high demand, which may cause temporary errors.",
-      'exceeded retry limit, last status: 503 Service Unavailable',
-    ],
-    opencode: ['Provider is overloaded'],
-  }
-  for (const [engine, errors] of Object.entries(network)) {
-    for (const error of errors) expect(classify(error), `${engine}: ${error}`).toBe('network')
-  }
-  for (const [engine, errors] of Object.entries(service)) {
-    for (const error of errors) expect(classify(error), `${engine}: ${error}`).toBe('service')
-  }
-  for (const error of [
-    // Waiting fixes none of these.
-    'Unable to connect to API: SSL certificate has expired',
-    'stream disconnected before completion: Incomplete response returned, reason: content_filter',
-    'Policy-restricted capacity is unavailable. Please try again later.',
-    'Too Many Requests',
-    'Process terminated by the user before it finished',
-  ]) {
-    expect(classify(error), error).toBeUndefined()
-  }
+// Each adapter labels its engine's errors (packages/core/src/adapters/error-kind.ts, with the engines' own wording).
+it('waits out a dropped connection or an unavailable service, and nothing else', () => {
+  expect(reasonOf('network')).toBe('network')
+  expect(reasonOf('overloaded')).toBe('service')
+  for (const kind of [undefined, 'interrupted', 'rate_limit', 'other'] as const) expect(reasonOf(kind), String(kind)).toBeUndefined()
 })
 
 it('backs off from the first delay, doubling, up to the cap', () => {
@@ -195,7 +113,7 @@ it('holds a dropped turn as waiting, checks the network, and continues once it i
 
 it('waits out an unavailable service without checking the network', async () => {
   const t = await start()
-  t.plans.push(dropped('API Error: 529 Overloaded'))
+  t.plans.push(dropped('API Error: 529 Overloaded', 'overloaded'))
   t.send('Build it')
   await until(() => t.prompts.length === 2)
   await t.settled()
@@ -211,8 +129,12 @@ it('waits out an unavailable service without checking the network', async () => 
 
 it('leaves Stop, usage limits and ordinary errors alone', async () => {
   const t = await start()
-  for (const error of ['Interrupted', 'Out of usage limit', 'Something broke']) {
-    t.plans.push(dropped(error))
+  for (const [error, kind] of [
+    ['Interrupted', 'interrupted'],
+    ['Out of usage limit', 'rate_limit'],
+    ['Something broke', 'other'],
+  ] as const) {
+    t.plans.push(dropped(error, kind))
     t.send('Go')
     await t.settled()
   }

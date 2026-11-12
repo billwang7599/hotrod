@@ -1,4 +1,3 @@
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   THINKING_LEVELS,
@@ -12,6 +11,12 @@ import {
   type ToolKind,
 } from '../shared.ts'
 import { acpStdioServer, kindOfAcp, levelsOfEfforts, startAcpSession, type AcpMcpServer, type AcpToolCall } from './acp.ts'
+import { processUserEnv, type UserEnv } from './user-env.ts'
+import type { EngineErrors } from './error-kind.ts'
+
+// OpenCode's own wording (1.17, Bun's fetch): "Unable to connect. Is the computer able to access the url?", a dropped
+// socket.
+export const OPENCODE_ERRORS: EngineErrors = { network: /unable to connect\. is the computer|socket connection was closed/i }
 
 // OpenCode (opencode.ai) runs as `opencode acp`: the Agent Client Protocol over stdio (acp.ts). Its sessions take
 // Kothar's MCP servers in session/new and ask before edits and commands with session/request_permission. Each session
@@ -114,15 +119,16 @@ export const RESTORE = [
 // Runs an MCP server OpenCode starts with the user's folders back; the folder comes from OpenCode's environment.
 const RESTORED_SERVER = '. "$KOTHAR_OPENCODE_DIR/restore.sh" && exec "$@"'
 
-const authFile = (accountDir?: string) =>
+const accountAuthFile = (accountDir: string) => join(accountDir, 'auth.json')
+const authFile = (user: UserEnv, accountDir?: string) =>
   accountDir
-    ? join(accountDir, 'auth.json')
-    : join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'opencode', 'auth.json')
+    ? accountAuthFile(accountDir)
+    : join(user.env.XDG_DATA_HOME ?? join(user.home, '.local', 'share'), 'opencode', 'auth.json')
 
 // OpenCode refreshes an OAuth login by writing auth.json in place, through the link.
-const jailed = (sandbox: Sandbox, accountDir?: string): Sandbox => ({
+const jailed = (user: UserEnv, sandbox: Sandbox, accountDir?: string): Sandbox => ({
   ...sandbox,
-  writable: [...sandbox.writable, authFile(accountDir)],
+  writable: [...sandbox.writable, authFile(user, accountDir)],
 })
 
 type LaunchOptions = { instructions?: string; accountDir?: string; merge?: boolean; signIn?: boolean }
@@ -131,7 +137,7 @@ function launch(config: object, { instructions = '', accountDir, merge = false, 
     KOTHAR_OPENCODE_CONFIG: JSON.stringify({ $schema: 'https://opencode.ai/config.json', ...config }),
     KOTHAR_OPENCODE_INSTRUCTIONS: instructions,
     KOTHAR_OPENCODE_RESTORE: RESTORE,
-    ...(accountDir && { KOTHAR_OPENCODE_AUTH: authFile(accountDir) }),
+    ...(accountDir && { KOTHAR_OPENCODE_AUTH: accountAuthFile(accountDir) }),
     ...(merge && { KOTHAR_OPENCODE_MERGE: '1' }),
     // A sign-in links the account's auth.json before it exists, so OpenCode writes the new login there.
     ...(signIn && { KOTHAR_OPENCODE_SIGNIN: '1' }),
@@ -328,191 +334,196 @@ const LOGIN_FAILED = /(Failed to authorize[^\n]*|Unknown (?:method|provider)[^\n
 const DEPLOYMENT_PROMPT = /Select GitHub deployment type/
 const OUTPUT_TAIL_CHARS = 8000
 
-export const opencode: Adapter = {
-  id: 'opencode',
-  name: 'OpenCode',
-  imageInput: true,
-  kotharMcp: true,
+export function createOpencode(user: UserEnv = processUserEnv()): Adapter {
+  return {
+    id: 'opencode',
+    name: 'OpenCode',
+    imageInput: true,
+    kotharMcp: true,
 
-  async detect(machine) {
-    const options = { cwd: '/' }
-    const version = await machine.run('opencode', ['--version'], options).catch(() => null)
-    if (version?.code !== 0) return { installed: false, signedIn: false }
-    const env = launch(BASE_CONFIG, {})
-    const listed = await machine
-      .run('/bin/sh', ['-c', LAUNCH, 'opencode', 'models', '--verbose', ...CLEAN_ARGS], { ...options, env })
-      .catch(() => null)
-    const found = listed?.code === 0 ? parseModels(listed.stdout) : []
-    const thinking = [...THINKING_LEVELS]
-    const modelThinking: Record<string, ThinkingLevel[]> = {}
-    for (const { id, variants } of found) {
-      const levels = levelsOfEfforts(variants)
-      if (levels.join() !== thinking.join()) modelThinking[id] = levels
-    }
-    const models = found.map((m) => m.id)
-    return {
-      installed: true,
-      // OpenCode offers some models with no sign-in; it can run whenever it lists one.
-      signedIn: models.length > 0,
-      detail: version.stdout.trim(),
-      models,
-      thinking,
-      ...(Object.keys(modelThinking).length && { modelThinking }),
-    }
-  },
-
-  accounts: {
-    status: authStatus,
-
-    async providers(machine) {
-      const cached = await machine.run('/bin/sh', ['-c', MODELS_CACHE], { cwd: '/' }).catch(() => null)
-      return parseProviders(cached?.code === 0 ? cached.stdout : '')
-    },
-
-    // A browser or device sign-in: OpenCode prints the link ("Go to:"), maybe a code to type in, then waits for the
-    // provider (or for a pasted code) and saves the login through the linked auth.json.
-    login(machine, accountDir, emit, choice) {
-      const { provider, method } = choice ?? { provider: 'openai', method: 'ChatGPT Pro/Plus (browser)' }
-      const env = launch(BASE_CONFIG, { accountDir, merge: true, signIn: true })
-      const proc = machine.spawn('/bin/sh', ['-c', LAUNCH, ...loginArgs(provider, method)], { cwd: accountDir, env })
-      let output = ''
-      let sent = ''
-      let answered = false
-      proc.onStdout((chunk) => {
-        output = (output + chunk).slice(-OUTPUT_TAIL_CHARS)
-        const text = strip(output)
-        if (!answered && DEPLOYMENT_PROMPT.test(text)) {
-          answered = true
-          proc.write('\r')
-        }
-        const url = text.match(LOGIN_URL)?.[1]
-        const instructions = text.match(LOGIN_INSTRUCTIONS)?.[1]
-        const key = `${url} ${instructions}`
-        if (!url || key === sent) return
-        sent = key
-        // The provider's page finishes the sign-in (a redirect or a device code typed in there); nothing comes back to
-        // paste.
-        emit({ type: 'url', url, noCode: true, ...(instructions && { instructions }) })
-      })
-      proc.onExit((code, stderrTail) => {
-        const text = strip(output + stderrTail)
-        if (code === 0 && LOGIN_DONE.test(text)) return emit({ type: 'done' })
-        const error = text.match(LOGIN_FAILED)?.[1]?.trim() ?? `OpenCode sign-in exited with code ${code}`
-        emit({ type: 'failed', error })
-      })
-      return { submitCode: (code) => proc.write(code.trim() + '\r'), cancel: () => proc.kill() }
-    },
-
-    // The account's auth.json goes with its folder.
-    logout: async () => {},
-
-    // The key goes in on stdin, never in arguments.
-    async addApiKey(machine, accountDir, key, choice) {
-      const { provider, method } = choice ?? { provider: 'anthropic', method: API_KEY.id }
-      const env = launch(BASE_CONFIG, { accountDir, merge: true, signIn: true })
-      const args = ['-c', LAUNCH, ...loginArgs(provider, method)]
-      const options = { cwd: accountDir, env, input: key + '\r', timeoutMs: 60_000 }
-      const { code, stdout } = await machine.run('/bin/sh', args, options)
-      const text = strip(stdout)
-      const failed = text.match(LOGIN_FAILED)?.[1]
-      if (code !== 0 || failed) throw new Error(failed?.trim() ?? `OpenCode exited with code ${code}`)
-    },
-  },
-
-  async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, sandbox }) {
-    const instructions = schema
-      ? `${system}\n\nReply with only JSON that matches this JSON Schema:\n${JSON.stringify(schema)}`
-      : system
-    const agent = { mode: 'primary', prompt: instructions, tools: { '*': false } }
-    const env = launch({ ...BASE_CONFIG, agent: { title: { disable: true }, [COMPLETE_AGENT]: agent } }, { accountDir })
-    const args = ['-c', LAUNCH, 'opencode', 'run', ...CLEAN_ARGS, '--format', 'json', '--agent', COMPLETE_AGENT]
-    args.push('--model', model)
-    const options = { cwd, env, input: prompt, timeoutMs, ...(sandbox && { sandbox: jailed(sandbox, accountDir) }) }
-    const { code, stdout, stderr } = await machine.run('/bin/sh', args, options)
-    const texts: string[] = []
-    let error: string | undefined
-    for (const line of stdout.split('\n')) {
-      let event: any
-      try {
-        event = JSON.parse(line)
-      } catch {
-        continue
+    async detect(machine) {
+      const options = { cwd: '/' }
+      const version = await machine.run('opencode', ['--version'], options).catch(() => null)
+      if (version?.code !== 0) return { installed: false, signedIn: false }
+      const env = launch(BASE_CONFIG, {})
+      const listed = await machine
+        .run('/bin/sh', ['-c', LAUNCH, 'opencode', 'models', '--verbose', ...CLEAN_ARGS], { ...options, env })
+        .catch(() => null)
+      const found = listed?.code === 0 ? parseModels(listed.stdout) : []
+      const thinking = [...THINKING_LEVELS]
+      const modelThinking: Record<string, ThinkingLevel[]> = {}
+      for (const { id, variants } of found) {
+        const levels = levelsOfEfforts(variants)
+        if (levels.join() !== thinking.join()) modelThinking[id] = levels
       }
-      if (event.type === 'text' && typeof event.part?.text === 'string') texts.push(event.part.text)
-      if (event.type === 'error') error ??= event.error?.data?.message || event.error?.name || 'OpenCode failed'
-    }
-    if (error) throw new Error(error)
-    if (code !== 0) throw new Error(stderr.trim() || `OpenCode exited with code ${code}`)
-    return texts.join('')
-  },
+      const models = found.map((m) => m.id)
+      return {
+        installed: true,
+        // OpenCode offers some models with no sign-in; it can run whenever it lists one.
+        signedIn: models.length > 0,
+        detail: version.stdout.trim(),
+        models,
+        thinking,
+        ...(Object.keys(modelThinking).length && { modelThinking }),
+      }
+    },
 
-  start(machine, options, emit) {
-    const { cwd, instructions, accountDir, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox } =
-      options
-    const servers: AcpMcpServer[] = []
-    if (kotharMcp) {
-      // In session/new, on OpenCode's stdin, so the token stays out of `ps`.
-      const headers = [{ name: 'Authorization', value: `Bearer ${kotharMcp.token}` }]
-      servers.push({ type: 'http', name: 'kothar', url: kotharMcp.url, headers })
-    }
-    for (const server of mcpServers) {
-      const restored = { ...server, command: '/bin/sh', args: ['-c', RESTORED_SERVER, server.name, server.command, ...(server.args ?? [])] }
-      servers.push(acpStdioServer(restored))
-    }
-    // Edits, commands, fetches and the extension servers' tools ask; Kothar answers or asks the user.
-    const permission: Record<string, unknown> = {
-      edit: 'ask',
-      bash: 'ask',
-      webfetch: 'ask',
-      websearch: 'ask',
-      external_directory: Object.fromEntries([
-        ['*', 'ask'],
-        ...extraDirs.flatMap((dir) => [
-          [dir, 'allow'],
-          [join(dir, '*'), 'allow'],
+    accounts: {
+      status: authStatus,
+
+      async providers(machine) {
+        const cached = await machine.run('/bin/sh', ['-c', MODELS_CACHE], { cwd: '/' }).catch(() => null)
+        return parseProviders(cached?.code === 0 ? cached.stdout : '')
+      },
+
+      // A browser or device sign-in: OpenCode prints the link ("Go to:"), maybe a code to type in, then waits for the
+      // provider (or for a pasted code) and saves the login through the linked auth.json.
+      login(machine, accountDir, emit, choice) {
+        const { provider, method } = choice ?? { provider: 'openai', method: 'ChatGPT Pro/Plus (browser)' }
+        const env = launch(BASE_CONFIG, { accountDir, merge: true, signIn: true })
+        const proc = machine.spawn('/bin/sh', ['-c', LAUNCH, ...loginArgs(provider, method)], { cwd: accountDir, env })
+        let output = ''
+        let sent = ''
+        let answered = false
+        proc.onStdout((chunk) => {
+          output = (output + chunk).slice(-OUTPUT_TAIL_CHARS)
+          const text = strip(output)
+          if (!answered && DEPLOYMENT_PROMPT.test(text)) {
+            answered = true
+            proc.write('\r')
+          }
+          const url = text.match(LOGIN_URL)?.[1]
+          const instructions = text.match(LOGIN_INSTRUCTIONS)?.[1]
+          const key = `${url} ${instructions}`
+          if (!url || key === sent) return
+          sent = key
+          // The provider's page finishes the sign-in (a redirect or a device code typed in there); nothing comes back to
+          // paste.
+          emit({ type: 'url', url, noCode: true, ...(instructions && { instructions }) })
+        })
+        proc.onExit((code, stderrTail) => {
+          const text = strip(output + stderrTail)
+          if (code === 0 && LOGIN_DONE.test(text)) return emit({ type: 'done' })
+          const error = text.match(LOGIN_FAILED)?.[1]?.trim() ?? `OpenCode sign-in exited with code ${code}`
+          emit({ type: 'failed', error })
+        })
+        return { submitCode: (code) => proc.write(code.trim() + '\r'), cancel: () => proc.kill() }
+      },
+
+      // The account's auth.json goes with its folder.
+      logout: async () => {},
+
+      // The key goes in on stdin, never in arguments.
+      async addApiKey(machine, accountDir, key, choice) {
+        const { provider, method } = choice ?? { provider: 'anthropic', method: API_KEY.id }
+        const env = launch(BASE_CONFIG, { accountDir, merge: true, signIn: true })
+        const args = ['-c', LAUNCH, ...loginArgs(provider, method)]
+        const options = { cwd: accountDir, env, input: key + '\r', timeoutMs: 60_000 }
+        const { code, stdout } = await machine.run('/bin/sh', args, options)
+        const text = strip(stdout)
+        const failed = text.match(LOGIN_FAILED)?.[1]
+        if (code !== 0 || failed) throw new Error(failed?.trim() ?? `OpenCode exited with code ${code}`)
+      },
+    },
+
+    async complete(machine, { cwd, system, prompt, schema, model, timeoutMs, accountDir, sandbox }) {
+      const instructions = schema
+        ? `${system}\n\nReply with only JSON that matches this JSON Schema:\n${JSON.stringify(schema)}`
+        : system
+      const agent = { mode: 'primary', prompt: instructions, tools: { '*': false } }
+      const env = launch({ ...BASE_CONFIG, agent: { title: { disable: true }, [COMPLETE_AGENT]: agent } }, { accountDir })
+      const args = ['-c', LAUNCH, 'opencode', 'run', ...CLEAN_ARGS, '--format', 'json', '--agent', COMPLETE_AGENT]
+      args.push('--model', model)
+      const options = { cwd, env, input: prompt, timeoutMs, ...(sandbox && { sandbox: jailed(user, sandbox, accountDir) }) }
+      const { code, stdout, stderr } = await machine.run('/bin/sh', args, options)
+      const texts: string[] = []
+      let error: string | undefined
+      for (const line of stdout.split('\n')) {
+        let event: any
+        try {
+          event = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (event.type === 'text' && typeof event.part?.text === 'string') texts.push(event.part.text)
+        if (event.type === 'error') error ??= event.error?.data?.message || event.error?.name || 'OpenCode failed'
+      }
+      if (error) throw new Error(error)
+      if (code !== 0) throw new Error(stderr.trim() || `OpenCode exited with code ${code}`)
+      return texts.join('')
+    },
+
+    start(machine, options, emit) {
+      const { cwd, instructions, accountDir, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox } =
+        options
+      const servers: AcpMcpServer[] = []
+      if (kotharMcp) {
+        // In session/new, on OpenCode's stdin, so the token stays out of `ps`.
+        const headers = [{ name: 'Authorization', value: `Bearer ${kotharMcp.token}` }]
+        servers.push({ type: 'http', name: 'kothar', url: kotharMcp.url, headers })
+      }
+      for (const server of mcpServers) {
+        const restored = { ...server, command: '/bin/sh', args: ['-c', RESTORED_SERVER, server.name, server.command, ...(server.args ?? [])] }
+        servers.push(acpStdioServer(restored))
+      }
+      // Edits, commands, fetches and the extension servers' tools ask; Kothar answers or asks the user.
+      const permission: Record<string, unknown> = {
+        edit: 'ask',
+        bash: 'ask',
+        webfetch: 'ask',
+        websearch: 'ask',
+        external_directory: Object.fromEntries([
+          ['*', 'ask'],
+          ...extraDirs.flatMap((dir) => [
+            [dir, 'allow'],
+            [join(dir, '*'), 'allow'],
+          ]),
         ]),
-      ]),
-    }
-    for (const server of mcpServers) permission[`${toolPrefix(server.name)}*`] = server.allowTools ? 'allow' : 'ask'
-    const config = {
-      ...BASE_CONFIG,
-      tools: TOOLS_OFF,
-      agent: { title: { disable: true } },
-      permission,
-      experimental: { mcp_timeout: MCP_CALL_TIMEOUT_MS },
-    }
-    const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
-    const text = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean).join('\n\n')
-    const env = launch(config, { instructions: text, accountDir, merge: true })
-    const args = ['-c', LAUNCH, 'opencode', ...LOG_ARGS, 'acp', ...CLEAN_ARGS, '--cwd', cwd]
-    const proc = machine.spawn('/bin/sh', args, { cwd, env, ...(sandbox && { sandbox: jailed(sandbox, accountDir) }) })
+      }
+      for (const server of mcpServers) permission[`${toolPrefix(server.name)}*`] = server.allowTools ? 'allow' : 'ask'
+      const config = {
+        ...BASE_CONFIG,
+        tools: TOOLS_OFF,
+        agent: { title: { disable: true } },
+        permission,
+        experimental: { mcp_timeout: MCP_CALL_TIMEOUT_MS },
+      }
+      const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')
+      const text = [instructions, dirs && `You can also work in these folders:${dirs}`].filter(Boolean).join('\n\n')
+      const env = launch(config, { instructions: text, accountDir, merge: true })
+      const args = ['-c', LAUNCH, 'opencode', ...LOG_ARGS, 'acp', ...CLEAN_ARGS, '--cwd', cwd]
+      const proc = machine.spawn('/bin/sh', args, { cwd, env, ...(sandbox && { sandbox: jailed(user, sandbox, accountDir) }) })
 
-    // The latest model-call error this turn with nothing heard since: OpenCode ends such a turn as if it had finished.
-    let lastError: string | undefined
-    const names = [...(kotharMcp ? ['kothar'] : []), ...mcpServers.map((s) => s.name)]
-    const tool = toolOf(names)
-    return startAcpSession(
-      proc,
-      { cwd, mcpServers: servers, ...(model && { model }), ...(thinking && { thinking }), name: 'OpenCode' },
-      {
-        tool: (call) => {
-          lastError = undefined
-          return tool(call)
+      // The latest model-call error this turn with nothing heard since: OpenCode ends such a turn as if it had finished.
+      let lastError: string | undefined
+      const names = [...(kotharMcp ? ['kothar'] : []), ...mcpServers.map((s) => s.name)]
+      const tool = toolOf(names)
+      return startAcpSession(
+        proc,
+        { cwd, mcpServers: servers, ...(model && { model }), ...(thinking && { thinking }), name: 'OpenCode' },
+        {
+          tool: (call) => {
+            lastError = undefined
+            return tool(call)
+          },
+          hasInput,
+          turnStarted: () => (lastError = undefined),
+          line(line, turn) {
+            const error = errorOfLine(line)
+            if (!error || !turn.running) return
+            lastError = error
+            if (LIMIT_ERROR.test(error)) turn.limit(error)
+          },
+          turnError: () => lastError,
+          errors: OPENCODE_ERRORS,
         },
-        hasInput,
-        turnStarted: () => (lastError = undefined),
-        line(line, turn) {
-          const error = errorOfLine(line)
-          if (!error || !turn.running) return
-          lastError = error
-          if (LIMIT_ERROR.test(error)) turn.limit(error)
+        (event) => {
+          if (event.type === 'text.delta' || event.type === 'thinking.delta') lastError = undefined
+          emit(event)
         },
-        turnError: () => lastError,
-      },
-      (event) => {
-        if (event.type === 'text.delta' || event.type === 'thinking.delta') lastError = undefined
-        emit(event)
-      },
-    )
-  },
+      )
+    },
+  }
 }
+
+export const opencode = createOpencode()

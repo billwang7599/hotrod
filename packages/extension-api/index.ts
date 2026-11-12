@@ -56,8 +56,9 @@ export type EngineEvent =
   // A message the core passed to Session.steer entered the running turn here, or is handed back unsent.
   | { type: 'steer.landed'; id: string }
   | { type: 'steer.returned'; id: string }
-  | { type: 'turn.completed'; error?: string }
-  | { type: 'session.ended'; error?: string }
+  // errorKind (here and on session.ended): why it failed, as the engine's adapter reads its error (see TurnErrorKind).
+  | { type: 'turn.completed'; error?: string; errorKind?: TurnErrorKind }
+  | { type: 'session.ended'; error?: string; errorKind?: TurnErrorKind }
 
 export type PermissionRequest = Extract<EngineEvent, { type: 'permission.requested' }>
 
@@ -106,8 +107,15 @@ export type ChatEntry = { at: string } & (
   | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
-  // panel: clicking the note opens that panel of the extension's.
-  | { type: 'extension.note'; text: string; extension?: string; panel?: string }
+  // panel: clicking the note opens that panel of the extension's, then sends it action. card: drawn as a card.
+  | {
+      type: 'extension.note'
+      text: string
+      extension?: string
+      panel?: string
+      action?: ExtensionAction
+      card?: ExtensionNoteCard
+    }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
 
@@ -117,6 +125,31 @@ export type ChatEntry = { at: string } & (
 // same way.
 export type MessageKind = 'user' | 'work' | 'talk' | 'tool' | 'echo' | 'note'
 export type MemoryMessage = { id: number; kind: MessageKind; at: string; text: string }
+
+// A message the transcript draws on its own: the user's (user), a worker's report (work) or the agent's reply (talk).
+// entry: where it is in the chat's log (host.read's index), which never changes, since the log only grows. text as
+// logged: a report without the line Kothar adds for the agent.
+export type ExtensionMessage = { entry: number; kind: 'user' | 'work' | 'talk'; at: string; text: string }
+
+// A small button on each message in the transcript, beside Copy: shown on hover or keyboard focus. A message marked()
+// lists keeps the button in view with its icon filled, as a mark (such as a pin), and offers activeLabel instead.
+export type ExtensionMessageAction = {
+  id: string
+  // Such as "Pin", and "Unpin" on a marked message; both default to label.
+  label: string
+  activeLabel?: string
+  icon: 'pin' | 'bookmark' | 'star'
+  hint?: string
+  activeHint?: string
+  // The kinds of message it's offered on; all three without it.
+  kinds?: ExtensionMessage['kind'][]
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  // The messages of the chat to mark, by entry. Called when the chat's extensions draw: on opening it, after a run and
+  // on host.refresh; keep it quick.
+  marked?(chat: ChatDetail, context: ExtensionContext): number[]
+  // Then the chat's extensions draw again (marks and open panels), as on host.refresh(chat.id).
+  run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
 
 // A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
@@ -160,7 +193,12 @@ export type ExtensionStorage = {
   // Adds to the end of the file, making it if it's missing.
   append(name: string, text: string): void
   remove(name: string): void
+  // The files directly in a folder of it (the top without one), by name and size in bytes, sorted by name. Folders and
+  // links aren't listed; a missing folder lists nothing. A chat's storage leaves out the core's own files.
+  list(folder?: string): ExtensionStoredFile[]
 }
+
+export type ExtensionStoredFile = { name: string; size: number }
 
 // Which of the user's model lists (Settings → Models) a chat runs on.
 export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
@@ -222,8 +260,10 @@ export type ExtensionHost = {
   // idle, as it is in onLimitReached.
   continue(chatId: string, text: string): void
   // A short line in the chat's transcript, for the user. Agents don't see it. With panel, clicking it opens that
-  // panel of this extension's.
-  note(chatId: string, text: string, options?: { panel?: string }): void
+  // panel of this extension's, and with action too, then sends the panel that action (as if clicked in it), such as
+  // which item to show. With card, it's drawn as a card instead (see ExtensionNoteCard), which stays in view when the
+  // turn's steps fold away: for something the user will come back to, such as an artifact an agent made.
+  note(chatId: string, text: string, options?: ExtensionNoteOptions): void
   // An error for the user, shown as one from a hook that throws is: after the extension's name. For background work.
   error(text: string): void
   // A system notification, such as "Reconnect gave up" or "The browser needs you". Kothar shows it as the other
@@ -245,14 +285,34 @@ export type ExtensionHost = {
   // the data folder (the garage), the work folder, and each chat's folders, files, work folder and checkouts. Rejects
   // with a short message for the user otherwise, or when the path doesn't exist.
   reveal(path: string): Promise<void>
+  // Adds a file to the chat's context (Context → Files), as the user adding it there does: it's pasted into the
+  // instructions of the chat's next sessions and its workers'. A worker's goes to its space. Throws with a short message
+  // for the user when it can't: no such file, it's already there, or the chat keeps no files (an extension's own chat,
+  // such as Home).
+  addContextFile(chatId: string, path: string): void
   // Files of the extension's own that belong to one chat, in the chat's folder: they go when the chat is deleted. The
   // core's own files there (chat.json, log.jsonl, AGENTS.md, parent-view.md, attachments/) are out of reach.
   chatStorage(chatId: string): ExtensionStorage
+  // The chatStorage of every chat Kothar keeps, by chat id: spaces, workers, archived chats, and an extension's own chat
+  // (Home) even while that extension is off and its chat isn't shown. For housekeeping across chats, such as how much
+  // disk an extension's files take, or removing them; not for reading chats the user can't see.
+  everyChatStorage(): { chatId: string; storage: ExtensionStorage }[]
+  // The user's home folder, as the core sees it (tests and a remote machine can give another).
+  home: string
+  // The core's clock. Use it instead of Date.now() or new Date(), so tests and the core agree on the time.
+  now(): Date
   // The chat's log as numbered memory messages, oldest first.
   messages(chatId: string): MemoryMessage[]
+  // The message at entry in the chat's log, if a message is there (see ExtensionMessage).
+  message(chatId: string, entry: number): ExtensionMessage | undefined
   // One call to the model picked for summaries (Settings → Models), on the user's own login, in Kothar's scratch
   // folder. Rejects when no engine that is on can make one.
   complete(request: CompletionRequest): Promise<string>
+  // Opens one of this extension's panels for the chat, without moving the user's focus: a dock panel slides in beside
+  // the chat and a tab shows in the right sidebar, if the user is looking at that chat (or at a chat below it). A popup
+  // isn't opened, since it would take over the window. For something new the user will want to see, such as an artifact
+  // an agent just made; not for every change.
+  showPanel(chatId: string, panel: string): void
   // Draws this extension's panels and commands for the chat again, and its open panels: call it when what they show
   // changed. Without a chat, for every chat.
   refresh(chatId?: string): void
@@ -274,6 +334,11 @@ export type ExtensionHost = {
   processAction(spaceId: string, extension: string, key: string, action: string): Promise<void>
   processesChanged(spaceId: string): void
 }
+
+// How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
+// (such as a version) beside it. Each is plain text, cut if long.
+export type ExtensionNoteCard = { title: string; badge?: string; detail?: string }
+export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
 export type ExtensionWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }
@@ -313,10 +378,17 @@ export type LimitReached = {
 // continued.
 export type TurnStart = { chat: ChatDetail; text: string; continued: boolean }
 
+// Why a turn failed, so extensions needn't read engines' error text: Stop (interrupted), a usage or rate limit
+// (rate_limit), the connection (network), the engine's service overloaded or down (overloaded, as 502/503/504/529), or
+// anything else (other). Each adapter reads its own engine's errors; absent when nothing labelled the error.
+export type TurnErrorKind = 'interrupted' | 'rate_limit' | 'network' | 'overloaded' | 'other'
+
 // A turn as it ended. text is its last reply; files are the paths its edit tools named, in order, without repeats.
+// errorKind is set with error: see TurnErrorKind.
 export type TurnSummary = {
   chat: ChatDetail
   error?: string
+  errorKind?: TurnErrorKind
   text: string
   tools: { name: string; kind: ToolKind; summary: string; path?: string; isError?: boolean }[]
   files: string[]
@@ -398,6 +470,12 @@ export type ExtensionListItem = {
   selected?: boolean
   action?: ExtensionAction
   hint?: string
+  // Parts of the label to highlight, such as what a search matched: [start, end) character ranges.
+  marks?: [number, number][]
+  // A quieter line under the label, such as the line of text a search matched, with its own highlighted ranges.
+  excerpt?: { text: string; marks?: [number, number][] }
+  // A small button at the end of the row, apart from its action, such as "Link" on a mention.
+  button?: { label: string; action: ExtensionAction; hint?: string }
 }
 
 export type ExtensionView =
@@ -429,13 +507,30 @@ export type ExtensionView =
       // Asks first, in Kothar's own dialog: text is the question, body what follows it (such as what's lost), ok the
       // confirming button's label. The action is sent only if the user confirms. danger colours the button red.
       confirm?: { text: string; body?: string; ok?: string; danger?: boolean }
+      // Opens the system's picker first, for a folder or a file, with title as its heading. The action is sent with
+      // value: the picked path; nothing is sent if the user cancels. The picker exists only in the desktop app: in a
+      // browser tab the button isn't drawn, so offer another way too, such as a form for a typed path.
+      pick?: { kind: 'folder' | 'file'; title?: string }
     }
   | { type: 'link'; text: string; url: string }
   | { type: 'list'; items: ExtensionListItem[]; empty?: string; label?: string }
-  // language 'diff' colours added and removed lines; others are shown plain. follow: for output that grows, such as a
-  // log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end as lines arrive
-  // unless the user scrolls up.
-  | { type: 'code'; text: string; language?: string; maxLines?: number; follow?: boolean }
+  // language 'diff' colours added and removed lines; javascript (js, mjs), jsx, typescript (ts), tsx, html (htm, svg,
+  // xml), css, json and python (py) get syntax colours in the theme's; others are shown plain. follow: for output that
+  // grows, such as a log: shows the last maxLines lines instead of the first, scrolled to the end, and stays at the end
+  // as lines arrive unless the user scrolls up. lineNumbers: numbers each line in a gutter. fill: takes the room it's
+  // given (a popup's or a dock's main column) instead of at most 480 px.
+  | {
+      type: 'code'
+      text: string
+      language?: string
+      maxLines?: number
+      follow?: boolean
+      lineNumbers?: boolean
+      fill?: boolean
+    }
+  // Markdown, drawn as Kothar draws replies (GitHub-flavoured: tables, task lists, code blocks with Copy). Raw HTML in it
+  // stays text, and links open in the browser.
+  | { type: 'markdown'; text: string }
   // A card with a title that folds; open says how it starts.
   | { type: 'card'; title: string; badges?: ExtensionListItem['badges']; open?: boolean; children: ExtensionView[] }
   | { type: 'divider' }
@@ -451,6 +546,86 @@ export type ExtensionView =
       cancel?: { label: string; action: ExtensionAction }
     }
   | { type: 'empty'; text: string }
+  // Two columns, for a popup (ExtensionPanel.placement): side is a narrow column on the left, such as a list, and main
+  // takes the rest, such as an editor. Each scrolls on its own. In a narrow panel side sits above main.
+  | { type: 'split'; side: ExtensionView; main: ExtensionView }
+  // A search box. As the user types it sends the action named action with value: the text (after a short pause), so the
+  // panel can draw what matches. key: a new key starts over at value; otherwise what's typed stays as the panel draws
+  // again. submit: Enter sends this action with value: the text, at once (such as opening the best match). ArrowDown
+  // moves to the first list below it, and the arrows move along a list. autofocus: in a popup, the box takes the keyboard
+  // when the popup opens (unless something else in it, such as an editor's autofocus, took it first); a tab or a dock
+  // never takes focus by itself.
+  | { type: 'search'; key?: string; value?: string; placeholder?: string; label?: string; action: string; submit?: string; autofocus?: boolean }
+  // A Markdown editor with live preview, as in Obsidian: the text stays plain Markdown, but outside the line being
+  // edited its marks are hidden and it's drawn as it reads (headings, bold, italics, code, quotes, lists, links). It
+  // sends the action named change with value: the whole text, a moment after the user stops typing and when the
+  // editor loses focus or closes. key: a new key starts over at text. With the same key, a new text from the extension
+  // (say, the file changed on disk) replaces the editor's only while the user has nothing unsent.
+  // links: clicking a [[wikilink]] sends this action with value: its target (before any | or #). tags: clicking a
+  // #tag sends this action with value: the tag without its #. Without them, they're drawn but don't act.
+  | {
+      type: 'editor'
+      key: string
+      text: string
+      change: string
+      label?: string
+      placeholder?: string
+      links?: string
+      tags?: string
+      // Puts the cursor in it when it first shows.
+      autofocus?: boolean
+      // Names typing [[ offers, such as every note's: the arrows pick one, Enter or Tab puts it in as [[name]].
+      completions?: string[]
+      // When the text changed elsewhere while the user had unsent typing and they pick "Keep mine", this action is sent
+      // first with value: the other text, so the extension can keep it somewhere (say, as a copy) before the editor's
+      // text replaces it. Without it, the other text is dropped.
+      keep?: string
+      // Moves the cursor to the start of a line (numbered from 1) and scrolls it to the top, such as a heading picked in
+      // an outline; the editor takes focus. Each new key jumps once; the same key again does nothing.
+      jump?: { key: string; line: number }
+      // A folder of the extension's own (in host.storage.dir or a chat's chatStorage folder) that pictures in the text
+      // are read from: ![alt](attachments/a.png) shows <files>/attachments/a.png. Kothar serves only plain pictures (PNG,
+      // JPEG, GIF, WebP) inside the extension's folders, outside the core's own files; anything else stays text.
+      files?: string
+      // With files: pasting or dropping a picture puts ![](attachments/pasted-<time>.png) in the text at once and sends
+      // this action with value { path, mimeType, data }: path relative to files (always attachments/<name>, the name made
+      // of letters, digits and dashes), data the picture's bytes in base64. The extension saves it there; until it does,
+      // the editor shows its own copy. Pictures over 10 MB are refused.
+      paste?: string
+    }
+  // A page of HTML, such as a chart or a mockup an agent made, drawn in a sandboxed frame. Its scripts run, but in an
+  // origin of their own: they can't reach Kothar's window, storage, token or core, open windows or popups, submit forms
+  // or navigate Kothar. It loads nothing from the network: scripts and styles only inline, images, fonts and media only
+  // as data: or blob: URLs, and no fetch, XHR or WebSocket. web: also lets it load scripts, styles, images, fonts and
+  // media from https: URLs (such as a chart library from a CDN); fetch, XHR and WebSockets stay blocked. label names
+  // the frame for screen readers. height in pixels; without it the frame takes the room it's given (a popup's main
+  // column). errors: each runtime error the page hits (an uncaught error or a rejected promise, with its stack where
+  // there is one) is sent as the action named errors with value: the error's text, at most 2000 characters and 20 per
+  // page load. The page could send any text this way, so treat it as the page's, not Kothar's. theme: the page draws in
+  // Kothar's light or dark scheme (prefers-color-scheme inside matches it, and there's no white sheet behind it), for
+  // pages made to follow it; without it a page draws on white, as in a browser. libraries: libraries Kothar ships and
+  // serves itself, offline, loaded before the page's own scripts (and allowed by the policy, which stays closed to the
+  // network otherwise): see HtmlLibrary.
+  | {
+      type: 'html'
+      html: string
+      label: string
+      web?: boolean
+      height?: number
+      errors?: string
+      theme?: boolean
+      libraries?: HtmlLibrary[]
+    }
+  // A message of the panel's chat, quoted: author and time (ISO, shown short) above its text, drawn as Markdown and
+  // folded with Show more when long. Clicking the author line scrolls the chat to the message at entry (loading older
+  // history first if needed) and flashes it. buttons: small views beside the author line, such as an Unpin button or
+  // a copy.
+  | { type: 'message'; entry: number; author: string; at: string; text: string; buttons?: ExtensionView[]; hint?: string }
+  // A button that copies text, such as a file's contents, to the clipboard.
+  | { type: 'copy'; text: string; label: string; hint?: string }
+  // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
+  // defaults to text/plain.
+  | { type: 'download'; text: string; filename: string; label: string; mimeType?: string; hint?: string }
   // Controls for one of the extension's spaceSettings in the panel's space (a worker's panel shows its space's): a
   // switch for a boolean setting, a picker for a select. The UI saves a change itself (no onAction) and the panel draws
   // again. label defaults to the setting's. value and options are filled in by the core from the space's saved values
@@ -466,10 +641,30 @@ export type ExtensionView =
       options?: { value: string | number; label: string }[]
     }
 
-// A tab beside General, Context and Permissions in the right sidebar.
+// Libraries an html view's page can load from Kothar, offline:
+// - react: React 19 and ReactDOM. The page puts its component in <script type="text/jsx"> (JSX and TypeScript work;
+//   only react and react-dom can be imported) and its default export is drawn into #root.
+// - mermaid: every element with class "mermaid" is drawn as a Mermaid diagram, in the frame's scheme, with Mermaid's
+//   strict security.
+// - tailwind: Tailwind CSS's browser build styles the page's utility classes.
+export type HtmlLibrary = 'react' | 'mermaid' | 'tailwind'
+
+// A tab beside General and Context in the right sidebar, or a popup over the chat.
 export type ExtensionPanel = {
   id: string
   title: string
+  // 'tab' (the default): a tab in the right sidebar. 'popup': a large window over the chat, for work that wants room,
+  // such as notes; Esc closes it. 'dock': a column beside the chat, between the transcript and the right sidebar, for
+  // something to look at while the chat goes on, such as an artifact: the user resizes it by its edge, widens it to
+  // fill the chat pane, and closes it; it takes no focus when it opens. One dock panel shows at a time. Whichever, it
+  // belongs to the chat that's open, and draws for it.
+  placement?: 'tab' | 'popup' | 'dock'
+  // Keys that open the panel (a popup) or show its tab, out of the box, such as 'Mod+Shift+N' (Mod is ⌘ on macOS,
+  // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left
+  // off; pick ones that are free.
+  shortcut?: string
+  // An entry in the left sidebar, below the spaces, that opens the panel.
+  sidebar?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
@@ -526,6 +721,7 @@ export type Extension = {
   setup?: ExtensionSetup
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
+  messageActions?: ExtensionMessageAction[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
   // that. For background work, such as summarizing chats.
@@ -537,6 +733,10 @@ export type Extension = {
   // The chat is gone from the core by now; its log and folder too.
   onChatRemoved?(chat: ChatDetail, context: ExtensionContext): void | Promise<void>
   onChatArchived?(chat: ChatDetail, archived: boolean, context: ExtensionContext): void | Promise<void>
+  // A space was deleted (after onChatRemoved for each of its chats): its work folder and checkouts as they were. Kothar
+  // removes the work folder and the checkouts itself, since it made them; this is for an extension's own records of
+  // them, such as cached pull requests of a checkout.
+  onSpaceRemoved?(space: SpaceDetail, context: ExtensionContext): void | Promise<void>
   onStatusChanged?(chat: ChatDetail, status: ChatStatus, context: ExtensionContext): void | Promise<void>
   onTurnStarted?(turn: TurnStart, context: ExtensionContext): void | Promise<void>
   onTurnCompleted?(turn: TurnSummary, context: ExtensionContext): void | Promise<void>
@@ -597,21 +797,22 @@ export type ExtensionUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onLimitReached, onStart, onStop
+  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop
   | 'events'
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
+  // commands, messageActions
   | 'commands'
   // settings, spaceSettings, migrateSettings, settingsView, onSettingsChanged, and host.spaceValues, setSpaceValue
   | 'settings'
   | 'chats'
   | 'setup'
-  // memory, and host.chatStorage
+  // memory, and host.chatStorage, everyChatStorage
   | 'memory'
-  // Host calls: chats, chat, read, space, messages, reaches, reachable.
+  // Host calls: chats, chat, read, space, messages, message, reaches, reachable.
   | 'readChats'
-  // send, createChat, retry, continue, interrupt
+  // send, createChat, retry, continue, interrupt, addContextFile
   | 'sendMessages'
   // accounts, useAccount
   | 'accounts'
@@ -621,7 +822,7 @@ export type ExtensionUse =
   | 'models'
   // Node's own APIs, not the host: fetch, WebSocket, node:http, https, net, tls, dns and the like
   | 'network'
-  // Node's own APIs: node:fs, for anything outside host.storage
+  // host.home; and Node's own APIs: node:fs, for anything outside host.storage
   | 'files'
 
 // Extensions were called mods. These old names stay, so an extension written against them still type-checks.

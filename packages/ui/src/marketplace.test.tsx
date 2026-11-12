@@ -7,8 +7,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { checkTheme } from '@kothar/core/catalog-check'
 import {
-  checkTheme,
   previewOf,
   type ClientMessage,
   type InstalledItem,

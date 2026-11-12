@@ -7,7 +7,7 @@ description: Add tabs to the right sidebar and actions to a chat's General tab.
 
 ## Panels
 
-`panels` adds tabs to the right sidebar, beside **General** and **Context**. A panel's code runs in Kothar's core, not
+`panels` adds tabs to the right sidebar, beside **General** and **Context**, or popups over the chat. A panel's code runs in Kothar's core, not
 in the window. It returns its UI as data, a **view**, and Kothar draws it with its own controls. So a panel looks like
 the rest of Kothar in every theme, and runs no code in the window.
 
@@ -63,6 +63,9 @@ A `ExtensionPanel` has:
 | `shown(chat, context)` | Optional. Whether this chat gets the tab. Without it, every chat does. |
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
+| `placement` | Optional. `'tab'` (the default) or `'popup'`: a large window over the chat, for work that wants room, such as notes. Esc closes it. It draws for the chat that's open, as a tab does. |
+| `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
+| `sidebar` | Optional. `true` adds an entry to the left sidebar, above **Settings**, that opens the panel. |
 
 When the panel redraws:
 
@@ -100,7 +103,7 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `text` | `text`, `tone?`, `mono?`, `small?`, `hint?`, `copy?`, `reveal?` | A line of text. With `copy`, a button beside it copies the text, such as a path. With `reveal`, a **Show in Finder** button shows the path the text is, by [`host.reveal`](host.md#reveal)'s rule: a path outside Kothar's folders shows an error when clicked. |
 | `badge` | `text`, `tone?`, `hint?` | A small label. |
 | `elapsed` | `since` (epoch ms), `tone?`, `mono?`, `small?`, `hint?` | A live time since that moment, such as an uptime. Kothar ticks it, so you needn't redraw. |
-| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?`, `confirm?` | A button. With `confirm: { text, body?, ok?, danger? }`, Kothar asks first in its own dialog and sends the action only if the user confirms. |
+| `button` | `label`, `action`, `variant?: 'normal' \| 'primary' \| 'ghost'`, `disabled?`, `hint?`, `confirm?`, `pick?` | A button. With `confirm: { text, body?, ok?, danger? }`, Kothar asks first in its own dialog and sends the action only if the user confirms. With `pick: { kind: 'folder' \| 'file', title? }`, it opens the system's picker and sends the action with `value`: the picked path (nothing if the user cancels). The picker is only in the desktop app; in a browser tab a pick button isn't drawn, so offer another way too, such as a form for a typed path. |
 | `link` | `text`, `url` | A link that opens in the browser. |
 | `list` | `items`, `empty?`, `label?` | A list of rows. `empty` is shown when there are none. |
 | `code` | `text`, `language?`, `maxLines?`, `follow?` | Code or output. See below. |
@@ -109,6 +112,13 @@ A view is one of these, nested with `stack`, `row` and `card`:
 | `empty` | `text` | A quiet placeholder, such as "No processes". |
 | `switch` | `setting`, `label?`, `hint?`, `disabled?` | A switch for one of the extension's boolean `spaceSettings`. See below. |
 | `picker` | `setting`, `label?`, `hint?`, `disabled?` | A picker for one of the extension's select `spaceSettings`. See below. |
+| `split` | `side`, `main` | Two columns, for a popup: a narrow `side`, such as a list, and `main`, such as an editor. Each scrolls on its own. In a narrow panel `side` sits above `main`. |
+| `search` | `action`, `key?`, `value?`, `placeholder?`, `label?` | A search box. As the user types, it sends `{ name: action, value: text }` after a short pause. What's typed stays as the panel redraws; a new `key` starts over at `value`. |
+| `editor` | `key`, `text`, `change`, `links?`, `tags?`, `label?`, `placeholder?`, `autofocus?` | A Markdown editor with live preview. See below. |
+| `html` | `html`, `label`, `web?`, `height?` | A page of HTML, such as a chart an agent made, in a sandboxed frame. See below. |
+| `message` | `entry`, `author`, `at`, `text`, `buttons?`, `hint?` | A message of the panel's chat, quoted: `author` and its time (`at`, ISO) above `text`, drawn as Markdown and folded with **Show more** when long. Clicking it scrolls the chat to the message at `entry` in its log (loading older history first) and flashes it. `buttons` are small views beside the author line, such as an Unpin button. |
+| `copy` | `text`, `label`, `hint?` | A button that copies `text` to the clipboard, such as a file's contents. |
+| `download` | `text`, `filename`, `label`, `mimeType?`, `hint?` | A button that saves `text` as a file through the browser's download (a save dialog in the desktop app). `mimeType` defaults to `text/plain`. |
 
 `hint` is an explanation shown on hover. Keep labels short and put explanations in hints.
 
@@ -140,6 +150,46 @@ the user's theme.
 **Code:** `language: 'diff'` colours added and removed lines; other languages are shown plain. For output that grows,
 such as a log, set `follow: true`. Then `maxLines` keeps the last lines instead of the first, and the view stays
 scrolled to the end as lines arrive, unless the user scrolls up.
+
+### Editor
+
+An `editor` edits Markdown with a live preview, as Obsidian does. The text stays plain Markdown, but outside the line
+being edited its marks are hidden and it's drawn as it reads: headings, bold, italics, code, quotes, lists and links.
+
+- **Saving:** it sends `{ name: change, value: text }` with the whole text, a moment after the user stops typing, and
+  when the editor loses focus or closes.
+- **Starting over:** a new `key` starts over at `text`. With the same `key`, a new `text` (say, the file changed on
+  disk) replaces the editor's only while the user has nothing unsent.
+- **Links and tags:** `[[wikilinks]]` and `#tags` are drawn as links. With `links`, clicking one sends
+  `{ name: links, value: target }`, where the target is the part before any `|` or `#`. With `tags`, clicking a tag
+  sends `{ name: tags, value: tag }`, without the `#`. On the line being edited, ⌘-click (Ctrl-click elsewhere)
+  follows them, so a plain click still places the cursor.
+
+```ts
+{ type: 'editor', key: note.path, text: note.body, change: 'save', links: 'open-link', tags: 'filter-tag' }
+```
+
+### HTML
+
+An `html` view draws a page of HTML in a frame, for things to look at or try, such as a chart, a mockup or a small app.
+Its scripts run, but it can't reach Kothar:
+
+- **Its own origin.** The frame is sandboxed with scripts only, so the page has an opaque origin. It can't read Kothar's
+  window, storage, cookies or token, open windows or popups, submit forms or navigate Kothar, and the core refuses its
+  connections.
+- **No network.** A Content-Security-Policy goes in ahead of everything in the page, so nothing the page says loosens
+  it. Scripts and styles load only inline, and images, fonts and media only as `data:` or `blob:` URLs. `fetch`, XHR,
+  WebSockets and beacons are blocked.
+- **`web: true`** also lets the page load scripts, styles, images, fonts and media from `https:` URLs, such as a chart
+  library from a CDN. `fetch`, XHR and WebSockets stay blocked. Let the user choose this, say with a
+  [switch](#switches-and-pickers).
+
+Without a `height`, the frame takes the room it's given, such as the main column of a popup's `split`, and the stacks
+around it grow to give it that room. `label` names the frame for screen readers.
+
+```ts
+{ type: 'html', html: page, label: 'Sales chart' }
+```
 
 ### Switches and pickers
 
@@ -232,3 +282,51 @@ export default summarize
 | `run(chat, context)` | Runs when the user clicks it. A throw or rejection shows as an error. |
 
 List `commands` in the manifest's `uses`. This example also calls `host.send`, so it lists `sendMessages` too.
+
+## Message actions
+
+`messageActions` adds a small button to each message in the transcript, beside **Copy**: the user's messages,
+workers' reports and the agent's replies. It shows on hover or keyboard focus. A message the action marks keeps the
+button in view, filled, as a mark (a pin, say), and the button then reads `activeLabel`.
+
+```ts
+const pins = new Set<number>()
+
+const pinMessages: Extension = {
+  id: 'pin-messages',
+  name: 'Pin messages',
+  description: 'Pin messages to find them again.',
+  enabledByDefault: false,
+  messageActions: [
+    {
+      id: 'pin',
+      label: 'Pin',
+      activeLabel: 'Unpin',
+      icon: 'pin',
+      marked: () => [...pins],
+      run(message) {
+        if (!pins.delete(message.entry)) pins.add(message.entry)
+      },
+    },
+  ],
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `label`, `activeLabel?` | The button's name, and its name on a marked message (defaults to `label`). |
+| `icon` | `pin`, `bookmark` or `star`. |
+| `hint?`, `activeHint?` | Shown on hover, unmarked and marked. |
+| `kinds?` | Which messages get it: `user`, `work` (a worker's report), `talk` (a reply). All three without it. |
+| `shown(chat, context)` | Optional. Whether this chat gets the action. |
+| `marked(chat, context)` | Optional. The entries of the chat's messages to mark. Asked when the chat's extensions draw: on opening it, after a run and on [`host.refresh`](host.md#refresh). Keep it quick. |
+| `run(message, chat, context)` | Runs on a click, with the message as an `ExtensionMessage`. Then the chat's marks and open panels draw again. |
+
+An `ExtensionMessage` is `{ entry, kind, at, text }`. `entry` is where the message is in the chat's log (its index in
+[`host.read`](host.md#reading-chats)), which never changes, since the log only grows, so it's the key to keep. Read a
+message again with [`host.message`](host.md#reading-chats), and quote one in a panel with a `message` view, which
+scrolls the chat to it when clicked.
+
+List `commands` in the manifest's `uses` for `messageActions`.
+

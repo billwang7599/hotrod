@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from 'react'
+import { LinkedText } from './file-links.tsx'
 
 /*
  * Lists in what the user types. The user's own messages aren't Markdown: they show as typed, with every newline kept,
@@ -96,7 +97,7 @@ function ListView({ list, depth }: { list: List; depth: number }): ReactNode {
           aria-label={item.checked ? 'Done' : 'Not done'}
         />
       )}
-      {item.text}
+      <LinkedText text={item.text} />
       {item.lists.map((sub, j) => (
         <ListView key={j} list={sub} depth={depth + 1} />
       ))}
@@ -114,11 +115,11 @@ function ListView({ list, depth }: { list: List; depth: number }): ReactNode {
 
 /** A user's message as typed, with its lists rendered. Text without a list renders as the plain string. */
 export const UserText = memo(function UserText({ text }: { text: string }) {
-  if (!/^[ \t]*([-*+]|\d{1,3}[.)])[ \t]/m.test(text)) return <>{text}</>
+  if (!/^[ \t]*([-*+]|\d{1,3}[.)])[ \t]/m.test(text)) return <LinkedText text={text} />
   return (
     <>
       {blocksOf(text).map((b, i) =>
-        b.kind === 'text' ? <div key={i}>{b.text}</div> : <ListView key={i} list={b.list} depth={0} />,
+        b.kind === 'text' ? <div key={i}><LinkedText text={b.text} /></div> : <ListView key={i} list={b.list} depth={0} />,
       )}
     </>
   )

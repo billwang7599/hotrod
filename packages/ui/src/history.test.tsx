@@ -111,10 +111,12 @@ describe('older pages in the state', () => {
       kind: 'thinking',
       text: 'Hmm, let me look',
     })
-    expect(chatOf(state).items.at(-2)).toEqual({ kind: 'user', text: 'more' })
+    // Each message knows where it is in the log; streamed thinking isn't in it.
+    expect(chatOf(state).items.at(-2)).toEqual({ kind: 'user', text: 'more', entry: log.length })
     expect(chatOf(state).items[0]).toEqual({
       kind: 'user',
       text: 'question 0',
+      entry: 0,
     })
   })
 
@@ -273,5 +275,33 @@ describe('the chat view', () => {
     render(chatOf(state), (m) => sent.push(m))
     const revealed = container.querySelector<HTMLElement>('[data-revealed]')
     expect(revealed?.textContent).toContain('question 2')
+  })
+
+  test("an extension's quoted message older than what is loaded: loads back to it, then flashes it", () => {
+    const log = turns(20)
+    const from = 60
+    let state = opened(log, from)
+    const entry = log.findIndex((e) => e.type === 'text.completed' && e.text === 'answer 3')
+    const sent: ClientMessage[] = []
+    render(chatOf(state), (m) => sent.push(m))
+    // The chat is open already when the panel asks.
+    act(() => revealLater({ chatId: 'c1', entry }))
+    expect(sent.filter((m) => m.type === 'chat.history')).toEqual([{ type: 'chat.history', chatId: 'c1', before: from, to: entry }])
+
+    state = reduce(state, older(log, entry, from))
+    render(chatOf(state), (m) => sent.push(m))
+    const revealed = container.querySelector<HTMLElement>('[data-revealed]')
+    expect(revealed?.dataset.entry).toBe(String(entry))
+    expect(revealed?.textContent).toContain('answer 3')
+  })
+
+  test('a quoted message inside folded steps flashes the steps it is in', () => {
+    const log: ChatEntry[] = [user('go'), ...step('a'), reply('on the way'), ...step('b'), reply('done')]
+    const state = opened(log, 0)
+    render(chatOf(state), () => {})
+    const entry = log.findIndex((e) => e.type === 'text.completed' && e.text === 'on the way')
+    act(() => revealLater({ chatId: 'c1', entry }))
+    const revealed = container.querySelector<HTMLElement>('[data-revealed]')
+    expect(revealed?.dataset.itemKind).toBe('steps')
   })
 })

@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import {
   ASK_FIRST_COMMANDS,
   CONTEXT_SECTIONS,
+  FOLDER_MODES,
   GLOBAL_CONTEXT,
   PERMISSION_SWITCHES,
   switchedOn,
@@ -10,6 +11,8 @@ import {
   type CommandInfo,
   type ContextItem,
   type ContextSection,
+  type ExtensionInfo,
+  type FolderMode,
   type PanelTab as ExtensionTab,
   type PermissionSwitch,
   type Setup,
@@ -17,10 +20,12 @@ import {
   type Worktree,
 } from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Chevron, Hint, MOTION, PanelToggle, Select, Switch, useSettled } from './controls.tsx'
+import { CopyRow } from './folder-copies.tsx'
 import { usePathsShown } from './paths.ts'
 import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './steps.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
+import { revealLater } from './search.tsx'
 import { ExtensionViewer } from './extension-view.tsx'
 import { SETUP_HINT } from './setups-page.tsx'
 import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
@@ -35,8 +40,8 @@ export const SECTIONS: Record<ContextSection, { label: string; about: string; in
   folders: {
     label: 'Folders',
     about:
-      'Each folder’s AGENTS.md is read in. Agents read folders but don’t write them: a git folder is checked out ' +
-      'in the work folder on a branch of its own, and they work there',
+      'Each folder’s AGENTS.md is read in. A git folder is checked out in the work folder on a branch of its own, ' +
+      'and agents work there; for any other folder, its mode sets whether agents write in it',
     inherited: `The folders of the ${CHAT_NOUN.many} above, with their AGENTS.md`,
   },
   files: {
@@ -49,8 +54,9 @@ export const PERMISSIONS: Record<PermissionSwitch, { label: string; about: strin
   editAnywhere: {
     label: 'Allow edits outside the work folder',
     about:
-      'On: no sandbox, and edits outside the work folder ask you first. Off: agents write only in the chat’s ' +
-      'folder in the work folder, and edits elsewhere are denied. From the chat’s next message.',
+      'On: no sandbox, and edits outside the work folder and the folders set to Edit in place ask you first. Off: ' +
+      'agents write only in the chat’s folder in the work folder and in folders set to Edit in place, and edits ' +
+      'elsewhere are denied. From the chat’s next message.',
     amberWhileOn: true,
   },
   autoRunCommands: {
@@ -99,6 +105,22 @@ const PILL = 'shrink-0 rounded-full bg-raised px-8 py-2 text-xs font-normal text
 const CHECKOUT_HINT =
   'A git worktree made from the folder’s last commit, so changes you haven’t committed aren’t in it. Agents work ' +
   'and commit there; the branch stays when the space is deleted.'
+const FOLDER_MODE_UI: Record<FolderMode, { label: string; about: string }> = {
+  edit: {
+    label: 'Edit in place',
+    about:
+      'Agents write in this folder itself, still sandboxed. Logins, keys and .env files in it still ask. It has no ' +
+      'git history, so an edit can’t be undone.',
+  },
+  copy: {
+    label: 'Work on a copy',
+    about:
+      'Kothar copies this folder into the work folder once, and agents write only there. You review their changes ' +
+      'and copy them back. node_modules and .git folders inside it aren’t copied.',
+  },
+  readOnly: { label: 'Read only', about: 'Agents read this folder but never write in it.' },
+}
+const FOLDER_MODE_HINT = 'A pick here is for this chat and the workers it starts. From the chat’s next message.'
 const COLLAPSED_KEY = 'kothar.contextCollapsed'
 const PREVIEW = 'scroll-inset scroll-inset-tight max-h-160 overflow-auto rounded border bg-bg px-8 py-6 font-mono text-xs whitespace-pre-wrap text-muted'
 
@@ -305,6 +327,10 @@ function PathCard({
           onChange={(enabled) => send({ type: 'context.set', chatId, path: item.path, enabled })}
         />
       </div>
+      {folder && item.mode && <FolderModeRow item={item} mode={item.mode} chatId={chatId} disabled={readOnly} send={send} />}
+      {folder && item.mode === 'copy' && !item.blocked && (
+        <CopyRow chatId={chatId} path={item.path} copy={item.copy} disabled={readOnly} send={send} />
+      )}
       {folder && <TerminalError chatId={chatId} path={item.path} errors={terminalErrors} />}
       <CardBody collapsed={collapsed} className="gap-4 pt-4">
         {paths.context && (
@@ -350,6 +376,34 @@ function PathCard({
           )}
         </div>
       </CardBody>
+    </div>
+  )
+}
+
+/** How agents may write in a folder that isn't a git repo: its mode, or why Kothar keeps it read only. */
+function FolderModeRow({ item, mode, chatId, disabled, send }: {
+  item: ContextItem
+  mode: FolderMode
+  chatId: string
+  disabled: boolean
+  send: (m: ClientMessage) => void
+}) {
+  return (
+    <div className={`flex items-center gap-8 pt-6 text-sm ${item.enabled ? '' : 'opacity-55'}`}>
+      <span className="min-w-0 flex-1 text-muted">Mode</span>
+      {item.blocked ? (
+        <span className="text-xs text-muted">Read only, since {item.blocked}</span>
+      ) : (
+        <Select
+          variant="chip"
+          label={`Mode of ${item.path}`}
+          value={mode}
+          disabled={disabled}
+          hint={`${FOLDER_MODE_UI[mode].about} ${FOLDER_MODE_HINT}`}
+          options={FOLDER_MODES.map((value) => ({ value, label: FOLDER_MODE_UI[value].label }))}
+          onChange={(value) => send({ type: 'context.folderMode', chatId, path: item.path, mode: value as FolderMode })}
+        />
+      )}
     </div>
   )
 }
@@ -588,40 +642,46 @@ function Permissions({ chat, above, workFolder, disabled, send }: {
 type PanelTabId = string
 const TAB_LABEL: Record<string, string> = { context: 'Context', general: 'General' }
 
-/** Actions extensions add for this chat, listed in the General tab. */
-function ExtensionCommands({ chatId, commands, disabled, send }: {
+/** Actions extensions add for this chat, listed in the General tab under each extension's name. */
+function ExtensionCommands({ chatId, commands, names, disabled, send }: {
   chatId: string
   commands: CommandInfo[]
+  // Extension id → display name; an extension missing here is headed by its id.
+  names: ReadonlyMap<string, string>
   disabled: boolean
   send: (m: ClientMessage) => void
 }) {
-  if (!commands.length) return null
-  return (
-    <section className="flex flex-col gap-8" aria-label="Commands">
-      <h3 className="font-semibold">Commands</h3>
-      <div className="flex flex-wrap gap-6">
-        {commands.map((c) => {
-          const button = (
-            <Button
-              key={`${c.extension}/${c.id}`}
-              size="small"
-              disabled={disabled}
-              onClick={() => send({ type: 'extension.command', chatId, extension: c.extension, command: c.id })}
-            >
-              {c.label}
-            </Button>
-          )
-          return c.hint ? (
-            <Hint key={`${c.extension}/${c.id}`} text={c.hint}>
-              {button}
-            </Hint>
-          ) : (
-            button
-          )
-        })}
-      </div>
-    </section>
-  )
+  const groups = new Map<string, CommandInfo[]>()
+  for (const c of commands) groups.set(c.extension, [...(groups.get(c.extension) ?? []), c])
+  return [...groups].map(([extension, list]) => {
+    const name = names.get(extension) ?? extension
+    return (
+      <section key={extension} className="flex flex-col gap-8" aria-label={name}>
+        <h3 className="font-semibold">{name}</h3>
+        <div className="flex flex-wrap gap-6">
+          {list.map((c) => {
+            const button = (
+              <Button
+                key={c.id}
+                size="small"
+                disabled={disabled}
+                onClick={() => send({ type: 'extension.command', chatId, extension, command: c.id })}
+              >
+                {c.label}
+              </Button>
+            )
+            return c.hint ? (
+              <Hint key={c.id} text={c.hint}>
+                {button}
+              </Hint>
+            ) : (
+              button
+            )
+          })}
+        </div>
+      </section>
+    )
+  })
 }
 
 function WorkFolderRow({ chatId, path, disabled, send, errors }: {
@@ -670,6 +730,8 @@ type ContextPanelProps = {
   send: (m: ClientMessage) => void
   hide?: () => void
   extensionUi?: State['extensionUi']
+  // Installed extensions, for the names over their commands.
+  extensions?: ExtensionInfo[]
   panelViews?: State['panelViews']
   terminalErrors?: TerminalErrors
   /** The desktop app's pickers (`window.kothar`); a browser tab has none and types paths instead. */
@@ -694,7 +756,9 @@ export function ContextPanel(props: ContextPanelProps) {
   const intro = chat?.extension ? `${chat.name} keeps no folders, files or AGENTS.md of its own.` : CHAT_INTRO
   const tab = usePanelTab()
   const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
-  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []) : []
+  // A popup panel opens over the chat instead (extension-popups.tsx).
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup') : []
+  const extensionNames = useMemo(() => new Map((props.extensions ?? []).map((e) => [e.id, e.name])), [props.extensions])
   const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
   const known = tab === 'general' || extensionTab
   const shown: PanelTabId = chat && known ? tab : 'context'
@@ -797,15 +861,26 @@ export function ContextPanel(props: ContextPanelProps) {
           <Permissions chat={chat} above={above} workFolder={workFolder} disabled={locked} send={send} />
         )}
         {shown === 'general' && chat && (
-          <ExtensionCommands chatId={chatId} commands={extensionUi?.commands ?? []} disabled={locked} send={send} />
+          <ExtensionCommands
+            chatId={chatId}
+            commands={extensionUi?.commands ?? []}
+            names={extensionNames}
+            disabled={locked}
+            send={send}
+          />
         )}
         {extensionTab && (
           <ExtensionViewer
+            extension={extensionTab.extension}
             view={panelView?.view}
             error={panelView?.error}
             act={(action) => send({ type: 'extension.panel.action', chatId, extension: extensionTab.extension, panel: extensionTab.id, action })}
             set={(key, value) => send({ type: 'extension.space.set', chatId, extension: extensionTab.extension, key, value })}
             reveal={(path) => send({ type: 'reveal', path })}
+          showMessage={(entry) => {
+              revealLater({ chatId, entry })
+              hide?.()
+            }}
           />
         )}
       </div>

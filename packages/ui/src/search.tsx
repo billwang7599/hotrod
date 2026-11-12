@@ -15,10 +15,19 @@ const MAX_RECENT = 12
  * A message match the chat view scrolls to once it opens: the nth message in the chat whose text holds the query, at
  * `entry` in its log (which the view loads back to first, if it's older than what's loaded).
  */
-export type Reveal = { chatId: string; query: string; nth: number; entry?: number }
+export type Reveal = { chatId: string; query: string; nth: number; entry?: number } | MessageReveal
+/** A message the chat view scrolls to by where it is in the chat's log, such as one an extension's view quotes. */
+export type MessageReveal = { chatId: string; entry: number }
 let pendingReveal: Reveal | null = null
+const revealListeners = new Set<() => void>()
 export const revealLater = (reveal: Reveal) => {
   pendingReveal = reveal
+  // A chat view that's open already takes it now; one that opens takes it as it does.
+  revealListeners.forEach((listener) => listener())
+}
+export const onReveal = (listener: () => void) => {
+  revealListeners.add(listener)
+  return () => void revealListeners.delete(listener)
 }
 export const takeReveal = (chatId: string): Reveal | null => {
   if (pendingReveal?.chatId !== chatId) return null
@@ -257,7 +266,7 @@ function PaletteRow({ index, result, active, heading, hover, choose }: RowProps)
 }
 
 /** Which match on screen the reveal's message is: how many loaded messages before it (from `from` on) match too. */
-export function localNth(entries: readonly { type: string; text?: string }[], from: number, reveal: Reveal) {
+export function localNth(entries: readonly { type: string; text?: string }[], from: number, reveal: Reveal & { query: string }) {
   const q = reveal.query.toLowerCase()
   const message = (e: { type: string }) => ['user.message', 'text.completed', 'worker.report'].includes(e.type)
   return entries
@@ -270,13 +279,52 @@ export function localNth(entries: readonly { type: string; text?: string }[], fr
  * text holds the query, or the last such one if fewer are on screen (a folded step hides its text). Flashes it.
  */
 export function revealIn(container: HTMLElement, reveal: Reveal) {
+  if (!('query' in reveal)) return flash(messageRow(container, reveal.entry))
   const q = reveal.query.toLowerCase()
   const found = [...container.querySelectorAll<HTMLElement>('[data-item-kind="user"],[data-item-kind="text"],[data-item-kind="report"]')].filter(
     (el) => (el.textContent ?? '').replace(/\s+/g, ' ').toLowerCase().includes(q),
   )
-  const target = found[Math.min(reveal.nth, found.length - 1)]
+  return flash(found[Math.min(reveal.nth, found.length - 1)])
+}
+
+/**
+ * The transcript row of the message at `entry` in the log: its own row, or the folded steps it's in, or else the
+ * nearest row before it (a message that isn't drawn on its own).
+ */
+export function messageRow(container: HTMLElement, entry: number): HTMLElement | undefined {
+  const rows = [...container.querySelectorAll<HTMLElement>('[data-entry],[data-entry-first]')]
+  const own = rows.find((row) => row.dataset.entry === String(entry))
+  if (own) return own
+  const first = (row: HTMLElement) => Number(row.dataset.entry ?? row.dataset.entryFirst)
+  const folded = rows.find((row) => row.dataset.entryFirst && first(row) <= entry && entry <= Number(row.dataset.entryLast))
+  return folded ?? rows.filter((row) => first(row) <= entry).at(-1)
+}
+
+// The nearest ancestor that scrolls, such as the transcript.
+function scrollerOf(el: HTMLElement): HTMLElement | undefined {
+  for (let at = el.parentElement; at && at !== document.documentElement; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && at.scrollHeight > at.clientHeight) return at
+  }
+  return undefined
+}
+
+/**
+ * Scrolls only the target's own scroller to centre it. scrollIntoView also scrolls every ancestor, the window's root
+ * included, which pushes the app's top bar out of view.
+ */
+export function centreIn(target: HTMLElement) {
+  const scroller = scrollerOf(target)
+  if (!scroller) return target.scrollIntoView?.({ block: 'center' })
+  const box = target.getBoundingClientRect()
+  const view = scroller.getBoundingClientRect()
+  const top = scroller.scrollTop + box.top - view.top - (scroller.clientHeight - Math.min(box.height, scroller.clientHeight)) / 2
+  scroller.scrollTo?.({ top: Math.max(0, top) })
+}
+
+function flash(target: HTMLElement | undefined) {
   if (!target) return false
-  target.scrollIntoView?.({ block: 'center' })
+  centreIn(target)
   target.dataset.revealed = ''
   setTimeout(() => delete target.dataset.revealed, 1600)
   return true

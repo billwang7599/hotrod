@@ -59,6 +59,53 @@ describe('edits', () => {
   })
 })
 
+describe('folder modes', () => {
+  const docs = join(home, 'docs')
+  mkdirSync(docs, { recursive: true })
+  const withFolders = (folders: PermissionContext['folders'], sandboxed = true) => ({ ...contextOf({}, sandboxed), folders })
+  const edit = (path: string) => request('edit', { path })
+
+  it('allows edits in a folder set to Edit in place, sandboxed or not', () => {
+    const folders = [{ path: docs, mode: 'edit' as const }]
+    expect(verdictOf(edit(join(docs, 'a.md')), withFolders(folders))).toEqual(ALLOW)
+    expect(verdictOf(edit(join(docs, 'sub', 'b.md')), withFolders(folders, false))).toEqual(ALLOW)
+  })
+
+  it('still asks for .env files and keys inside a folder edited in place', () => {
+    const folders = [{ path: docs, mode: 'edit' as const }]
+    expect(verdictOf(edit(join(docs, '.env')), withFolders(folders))).toBeUndefined()
+    expect(verdictOf(edit(join(docs, 'id_rsa')), withFolders(folders))).toBeUndefined()
+    const all = [{ path: home, mode: 'edit' as const }]
+    expect(verdictOf(edit(join(home, '.ssh', 'config')), withFolders(all))).toBeUndefined()
+  })
+
+  it('refuses a Read only folder, naming its mode in the Context panel, even unsandboxed', () => {
+    const folders = [{ path: docs, mode: 'readOnly' as const }]
+    for (const sandboxed of [true, false]) {
+      const verdict = verdictOf(edit(join(docs, 'a.md')), withFolders(folders, sandboxed))
+      expect(verdict?.allow).toBe(false)
+      expect(verdict?.message).toContain(`${docs} is set to Read only`)
+      expect(verdict?.message).toContain("its mode in the chat's Context panel")
+    }
+  })
+
+  it('points a git folder at its checkout', () => {
+    const folders = [{ path: project, mode: 'checkout' as const, where: join(workDir, 'app') }]
+    const verdict = verdictOf(edit(join(project, 'a.ts')), withFolders(folders))
+    expect(verdict?.message).toContain(`edit its checkout at ${join(workDir, 'app')}`)
+    expect(verdictOf(edit(join(project, 'a.ts')), withFolders(folders, false))).toBeUndefined()
+  })
+
+  it('names Edit in place when the folder is not attached', () => {
+    const verdict = verdictOf(edit(join(project, 'a.ts')), withFolders([{ path: docs, mode: 'edit' }]))
+    expect(verdict).toEqual({
+      allow: false,
+      message: `Kothar lets this chat edit only inside ${workDir} and the folders set to Edit in place. ${OUTSIDE_EDIT_ADVICE}`,
+    })
+    expect(OUTSIDE_EDIT_ADVICE).toContain('Edit in place')
+  })
+})
+
 describe('autoFetch', () => {
   it('allows fetches by default, sandboxed or not', () => {
     expect(verdictOf(request('fetch'), contextOf())).toEqual(ALLOW)

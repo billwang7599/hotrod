@@ -16,7 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './kothar-mcp.ts'
+import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './workers.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -27,6 +27,7 @@ import {
   type SessionOptions,
   type ThinkingLevel,
 } from './shared.ts'
+import { until as waitUntil } from './test-wait.ts'
 
 const origin = 'http://localhost:4318'
 const token = 'test-token-0123456789'
@@ -71,10 +72,7 @@ function connect(url: string, headers: { origin?: string }) {
   return { socket, messages }
 }
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean) => waitUntil(check, { tries: 200 })
 
 it('rejects other origins', async () => {
   const { url } = await start()
@@ -272,6 +270,47 @@ it("serves a chat's attachments with the token, images and PDFs inline and anyth
   ]) {
     expect((await get(path)).status, path).toBe(404)
   }
+})
+
+it("serves pictures from an extension's own folders with the token, and nothing else", async () => {
+  const garage = mkdtempSync(join(tmpdir(), 'kothar-test-'))
+  const pictures: Extension = { id: 'pictures', name: 'Pictures', description: '', enabledByDefault: true }
+  const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [pictures] })
+  const server = await startServer({ core, port: 0, uiOrigin: origin, token })
+  cleanups.push(() => {
+    core.close()
+    rmSync(garage, { recursive: true, force: true })
+  })
+  cleanups.push(() => server.close())
+  const own = join(garage, 'extensions', 'pictures')
+  mkdirSync(own, { recursive: true })
+  writeFileSync(join(own, 'a.png'), 'png bytes')
+  writeFileSync(join(own, 'a.html'), '<script>')
+  writeFileSync(join(garage, 'settings.png'), 'not its own')
+  const base = `http://127.0.0.1:${server.port}`
+  const get = (extension: string, path: string, key = token) =>
+    fetch(`${base}/extensions/${extension}/files?path=${encodeURIComponent(path)}&token=${encodeURIComponent(key)}`)
+  const ok = await get('pictures', join(own, 'a.png'))
+  expect(ok.status).toBe(200)
+  expect(ok.headers.get('content-type')).toBe('image/png')
+  expect(ok.headers.get('x-content-type-options')).toBe('nosniff')
+  expect(ok.headers.get('content-security-policy')).toBe('sandbox')
+  expect(await ok.text()).toBe('png bytes')
+  expect((await get('pictures', join(own, 'a.png'), 'wrong')).status).toBe(401)
+  expect((await fetch(`${base}/extensions/pictures/files?path=${encodeURIComponent(join(own, 'a.png'))}`)).status).toBe(401)
+  expect((await fetch(`${base}/extensions/pictures/files?path=${encodeURIComponent(join(own, 'a.png'))}&token=${token}`, { method: 'POST' })).status).toBe(405)
+  for (const [extension, path] of [
+    ['pictures', join(own, 'a.html')],
+    ['pictures', join(garage, 'settings.png')],
+    ['pictures', join(own, '..', '..', 'settings.png')],
+    ['nope', join(own, 'a.png')],
+    ['pictures', 'a.png'],
+  ]) {
+    expect((await get(extension!, path!)).status, `${extension} ${path}`).toBe(404)
+  }
+  // Off, it serves nothing.
+  core.handle({ type: 'extension.setEnabled', extensionId: 'pictures', enabled: false }, () => {})
+  expect((await get('pictures', join(own, 'a.png'))).status).toBe(404)
 })
 
 it('serves no files without a UI folder', async () => {

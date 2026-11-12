@@ -8,28 +8,24 @@ import { Chat } from './chat.tsx'
 import { useCore } from './connection.ts'
 import { pruneDrafts } from './drafts.ts'
 import { Button, CHAT_NOUN, ConfirmDialog, MOTION, PanelToggle, SidePanel, Toast, TRANSITION } from './controls.tsx'
-import { SettingsDialog, WorkFolderDialog, type SettingsPage } from './settings.tsx'
+import { SettingsDialog, type SettingsPage } from './settings.tsx'
+import { WorkFolderDialog } from './settings/work-folder.tsx'
 import { MarketplaceDialog } from './marketplace.tsx'
 import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
+import { ExtensionPopup, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { choosePanelTab, extensionTabId, openDock, showsFor } from './panel-tab.ts'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
 import { isLooking, useLooking, useMarkRead } from './unread.ts'
 import { createNotifier, deliver } from './notifications.ts'
-import {
-  dockedPanels,
-  folderName,
-  folderOf,
-  initialState,
-  MIN_WINDOW_PX,
-  reduce,
-  storedColumn,
-  type Action,
-  storedFlag,
-} from './state.ts'
+import { folderName, folderOf, initialState, reduce, type Action, storedFlag } from './state.ts'
+import { dockedPanels, MIN_WINDOW_PX, storedColumn } from './layout.ts'
+import { fileLinksChecked } from './file-links.tsx'
+import { receiveCopyChanges } from './folder-copies.tsx'
 import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'
@@ -90,12 +86,27 @@ function App() {
     seenRef.current = { chats: state.chats, selectedId: state.selectedId }
   })
   const openRef = useRef((_chatId: string) => {})
+  // Shows the right sidebar, for an extension that opens one of its tabs (host.showPanel).
+  const showTabRef = useRef(() => {})
   // oxlint-disable-next-line react/refs -- read when a notification is clicked, never during render
   const [notifier] = useState(() => createNotifier((shown) => deliver(shown, (chatId) => openRef.current(chatId))))
   const receive = useCallback(
     (action: Action) => {
       if (action.type !== 'connection' && action.type !== 'select' && action.type !== 'toast.dismiss') {
         notifier.observe(action, { ...seenRef.current, looking: isLooking() })
+      }
+      if (action.type === 'files.checked') return fileLinksChecked(action)
+      if (action.type === 'context.copyChanges') return receiveCopyChanges(action)
+      if (action.type === 'extension.panel.show') {
+        const { chats, selectedId } = seenRef.current
+        if (!showsFor(chats, selectedId, action.chatId)) return
+        const id = extensionTabId(action.extension, action.panel)
+        if (action.placement === 'dock') openDock(id)
+        else {
+          choosePanelTab(id)
+          showTabRef.current()
+        }
+        return
       }
       dispatch(action)
     },
@@ -197,6 +208,16 @@ function App() {
   const [marketplace, setMarketplace] = useState(false)
   const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
+  // The open chat's extension panels: popups, their keys and sidebar entries.
+  const panels = (selected && state.extensionUi?.chatId === selected.id && state.extensionUi.panels) || []
+  const showContext = useCallback(() => {
+    if (contextDocks) setContextOpen(true)
+    else setOverlay('context')
+  }, [contextDocks])
+  useLayoutEffect(() => {
+    showTabRef.current = showContext
+  })
+  const panelKeys = usePanelShortcuts(panels, showContext)
   const shortcuts: ShortcutHandlers = {
     previousSpace: () => goTo(stepSpace(state.chats, state.selectedId, -1)),
     nextSpace: () => goTo(stepSpace(state.chats, state.selectedId, 1)),
@@ -209,6 +230,7 @@ function App() {
     marketplace: () => setMarketplace((open) => !open),
     ...panelShortcuts({ covered: settingsOpen || marketplace, chatOpen: !!selected, toggleSidebar, toggleContext }),
     ...(window.kothar && { newSpaceFromFolder: () => void newChatFromFolder() }),
+    ...(!settingsOpen && !marketplace && panelKeys),
   }
   useShortcuts(shortcuts)
   const keys = useBindings()
@@ -248,7 +270,11 @@ function App() {
                     askName={setNameRequest}
                     newSpaceKeys={keys.newSpace}
                   />
-                  <SidebarFooter settingsKeys={keys.settings} openSettings={() => openSettings()} />
+                  <SidebarFooter
+                    settingsKeys={keys.settings}
+                    openSettings={() => openSettings()}
+                    entries={sidebarEntries(panels, keys, showContext)}
+                  />
                 </aside>
               </SidePanel>
             )}
@@ -337,6 +363,7 @@ function App() {
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
                 extensionUi={state.extensionUi}
+                extensions={state.extensions}
                 panelViews={state.panelViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
@@ -388,6 +415,15 @@ function App() {
             send={send}
             pickFolder={window.kothar?.pickFolder}
           />
+          {selected && (
+            <ExtensionPopup
+              chatId={selected.id}
+              panels={panels}
+              panelViews={state.panelViews}
+              connected={connected}
+              send={send}
+            />
+          )}
           <SearchPalette
             open={searching}
             close={() => setSearching(false)}

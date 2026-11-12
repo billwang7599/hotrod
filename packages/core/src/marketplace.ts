@@ -5,20 +5,16 @@ import type { ExtensionManifest, ExtensionUse } from '@kothar/extension-api'
 import { moveCommunityDir } from './vocab-move.ts'
 import { garageHolder } from './garage-lock.ts'
 import {
-  type CatalogEntry,
   checkCatalog,
   checkExtensionManifest,
   checkTheme,
-  type InstalledItem,
   isItemId,
-  type MarketEntry,
-  type MarketKind,
-  MAX_MANIFEST_BYTES,
   MAX_EXTENSION_BYTES,
+  MAX_MANIFEST_BYTES,
   MAX_THEME_BYTES,
-  previewOf,
-  type ThemeFile,
-} from './shared.ts'
+} from './catalog-check.ts'
+import { type CatalogEntry, type InstalledItem, type MarketEntry, type MarketKind, previewOf, type ThemeFile } from './shared.ts'
+import { messageOf } from './util.ts'
 
 // The catalog is its own repo of pointers; each entry's files come from the author's repo. KOTHAR_MARKETPLACE_URL points
 // it elsewhere (a fork, or a local server).
@@ -444,4 +440,3 @@ function rateLimitMessage(response: Response) {
 
 export const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))

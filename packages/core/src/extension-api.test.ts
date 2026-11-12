@@ -8,6 +8,7 @@ import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore, type Core } from './core.ts'
 import type { ClientMessage, CoreMessage, Machine, Sandbox, SessionOptions } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -18,11 +19,6 @@ function tempDir() {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-modapi-')))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
-}
-
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
 }
 
 const replied: FakeStep[] = [{ type: 'text.completed', text: 'Done' }]
@@ -84,6 +80,23 @@ describe('lifecycle hooks', () => {
     t.handle({ type: 'chat.archive', chatId: id, archived: false })
     t.handle({ type: 'chat.delete', chatId: id })
     expect(heard).toEqual(['created Alpha idle', 'archived Alpha', 'unarchived Alpha', 'removed Alpha'])
+  })
+
+  it('hear a space removed with its work folder and checkouts, after each of its chats, and only for spaces', async () => {
+    const heard: string[] = []
+    let removed: unknown
+    const t = start({
+      onChatRemoved: (chat) => void heard.push(`removed ${chat.name}`),
+      onSpaceRemoved: (space) => {
+        heard.push(`space removed ${space.name}`)
+        removed = space
+      },
+    })
+    const id = t.create('Alpha')
+    await t.send(id)
+    t.handle({ type: 'chat.delete', chatId: id })
+    expect(heard).toEqual(['removed Alpha', 'space removed Alpha'])
+    expect(removed).toEqual({ id, name: 'Alpha', workDir: join(t.garage, 'work', id), folders: [], checkouts: [] })
   })
 
   it('hear a turn start and end with what it did, the statuses it went through and every event', async () => {
@@ -154,6 +167,20 @@ describe('lifecycle hooks', () => {
     const id = t.create()
     await t.send(id)
     expect(ended).toEqual(['The engine quit', 'The engine quit'])
+  })
+
+  it("carry why a turn failed, as the engine's adapter labelled it, without logging it", async () => {
+    const turns: unknown[] = []
+    const t = start(
+      { onTurnCompleted: ({ error, errorKind }) => void turns.push({ error, errorKind }) },
+      [{ type: 'turn.completed', error: 'socket hang up', errorKind: 'network' }],
+    )
+    const id = t.create()
+    await t.send(id)
+    expect(turns).toEqual([{ error: 'socket hang up', errorKind: 'network' }])
+    const log = readFileSync(join(t.garage, 'chats', id, 'log.jsonl'), 'utf8')
+    expect(log).toContain('socket hang up')
+    expect(log).not.toContain('errorKind')
   })
 
   it('show a hook that throws or rejects as an error, and the chat carries on', async () => {
@@ -494,6 +521,31 @@ describe('the host', () => {
     expect(() => t.host().note(id, 'Bad', { panel: 'nope' })).toThrow('Test extension has no panel "nope"')
   })
 
+  it('notes a card that opens its panel on an action, cut to size', () => {
+    const t = withHost({ panels: [{ id: 'info', title: 'Info', render: () => ({ type: 'empty', text: '' }) }] })
+    const id = t.create()
+    t.host().note(id, 'Made it', {
+      panel: 'info',
+      action: { name: 'open', value: { slug: 'chart', version: 2 } },
+      card: { title: `  Sales\n chart ${'x'.repeat(200)}`, badge: 'Chart', detail: '' },
+    })
+    t.host().note(id, 'Bare card', { card: { title: 'Plain' } })
+    const [made, bare] = t.chat(id).entries.filter((e) => e.type === 'extension.note')
+    expect(made).toMatchObject({
+      extension: 'test',
+      panel: 'info',
+      action: { name: 'open', value: { slug: 'chart', version: 2 } },
+      card: { title: `Sales chart ${'x'.repeat(108)}`, badge: 'Chart' },
+    })
+    expect((made as { card: object }).card).not.toHaveProperty('detail')
+    expect(bare).toMatchObject({ extension: 'test', card: { title: 'Plain' } })
+    expect(bare).not.toHaveProperty('panel')
+    expect(() => t.host().note(id, 'x', { action: { name: 'open' } })).toThrow('give its panel too')
+    expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: '' } })).toThrow('needs a name')
+    expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: 'a', value: 'x'.repeat(5000) } })).toThrow('at most 4000')
+    expect(() => t.host().note(id, 'x', { card: { title: ' ' } })).toThrow('needs a title')
+  })
+
   it('runs commands through the Machine', async () => {
     const t = withHost()
     t.create()
@@ -572,6 +624,36 @@ describe('notify', () => {
       { type: 'notify', extension: 'test', title: 'No chat', body: '' },
     ])
     expect(() => t.host().notify({ chatId: 'nope', title: 'Hi' })).toThrow('Unknown chat "nope"')
+  })
+})
+
+describe('showPanel', () => {
+  const panels: Extension['panels'] = [
+    { id: 'side', title: 'Side', placement: 'dock', render: () => ({ type: 'empty', text: '' }) },
+    { id: 'tab', title: 'Tab', render: () => ({ type: 'empty', text: '' }) },
+    { id: 'pop', title: 'Pop', placement: 'popup', render: () => ({ type: 'empty', text: '' }) },
+  ]
+
+  it('asks the UI to open a dock or a tab for a chat, never a popup', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.host().showPanel(id, 'side')
+    t.host().showPanel(id, 'tab')
+    t.host().showPanel(id, 'pop')
+    expect(t.messages.filter((m) => m.type === 'extension.panel.show')).toEqual([
+      { type: 'extension.panel.show', chatId: id, extension: 'test', panel: 'side', placement: 'dock' },
+      { type: 'extension.panel.show', chatId: id, extension: 'test', panel: 'tab', placement: 'tab' },
+    ])
+    expect(() => t.host().showPanel(id, 'nope')).toThrow('Test extension has no panel "nope"')
+    expect(() => t.host().showPanel('nope', 'side')).toThrow('Unknown chat "nope"')
+  })
+
+  it('keeps a dock placement for the UI', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    const listed = t.replies.find((m) => m.type === 'chat.extensions')
+    expect(listed).toMatchObject({ panels: [{ id: 'side', placement: 'dock' }, { id: 'tab' }, { id: 'pop', placement: 'popup' }] })
   })
 })
 
@@ -679,6 +761,107 @@ describe('panels and commands', () => {
     expect(t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === id)).toMatchObject({
       panels: expect.arrayContaining([expect.objectContaining({ id: 'count' })]),
     })
+  })
+})
+
+describe('message actions', () => {
+  const view = (text: string): ExtensionView => ({ type: 'text', text })
+  // A pin-like action: it keeps the entries it was run on, marks them, and draws a panel listing them.
+  function marking(extra: Partial<Extension> = {}) {
+    const marked = new Set<number>()
+    const ran: unknown[] = []
+    const t = start({
+      messageActions: [
+        {
+          id: 'mark',
+          label: 'Mark',
+          activeLabel: 'Unmark',
+          icon: 'pin',
+          hint: 'Mark this message',
+          marked: () => [...marked],
+          run(message) {
+            ran.push(message)
+            if (!marked.delete(message.entry)) marked.add(message.entry)
+          },
+        },
+        { id: 'replies', label: 'Star', icon: 'star', kinds: ['talk'], run: () => {} },
+      ],
+      panels: [{ id: 'marks', title: 'Marks', render: () => view([...marked].join(',')) }],
+      ...extra,
+    })
+    const listed = () => t.messages.findLast((m) => m.type === 'chat.extensions')
+    return { ...t, ran, listed }
+  }
+
+  it('list a chat’s message actions with the entries each marks', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    t.handle({ type: 'context.get', chatId: id })
+    expect(t.replies.findLast((m) => m.type === 'chat.extensions')).toMatchObject({
+      messageActions: [
+        { extension: 'test', id: 'mark', label: 'Mark', activeLabel: 'Unmark', icon: 'pin', hint: 'Mark this message', kinds: ['user', 'work', 'talk'], marked: [] },
+        { extension: 'test', id: 'replies', label: 'Star', icon: 'star', kinds: ['talk'], marked: [] },
+      ],
+    })
+  })
+
+  it('run on a message by its log entry, then mark it and draw open panels again', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    const reply = entries.findIndex((e) => e.type === 'text.completed')
+    t.handle({ type: 'extension.panel.get', chatId: id, extension: 'test', panel: 'marks' })
+    await t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action: 'mark', entry: reply })
+    expect(t.ran).toEqual([{ entry: reply, kind: 'talk', at: expect.any(String), text: 'Done' }])
+    expect(t.listed()).toMatchObject({ chatId: id, messageActions: [{ id: 'mark', marked: [reply] }, { id: 'replies' }] })
+    await until(() => t.messages.some((m) => m.type === 'extension.panel' && m.view?.type === 'text' && m.view.text === String(reply)))
+    await t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action: 'mark', entry: asked })
+    expect(t.ran.at(-1)).toMatchObject({ entry: asked, kind: 'user', text: 'Hello' })
+    expect(t.listed()).toMatchObject({ messageActions: [{ marked: [reply, asked] }, { id: 'replies' }] })
+  })
+
+  it('refuse an entry that isn’t a message, a kind the action isn’t offered on, and an unknown action', async () => {
+    const t = marking()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    const notMessage = entries.findIndex((e) => e.type === 'turn.started' || e.type === 'turn.completed')
+    const act = (action: string, entry: number) =>
+      t.handle({ type: 'extension.message.action', chatId: id, extension: 'test', action, entry }) as unknown as Promise<void>
+    await expect(act('mark', notMessage)).rejects.toThrow('That message isn’t in the chat')
+    await expect(act('mark', 999)).rejects.toThrow('That message isn’t in the chat')
+    await expect(act('replies', asked)).rejects.toThrow('Star isn’t offered on that message')
+    await expect(act('nope', asked)).rejects.toThrow('Test extension has no message action "nope" here')
+    expect(t.ran).toEqual([])
+  })
+
+  it('leave out a broken action and show its error, keeping the others', () => {
+    const errors: string[] = []
+    const t = marking({
+      messageActions: [
+        { id: 'bad', label: 'Bad', icon: 'nope' as 'pin', run: () => {} },
+        { id: 'ok', label: 'Fine', icon: 'bookmark', marked: () => [3, 3, -1, 1.5, 'x' as unknown as number], run: () => {} },
+      ],
+    })
+    t.core.onMessage((m) => void (m.type === 'error' && errors.push(m.message)))
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    expect(t.replies.findLast((m) => m.type === 'chat.extensions')).toMatchObject({ messageActions: [{ id: 'ok', marked: [3] }] })
+  })
+
+  it('give a message by entry through the host', async () => {
+    const t = withHost()
+    const id = t.create()
+    await t.send(id, 'Hello')
+    const entries = t.chat(id).entries
+    const asked = entries.findIndex((e) => e.type === 'user.message')
+    expect(t.host().message(id, asked)).toEqual({ entry: asked, kind: 'user', at: expect.any(String), text: 'Hello' })
+    expect(t.host().message(id, asked + 1)).toBeUndefined()
+    expect(t.host().message(id, -1)).toBeUndefined()
   })
 })
 

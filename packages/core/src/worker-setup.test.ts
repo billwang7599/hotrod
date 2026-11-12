@@ -7,6 +7,7 @@ import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -20,11 +21,6 @@ const extension: Extension = {
   enabledByDefault: true,
   panels: [{ id: 'board', title: 'Board', render: () => ({ type: 'text', text: 'On the board' }) }],
   commands: [{ id: 'poke', label: 'Poke', run: () => {} }],
-}
-
-const until = async (done: () => boolean) => {
-  for (let i = 0; i < 400 && !done(); i++) await new Promise((r) => setTimeout(r, 5))
-  expect(done()).toBe(true)
 }
 
 function open(garage: string) {

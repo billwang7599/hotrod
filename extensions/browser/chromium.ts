@@ -1,6 +1,8 @@
-// Launches a Chromium (Playwright's Chrome for Testing, or the user's own browser on a copy of their profile) on a
-// profile of Kothar's own, headless or with a window, through the Machine (host.spawn), and finds its DevTools endpoint. Playwright MCP never launches a browser in this extension:
-// it attaches to this one over CDP.
+// Launches a Chromium (the user's installed Google Chrome, Playwright's Chrome for Testing, or the user's own browser on
+// a copy of their profile) on a profile of Kothar's own, headless or with a window, through the Machine (host.spawn),
+// and finds its DevTools endpoint. Playwright MCP never launches a browser in this extension: it attaches to this one
+// over CDP. A plain launch has no DevTools at all: a window for the user to sign in, which sites can't tell from an
+// ordinary browser.
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExtensionHost, ExtensionProcess } from '@kothar/extension-api'
@@ -11,7 +13,8 @@ import { chromiumMajor, windowUserAgent } from './profiles.ts'
 // keychain 'real': cookies and passwords are encrypted with the browser's key in the macOS Keychain, as the user's own
 // browser does, so a copy of a user's profile reads; otherwise a mock keychain keeps macOS from asking. userAgent: sent
 // instead of headless Chrome's own. cold: a start from nothing, not a relaunch for a hand-off (a copied profile is
-// copied again then).
+// copied again then). plain: a window with no remote debugging, for signing in (headless is ignored); urls: the tabs
+// it opens on. restoreSession: opens the tabs the profile's last browser had, as a plain window leaves them.
 export type Launch = {
   profile: string
   headless: boolean
@@ -19,9 +22,13 @@ export type Launch = {
   keychain?: 'mock' | 'real'
   userAgent?: string
   cold?: boolean
+  plain?: boolean
+  urls?: string[]
+  restoreSession?: boolean
 }
 
-// A browser that's running: its DevTools endpoint (http://127.0.0.1:<port>), a promise that settles when it exits,
+// A browser that's running: its DevTools endpoint (http://127.0.0.1:<port>; empty for a plain one), a promise that
+// settles when it exits,
 // and stop, which asks it to quit and kills it if it won't.
 // activate: makes its window the one in front of the user's other apps, as far as macOS lets it.
 export type Running = { endpoint: string; exited: Promise<void>; stop(): Promise<void>; activate?(): Promise<void> }
@@ -35,13 +42,17 @@ const POLL_MS = 50
 // The flags Kothar's browser runs with. The keychain flags are the same in both modes, so cookies one mode saves the
 // other can read: on Kothar's own profile the mock keychain and basic password store keep macOS from asking for the
 // Keychain; a copy of a user's profile needs the real one. The disk cache stays in the profile (macOS Chromium
-// otherwise puts it in ~/Library/Caches), so it goes with the profile.
-export function chromiumArgs({ profile, headless, keychain, userAgent }: Launch): string[] {
+// otherwise puts it in ~/Library/Caches), so it goes with the profile. Never --enable-automation, and
+// AutomationControlled off, so pages don't see navigator.webdriver (headless Chrome sets it otherwise): sites such as
+// Google's sign-in refuse a browser that says it's automated. A plain window has no remote debugging at all.
+export function chromiumArgs(launch: Launch): string[] {
+  const { profile, keychain, userAgent, plain } = launch
+  const headless = launch.headless && !plain
   return [
     `--user-data-dir=${profile}`,
     `--disk-cache-dir=${profile}/Cache`,
-    '--remote-debugging-port=0',
-    '--remote-debugging-address=127.0.0.1',
+    ...(plain ? [] : ['--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1']),
+    '--disable-blink-features=AutomationControlled',
     '--no-first-run',
     '--no-default-browser-check',
     ...(keychain === 'real' ? [] : ['--use-mock-keychain', '--password-store=basic']),
@@ -50,7 +61,8 @@ export function chromiumArgs({ profile, headless, keychain, userAgent }: Launch)
     '--disable-features=Translate,MediaRouter',
     ...(headless ? ['--headless', '--hide-scrollbars', '--mute-audio'] : []),
     ...(headless && userAgent ? [`--user-agent=${userAgent}`] : []),
-    'about:blank',
+    ...(launch.restoreSession ? ['--restore-last-session'] : []),
+    ...(launch.urls?.length ? launch.urls : launch.restoreSession ? [] : ['about:blank']),
   ]
 }
 
@@ -122,9 +134,10 @@ export function chromiumLauncher(
     const portFile = join(launch.profile, 'DevToolsActivePort')
     rmSync(portFile, { force: true })
     // Headless, it says the user agent Chrome says in a window: some sites turn HeadlessChrome away.
-    const major = launch.headless && !launch.userAgent ? chromiumMajor(path) : undefined
+    const major = launch.headless && !launch.plain && !launch.userAgent ? chromiumMajor(path) : undefined
     const args = chromiumArgs({ ...launch, ...(major && { userAgent: windowUserAgent(major) }) })
     const proc: ExtensionProcess = await host.spawn(path, [...extraArgs, ...args])
+    if (launch.plain) return plainRunning(host, proc, launch)
     let gone = false
     let stderr = ''
     const exited = new Promise<void>((resolve) =>
@@ -162,5 +175,39 @@ export function chromiumLauncher(
         await exited
       },
     }
+  }
+}
+
+// A plain window: no DevTools to ask, so it's up once it has locked its profile, and it stops on SIGTERM, which Chrome
+// takes as a request to quit cleanly (its cookies and session saved), with SIGKILL after a grace period.
+async function plainRunning(host: Pick<ExtensionHost, 'run'>, proc: ExtensionProcess, launch: Launch): Promise<Running> {
+  let gone = false
+  let stderr = ''
+  const exited = new Promise<void>((resolve) =>
+    proc.onExit((_code, tail) => {
+      gone = true
+      stderr = tail
+      resolve()
+    }),
+  )
+  for (let waited = 0; !gone && !profilePid(launch.profile) && waited < STARTUP_MS; waited += POLL_MS) await sleep(POLL_MS)
+  if (gone || !profilePid(launch.profile)) {
+    proc.stop()
+    const why = stderr.trim().split('\n').at(-1)
+    throw new Error(`The browser didn't start${why ? `: ${why}` : ''}`)
+  }
+  const pid = profilePid(launch.profile)
+  return {
+    endpoint: '',
+    exited,
+    async activate() {
+      if (gone || !pid || process.platform !== 'darwin') return
+      await host.run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', ACTIVATE_SCRIPT, String(pid)], { timeoutMs: 5000 })
+    },
+    async stop() {
+      if (gone) return
+      proc.stop()
+      await exited
+    },
   }
 }

@@ -3,6 +3,7 @@
 // and the chat asks the user as before.
 import { realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
+import { within } from './util.ts'
 
 // Reads change nothing, but these hold logins and keys, so reading them still asks.
 const HOME_SECRETS = [
@@ -42,8 +43,6 @@ export const secretPathsOf = (home: string, garage: string) => [
   ...HOME_SECRETS.map((path) => join(home, path)),
   join(garage, 'accounts'),
 ]
-
-const within = (inner: string, outer: string) => inner === outer || inner.startsWith(outer.replace(/\/?$/, sep))
 
 const realOf = (path: string): string => {
   try {

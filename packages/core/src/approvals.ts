@@ -61,10 +61,11 @@ function writeApprovals(garage: string, approvals: Record<string, Approval>) {
   renameSync(fresh, file)
 }
 
-export function logHistory(garage: string, entry: Omit<HistoryEntry, 'at'> & { at?: string }) {
+// now is the core's clock (openCore's now), passed in so tests can fix the time.
+export function logHistory(garage: string, now: () => Date, entry: Omit<HistoryEntry, 'at'> & { at?: string }) {
   try {
     mkdirSync(communityDir(garage), { recursive: true })
-    appendFileSync(historyFile(garage), `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`)
+    appendFileSync(historyFile(garage), `${JSON.stringify({ at: now().toISOString(), ...entry })}\n`)
   } catch (error) {
     console.error(`Couldn't add to the community extension history: ${error instanceof Error ? error.message : error}`)
   }
@@ -104,15 +105,15 @@ const aboutOf = ({ manifest, item }: CommunityInstall) => ({
 })
 
 // Records that the user turned on the extension as its files are now.
-export function approve(garage: string, install: CommunityInstall, carriedOver = false): Approval {
+export function approve(garage: string, now: () => Date, install: CommunityInstall, carriedOver = false): Approval {
   const approval: Approval = {
     ...aboutOf(install),
     sha256: filesOf(install.dir),
-    approvedAt: new Date().toISOString(),
+    approvedAt: now().toISOString(),
     ...(carriedOver && { carriedOver: true as const }),
   }
   writeApprovals(garage, { ...readApprovals(garage), [install.manifest.id]: approval })
-  logHistory(garage, { id: install.manifest.id, event: 'approved', ...aboutOf(install), sha256: approval.sha256, ...(carriedOver && { reason: 'already on' }) })
+  logHistory(garage, now, { id: install.manifest.id, event: 'approved', ...aboutOf(install), sha256: approval.sha256, ...(carriedOver && { reason: 'already on' }) })
   return approval
 }
 
@@ -123,20 +124,20 @@ export function forget(garage: string, id: string) {
   writeApprovals(garage, rest)
 }
 
-export function logInstall(garage: string, install: CommunityInstall, updated: boolean) {
-  logHistory(garage, { id: install.manifest.id, event: updated ? 'updated' : 'installed', ...aboutOf(install), sha256: filesOf(install.dir) })
+export function logInstall(garage: string, now: () => Date, install: CommunityInstall, updated: boolean) {
+  logHistory(garage, now, { id: install.manifest.id, event: updated ? 'updated' : 'installed', ...aboutOf(install), sha256: filesOf(install.dir) })
 }
 
 // The approval for each extension that's on, starting approvals in a garage that has none: an extension the user had
 // already turned on is approved as it is, once, so updating Kothar doesn't turn everything off. switchedOn is the
 // extension's own switch, whatever the Community extensions switch says: one that's on while that switch is off is
 // still the user's choice, and would otherwise be held the day they turn community extensions on again.
-export function approvalsFor(garage: string, installs: CommunityInstall[], switchedOn: (id: string) => boolean) {
+export function approvalsFor(garage: string, now: () => Date, installs: CommunityInstall[], switchedOn: (id: string) => boolean) {
   const kept = readApprovals(garage)
   if (kept) return kept
   const approvals: Record<string, Approval> = {}
   for (const install of installs) {
-    if (switchedOn(install.manifest.id)) approvals[install.manifest.id] = approve(garage, install, true)
+    if (switchedOn(install.manifest.id)) approvals[install.manifest.id] = approve(garage, now, install, true)
   }
   if (!Object.keys(approvals).length && installs.length) writeApprovals(garage, {})
   return readApprovals(garage) ?? approvals

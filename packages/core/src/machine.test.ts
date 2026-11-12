@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createLocalMachine, RUN_TIMEOUT_MS, STDERR_TAIL_CHARS, STRIPPED_ENV_KEYS } from './machine.ts'
 import { cantPs, cantSandbox, needs } from './test-env.ts'
+import { until } from './test-wait.ts'
 
 const cwd = process.cwd()
 const node = process.execPath
@@ -17,13 +18,7 @@ const alive = (pid: number) => {
   return state !== '' && !/^[ZE]/.test(state)
 }
 
-const waitFor = async (check: () => boolean, timeoutMs = 2000) => {
-  const start = performance.now()
-  while (!check()) {
-    if (performance.now() - start > timeoutMs) throw new Error('timed out waiting')
-    await new Promise((resolve) => setTimeout(resolve, 20))
-  }
-}
+const waitFor = (check: () => boolean, timeoutMs = 2000) => until(check, { timeoutMs, everyMs: 20 })
 
 const spawnGrandchild = (code: string, options = '{}') =>
   `require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(code)}], ${options})`

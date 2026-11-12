@@ -227,8 +227,6 @@ export function formatBinding(binding: Binding | null, mac = isMac()): string {
 }
 
 /** An action's keys as the user reads them, or '' when it has none. */
-export const shortcutText = (id: string, mac = isMac()) => formatBinding(current[id] ?? null, mac)
-
 /** Keys the system or the editing basics own; Kothar never takes them. */
 const RESERVED = ['Mod+Q', 'Mod+W', 'Mod+C', 'Mod+V', 'Mod+X', 'Mod+Z', 'Mod+Shift+Z', 'Mod+A', 'Mod+H', 'Mod+M', 'Mod+R', 'Mod+Tab']
 

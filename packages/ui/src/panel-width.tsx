@@ -1,12 +1,14 @@
 import { useState, useSyncExternalStore } from 'react'
-import { PANEL_PX } from './state.ts'
+import { PANEL_PX } from './layout.ts'
 
 /** The left sidebar and the right panel, each resized by dragging its inner edge; widths saved in localStorage. */
-export type Panel = keyof typeof PANEL_PX
+export type Panel = keyof typeof PANEL_PX | 'dock'
 
 export const PANEL_LIMITS: Record<Panel, { key: string; min: number; max: number; default: number }> = {
   sidebar: { key: 'kothar.sidebarWidth', min: 180, max: 420, default: PANEL_PX.sidebar },
   context: { key: 'kothar.contextWidth', min: 260, max: 560, default: PANEL_PX.context },
+  // An extension's dock panel beside the chat (ExtensionPanel placement 'dock'), such as an artifact.
+  dock: { key: 'kothar.dockWidth', min: 320, max: 1600, default: 560 },
 }
 export const RESIZE_STEP_PX = 16
 
@@ -22,7 +24,7 @@ function stored(panel: Panel) {
   return Number.isFinite(px) ? clampWidth(panel, px) : PANEL_LIMITS[panel].default
 }
 
-const read = () => ({ sidebar: stored('sidebar'), context: stored('context') })
+const read = () => ({ sidebar: stored('sidebar'), context: stored('context'), dock: stored('dock') })
 let current = read()
 
 export function setPanelWidth(panel: Panel, px: number) {
@@ -48,10 +50,10 @@ const snapshot = () => current
 export const usePanelWidths = () => useSyncExternalStore(subscribe, snapshot, snapshot)
 export const usePanelWidth = (panel: Panel) => usePanelWidths()[panel]
 
-const LABELS: Record<Panel, string> = { sidebar: 'Resize sidebar', context: 'Resize right panel' }
+const LABELS: Record<Panel, string> = { sidebar: 'Resize sidebar', context: 'Resize right panel', dock: 'Resize the panel beside the chat' }
 
 /** A thin handle on the panel's inner edge: drag, arrow keys, or double-click to reset. */
-export function ResizeHandle({ panel }: { panel: Panel }) {
+export function ResizeHandle({ panel, label }: { panel: Panel; label?: string }) {
   const width = usePanelWidth(panel)
   const { min, max } = PANEL_LIMITS[panel]
   // The sidebar's handle is on its right edge, so dragging right widens it; the right panel's is on its left.
@@ -61,7 +63,7 @@ export function ResizeHandle({ panel }: { panel: Panel }) {
     <div
       role="separator"
       aria-orientation="vertical"
-      aria-label={LABELS[panel]}
+      aria-label={label ?? LABELS[panel]}
       aria-valuenow={width}
       aria-valuemin={min}
       aria-valuemax={max}

@@ -1,9 +1,14 @@
 // Joins a session's instructions from plain data, in the README's order (Instructions). The core gathers each part
 // (asking extensions, reading files) and this only orders and formats them, so it can be tested alone.
+import { folderLines, type FolderPlace } from './folder-modes.ts'
 import type { ContextItem } from './shared.ts'
 
 export const WRITE_RULES =
-  'You can write files only in your work folder. Every other folder is read-only to you: writes there fail.'
+  'You can write files only in your work folder and in attached folders set to Edit in place. Every other folder ' +
+  'is read-only to you: writes there fail.'
+export const FOLDER_RULES =
+  "The user sets how you may write in each attached folder that isn't a git repo, as its mode in the chat's " +
+  "Context panel. To write in one you can't, ask them to change its mode there:"
 export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
@@ -16,6 +21,8 @@ export type InstructionParts = {
   // Set while sandboxed: the chat may write only here.
   workDir?: string
   checkouts: InstructionCheckout[]
+  // The attached folders that aren't git repos, each with its mode.
+  folders: FolderPlace[]
   // What extensions add (Extension.instructions), already trimmed, in extension order.
   extensions: string[]
   // The Workers extension's instructions, for a chat that may start workers.
@@ -39,12 +46,13 @@ export const contextTextOf = (items: ContextItem[]) =>
   })
 
 export const buildInstructions = (parts: InstructionParts) => {
-  const { role, workDir, checkouts, extensions, workers, memory, parentView, setup, items } = parts
+  const { role, workDir, checkouts, folders, extensions, workers, memory, parentView, setup, items } = parts
   const rules = [
     ...(workDir !== undefined ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []),
     ...(checkouts.length
       ? [[CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n')]
       : []),
+    ...(folders.length ? [[FOLDER_RULES, ...folderLines(folders)].join('\n')] : []),
   ]
   const memoryText = [
     ...(workers !== undefined ? [workers] : []),

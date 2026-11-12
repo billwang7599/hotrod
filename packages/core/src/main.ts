@@ -42,6 +42,7 @@ export async function startCore(
     adapters?: Adapter[]
     extensions?: Extension[]
     machine?: Machine
+    // The user's home folder: where the garage is found, and what the core treats as home. Tests pass their own.
     home?: string
     // Where the built-in extensions are: the repo's extensions/ unless a packaged app ships them elsewhere.
     extensionsDir?: string
@@ -78,6 +79,7 @@ export async function startCore(
     extensions,
     brokenExtensions,
     community,
+    ...(home && { home }),
     marketplaceUrl,
     githubToken,
     ...(options.restart && { restart: options.restart }),

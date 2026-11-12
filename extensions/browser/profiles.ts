@@ -34,7 +34,7 @@ export const BROWSER_APPS: BrowserApp[] = [
 ]
 
 // Where to look, for tests.
-export type Places = { home: string; apps: string[] }
+export type Places = { home: string; apps: string[]; bins?: string[] }
 export const defaultPlaces = (): Places => ({ home: homedir(), apps: ['/Applications', join(homedir(), 'Applications')] })
 
 // A profile of an installed browser. key is what the setting saves: "<browser id>:<profile folder name>".
@@ -48,6 +48,31 @@ export function executableOf(app: BrowserApp, places: Places) {
     const path = join(root, app.app, 'Contents', 'MacOS', app.binary)
     if (existsSync(path)) return path
   }
+}
+
+// The installed Google Chrome agents' browsers run on, when the setting picks it: on macOS the first of Chrome, Chrome
+// Beta and Chrome Canary found in the app folders; elsewhere the usual install paths. `places.bins` overrides those
+// paths, for tests.
+export type InstalledChrome = { name: string; executable: string }
+const CHROME_IDS = ['chrome', 'chrome-beta', 'chrome-canary']
+const CHROME_PATHS: Partial<Record<NodeJS.Platform, string[]>> = {
+  linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome', '/usr/bin/google-chrome-beta'],
+  win32: [
+    `${process.env.PROGRAMFILES ?? 'C:\\Program Files'}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)'}\\Google\\Chrome\\Application\\chrome.exe`,
+    `${process.env.LOCALAPPDATA ?? ''}\\Google\\Chrome\\Application\\chrome.exe`,
+  ],
+}
+export function findChrome(places: Places = defaultPlaces(), platform: NodeJS.Platform = process.platform): InstalledChrome | undefined {
+  if (platform === 'darwin') {
+    for (const app of BROWSER_APPS.filter((a) => CHROME_IDS.includes(a.id))) {
+      const executable = executableOf(app, places)
+      if (executable) return { name: `Google ${app.name}`, executable }
+    }
+    return undefined
+  }
+  const executable = (places.bins ?? CHROME_PATHS[platform] ?? []).find((path) => existsSync(path))
+  return executable ? { name: 'Google Chrome', executable } : undefined
 }
 
 // Every profile of every installed Chromium-family browser, from its Local State (profile.info_cache), in the

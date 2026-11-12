@@ -1,8 +1,7 @@
-import type { ExtensionView } from '@kothar/extension-api'
+import type { ExtensionAction, ExtensionNoteCard, ExtensionView } from '@kothar/extension-api'
 import { bySpaceOrder, levelsOf, looksBinary, NO_LISTS } from '@kothar/core/shared'
 import type {
   RestartState,
-  Account,
   Answers,
   Attachment,
   InstalledItem,
@@ -13,6 +12,7 @@ import type {
   ChatState,
   ChatStatus,
   CommandInfo,
+  MessageActionInfo,
   ContextItem,
   ContextSection,
   CoreMessage,
@@ -42,10 +42,12 @@ export type Permission = {
   auto?: true
 }
 
+// entry: where a message (the user's, a report or a reply) is in the chat's log, for extensions' message actions and
+// jumps to it; absent when the view can't tell.
 export type Item =
-  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true }
-  | { kind: 'report'; chatId: string; name: string; text: string; error?: string }
-  | { kind: 'text'; text: string }
+  | { kind: 'user'; text: string; attachments?: Attachment[]; midTurn?: true; entry?: number }
+  | { kind: 'report'; chatId: string; name: string; text: string; error?: string; entry?: number }
+  | { kind: 'text'; text: string; entry?: number }
   | { kind: 'thinking'; text: string }
   | {
       kind: 'tool'
@@ -65,8 +67,9 @@ export type Item =
       answers?: Answers
     }
   | { kind: 'error'; text: string }
-  // extension and panel: clicking the note opens that extension's panel.
-  | { kind: 'note'; text: string; extension?: string; panel?: string }
+  // extension and panel: clicking the note opens that extension's panel, then sends it action. card: drawn as a card,
+  // kept in view when the turn's steps fold.
+  | { kind: 'note'; text: string; extension?: string; panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // Thinking as it streams in: never logged, but kept with the entries so items can be rebuilt from them.
 type Shown = ChatEntry | { type: 'thinking.shown'; text: string }
@@ -118,7 +121,7 @@ export type State = {
   search?: { id: number; query: string; hits: SearchHit[] }
   context?: { chatId: string; items: ContextItem[] }
   // The selected chat's extension panels and commands, and the views of the panels it has opened (panelKey).
-  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[]; messageActions?: MessageActionInfo[] }
   panelViews: Record<string, { view?: ExtensionView; error?: string }>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
@@ -160,7 +163,9 @@ const cancel = <P extends { outcome: string }>(p: P): P => (p.outcome === 'pendi
 const OLD_REPORT = /^\[subagent "(.*)" \(([0-9a-f]+)\)\] ([\s\S]*?)(?: \(The turn ended early: (.*)\))?$/
 const NO_REPLY = '(No reply)'
 
-function applyEntry(items: Item[], entry: Shown): Item[] {
+// logged: where the entry is in the chat's log.
+function applyEntry(items: Item[], entry: Shown, logged?: number): Item[] {
+  const at = logged === undefined ? {} : { entry: logged }
   switch (entry.type) {
     case 'thinking.shown': {
       const last = items.at(-1)
@@ -174,16 +179,19 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
       if (old) {
         const [, name, chatId, reply, error] = old as unknown as string[]
         const replyText = reply === NO_REPLY ? '' : reply!
-        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }) }]
+        return [...items, { kind: 'report', chatId: chatId!, name: name!, text: replyText, ...(error && { error }), ...at }]
       }
-      return [...items, { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }) }]
+      return [
+        ...items,
+        { kind: 'user', text, ...(attachments && { attachments }), ...(entry.midTurn && { midTurn: true }), ...at },
+      ]
     }
     case 'worker.report': {
       const { chatId, name, text, error } = entry
-      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }) }]
+      return [...items, { kind: 'report', chatId, name, text, ...(error && { error }), ...at }]
     }
     case 'text.completed':
-      return [...items, { kind: 'text', text: entry.text }]
+      return [...items, { kind: 'text', text: entry.text, ...at }]
     case 'tool.started':
       return [
         ...items,
@@ -252,8 +260,11 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
     case 'extension.note': {
-      const { text, extension, panel } = entry
-      return [...items, { kind: 'note', text, ...(extension && panel && { extension, panel }) }]
+      const { text, extension, panel, action, card } = entry
+      return [
+        ...items,
+        { kind: 'note', text, ...(extension && panel && { extension, panel, ...(action && { action }) }), ...(card && { card }) },
+      ]
     }
     // The turn's error or an extension's note says it.
     case 'limit.reached':
@@ -262,9 +273,17 @@ function applyEntry(items: Item[], entry: Shown): Item[] {
   }
 }
 
+const logged = (entries: readonly Shown[]) => entries.filter((e) => e.type !== 'thinking.shown').length
+
+// The items of the loaded entries, which start at `from` in the log; streamed thinking isn't in the log.
+function itemsOf(entries: readonly Shown[], from: number): Item[] {
+  let at = from
+  return entries.reduce<Item[]>((items, e) => (e.type === 'thinking.shown' ? applyEntry(items, e) : applyEntry(items, e, at++)), [])
+}
+
 const toView = ({ entries, from, ...chat }: ChatState): ChatView => ({
   ...chat,
-  items: entries.reduce(applyEntry, []),
+  items: itemsOf(entries, from ?? 0),
   entries,
   from: from ?? 0,
   shift: 0,
@@ -283,7 +302,7 @@ const withThinking = (entries: Shown[], text: string): Shown[] => {
 function withOlder(chat: ChatView, page: Extract<CoreMessage, { type: 'chat.history' }>): ChatView {
   if (page.before !== chat.from || page.from >= page.before) return chat
   const entries = [...page.entries, ...(chat.entries ?? [])]
-  const items = entries.reduce(applyEntry, [])
+  const items = itemsOf(entries, page.from)
   return { ...chat, entries, items, from: page.from, shift: (chat.shift ?? 0) + items.length - chat.items.length }
 }
 
@@ -298,6 +317,8 @@ const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pen
 
 // The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits. A question
 // waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
+const carded = (item: Item) => item.kind === 'note' && item.card !== undefined
+
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   let turn: ShownItem[] = []
@@ -305,10 +326,11 @@ export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
     let end = turn.length
     while (turn[end - 1]?.item.kind === 'error' || turn[end - 1]?.item.kind === 'note') end--
     if (turn[end - 1]?.item.kind === 'text') end--
-    const steps = turn.slice(0, end).filter((s) => !asking(s.item))
+    const steps = turn.slice(0, end).filter((s) => !asking(s.item) && !carded(s.item))
     if (live || steps.length < 2) rows.push(...turn)
     else {
-      const kept = turn.slice(0, end).filter((s) => asking(s.item))
+      // Questions, and an extension's card (such as an artifact made), stay in view.
+      const kept = turn.slice(0, end).filter((s) => asking(s.item) || carded(s.item))
       rows.push({ at: steps[0]!.at, steps: steps.map((s) => s.item) }, ...kept, ...turn.slice(end))
     }
     turn = []
@@ -391,7 +413,7 @@ export function reduce(state: State, action: Action): State {
     case 'chat.entry':
       return updateChat(state, action.chatId, (c) => ({
         ...c,
-        items: applyEntry(c.items, action.entry),
+        items: applyEntry(c.items, action.entry, c.entries && (c.from ?? 0) + logged(c.entries)),
         ...(c.entries && { entries: [...c.entries, action.entry] }),
         draft: endsText(action.entry) ? '' : c.draft,
       }))
@@ -418,8 +440,8 @@ export function reduce(state: State, action: Action): State {
       return { ...state, context: { chatId: action.chatId, items: action.items } }
     case 'chat.extensions': {
       if (action.chatId !== state.selectedId) return state
-      const { chatId, panels, commands } = action
-      return { ...state, extensionUi: { chatId, panels, commands } }
+      const { chatId, panels, commands, messageActions } = action
+      return { ...state, extensionUi: { chatId, panels, commands, ...(messageActions && { messageActions }) } }
     }
     case 'extension.panel': {
       if (action.chatId !== state.selectedId) return state
@@ -487,6 +509,12 @@ export function reduce(state: State, action: Action): State {
     }
     // Shown by the notifier (notifications.ts), not kept in state.
     case 'notify':
+    // Opens a dock or a tab (main.tsx), not kept in state.
+    case 'extension.panel.show':
+    // Kept by the file link cache, so a check's answer re-renders only the messages that asked.
+    case 'files.checked':
+    // Kept by Copy changes back (folder-copies.tsx), the only one that reads it.
+    case 'context.copyChanges':
       return state
     case 'search.results':
       return { ...state, search: { id: action.id, query: action.query, hits: action.hits } }
@@ -574,28 +602,6 @@ export function folderOf(chats: ChatView[], chat: ChatView): string | undefined 
   return chat.folders[0] ?? (parent && folderOf(chats, parent))
 }
 
-export const MIN_WINDOW_PX = { width: 375, height: 600 }
-export const PANEL_PX = { sidebar: 232, context: 320 }
-const PANE_PADDING_PX = 24
-/** The chat column's width. It never exceeds the pane (CSS caps it at 100%); `max` only bounds a saved value. */
-export const COLUMN_PX = { min: MIN_WINDOW_PX.width - 2 * PANE_PADDING_PX, max: 2400, default: 760 }
-
-export function dockedPanels(windowPx: number, widths: typeof PANEL_PX = PANEL_PX) {
-  const sidebar = widths.sidebar + MIN_WINDOW_PX.width
-  if (windowPx >= sidebar + widths.context) return 'both'
-  return windowPx >= sidebar ? 'sidebar' : 'none'
-}
-
-export function storedColumn(value: string | null) {
-  const px = Number(value ?? NaN)
-  return Number.isFinite(px) ? Math.min(Math.max(Math.round(px), COLUMN_PX.min), COLUMN_PX.max) : COLUMN_PX.default
-}
-
-export function columnSlider(savedPx: number, paneColumnPx: number) {
-  const max = Math.max(Math.floor(paneColumnPx), COLUMN_PX.min)
-  return { min: COLUMN_PX.min, max, value: Math.min(Math.max(savedPx, COLUMN_PX.min), max) }
-}
-
 export const storedFlag = (value: string | null, fallback: boolean) =>
   value === 'true' || value === 'false' ? value === 'true' : fallback
 
@@ -657,12 +663,6 @@ export function modelMenu(chat: ChatView, engines: EngineInfo[]) {
   }
 }
 
-export function formatBytes(bytes: number) {
-  if (bytes < 1000) return `${bytes} B`
-  const [value, unit] = bytes < 1_000_000 ? [bytes / 1000, 'KB'] : [bytes / 1_000_000, 'MB']
-  return `${value < 10 ? Number(value.toFixed(1)) : Math.round(value)} ${unit}`
-}
-
 export const MAX_PREVIEW_BYTES = 1_000_000
 
 export function pinState(chat: ChatView, items: ContextItem[] | undefined, path: string) {
@@ -673,23 +673,6 @@ export function pinState(chat: ChatView, items: ContextItem[] | undefined, path:
 
 export const previewText = (bytes: Uint8Array) =>
   looksBinary(bytes) ? undefined : new TextDecoder().decode(bytes.subarray(0, MAX_PREVIEW_BYTES), { stream: true })
-
-export function accountLabel(account: Account) {
-  if (account.id === 'default') return (account.signedIn && account.label) || 'Not signed in'
-  const missing = account.kind === 'apiKey' ? 'key file missing' : 'signed out'
-  if (account.signedIn === false) return `${account.name} (${missing})`
-  return account.label ? `${account.name} (${account.label})` : account.name
-}
-
-export function listedAccounts({ active, accounts }: EngineAccounts) {
-  const own = accounts.find((a) => a.id === 'default')
-  // A label names the person signed in, except on engines with providers, where it names the provider.
-  const sameLogin = (a: Account) =>
-    a !== own && a.kind === 'login' && !a.provider && a.signedIn && a.label === own?.label
-  const twin = own?.signedIn && own.label && accounts.find(sameLogin)
-  if (!own || !twin) return { active, accounts }
-  return { active: active === own.id ? twin.id : active, accounts: accounts.filter((a) => a !== own) }
-}
 
 // One key per installable thing: a theme and an extension may share an id.
 export const marketKey = (kind: MarketKind, id: string) => `${kind}:${id}`

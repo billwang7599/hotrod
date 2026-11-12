@@ -8,7 +8,6 @@ import type {
   EngineEvent,
   McpServer,
   ExtensionAction,
-  ExtensionManifest,
   ExtensionSetting,
   ExtensionUse,
   ExtensionValues,
@@ -244,6 +243,9 @@ export type ChatInfo = PermissionSwitches & {
   thinking?: ThinkingLevel
   workDir?: string
   worktrees?: Record<string, Worktree>
+  // The mode the user picked for a folder that isn't a git repo, by path: a folder of this chat's or one it inherits.
+  // A folder without one takes the nearest chat above's, else DEFAULT_FOLDER_MODE (folder-modes.ts).
+  folderModes?: Record<string, FolderMode>
   // When its last turn ended, and when the user last saw it (core clock, ISO). Unread: a turn ended since it was seen.
   doneAt?: string
   readAt?: string
@@ -288,13 +290,17 @@ export function bySpaceOrder(a: Pick<ChatInfo, 'pinned' | 'order' | 'createdAt'>
 }
 
 // terminal: the app Open in Terminal uses, absent for automatic; terminals: the ones the user can pick, only where
-// there's a choice (macOS).
+// there's a choice (macOS). editor: what a file link opens with, absent for the system's default app ('custom' runs
+// editorCommand); editors: the installed editors Kothar knows.
 export type WorkFolder = PermissionSwitches & {
   path?: string
   defaultPath: string
   canSandbox: boolean
   terminal?: string
   terminals?: { id: string; name: string }[]
+  editor?: string
+  editorCommand?: string
+  editors?: { id: string; name: string }[]
 }
 
 // Layers nearest first: a chat, the chats above it, then the work folder's defaults.
@@ -408,7 +414,26 @@ export type ContextItem = {
   enabled: boolean
   text: string
   binary?: boolean
+  // Folders only: a git repo, checked out in the work folder whatever its mode.
+  git?: true
+  // Folders that aren't git repos: how agents may write in it, and why they can't when Kothar refuses the mode.
+  mode?: FolderMode
+  blocked?: string
+  // Set to Work on a copy, once the copy is made: its path in the work folder.
+  copy?: string
 }
+
+/** A file the agents changed in a folder's copy. conflict: the original changed since the copy was made. */
+export type CopyChange = { path: string; kind: 'added' | 'changed' | 'deleted'; conflict?: true }
+
+/**
+ * How agents may write in an attached folder that isn't a git repo. edit: in the folder itself, inside the sandbox.
+ * copy: in a copy the core makes in the work folder, which the user copies back. readOnly: nowhere. Git folders are
+ * checked out in the work folder instead (design rule 10).
+ */
+export const FOLDER_MODES = ['edit', 'copy', 'readOnly'] as const
+export type FolderMode = (typeof FOLDER_MODES)[number]
+export const DEFAULT_FOLDER_MODE: FolderMode = 'edit'
 
 const BINARY_SNIFF_BYTES = 8192
 
@@ -438,8 +463,28 @@ export type QueuedMessage = {
 }
 
 // An extension's tab in the right sidebar, and an extension's action in the General tab, for one chat.
-export type PanelTab = { extension: string; id: string; title: string }
+// placement, shortcut and sidebar as the panel declares them (ExtensionPanel).
+export type PanelTab = {
+  extension: string
+  id: string
+  title: string
+  placement?: 'tab' | 'popup' | 'dock'
+  shortcut?: string
+  sidebar?: boolean
+}
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
+// An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.
+export type MessageActionInfo = {
+  extension: string
+  id: string
+  label: string
+  activeLabel?: string
+  icon: 'pin' | 'bookmark' | 'star'
+  hint?: string
+  activeHint?: string
+  kinds: ('user' | 'work' | 'talk')[]
+  marked: number[]
+}
 
 export type ChatState = ChatInfo & {
   run?: Run
@@ -484,10 +529,18 @@ export type ClientMessage =
   | { type: 'extension.panel.action'; chatId: string; extension: string; panel: string; action: ExtensionAction }
   | { type: 'extension.space.set'; chatId: string; extension: string; key: string; value: string | number | boolean }
   | { type: 'extension.command'; chatId: string; extension: string; command: string }
+  // One of an extension's message actions, on the message at entry in the chat's log.
+  | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.set'; chatId: string; path: string; enabled: boolean }
+  | { type: 'context.folderMode'; chatId: string; path: string; mode: FolderMode }
+  // A folder set to Work on a copy: what changed in its copy (replies context.copyChanges), and copying the picked
+  // files back into the folder (replies context.copyChanges again, or with error). overwrite: the user confirmed
+  // overwriting originals that changed since the copy was made.
+  | { type: 'context.copyChanges'; chatId: string; path: string }
+  | { type: 'context.copyBack'; chatId: string; path: string; files: string[]; overwrite?: boolean }
   | { type: 'context.write'; chatId: string; text: string }
   | { type: 'context.setDefault'; section: ContextSection; enabled: boolean }
   | { type: 'instructions.write'; text: string }
@@ -540,6 +593,14 @@ export type ClientMessage =
   | { type: 'terminal.set'; terminal: string }
   // Show in Finder, for an extension view's text with reveal: only inside Kothar's own folders (host.reveal's rule).
   | { type: 'reveal'; path: string }
+  // Which of the paths a chat's messages mention exist in its folders, checkouts, work folder or garage folder, as
+  // written (relative or absolute, without :line). Replies files.checked.
+  | { type: 'files.check'; chatId: string; paths: string[] }
+  // Opens a path files.checked found: with the editor in settings (at line and col where it can), or a terminal at
+  // its folder. Errors come back as an error toast.
+  | { type: 'file.open'; chatId: string; path: string; line?: number; col?: number; in?: 'editor' | 'terminal' }
+  // 'system' for the system's default app, 'custom' for command, or one of WorkFolder.editors by id.
+  | { type: 'editor.set'; editor: string; command?: string }
 
 // One message matching a search. snippet is one line around the match, which sits at match.start; nth counts the
 // earlier messages in the same chat that match too.
@@ -587,7 +648,14 @@ export type CoreMessage =
   | { type: 'chat.queue'; chatId: string; queue: QueuedMessage[] }
   | { type: 'chat.waits'; chatId: string; waits: ChatWait[] }
   | { type: 'chat.context'; chatId: string; items: ContextItem[] }
-  | { type: 'chat.extensions'; chatId: string; panels: PanelTab[]; commands: CommandInfo[] }
+  | {
+      type: 'chat.extensions'
+      chatId: string
+      panels: PanelTab[]
+      commands: CommandInfo[]
+      // Absent: none.
+      messageActions?: MessageActionInfo[]
+    }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
@@ -616,8 +684,14 @@ export type CoreMessage =
   | { type: 'error'; message: string }
   // An extension's notification (host.notify); chatId: clicking it opens that chat.
   | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
+  // An extension asks the UI to open one of its panels for the chat (host.showPanel), without taking focus.
+  | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
+  // copied: how many files the last copyBack copied back.
+  | { type: 'context.copyChanges'; chatId: string; path: string; changes: CopyChange[]; copied?: number; error?: string }
+  // The answer to files.check: each path asked about, to its absolute path or null if it isn't there.
+  | { type: 'files.checked'; chatId: string; paths: Record<string, string | null> }
 
 // Themes: Default and Glass are built into the UI; any other comes from the marketplace as a plain JSON file, checked
 // strictly so a theme is only ever colours and can never carry CSS.
@@ -696,16 +770,6 @@ export function changesUrl(item: InstalledItem, repo: string, latestTag: string)
   return `https://github.com/${repo}/compare/${encodeURIComponent(item.tag)}...${encodeURIComponent(latestTag)}`
 }
 
-export const MAX_THEME_BYTES = 64 * 1024
-
-const HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/
-// Lowercase only, so two ids can't name one file on a case-insensitive disk.
-const ITEM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
-const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/
-export const MAX_MANIFEST_BYTES = 64 * 1024
-export const MAX_EXTENSION_BYTES = 5 * 1024 * 1024
-export const EXTENSION_API_VERSION = 1
-
 // What a community extension can say it uses, as the user reads it before install. The keys are ExtensionUse, in this
 // order.
 export const EXTENSION_USES: Record<ExtensionUse, string> = {
@@ -736,113 +800,6 @@ export const isExtensionUse = (use: unknown): use is ExtensionUse => typeof use 
 export const sortUses = (uses: Iterable<ExtensionUse>) => {
   const set = new Set(uses)
   return (Object.keys(EXTENSION_USES) as ExtensionUse[]).filter((use) => set.has(use))
-}
-
-const REPO = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/
-
-export const isItemId = (id: unknown): id is string => typeof id === 'string' && ITEM_ID.test(id)
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-
-function onlyKeys(value: unknown, what: string, required: readonly string[], optional: readonly string[] = []) {
-  if (!isRecord(value)) throw new Error(`${what} must be an object`)
-  const extra = Object.keys(value).find((key) => !required.includes(key) && !optional.includes(key))
-  if (extra !== undefined) throw new Error(`${what} has an unknown field "${extra}"`)
-  const missing = required.find((key) => !Object.hasOwn(value, key))
-  if (missing !== undefined) throw new Error(`${what} is missing "${missing}"`)
-  return value
-}
-
-function text(value: unknown, what: string, max: number) {
-  // oxlint-disable-next-line no-control-regex -- rejects control characters on purpose
-  if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f]/.test(value)) {
-    throw new Error(`${what} must be text of 1 to ${max} characters`)
-  }
-  return value
-}
-
-function colors<K extends string>(value: unknown, what: string, tokens: readonly K[]) {
-  const palette = onlyKeys(value, what, tokens)
-  for (const token of tokens) {
-    const color = palette[token]
-    if (typeof color !== 'string' || !HEX_COLOR.test(color)) throw new Error(`${what} ${token} must be a hex colour`)
-  }
-  return palette as Record<K, string>
-}
-
-function itemFields(value: Record<string, unknown>, what: string) {
-  if (!isItemId(value.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
-  if (typeof value.version !== 'string' || !VERSION.test(value.version)) {
-    throw new Error(`${what} version must look like 1.2.3`)
-  }
-  return {
-    id: value.id,
-    name: text(value.name, `${what} name`, 40),
-    version: value.version,
-    author: text(value.author, `${what} author`, 60),
-    description: text(value.description, `${what} description`, 200),
-  }
-}
-
-// Throws, saying why, unless value is a theme file with exactly the known fields.
-export function checkTheme(value: unknown): ThemeFile {
-  const fields = ['id', 'name', 'version', 'author', 'description', 'dark', 'light']
-  const theme = onlyKeys(value, 'The theme', fields, ['variants'])
-  const variants =
-    theme.variants === undefined
-      ? undefined
-      : onlyKeys(theme.variants, 'The theme variants', ['dark', 'light'])
-  return {
-    ...itemFields(theme, 'The theme'),
-    ...(variants && {
-      variants: { dark: text(variants.dark, 'The dark variant', 30), light: text(variants.light, 'The light variant', 30) },
-    }),
-    dark: colors(theme.dark, 'The dark palette', THEME_TOKENS),
-    light: colors(theme.light, 'The light palette', THEME_TOKENS),
-  }
-}
-
-// Throws, saying why, unless value is a community extension's manifest.json with exactly the known fields.
-export function checkExtensionManifest(value: unknown): ExtensionManifest {
-  const fields = ['id', 'name', 'version', 'author', 'description', 'api', 'uses']
-  const manifest = onlyKeys(value, 'manifest.json', fields)
-  if (manifest.api !== EXTENSION_API_VERSION) throw new Error(`manifest.json is for extension API ${String(manifest.api)}, not ${EXTENSION_API_VERSION}`)
-  if (!Array.isArray(manifest.uses)) throw new Error('manifest.json uses must be a list')
-  const unknown = manifest.uses.find((use) => !isExtensionUse(use))
-  if (unknown !== undefined) throw new Error(`manifest.json uses "${String(unknown)}", which Kothar doesn't know`)
-  return { ...itemFields(manifest, 'manifest.json'), api: EXTENSION_API_VERSION, uses: sortUses(manifest.uses as ExtensionUse[]) }
-}
-
-export const isRepo = (repo: unknown): repo is string => typeof repo === 'string' && REPO.test(repo) && !repo.includes('..')
-
-// Throws, saying why, unless value is a marketplace catalog: { version: 2, entries: CatalogEntry[] } with unique ids per
-// kind.
-export function checkCatalog(value: unknown): CatalogEntry[] {
-  const catalog = onlyKeys(value, 'The marketplace catalog', ['entries'], ['version'])
-  if (catalog.version !== 2) throw new Error('The marketplace catalog is for another version of Kothar')
-  if (!Array.isArray(catalog.entries)) throw new Error('The marketplace catalog entries must be a list')
-  const entries = catalog.entries.map((raw, i): CatalogEntry => {
-    const what = `Marketplace entry ${i + 1}`
-    const entry = onlyKeys(raw, what, ['id', 'kind', 'name', 'author', 'description', 'repo'])
-    if (!isItemId(entry.id)) throw new Error(`${what} id must be lowercase letters, digits and dashes`)
-    // Extensions were mods, and catalogs written then still say "mod".
-    const kind = entry.kind === 'mod' ? 'extension' : entry.kind
-    if (kind !== 'theme' && kind !== 'extension') throw new Error(`Marketplace entry "${entry.id}" is a "${entry.kind}"`)
-    if (!isRepo(entry.repo)) throw new Error(`Marketplace entry "${entry.id}" repo must be owner/name`)
-    return {
-      id: entry.id,
-      kind,
-      name: text(entry.name, `${what} name`, 40),
-      author: text(entry.author, `${what} author`, 60),
-      description: text(entry.description, `${what} description`, 200),
-      repo: entry.repo,
-    }
-  })
-  const keys = entries.map((entry) => `${entry.kind} ${entry.id}`)
-  const twin = keys.find((key, i) => keys.indexOf(key) !== i)
-  if (twin !== undefined) throw new Error(`Two marketplace entries are the ${twin.replace(' ', ' "')}"`)
-  return entries
 }
 
 export const previewOf = (theme: ThemeFile): ThemePreview => ({

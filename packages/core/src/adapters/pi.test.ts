@@ -1,18 +1,18 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { localMachine } from '../machine.ts'
 import { type EngineEvent, type SessionOptions } from '../shared.ts'
-import { pi } from './pi.ts'
+import { createPi, pi } from './pi.ts'
 import { fakeMachine } from './test-machine.ts'
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/pi/${name}.jsonl`, import.meta.url), 'utf8')
 
-function startSession(instructions = '', extra: Partial<SessionOptions> = {}) {
+function startSession(instructions = '', extra: Partial<SessionOptions> = {}, adapter = pi) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
-  const session = pi.start(fake.machine, { cwd: '/tmp/project', instructions, ...extra }, (e) => events.push(e))
+  const session = adapter.start(fake.machine, { cwd: '/tmp/project', instructions, ...extra }, (e) => events.push(e))
   return { fake, events, session }
 }
 
@@ -148,6 +148,7 @@ describe('pi adapter', () => {
         error:
           '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},' +
           '"request_id":"req_011Cgnpak7k1PTbanzGJJQ4d"}',
+        errorKind: 'other',
       },
     ])
   })
@@ -170,7 +171,7 @@ describe('pi adapter', () => {
     fake.stdout(line({ type: 'agent_settled', aborted: false }))
     expect(events).toEqual([
       { type: 'limit.reached', message: limited },
-      { type: 'turn.completed', error: limited },
+      { type: 'turn.completed', error: limited, errorKind: 'rate_limit' },
     ])
     fake.stdout(failed('529 overloaded'))
     fake.stdout(line({ type: 'agent_settled', aborted: false }))
@@ -217,7 +218,7 @@ describe('pi adapter', () => {
     fake.stdout(line({ type: 'agent_settled', aborted: true }))
     expect(events.slice(-2)).toEqual([
       { type: 'steer.returned', id: 's2' },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
@@ -232,7 +233,7 @@ describe('pi adapter', () => {
       { type: 'turn.started' },
       { type: 'tool.started', toolId, name: 'bash', kind: 'shell', summary: 'sleep 30', input: { command: 'sleep 30', timeout: 60 } },
       { type: 'tool.completed', toolId, output: 'Command aborted', isError: true },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
@@ -249,14 +250,14 @@ describe('pi adapter', () => {
     expect(events).toEqual([
       { type: 'text.delta', text: '1\n2' },
       { type: 'text.completed', text: '1\n2' },
-      { type: 'turn.completed', error: 'Interrupted' },
+      { type: 'turn.completed', error: 'Interrupted', errorKind: 'interrupted' },
     ])
   })
 
   it('ends the turn when pi rejects the prompt', () => {
     const { fake, events } = startSession()
     fake.stdout(line({ type: 'response', command: 'prompt', success: false, error: 'Agent is busy' }))
-    expect(events).toEqual([{ type: 'turn.completed', error: 'Agent is busy' }])
+    expect(events).toEqual([{ type: 'turn.completed', error: 'Agent is busy', errorKind: 'other' }])
   })
 
   it('ends the turn when pi handles the prompt without a run', () => {
@@ -357,13 +358,13 @@ describe('pi adapter', () => {
   it('reports a startup failure with the stderr tail', () => {
     const { fake, events } = startSession()
     fake.exit(1, 'Error: Model "x" is ambiguous across providers\n')
-    expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers' }])
+    expect(events).toEqual([{ type: 'session.ended', error: 'Error: Model "x" is ambiguous across providers', errorKind: 'other' }])
   })
 
   it('names the exit code when stderr is empty', () => {
     const { fake, events } = startSession()
     fake.exit(1)
-    expect(events).toEqual([{ type: 'session.ended', error: 'pi exited with code 1' }])
+    expect(events).toEqual([{ type: 'session.ended', error: 'pi exited with code 1', errorKind: 'other' }])
   })
 
   it('closes stdin and kills the process', () => {
@@ -563,30 +564,25 @@ describe("pi's own agent folder", () => {
 
 describe('pi in a sandbox', () => {
   const sandbox = { writable: ['/work/space'], tmpDir: '/work/space/.tmp' }
-  const savedAgentDir = process.env.PI_CODING_AGENT_DIR
-  afterEach(() => {
-    if (savedAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR
-    else process.env.PI_CODING_AGENT_DIR = savedAgentDir
-  })
+  // The user's own environment, without PI_CODING_AGENT_DIR.
+  const adapter = createPi({ env: {}, home: '/Users/me' })
   const stateFiles = (dir: string) =>
     ['auth.json*', 'settings.json.lock*', 'models-store.json*', 'install/update.lock*'].map((file) => join(dir, file))
 
   it('also lets it write only its login and lock files, under PI_CODING_AGENT_DIR or ~/.pi/agent', () => {
-    delete process.env.PI_CODING_AGENT_DIR
-    const { fake } = startSession('', { sandbox })
-    const agentDir = join(homedir(), '.pi', 'agent')
+    const { fake } = startSession('', { sandbox }, adapter)
+    const agentDir = '/Users/me/.pi/agent'
     expect(fake.spawned[0]?.sandbox).toEqual({ writable: ['/work/space', ...stateFiles(agentDir)], tmpDir: sandbox.tmpDir })
-    process.env.PI_CODING_AGENT_DIR = '/pi-state'
-    expect(startSession('', { sandbox }).fake.spawned[0]?.sandbox?.writable).toEqual([
+    const withAgentDir = createPi({ env: { PI_CODING_AGENT_DIR: '/pi-state' }, home: '/Users/me' })
+    expect(startSession('', { sandbox }, withAgentDir).fake.spawned[0]?.sandbox?.writable).toEqual([
       '/work/space',
       ...stateFiles('/pi-state'),
     ])
   })
 
   it('sandboxes a one-shot completion the same way', async () => {
-    delete process.env.PI_CODING_AGENT_DIR
     const fake = fakeMachine({ pi: { code: 0, stdout: 'ok', stderr: '' } })
-    await pi.complete!(fake.machine, { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox })
-    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', ...stateFiles(join(homedir(), '.pi', 'agent'))])
+    await adapter.complete!(fake.machine, { cwd: '/work/home', system: 's', prompt: 'p', model: 'm', timeoutMs: 1, sandbox })
+    expect(fake.ran[0]?.sandbox?.writable).toEqual(['/work/space', ...stateFiles('/Users/me/.pi/agent')])
   })
 })

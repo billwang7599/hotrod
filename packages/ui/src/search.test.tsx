@@ -5,7 +5,7 @@ import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 import type { ClientMessage, SearchHit } from '@kothar/core/shared'
-import { ago, paletteResults, revealIn, SEARCH_DEBOUNCE_MS, SearchPalette, takeReveal } from './search.tsx'
+import { ago, centreIn, paletteResults, revealIn, SEARCH_DEBOUNCE_MS, SearchPalette, takeReveal } from './search.tsx'
 import type { ChatView } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -171,4 +171,28 @@ test('revealIn picks the nth matching message, or the last one shown', () => {
   expect(list.children[2]!.hasAttribute('data-revealed')).toBe(true)
   expect(revealIn(list, { chatId: 'x', query: 'deploy', nth: 9 })).toBe(true)
   expect(revealIn(list, { chatId: 'x', query: 'nope', nth: 0 })).toBe(false)
+})
+
+test('centring a revealed row scrolls only its own scroller, not the window', () => {
+  const scroller = document.createElement('div')
+  scroller.style.overflowY = 'auto'
+  const row = document.createElement('div')
+  scroller.append(row)
+  document.body.append(scroller)
+  Object.defineProperties(scroller, {
+    scrollHeight: { value: 5000 },
+    clientHeight: { value: 400 },
+    scrollTop: { value: 1000, writable: true },
+  })
+  scroller.getBoundingClientRect = () => ({ top: 50, height: 400 }) as DOMRect
+  row.getBoundingClientRect = () => ({ top: 850, height: 100 }) as DOMRect
+  const scrollTo = vi.fn()
+  scroller.scrollTo = scrollTo as typeof scroller.scrollTo
+  const intoView = vi.fn()
+  row.scrollIntoView = intoView
+  centreIn(row)
+  // 1000 + (850 - 50) - (400 - 100) / 2
+  expect(scrollTo).toHaveBeenCalledWith({ top: 1650 })
+  expect(intoView).not.toHaveBeenCalled()
+  scroller.remove()
 })

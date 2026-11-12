@@ -7,16 +7,12 @@ import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
 import type { ClientMessage } from './shared.ts'
+import { until } from './test-wait.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
-
-async function until(check: () => boolean) {
-  for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
 
 // A core on the fake engine (fake-large, fake-small; default fake-small) whose sessions run into a usage limit, and an
 // extension that keeps its host and every limit it hears of.

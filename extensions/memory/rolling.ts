@@ -12,6 +12,7 @@ import {
   TAIL_MAX_CHARS,
   VIEW_MAX_CHARS,
 } from './tree.ts'
+import { type JobOutcome, openJobQueue, type Timers } from './queue.ts'
 
 // The rolling summary: one summary of everything older than the latest messages, rewritten as messages leave them.
 // Cheaper than the tree (one call per fold instead of one per message and block), but it can't be zoomed back into
@@ -133,7 +134,7 @@ export function foldOf(messages: MemoryMessage[], rolling: Rolling | undefined, 
 
 type RollingChat = { messages: MemoryMessage[]; storage: Pick<ExtensionStorage, 'read' | 'write'> }
 
-// Folds chats one call at a time, latest touched first, with backoff on failure, like the tree's compactor.
+// Folds chats one call at a time, latest touched first, with backoff on failure, on the same queue as the tree.
 export function openRollingCompactor(options: {
   chat(chatId: string): RollingChat | undefined
   complete(request: CompletionRequest): Promise<string>
@@ -142,93 +143,41 @@ export function openRollingCompactor(options: {
   retryBaseMs?: number
   retryMaxMs?: number
   minChars?: number
+  now?(): number
+  timers?: Timers
 }) {
-  const { debounceMs = COMPACT_DEBOUNCE_MS, retryBaseMs = RETRY_BASE_MS, retryMaxMs = RETRY_MAX_MS } = options
-  const touched = new Set<string>()
-  const backoffs = new Map<string, { failures: number; retryAtMs: number }>()
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let running = false
-  let closed = false
-  let failing = false
-  const idleWaiters: (() => void)[] = []
-  const settleIdle = () => {
-    if (closed || (!running && timer === undefined && !touched.size)) idleWaiters.splice(0).forEach((done) => done())
-  }
-  const schedule = (delayMs: number) => {
-    if (closed) return
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = undefined
-      void run()
-    }, delayMs)
-  }
-
-  const nextJob = () => {
-    for (const chatId of [...touched].reverse()) {
-      if ((backoffs.get(chatId)?.retryAtMs ?? 0) > Date.now()) continue
+  return openJobQueue({
+    onFailure: options.onFailure,
+    debounceMs: options.debounceMs ?? COMPACT_DEBOUNCE_MS,
+    retryBaseMs: options.retryBaseMs ?? RETRY_BASE_MS,
+    retryMaxMs: options.retryMaxMs ?? RETRY_MAX_MS,
+    now: options.now,
+    timers: options.timers,
+    find(chatId) {
       const chat = options.chat(chatId)
       const fold = chat && foldOf(chat.messages, readRolling(chat.storage, chat.messages), options.minChars)
-      if (chat && fold) return { chatId, chat, fold }
-      touched.delete(chatId)
-    }
-  }
-
-  async function run() {
-    if (running || closed) return
-    running = true
-    try {
-      for (let job = nextJob(); job && !closed; job = nextJob()) {
-        const { chatId, chat, fold } = job
-        let reason = ''
-        let text = ''
-        try {
-          const reply = await options.complete({ system: FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS })
-          text = reply.trim()
-          if (!text) reason = 'the reply was empty'
-        } catch (error) {
-          reason = error instanceof Error ? error.message : String(error)
-        }
-        if (closed) return
-        if (text) {
-          const rolling: Rolling = { upTo: fold.upTo, at: fold.at, text: clip(text, ROLLING_SUMMARY_MAX_CHARS) }
-          try {
-            chat.storage.write(ROLLING_FILE, JSON.stringify(rolling) + '\n')
-          } catch {
-            touched.delete(chatId)
-            continue
-          }
-          backoffs.delete(chatId)
-          failing = false
-          continue
-        }
-        const failures = (backoffs.get(chatId)?.failures ?? 0) + 1
-        backoffs.set(chatId, { failures, retryAtMs: Date.now() + Math.min(retryMaxMs, retryBaseMs * 2 ** (failures - 1)) })
-        if (!failing) options.onFailure?.(reason)
-        failing = true
+      return chat && fold ? { chat, fold } : undefined
+    },
+    async work(_chatId, { chat, fold }) {
+      let reason = ''
+      let text = ''
+      try {
+        const reply = await options.complete({ system: FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS })
+        text = reply.trim()
+        if (!text) reason = 'the reply was empty'
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error)
       }
-    } finally {
-      running = false
-    }
-    const retryAtMs = Math.min(...[...touched].map((chatId) => backoffs.get(chatId)?.retryAtMs ?? Infinity))
-    if (retryAtMs < Infinity) schedule(retryAtMs - Date.now())
-    settleIdle()
-  }
-
-  return {
-    touch(chatId: string) {
-      touched.delete(chatId)
-      touched.add(chatId)
-      schedule(debounceMs)
+      return (): JobOutcome => {
+        if (!text) return { failed: reason }
+        const rolling: Rolling = { upTo: fold.upTo, at: fold.at, text: clip(text, ROLLING_SUMMARY_MAX_CHARS) }
+        try {
+          chat.storage.write(ROLLING_FILE, JSON.stringify(rolling) + '\n')
+        } catch {
+          return 'drop'
+        }
+        return 'done'
+      }
     },
-    whenIdle() {
-      const done = new Promise<void>((resolve) => idleWaiters.push(resolve))
-      settleIdle()
-      return done
-    },
-    close() {
-      closed = true
-      clearTimeout(timer)
-      settleIdle()
-    },
-  }
+  })
 }

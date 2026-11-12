@@ -153,7 +153,8 @@ const COPY_RESULTS = {
   copied: { text: 'Copied', color: 'text-green' },
   failed: { text: "Couldn't copy", color: 'text-red' },
 }
-const COPY_REVEAL = 'opacity-0 [:hover>&]:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
+// Shown while its parent is hovered or it has keyboard focus, and always on touch screens.
+export const COPY_REVEAL = 'opacity-0 [:hover>&]:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
 
 type CopyButtonProps = { text: string; label: string; className?: string }
 
@@ -423,6 +424,7 @@ const subscribeConfirm = (listener: () => void) => {
 
 export function ConfirmDialog() {
   const pending = useSyncExternalStore(subscribeConfirm, () => pendingConfirm)
+  // Above everything else, popups (z-20) included: a popup's buttons ask here too.
   // Kept while the dialog animates out, after pending is cleared.
   const [shown, setShown] = useState<ConfirmRequest>({ text: '' })
   if (pending && pending !== shown && (pending.text !== shown.text || pending.body !== shown.body || pending.ok !== shown.ok)) {
@@ -437,7 +439,7 @@ export function ConfirmDialog() {
         {pending && (
           <AlertDialog.Portal forceMount>
             <AlertDialog.Overlay forceMount asChild>
-              <m.div className="fixed inset-0 bg-backdrop" {...MOTION.fade} />
+              <m.div className="fixed inset-0 z-30 bg-backdrop" {...MOTION.fade} />
             </AlertDialog.Overlay>
             <AlertDialog.Content
               forceMount
@@ -451,7 +453,7 @@ export function ConfirmDialog() {
               onCloseAutoFocus={focus.restore}
             >
               <m.div
-                className="fixed inset-0 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
+                className="fixed inset-0 z-30 m-auto flex h-fit max-h-[calc(100vh-32px)] w-[min(420px,calc(100vw-32px))] flex-col gap-16 scroll-inset overflow-y-auto rounded-xl border bg-panel pt-14 pr-2 pb-16 pl-16 text-text shadow-overlay"
                 {...MOTION.pop}
               >
                 <div className="flex flex-col gap-8">

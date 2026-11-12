@@ -18,9 +18,9 @@ import type { LimitReached, Extension, ExtensionChat, ExtensionHost, ExtensionSe
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
-import { CHECKOUT_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
+import { CHECKOUT_RULES, FOLDER_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { LOCK_FILE } from './garage-lock.ts'
-import { WORKERS_EXTENSION } from './kothar-mcp.ts'
+import { WORKERS_EXTENSION } from './workers.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import { WINDOW_MAX_CHARS } from './memory.ts'
@@ -44,6 +44,7 @@ import {
   type ThinkingLevel,
 } from './shared.ts'
 import { cantSandbox, cantWriteTmp, needs } from './test-env.ts'
+import { until as waitUntil } from './test-wait.ts'
 
 const TEST_STOP_GRACE_MS = 30
 const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
@@ -178,15 +179,12 @@ function snapshot(dir: string): Record<string, string> {
   return out
 }
 
-async function until(check: () => boolean) {
-  for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5))
-  if (!check()) throw new Error('timed out')
-}
+const until = (check: () => boolean) => waitUntil(check, { tries: 200 })
 
 const withoutRules = (instructions = '') =>
   instructions
     .split('\n\n')
-    .filter((part) => !part.startsWith(WRITE_RULES))
+    .filter((part) => !part.startsWith(WRITE_RULES) && !part.startsWith(FOLDER_RULES))
     .join('\n\n')
 const chatOf = (core: Core, id: string) => core.chats().find((c) => c.id === id)
 const statusOf = (core: Core, id: string) => core.chats().find((p) => p.id === id)?.status
@@ -580,7 +578,33 @@ describe('work folder', () => {
     expect(t.core.workFolder().path).toBe(workOf(t))
   })
 
-  it('runs each space in its own folder there, made at its first message and kept, and lets it write only there', async () => {
+  it("uses the home folder and clock it's given: ~ means that folder, which can't be the work folder, and times come from the clock", () => {
+    const home = tempDir()
+    mkdirSync(join(home, 'app'))
+    const garage = tempDir()
+    const core = openCore({
+      garage,
+      adapters: [createFakeAdapter(textScript, 0)],
+      defaultEngine: 'fake',
+      machine: sandboxingMachine,
+      extensions: [],
+      home,
+      now: () => new Date('2030-01-02T03:04:05.000Z'),
+    })
+    cores.push(core)
+    const messages: CoreMessage[] = []
+    core.onMessage((m) => messages.push(m))
+    const handle = (m: Parameters<Core['handle']>[0]) => core.handle(m, () => {})
+    handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true })
+    expect(() => handle({ type: 'workFolder.set', path: home })).toThrow("can't be the work folder")
+    expect(() => handle({ type: 'workFolder.set', path: '~' })).toThrow("can't be the work folder")
+    handle({ type: 'chat.create', name: 'App', folders: ['~/app'] })
+    const added = messages.findLast((m) => m.type === 'chat.added')
+    if (added?.type !== 'chat.added') throw new Error('no chat.added')
+    expect(added.chat).toMatchObject({ folders: [join(home, 'app')], createdAt: '2030-01-02T03:04:05.000Z' })
+  })
+
+  it('runs each space in its own folder there, made at its first message and kept, and lets it write there and in its folders', async () => {
     const t = setup(textScript)
     const repo = tempDir()
     const chat = createChat(t, { name: 'App', folders: [repo] })
@@ -590,7 +614,7 @@ describe('work folder', () => {
     expect(await sessionOf(t, chat.id)).toMatchObject({
       cwd: dir,
       extraDirs: [repo],
-      sandbox: { writable: [dir], tmpDir: join(dir, '.tmp') },
+      sandbox: { writable: [dir, repo], tmpDir: join(dir, '.tmp') },
     })
     expect(statSync(dir).isDirectory()).toBe(true)
     expect(chatOf(t.core, chat.id)?.workDir).toBe(dir)
@@ -799,159 +823,6 @@ describe('worktrees', () => {
     expect(branchesOf(repo)).toEqual(['kothar/app', 'main'])
   })
 
-  describe('cleanup', () => {
-    // A sweep runs git back to back, so a quiet spell means the one that started has finished.
-    const quietMachine = (base = sandboxingMachine) => {
-      let running = 0
-      let lastEndMs = 0
-      const machine: Machine = {
-        ...base,
-        run: async (command, args, options) => {
-          running++
-          try {
-            return await base.run(command, args, options)
-          } finally {
-            running--
-            lastEndMs = Date.now()
-          }
-        },
-      }
-      const quiet = async () => {
-        while (running || Date.now() - lastEndMs < 200) await new Promise((r) => setTimeout(r, 20))
-      }
-      return { machine, quiet }
-    }
-    const repoWithOrigin = () => {
-      const origin = tempDir()
-      git(origin, 'init', '-q', '--bare', '-b', 'main')
-      const repo = gitRepo()
-      git(repo, 'remote', 'add', 'origin', origin)
-      git(repo, 'push', '-q', '-u', 'origin', 'main')
-      return { origin, repo }
-    }
-    const branchIn = (
-      { origin, repo }: { origin: string; repo: string },
-      path: string,
-      branch: string,
-      { push = true, merge = true, gone = true } = {},
-    ) => {
-      if (!existsSync(path)) git(repo, 'worktree', 'add', '-q', '-b', branch, path, 'main')
-      writeFileSync(join(path, `${branch.replace('/', '-')}.txt`), 'work\n')
-      git(path, 'add', '-A')
-      git(path, 'commit', '-q', '-m', branch)
-      if (push) git(path, 'push', '-q', '-u', 'origin', branch)
-      if (merge) {
-        git(repo, 'merge', '-q', '--no-ff', '-m', `Merge ${branch}`, branch)
-        git(repo, 'push', '-q', 'origin', 'main')
-      }
-      if (push && gone) git(origin, 'update-ref', '-d', `refs/heads/${branch}`)
-      return path
-    }
-
-    it("removes an agent's worktree in the space folder once its branch is merged and gone upstream", async () => {
-      const { machine, quiet } = quietMachine()
-      const { adapter, calls } = recording(createFakeAdapter(textScript, 0))
-      const opened = open(tempDir(), [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainExtension], machine)
-      const t = { ...opened, calls }
-      const remote = repoWithOrigin()
-      const { repo } = remote
-      const chat = createChat(t, { name: 'App', folders: [repo] })
-      await sessionOf(t, chat.id)
-      await quiet()
-      const dir = join(t.garage, 'work', chat.id)
-
-      const own = branchIn(remote, join(dir, basename(repo)), 'kothar/app')
-      const merged = branchIn(remote, join(dir, 'merged'), 'merged')
-      const dirty = branchIn(remote, join(dir, 'dirty'), 'dirty')
-      writeFileSync(join(dirty, 'notes.txt'), 'not committed\n')
-      const unmerged = branchIn(remote, join(dir, 'unmerged'), 'unmerged', { merge: false })
-      const local = branchIn(remote, join(dir, 'local'), 'local', { push: false })
-      const outside = branchIn(remote, join(tempDir(), 'outside'), 'outside')
-      expect(git(repo, 'branch', '-r')).toContain('origin/merged')
-
-      await sessionOf(t, chat.id)
-      await quiet()
-      expect(existsSync(merged)).toBe(false)
-      expect(git(repo, 'worktree', 'list', '--porcelain')).not.toContain(merged)
-      expect(branchesOf(repo)).toEqual(['dirty', 'kothar/app', 'local', 'main', 'outside', 'unmerged'])
-      for (const kept of [own, dirty, unmerged, local, outside]) expect(existsSync(kept), kept).toBe(true)
-      expect(git(repo, 'branch', '-r')).not.toContain('origin/merged')
-    })
-
-    const stubSpace = async (baseMachine?: Machine) => {
-      const { machine, quiet } = quietMachine(baseMachine)
-      const emits: ((event: EngineEvent) => void)[] = []
-      const adapter = stubAdapter((_machine, _options, emit) => {
-        emits.push(emit)
-        return { prompt() {}, interrupt() {}, respond() {}, close() {} }
-      })
-      const garage = tempDir()
-      const remote = repoWithOrigin()
-      const base = { engine: adapter.id, archived: false, createdAt: at, folders: [], files: [] }
-      for (const info of [
-        { id: 'aaaa0001', name: 'App', ...base, folders: [remote.repo] },
-        { id: 'sub', name: 'Sub', parentId: 'aaaa0001', worker: true, ...base },
-      ]) {
-        mkdirSync(join(garage, 'chats', info.id), { recursive: true })
-        writeFileSync(join(garage, 'chats', info.id, 'chat.json'), JSON.stringify(info))
-      }
-      const t = open(garage, [adapter], adapter.id, TEST_STOP_GRACE_MS, [adapter.id], [mainExtension], machine)
-      const turn = async (chatId: string) => {
-        const before = emits.length
-        t.handle({ type: 'chat.send', chatId, text: 'go' })
-        await until(() => emits.length > before)
-        return emits.at(-1)!
-      }
-      const end = async (emit: (event: EngineEvent) => void, chatId: string) => {
-        emit({ type: 'turn.completed' })
-        await until(() => settled(t.core, chatId))
-        await quiet()
-      }
-      await end(await turn('aaaa0001'), 'aaaa0001')
-      const merged = branchIn(remote, join(garage, 'work', 'aaaa0001', 'merged'), 'merged')
-      return { t, emits, turn, end, merged, quiet }
-    }
-
-    it('waits until no chat in the space is running, workers included', async () => {
-      const { t, emits, turn, end, merged } = await stubSpace()
-      const sub = await turn('sub')
-      await end(await turn('aaaa0001'), 'aaaa0001')
-      expect(existsSync(merged)).toBe(true)
-
-      const before = emits.length
-      sub({ type: 'turn.completed' })
-      await until(() => emits.length > before)
-      await end(emits.at(-1)!, 'aaaa0001')
-      expect(chatOf(t.core, 'sub')).toBeUndefined()
-      expect(existsSync(merged)).toBe(false)
-    })
-
-    it('keeps a worktree when a turn starts while the sweep is checking it', async () => {
-      let checking = false
-      let check = () => {}
-      const checked = new Promise<void>((resolve) => (check = resolve))
-      const slow: Machine = {
-        ...sandboxingMachine,
-        run: async (command, args, options) => {
-          if (args.includes('status')) {
-            checking = true
-            await checked
-          }
-          return sandboxingMachine.run(command, args, options)
-        },
-      }
-      const { turn, end, merged, quiet } = await stubSpace(slow)
-      const first = await turn('aaaa0001')
-      first({ type: 'turn.completed' })
-      await until(() => checking)
-      const second = await turn('aaaa0001')
-      check()
-      await quiet()
-      expect(existsSync(merged)).toBe(true)
-      await end(second, 'aaaa0001')
-      expect(existsSync(merged)).toBe(false)
-    })
-  })
 })
 
 describe('edits', () => {
@@ -3412,7 +3283,7 @@ describe('context', () => {
     expect(itemsOf(t, 'main')).toEqual([global])
     expect(itemsOf(t, chat.id)).toEqual([
       global,
-      { section: 'folders', path: repo, from: chat.id, enabled: true, text: 'REPO RULES' },
+      { section: 'folders', path: repo, from: chat.id, enabled: true, text: 'REPO RULES', mode: 'edit' },
       { section: 'agents', path: own, from: chat.id, enabled: true, text: '' },
       { section: 'files', path: notes, from: chat.id, enabled: true, text: 'NOTES' },
     ])
@@ -3455,6 +3326,84 @@ describe('context', () => {
     const again = reopenWithWorker(t, app.id)
     expect(await sessionOf(again.t, workerId)).toMatchObject({ extraDirs: [b] })
     expect(await sessionOf(again.t, 'main')).toMatchObject({ cwd: join(work, 'home') })
+  })
+
+  it('gives each folder that is not git a mode, Edit in place by default, kept in chat.json and taken by workers', async () => {
+    const first = setup(textScript)
+    const [docs, ref] = [folderWith(''), folderWith('')]
+    const app = createChat(first, { name: 'App', folders: [docs, ref] })
+    expect(itemsOf(first, app.id).filter((i) => i.section === 'folders').map((i) => i.mode)).toEqual(['edit', 'edit'])
+    first.handle({ type: 'context.folderMode', chatId: app.id, path: ref, mode: 'readOnly' })
+    expect(JSON.parse(readFileSync(chatFile(first, app.id), 'utf8')).folderModes).toEqual({ [ref]: 'readOnly' })
+    const options = await sessionOf(first, app.id)
+    expect(options.sandbox?.writable).toEqual([join(first.garage, 'work', app.id), docs])
+    expect(options.instructions).toContain(`${FOLDER_RULES}\n- ${docs}: Edit in place. Write in it directly.\n- ${ref}: Read only.`)
+    expect(() => first.handle({ type: 'context.folderMode', chatId: app.id, path: ref, mode: 'nope' as 'edit' })).toThrow(
+      'Unknown folder mode',
+    )
+
+    const { t, workerId } = reopenWithWorker(first, app.id)
+    expect(itemsOf(t, workerId).filter((i) => i.section === 'folders').map((i) => i.mode)).toEqual(['edit', 'readOnly'])
+    t.handle({ type: 'context.folderMode', chatId: workerId, path: docs, mode: 'readOnly' })
+    await sessionOf(t, workerId)
+    // The worker's own session is the first; its report then wakes the space.
+    expect(t.calls[0]?.options.sandbox?.writable).toEqual([join(t.garage, 'work', app.id)])
+    expect(itemsOf(t, app.id).find((i) => i.path === docs)?.mode).toBe('edit')
+
+    t.handle({ type: 'context.remove', chatId: app.id, section: 'folders', path: ref })
+    expect(JSON.parse(readFileSync(chatFile(t, app.id), 'utf8')).folderModes).toEqual({})
+  })
+
+  it('copies a folder set to Work on a copy before the session, points the agent there, and copies changes back', async () => {
+    const t = setup(textScript)
+    const docs = folderWith('')
+    writeFileSync(join(docs, 'a.md'), 'A')
+    const app = createChat(t, { name: 'App', folders: [docs] })
+    t.handle({ type: 'context.folderMode', chatId: app.id, path: docs, mode: 'copy' })
+    const copy = join(t.garage, 'work', app.id, basename(docs))
+    const options = await sessionOf(t, app.id)
+    expect(readFileSync(join(copy, 'a.md'), 'utf8')).toBe('A')
+    expect(options.extraDirs ?? []).not.toContain(docs)
+    expect(options.instructions).toContain(`- ${docs}: Work on a copy. Write only in your copy at ${copy};`)
+    expect(itemsOf(t, app.id).find((i) => i.path === docs)).toMatchObject({ mode: 'copy', copy })
+
+    writeFileSync(join(copy, 'a.md'), 'A2')
+    const answer = async (message: Parameters<typeof t.handle>[0]) => {
+      const before = t.replies.length
+      t.handle(message)
+      await until(() => t.replies.slice(before).some((r) => r.type === 'context.copyChanges'))
+      return t.replies.slice(before).find((r) => r.type === 'context.copyChanges')
+    }
+    expect(await answer({ type: 'context.copyChanges', chatId: app.id, path: docs })).toEqual({
+      type: 'context.copyChanges',
+      chatId: app.id,
+      path: docs,
+      changes: [{ path: 'a.md', kind: 'changed' }],
+    })
+    expect(await answer({ type: 'context.copyBack', chatId: app.id, path: docs, files: ['a.md'] })).toMatchObject({
+      changes: [],
+      copied: 1,
+    })
+    expect(readFileSync(join(docs, 'a.md'), 'utf8')).toBe('A2')
+
+    t.handle({ type: 'context.folderMode', chatId: app.id, path: docs, mode: 'edit' })
+    expect(await answer({ type: 'context.copyChanges', chatId: app.id, path: docs })).toMatchObject({
+      error: expect.stringContaining('set to Work on a copy'),
+    })
+  })
+
+  it("keeps git folders on their checkout and never lets a folder holding Kothar's data be written", () => {
+    const t = setup(textScript)
+    const repo = folderWith('')
+    mkdirSync(join(repo, '.git'))
+    const inside = join(t.garage, 'notes')
+    mkdirSync(inside)
+    const app = createChat(t, { name: 'App', folders: [repo, inside] })
+    const [git, held] = itemsOf(t, app.id).filter((i) => i.section === 'folders')
+    expect(git).toMatchObject({ git: true })
+    expect(git).not.toHaveProperty('mode')
+    expect(held).toMatchObject({ mode: 'edit', blocked: expect.stringContaining("Kothar's own data") })
+    expect(() => t.handle({ type: 'context.folderMode', chatId: app.id, path: repo, mode: 'readOnly' })).toThrow('git folder')
   })
 
   it('gives a file that is not text by path with read access, never pasted, down to the workers', async () => {

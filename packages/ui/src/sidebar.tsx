@@ -464,9 +464,30 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
 const FOOTER_ROW = 'flex h-control w-full items-center gap-8 px-8'
 
 /** The sidebar's bottom row: Settings, with its shortcut on hover. New space sits under the spaces instead. */
-export function SidebarFooter({ settingsKeys, openSettings }: { settingsKeys?: Binding | null; openSettings: () => void }) {
+/** An entry an extension adds to the sidebar (ExtensionPanel.sidebar), above Settings. */
+export type SidebarEntry = { key: string; label: string; keys?: Binding | null; open: () => void }
+
+type FooterProps = { settingsKeys?: Binding | null; openSettings: () => void; entries?: SidebarEntry[] }
+
+export function SidebarFooter({ settingsKeys, openSettings, entries = [] }: FooterProps) {
   return (
     <div className="flex flex-col gap-1 px-8 pb-10">
+      {entries.map((entry) => {
+        const row = (
+          <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={entry.open}>
+            {entry.label}
+          </Button>
+        )
+        return entry.keys ? (
+          <Hint key={entry.key} text={<Keys binding={entry.keys} />} side="right">
+            {row}
+          </Hint>
+        ) : (
+          <div key={entry.key} className="contents">
+            {row}
+          </div>
+        )
+      })}
       <Hint text={settingsKeys && <Keys binding={settingsKeys} />} side="right">
         <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={openSettings}>
           <span aria-hidden="true">⚙</span>

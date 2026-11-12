@@ -48,6 +48,7 @@ Background work has no hook to throw from, so report failures with [`host.error`
 | `onChatCreated(chat, context)` | A chat is made: a space, a worker or an extension's chat. |
 | `onChatArchived(chat, archived, context)` | A chat is archived (`archived` is `true`) or brought back (`false`). |
 | `onChatRemoved(chat, context)` | A chat is deleted. By now it's gone from Kothar, with its log and folder. |
+| `onSpaceRemoved(space, context)` | A space is deleted, after `onChatRemoved` for it and each of its workers. `space` is its `SpaceDetail` as it was, with its work folder and checkouts. Kothar removes the work folder and the checkouts itself, since it made them; use this to forget what your extension kept about them. |
 | `onStatusChanged(chat, status, context)` | A chat's status changes: `idle`, `running`, `waiting` (on the user, such as a permission request) or `stopping`. |
 
 ```ts
@@ -86,6 +87,7 @@ A turn is one message and the agent's work on it. Each message runs its own engi
 | `chat` | The chat, as a [`ChatDetail`](types.md#chats). |
 | `text` | The turn's last reply. |
 | `error` | Set if the turn failed. |
+| `errorKind` | Why it failed, read by the engine's adapter: `interrupted` (Stop), `rate_limit`, `network`, `overloaded` (the engine's service is busy or down) or `other`. Absent if nothing labelled the error. |
 | `tools` | Each tool call: `{ name, kind, summary, path?, isError? }`. |
 | `files` | The paths the turn's edit tools named, in order, without repeats. |
 

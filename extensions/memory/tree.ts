@@ -1,4 +1,5 @@
 import type { CompletionRequest, MemoryMessage, ExtensionStorage } from '@kothar/extension-api'
+import { type JobOutcome, openJobQueue, type Timers } from './queue.ts'
 
 // The zoomable summary tree: every message, and every aligned block of 2^k messages, gets a one-line summary in the
 // chat's summaries.jsonl. A session's view shows the latest messages in full and older ones as id+n|text lines that
@@ -333,89 +334,58 @@ export function openCompactor(options: {
   retryBaseMs?: number
   retryMaxMs?: number
   minChars?: number
+  now?(): number
+  timers?: Timers
 }) {
-  const {
-    debounceMs = COMPACT_DEBOUNCE_MS,
-    retryBaseMs = RETRY_BASE_MS,
-    retryMaxMs = RETRY_MAX_MS,
-    minChars = COMPACT_MIN_CHARS,
-  } = options
-  const touched = new Set<string>()
-  const backoffs = new Map<string, { failures: number; batchMaxItems: number; retryAtMs: number }>()
+  const minChars = options.minChars ?? COMPACT_MIN_CHARS
+  // After a failed call a chat's next batch is half the size, down to one item; a success resets it.
+  const batchMaxItems = new Map<string, number>()
   // mark: how many calls had succeeded at the item's first failed try, then at its last try alone.
   const items = new Map<string, { tries: number; mark: number; alone: boolean }>()
   let successes = 0
-  let failing = false
-  let timer: ReturnType<typeof setTimeout> | undefined
-  let running = false
-  let closed = false
-  let idleWaiters: (() => void)[] = []
-  const settleIdle = () => {
-    if (closed || (!running && timer === undefined && !touched.size)) idleWaiters.splice(0).forEach((done) => done())
-  }
 
-  const schedule = (delayMs: number) => {
-    if (closed) return
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = undefined
-      void run()
-    }, delayMs)
-  }
-
-  const nextJob = () => {
-    for (const chatId of [...touched].reverse()) {
-      if ((backoffs.get(chatId)?.retryAtMs ?? 0) > Date.now()) continue
+  return openJobQueue({
+    onFailure: options.onFailure,
+    debounceMs: options.debounceMs ?? COMPACT_DEBOUNCE_MS,
+    retryBaseMs: options.retryBaseMs ?? RETRY_BASE_MS,
+    retryMaxMs: options.retryMaxMs ?? RETRY_MAX_MS,
+    now: options.now,
+    timers: options.timers,
+    find(chatId) {
       const chat = options.chat(chatId)
       const chars = chat?.messages.reduce((sum, m) => sum + m.text.length, 0) ?? 0
       const pending = chat && chars > minChars ? pendingOf(chat.messages, chat.summaries) : []
       const failedAlone = (block: Block) => items.get(`${chatId}:${keyOf(block.id, block.n)}`)?.alone === true
-      if (chat && pending.length) {
-        return { chatId, ...chat, pending: [...pending.filter((b) => !failedAlone(b)), ...pending.filter(failedAlone)] }
+      if (!chat || !pending.length) return undefined
+      return { ...chat, pending: [...pending.filter((b) => !failedAlone(b)), ...pending.filter(failedAlone)] }
+    },
+    async work(chatId, { messages, summaries, pending }) {
+      const lineOf = lineReader(messages, summaries)
+      const batch: (Block & { input: string })[] = []
+      let promptChars = 0
+      for (const block of pending.slice(0, batchMaxItems.get(chatId) ?? BATCH_MAX_ITEMS)) {
+        const input = itemInput(messages, lineOf, block)
+        if (batch.length && promptChars + 2 + input.length > BATCH_MAX_INPUT_CHARS) break
+        promptChars += (batch.length ? 2 : 0) + input.length
+        batch.push({ ...block, input })
       }
-      touched.delete(chatId)
-    }
-  }
+      let lines: Map<string, string> | undefined
+      let reason = ''
+      try {
+        const prompt = batch.map((item) => item.input).join('\n\n')
+        const reply = await options.complete({
+          system: COMPACTOR_INSTRUCTIONS,
+          prompt,
+          schema: SUMMARIES_SCHEMA,
+          timeoutMs: COMPLETE_TIMEOUT_MS,
+        })
+        lines = parseReply(reply)
+        if (!lines) reason = `the reply wasn't JSON (${clip(oneLine(reply), 200) || 'empty'})`
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error)
+      }
 
-  const fail = (chatId: string, batchItems: number, reason: string) => {
-    const failures = (backoffs.get(chatId)?.failures ?? 0) + 1
-    const retryAtMs = Date.now() + Math.min(retryMaxMs, retryBaseMs * 2 ** (failures - 1))
-    backoffs.set(chatId, { failures, batchMaxItems: Math.max(1, Math.floor(batchItems / 2)), retryAtMs })
-    if (!failing) options.onFailure?.(reason)
-    failing = true
-  }
-
-  async function run() {
-    if (running || closed) return
-    running = true
-    try {
-      for (let job = nextJob(); job && !closed; job = nextJob()) {
-        const { chatId, messages, summaries, pending } = job
-        const lineOf = lineReader(messages, summaries)
-        const batch: (Block & { input: string })[] = []
-        let promptChars = 0
-        for (const block of pending.slice(0, backoffs.get(chatId)?.batchMaxItems ?? BATCH_MAX_ITEMS)) {
-          const input = itemInput(messages, lineOf, block)
-          if (batch.length && promptChars + 2 + input.length > BATCH_MAX_INPUT_CHARS) break
-          promptChars += (batch.length ? 2 : 0) + input.length
-          batch.push({ ...block, input })
-        }
-        let lines: Map<string, string> | undefined
-        let reason = ''
-        try {
-          const prompt = batch.map((item) => item.input).join('\n\n')
-          const reply = await options.complete({
-            system: COMPACTOR_INSTRUCTIONS,
-            prompt,
-            schema: SUMMARIES_SCHEMA,
-            timeoutMs: COMPLETE_TIMEOUT_MS,
-          })
-          lines = parseReply(reply)
-          if (!lines) reason = `the reply wasn't JSON (${clip(oneLine(reply), 200) || 'empty'})`
-        } catch (error) {
-          reason = error instanceof Error ? error.message : String(error)
-        }
-        if (closed) return
+      return (): JobOutcome => {
         if (lines) successes++
         const written: Summary[] = []
         for (const { id, n } of batch) {
@@ -446,40 +416,15 @@ export function openCompactor(options: {
         try {
           summaries.add(written)
         } catch {
-          touched.delete(chatId)
-          continue
+          return 'drop'
         }
         if (lines && written.length) {
-          backoffs.delete(chatId)
-          failing = false
-        } else {
-          fail(chatId, batch.length, reason || 'the model left every item out')
+          batchMaxItems.delete(chatId)
+          return 'done'
         }
+        batchMaxItems.set(chatId, Math.max(1, Math.floor(batch.length / 2)))
+        return { failed: reason || 'the model left every item out' }
       }
-    } finally {
-      running = false
-    }
-    const retryAtMs = Math.min(...[...touched].map((chatId) => backoffs.get(chatId)?.retryAtMs ?? Infinity))
-    if (retryAtMs < Infinity) schedule(retryAtMs - Date.now())
-    settleIdle()
-  }
-
-  return {
-    touch(chatId: string) {
-      touched.delete(chatId)
-      touched.add(chatId)
-      schedule(debounceMs)
     },
-    // Resolves once no touched chat has work left (a failing one keeps it waiting), or the compactor is closed.
-    whenIdle() {
-      const done = new Promise<void>((resolve) => idleWaiters.push(resolve))
-      settleIdle()
-      return done
-    },
-    close() {
-      closed = true
-      clearTimeout(timer)
-      settleIdle()
-    },
-  }
+  })
 }

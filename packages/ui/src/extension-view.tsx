@@ -1,7 +1,12 @@
-import { createContext, useContext, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactElement, type ReactNode } from 'react'
 import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
-import { Button, Chevron, confirm, CopyButton, Hint, Select, Switch } from './controls.tsx'
+import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
+import { highlightLines } from './highlight.ts'
+import { HtmlFrame } from './html-frame.tsx'
+import { Markdown } from './markdown.tsx'
+import { MarkdownEditor } from './markdown-editor.tsx'
+import { windowExtensionFileUrl } from './connection.ts'
 
 /**
  * Draws an extension's panel from the view tree its core side sends (ExtensionView in @kothar/extension-api), with
@@ -31,6 +36,8 @@ const FOLLOW_PX = 16
 const GAPS = { tight: 'gap-4', normal: 'gap-8', loose: 'gap-18' }
 const JUSTIFY = { start: 'justify-start', between: 'justify-between', end: 'justify-end' }
 const MAX_CODE_LINES = 400
+// How long a search box waits after the last key before it sends.
+export const SEARCH_VIEW_MS = 150
 
 type Act = (action: ExtensionAction) => void
 // Saves one of the extension's space settings, for a panel's switches and pickers.
@@ -39,6 +46,23 @@ const SetValueContext = createContext<SetValue | undefined>(undefined)
 // Show in Finder for a text with reveal; the core checks the path (host.reveal's rule).
 type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
+// The extension whose view this is, so its pictures can be read from its own folders (an editor's files).
+const ExtensionIdContext = createContext<string | undefined>(undefined)
+// Scrolls the panel's chat to the message at an entry of its log, for a quoted message.
+type ShowMessage = (entry: number) => void
+const ShowMessageContext = createContext<ShowMessage | undefined>(undefined)
+// A quoted message longer than this is folded, with Show more.
+const FOLD_CHARS = 600
+const FOLD_LINES = 10
+
+// The desktop app's picker for a button's pick, or undefined in a browser tab, where there's none. A file picker gives
+// the first file chosen.
+function pickerFor(kind: 'folder' | 'file'): ((title?: string) => Promise<string | null>) | undefined {
+  const desktop = typeof window === 'undefined' ? undefined : window.kothar
+  if (!desktop) return undefined
+  if (kind === 'folder') return (title) => desktop.pickFolder(title)
+  return async (title) => (await desktop.pickFiles(title))[0] ?? null
+}
 
 function RevealButton({ path }: { path: string }) {
   const reveal = useContext(RevealContext)
@@ -101,6 +125,16 @@ function Hinted({ hint, children }: { hint?: string; children: ReactNode }) {
   )
 }
 
+function RowHint({ hint, children }: { hint?: string; children: ReactElement }) {
+  return hint ? (
+    <Hint text={hint} align="start">
+      {children}
+    </Hint>
+  ) : (
+    children
+  )
+}
+
 function Badges({ badges }: { badges?: ExtensionListItem['badges'] }) {
   return badges?.map((badge, i) => (
     <Hinted key={i} hint={badge.hint}>
@@ -124,10 +158,14 @@ function lineTone(line: string) {
 
 type CodeNode = Extract<ExtensionView, { type: 'code' }>
 
-function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNode, 'type'>) {
-  const lines = text.replace(/\n$/, '').split('\n')
-  const shown = follow ? lines.slice(-maxLines) : lines.slice(0, maxLines)
+function Code({ text, language, maxLines = MAX_CODE_LINES, follow, lineNumbers, fill }: Omit<CodeNode, 'type'>) {
+  const trimmed = text.replace(/\n$/, '')
+  const lines = trimmed.split('\n')
+  const first = follow ? Math.max(lines.length - maxLines, 0) : 0
+  const shown = lines.slice(first, first + maxLines)
   const cut = lines.length - shown.length
+  const coloured = language === 'diff' ? undefined : highlightLines(trimmed, language)
+  const gutter = String(first + shown.length).length
   const pre = useRef<HTMLPreElement>(null)
   // A followed log stays at its end as it grows, until the user scrolls up to read.
   const atEnd = useRef(true)
@@ -143,12 +181,27 @@ function Code({ text, language, maxLines = MAX_CODE_LINES, follow }: Omit<CodeNo
     <pre
       ref={pre}
       onScroll={follow ? onScroll : undefined}
-      className="scroll-inset scroll-inset-tight max-h-480 overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5]"
+      className={`scroll-inset scroll-inset-tight overflow-auto rounded border bg-bg py-6 font-mono text-xs leading-[1.5] ${fill ? 'min-h-0 flex-1' : 'max-h-480'}`}
+      data-language={coloured ? language : undefined}
     >
       {follow && more}
       {shown.map((line, i) => (
-        <div key={i} className={`px-8 whitespace-pre ${language === 'diff' ? lineTone(line) : 'text-muted'}`}>
-          {line || ' '}
+        <div key={i} className={`flex px-8 whitespace-pre ${language === 'diff' ? lineTone(line) : coloured ? 'text-text' : 'text-muted'}`}>
+          {lineNumbers && (
+            <span aria-hidden="true" className="mr-12 shrink-0 text-right text-faint select-none" style={{ width: `${gutter}ch` }}>
+              {first + i + 1}
+            </span>
+          )}
+          <span>
+            {coloured
+              ? coloured[first + i]!.map((run, j) => (
+                  <span key={j} className={run.className}>
+                    {run.text}
+                  </span>
+                ))
+              : line}
+            {!line && ' '}
+          </span>
         </div>
       ))}
       {!follow && more}
@@ -183,15 +236,65 @@ function Card({ node, act }: { node: Extract<ExtensionView, { type: 'card' }>; a
   )
 }
 
+// The arrows move along a list's rows; up from the first goes back to a search box above it.
+// The rows' own buttons (not a row's extra button, which Tab reaches): the arrows move between them.
+const ROW_BUTTONS = ':scope > li button[data-row]'
+function moveAlong(e: KeyboardEvent<HTMLUListElement>) {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  const rows = [...e.currentTarget.querySelectorAll<HTMLButtonElement>(ROW_BUTTONS)]
+  const at = rows.indexOf(document.activeElement as HTMLButtonElement)
+  if (at < 0) return
+  e.preventDefault()
+  const next = rows[at + (e.key === 'ArrowDown' ? 1 : -1)]
+  if (next) return next.focus()
+  if (e.key === 'ArrowUp') e.currentTarget.closest('[data-split-side]')?.querySelector<HTMLInputElement>('input[type=search]')?.focus()
+}
+
+/**
+ * Text with some ranges highlighted ([start, end), as an extension sends them for a search match). Ranges are clamped to
+ * the text, sorted, and an overlap is cut, so anything an extension sends draws the text whole and in order.
+ */
+export function Marked({ text, marks }: { text: string; marks?: [number, number][] }) {
+  if (!marks?.length) return <>{text}</>
+  const parts: ReactNode[] = []
+  let at = 0
+  const ranges = marks
+    .filter((r) => Array.isArray(r) && Number.isFinite(r[0]) && Number.isFinite(r[1]))
+    .map(([a, b]) => [Math.max(0, Math.floor(a)), Math.min(text.length, Math.floor(b))] as const)
+    .sort((x, y) => x[0] - y[0])
+  for (const [from, to] of ranges) {
+    const start = Math.max(from, at)
+    if (to <= start) continue
+    if (start > at) parts.push(text.slice(at, start))
+    parts.push(
+      <mark key={start} className="rounded-sm bg-accent/25 text-inherit">
+        {text.slice(start, to)}
+      </mark>,
+    )
+    at = to
+  }
+  if (at < text.length) parts.push(text.slice(at))
+  return <>{parts}</>
+}
+
 function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; act: Act }) {
   if (!node.items.length) return node.empty ? <p className="text-sm text-faint">{node.empty}</p> : null
   return (
-    <ul className="flex flex-col" aria-label={node.label}>
+    <ul className="flex flex-col" aria-label={node.label} onKeyDown={moveAlong}>
       {node.items.map((item) => {
         const body = (
           <>
             {item.dot && <span className={`size-7 shrink-0 rounded-full ${DOTS[item.dot]}`} data-tone={item.dot} />}
-            <span className={`min-w-0 flex-1 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>{item.label}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className={`min-w-0 truncate ${item.mono ? 'font-mono text-xs' : ''}`}>
+                <Marked text={item.label} marks={item.marks} />
+              </span>
+              {item.excerpt && (
+                <span className="min-w-0 truncate text-xs text-muted" data-excerpt>
+                  <Marked text={item.excerpt.text} marks={item.excerpt.marks} />
+                </span>
+              )}
+            </span>
             {item.since !== undefined ? (
               <Elapsed since={item.since} className="shrink-0 font-mono text-xs text-faint" />
             ) : (
@@ -204,9 +307,11 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
         return (
           <li key={item.key} className="flex min-w-0 items-center gap-8">
             <div className="flex min-w-0 flex-1 flex-col">
-              <Hinted hint={item.hint}>
+              {/* The hint goes on the row itself, so a row with one still takes the full width. */}
+              <RowHint hint={item.hint}>
                 {item.action ? (
                   <button
+                    data-row
                     className={`${row} hover:bg-hover aria-pressed:bg-hover`}
                     aria-pressed={item.selected ?? undefined}
                     onClick={() => act(item.action!)}
@@ -214,10 +319,11 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
                     {body}
                   </button>
                 ) : (
-                  <div className={row}>{body}</div>
+                  <div className={item.hint ? `${row} cursor-help` : row}>{body}</div>
                 )}
-              </Hinted>
+              </RowHint>
             </div>
+            {item.button && <RowButton button={item.button} act={act} />}
             {item.link && (
               <a
                 className="shrink-0 font-mono text-xs text-accent hover:underline"
@@ -233,6 +339,15 @@ function List({ node, act }: { node: Extract<ExtensionView, { type: 'list' }>; a
       })}
     </ul>
   )
+}
+
+function RowButton({ button, act }: { button: NonNullable<ExtensionListItem['button']>; act: Act }) {
+  const control = (
+    <Button size="small" variant="ghost" className="shrink-0" onClick={() => act(button.action)}>
+      {button.label}
+    </Button>
+  )
+  return button.hint ? <Hint text={button.hint}>{control}</Hint> : control
 }
 
 type FormNode = Extract<ExtensionView, { type: 'form' }>
@@ -291,11 +406,111 @@ function Form({ node, act }: { node: FormNode; act: Act }) {
   )
 }
 
+type SearchNode = Extract<ExtensionView, { type: 'search' }>
+
+// What's typed stays as the panel draws again (with what matches); a new key starts over at value.
+function Search({ node, act }: { node: SearchNode; act: Act }) {
+  const start = node.key ?? ''
+  const [typed, setTyped] = useState({ start, text: node.value ?? '' })
+  const text = typed.start === start ? typed.text : (node.value ?? '')
+  const sent = useRef(text)
+  const latest = useRef(act)
+  useLayoutEffect(() => {
+    latest.current = act
+  })
+  useEffect(() => {
+    if (text === sent.current) return
+    const timer = setTimeout(() => {
+      sent.current = text
+      latest.current({ name: node.action, value: text })
+    }, SEARCH_VIEW_MS)
+    return () => clearTimeout(timer)
+  }, [text, node.action])
+  return (
+    <input
+      type="search"
+      // The popup that draws it focuses it as it opens (extension-popups.tsx).
+      data-autofocus={node.autofocus || undefined}
+      className="min-w-0 text-sm"
+      aria-label={node.label ?? node.placeholder ?? 'Search'}
+      placeholder={node.placeholder}
+      spellCheck={false}
+      value={text}
+      onChange={(e) => setTyped({ start, text: e.target.value })}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' && node.submit) {
+          e.preventDefault()
+          // What's typed goes first, so the panel searches the same text it's asked to act on.
+          if (text !== sent.current) {
+            sent.current = text
+            latest.current({ name: node.action, value: text })
+          }
+          latest.current({ name: node.submit, value: text })
+        } else if (e.key === 'ArrowDown') {
+          // To the first list row after the box, in the same column.
+          const column = e.currentTarget.closest('[data-split-side]') ?? e.currentTarget.parentElement
+          const first = column?.querySelector<HTMLButtonElement>('ul li button[data-row]')
+          if (first) {
+            e.preventDefault()
+            first.focus()
+          }
+        }
+      }}
+    />
+  )
+}
+
+// A labelled button that copies text, saying for a moment whether it worked.
+function CopyText({ node }: { node: Extract<ExtensionView, { type: 'copy' }> }) {
+  const [result, setResult] = useState<'Copied' | 'Couldn’t copy'>()
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  const copy = async () => {
+    let copied = true
+    try {
+      await navigator.clipboard.writeText(node.text)
+    } catch {
+      copied = false
+    }
+    setResult(copied ? 'Copied' : 'Couldn’t copy')
+    clearTimeout(timer.current)
+    timer.current = setTimeout(() => setResult(undefined), COPIED_MS)
+  }
+  const button = (
+    <Button size="small" variant="ghost" onClick={() => void copy()} aria-live="polite">
+      {result ?? node.label}
+    </Button>
+  )
+  return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
+}
+
+// Saves text as a file through the browser's own download.
+export function downloadText(text: string, filename: string, mimeType = 'text/plain') {
+  const url = URL.createObjectURL(new Blob([text], { type: mimeType }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.rel = 'noopener'
+  document.body.append(link)
+  link.click()
+  link.remove()
+  // The download has its own copy by now.
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+// An html frame without a height takes the room it's given, so the stacks around it grow to give it that room.
+const fills = (node: ExtensionView): boolean =>
+  node.type === 'html'
+    ? node.height === undefined
+    : node.type === 'code'
+      ? node.fill === true
+      : node.type === 'stack' && node.children.some(fills)
+
 function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
   switch (node.type) {
     case 'stack':
       return (
-        <div className={`flex min-w-0 flex-col ${GAPS[node.gap ?? 'normal']}`}>
+        <div className={`flex min-w-0 flex-col ${GAPS[node.gap ?? 'normal']} ${fills(node) ? 'flex-1' : ''}`}>
           {node.children.map((child, i) => (
             <Node key={i} node={child} act={act} />
           ))}
@@ -346,13 +561,18 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
         </Hinted>
       )
     case 'button': {
+      const pick = node.pick && pickerFor(node.pick.kind)
+      if (node.pick && !pick) return null
       const button = (
         <Button
           variant={node.variant === 'primary' ? 'primary' : node.variant === 'ghost' ? 'ghost' : 'default'}
           size="small"
           disabled={node.disabled}
           onClick={async () => {
-            if (!node.confirm || (await confirm(node.confirm))) act(node.action)
+            if (node.confirm && !(await confirm(node.confirm))) return
+            if (!pick) return act(node.action)
+            const path = await pick(node.pick!.title)
+            if (path) act({ name: node.action.name, value: path })
           }}
         >
           {node.label}
@@ -369,7 +589,18 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
     case 'list':
       return <List node={node} act={act} />
     case 'code':
-      return <Code text={node.text} language={node.language} maxLines={node.maxLines} follow={node.follow} />
+      return (
+        <Code
+          text={node.text}
+          language={node.language}
+          maxLines={node.maxLines}
+          follow={node.follow}
+          lineNumbers={node.lineNumbers}
+          fill={node.fill}
+        />
+      )
+    case 'markdown':
+      return <Markdown text={node.text} className="min-w-0 text-body leading-[1.6]" />
     case 'card':
       return <Card node={node} act={act} />
     case 'divider':
@@ -382,20 +613,170 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       return <SettingSwitch node={node} />
     case 'picker':
       return <SettingPicker node={node} />
+    case 'split':
+      return (
+        // Side by side once there's room; in a narrow panel the side sits above.
+        <div className="@container flex min-h-0 min-w-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-12 @min-[560px]:flex-row" data-split>
+            <div data-split-side className="flex min-h-0 min-w-0 flex-col gap-8 @min-[560px]:w-240 @min-[560px]:shrink-0 @min-[560px]:overflow-y-auto @min-[560px]:border-r @min-[560px]:pr-12">
+              <Node node={node.side} act={act} />
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-8 @min-[560px]:overflow-y-auto">
+              <Node node={node.main} act={act} />
+            </div>
+          </div>
+        </div>
+      )
+    case 'search':
+      return <Search node={node} act={act} />
+    case 'editor':
+      return <Editor node={node} act={act} />
+    case 'html':
+      return (
+        <HtmlFrame
+          html={node.html}
+          label={node.label}
+          web={node.web}
+          height={node.height}
+          theme={node.theme}
+          libraries={node.libraries}
+          onError={node.errors ? (error) => act({ name: node.errors!, value: error }) : undefined}
+        />
+      )
+    case 'message':
+      return <QuotedMessage node={node} act={act} />
+    case 'copy':
+      return <CopyText node={node} />
+    case 'download': {
+      const button = (
+        <Button size="small" variant="ghost" onClick={() => downloadText(node.text, node.filename, node.mimeType)}>
+          {node.label}
+        </Button>
+      )
+      return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
+    }
     default:
       return null
   }
 }
 
-type ViewerProps = { view?: ExtensionView; error?: string; act: Act; set?: SetValue; reveal?: Reveal }
+const shortTime = (iso: string) => {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return { short: '', full: '' }
+  const today = date.toDateString() === new Date().toDateString()
+  const short = today
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return { short, full: date.toLocaleString() }
+}
 
-export function ExtensionViewer({ view, error, act, set, reveal }: ViewerProps) {
+// Clicks on the message's own controls (a link, a code block's Copy, its buttons) or a text selection don't jump.
+const jumpsFrom = (target: EventTarget) =>
+  !(target as Element).closest?.('a,button,input,textarea,[role="button"]') && !window.getSelection()?.toString()
+
+function QuotedMessage({ node, act }: { node: Extract<ExtensionView, { type: 'message' }>; act: Act }) {
+  const show = useContext(ShowMessageContext)
+  const [open, setOpen] = useState(false)
+  const long = node.text.length > FOLD_CHARS || node.text.split('\n').length > FOLD_LINES
+  const folded = long && !open
+  const { short, full } = shortTime(node.at)
+  const head = (
+    <span className="flex min-w-0 items-baseline gap-6">
+      <span className="min-w-0 truncate font-medium">{node.author}</span>
+      {short && (
+        <time className="shrink-0 text-xs text-faint" dateTime={node.at} title={full}>
+          {short}
+        </time>
+      )}
+    </span>
+  )
+  return (
+    <article
+      className={`flex min-w-0 flex-col gap-4 rounded-lg border bg-bg px-10 py-8 ${show ? 'cursor-pointer transition-colors hover:bg-hover' : ''}`}
+      data-quoted-entry={node.entry}
+      onClick={show ? (e) => jumpsFrom(e.target) && show(node.entry) : undefined}
+    >
+      <div className="flex min-w-0 items-center gap-4">
+        {show ? (
+          <Hint text={node.hint ?? 'Show in the chat'} align="start">
+            <button
+              type="button"
+              className="-mx-4 flex min-w-0 flex-1 rounded px-4 text-left"
+              aria-label={`Show ${node.author}'s message${short ? ` from ${short}` : ''} in the chat`}
+              onClick={() => show(node.entry)}
+            >
+              {head}
+            </button>
+          </Hint>
+        ) : (
+          <div className="flex min-w-0 flex-1">{head}</div>
+        )}
+        {node.buttons?.map((child, i) => (
+          <Node key={i} node={child} act={act} />
+        ))}
+      </div>
+      <div className={folded ? 'relative max-h-[180px] overflow-hidden [mask-image:linear-gradient(to_bottom,black_60%,transparent)]' : ''}>
+        <Markdown text={node.text} className="min-w-0 text-body leading-[1.6]" />
+      </div>
+      {long && (
+        <button
+          type="button"
+          className="w-fit rounded text-sm text-accent hover:underline"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+        >
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </article>
+  )
+}
+
+function Editor({ node, act }: { node: Extract<ExtensionView, { type: 'editor' }>; act: Act }) {
+  const extension = useContext(ExtensionIdContext)
+  const files = node.files && extension ? { folder: node.files, url: (path: string) => windowExtensionFileUrl(extension, path) } : undefined
+  return (
+    <MarkdownEditor
+      docKey={node.key}
+      text={node.text}
+      label={node.label}
+      placeholder={node.placeholder}
+      autofocus={node.autofocus}
+      completions={node.completions}
+      jump={node.jump}
+      files={files}
+      onPaste={files && node.paste ? (picture) => act({ name: node.paste!, value: picture }) : undefined}
+      onKeep={node.keep ? (theirs) => act({ name: node.keep!, value: theirs }) : undefined}
+      onChange={(text) => act({ name: node.change, value: text })}
+      onLink={node.links ? (target) => act({ name: node.links!, value: target }) : undefined}
+      onTag={node.tags ? (tag) => act({ name: node.tags!, value: tag }) : undefined}
+    />
+  )
+}
+
+// extension: whose view it is, for pictures read from its folders (an editor's files); without it they stay text.
+// showMessage: scrolls the chat the panel belongs to, for a quoted message; without it, a quote doesn't jump.
+type ViewerProps = {
+  view?: ExtensionView
+  error?: string
+  act: Act
+  set?: SetValue
+  reveal?: Reveal
+  extension?: string
+  showMessage?: ShowMessage
+}
+
+export function ExtensionViewer({ view, error, act, set, reveal, extension, showMessage }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>
   return (
     <SetValueContext.Provider value={set}>
       <RevealContext.Provider value={reveal}>
-        <Node node={view} act={act} />
+        <ExtensionIdContext.Provider value={extension}>
+          <ShowMessageContext.Provider value={showMessage}>
+            <Node node={view} act={act} />
+          </ShowMessageContext.Provider>
+        </ExtensionIdContext.Provider>
       </RevealContext.Provider>
     </SetValueContext.Provider>
   )

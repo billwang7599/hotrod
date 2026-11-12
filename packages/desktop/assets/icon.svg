@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- Kothar: an anvil in temper blue, with the spark of a hammer blow. The mark's paths also live in
-       packages/ui/src/logo.svg, packages/ui/src/mark.tsx and packages/ui/public/favicon.svg. -->
+       packages/ui/src/logo.svg and packages/ui/public/favicon.svg. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#262b38"/>

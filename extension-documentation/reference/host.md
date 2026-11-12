@@ -18,10 +18,11 @@ names the missing entry.
 | `accounts`, `useAccount` | `accounts` |
 | `run`, `spawn`, `openTerminal`, `reveal` | `run` |
 | `complete` | `models` |
-| `chatStorage` | `memory` |
+| `chatStorage`, `everyChatStorage` | `memory` |
+| `home` | `files` |
 | `spaceValues`, `setSpaceValue` | `settings` |
 | `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
-| `note`, `error`, `notify`, `storage`, `refresh` | nothing |
+| `note`, `error`, `notify`, `storage`, `refresh`, `now` | nothing |
 
 A community extension can't make any other host call, including one added in a later Kothar, until Kothar lists it here.
 Built-in extensions aren't held to `uses`.
@@ -34,6 +35,7 @@ Built-in extensions aren't held to `uses`.
 | `chat(chatId)` | One chat, or `undefined`. |
 | `read(chatId, { last? })` | The chat's log, oldest first, as [`ChatEntry`](types.md#log-entries)s. `last` keeps only the newest entries. |
 | `messages(chatId)` | The chat's log as numbered [memory messages](types.md#memory-messages), oldest first. |
+| `message(chatId, entry)` | The message at `entry` in the chat's log (the index in `read`), as an [`ExtensionMessage`](panels.md#message-actions), or `undefined` when that entry isn't the user's message, a worker's report or a reply. |
 | `space(chatId)` | The space the chat is in (the chat itself for a space), as a [`SpaceDetail`](types.md#spaces), or `undefined`. |
 | `reaches(callerId, chatId)` | Whether chat `callerId` may reach chat `chatId`. See below. |
 | `reachable(callerId)` | Every chat `callerId` may reach, by the same rule. |
@@ -92,6 +94,7 @@ export { lastQuestion, workFolder }
 | `retry(chatId)` | Sends the chat's last message again, ahead of anything queued. |
 | `continue(chatId, text)` | Carries on the chat's last turn with a prompt from Kothar, as a turn of its own. The agent sees the turn so far in its memory. The prompt isn't shown or logged as a message, and queued messages run after it. The chat must be idle. |
 | `interrupt(chatId)` | Asks a running turn to stop, as the Stop button does. |
+| `addContextFile(chatId, path)` | Adds a file to the chat's context (**Context → Files**), as the user adding it there does. It's pasted into the instructions of the chat's next sessions and its workers'. A worker's goes to its space. Throws a short message for the user when there's no such file, it's already there, or the chat keeps no files (an extension's own chat, such as Home). |
 
 ```ts
 import type { Extension } from '@kothar/extension-api'
@@ -303,9 +306,23 @@ that folder and can't leave it; they may include subfolders.
 | `write(name, text)` | Writes the file, making folders as needed. |
 | `append(name, text)` | Adds to the end of the file, making it if it's missing. |
 | `remove(name)` | Deletes the file, if it's there. |
+| `list(folder?)` | The plain files directly in that folder (the top without one) as `{ name, size }[]`, `size` in bytes, sorted by name. Folders and links aren't listed; a missing folder lists nothing. |
 
 `chatStorage(chatId)` is the same, for files of the extension's own that belong to one chat. They live in the chat's
-folder and go when the chat is deleted. Kothar's own files there are out of reach. It needs `memory` listed.
+folder and go when the chat is deleted. Kothar's own files there are out of reach, and `list` leaves them out. It needs
+`memory` listed.
+
+`everyChatStorage()` returns `{ chatId, storage }[]`: the `chatStorage` of every chat Kothar keeps, including chats
+the user can't see right now, such as Home while its extension is off. It's for housekeeping across chats, such as
+showing how much disk your files take or deleting them all. It isn't for reading chats the user can't see. It needs
+`memory` listed. Memory's Settings readout uses it:
+
+```ts
+const used = host
+  .everyChatStorage()
+  .flatMap(({ storage }) => storage.list().filter((file) => file.name === 'summaries.jsonl'))
+  .reduce((sum, file) => sum + file.size, 0)
+```
 
 ```ts
 import type { ExtensionHost } from '@kothar/extension-api'
@@ -322,6 +339,13 @@ export { bump }
 ```
 
 The folder stays when the extension is turned off or uninstalled.
+
+## Home folder and clock
+
+| Member | What it is |
+|---|---|
+| `home` | The user's home folder, as the core has it. A test, or a core on another machine, can give a different one, so read it here rather than from `node:os`. Needs `files` listed. |
+| `now()` | The core's clock, as a `Date`. Use it instead of `Date.now()` or `new Date()`, so your times match the core's and tests can fix them. |
 
 ## refresh
 

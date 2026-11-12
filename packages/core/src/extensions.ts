@@ -1,10 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { Extension, ExtensionHost, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
+import type { Extension, ExtensionHost, ExtensionManifest, ExtensionPanel, ExtensionUse, ExtensionValues } from '@kothar/extension-api'
 import { type CommunityInstall, installedExtensions, EXTENSION_MAIN } from './marketplace.ts'
 import { approvalsFor, logHistory, reviewOf } from './approvals.ts'
-import { EXTENSION_USES, settingProblem, sortUses } from './shared.ts'
+import { EXTENSION_USES, type InstalledItem, type PanelTab, settingProblem, sortUses } from './shared.ts'
 
 const MISSING_PACKAGE = /^Cannot find (?:package|module) '((?:@[^/']+\/)?[^/'.:][^/':]*)(?:\/[^']*)?'/
 
@@ -64,9 +64,11 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onChatCreated', 'events'],
   ['onChatRemoved', 'events'],
   ['onChatArchived', 'events'],
+  ['onSpaceRemoved', 'events'],
   ['onLimitReached', 'events'],
   ['panels', 'panels'],
   ['commands', 'commands'],
+  ['messageActions', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
   ['migrateSettings', 'settings'],
@@ -83,6 +85,20 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onProcessesChanged', 'panels'],
 ]
 
+// What the UI gets of a panel: where it shows, its keys and whether the left sidebar lists it. Anything else an
+// extension put there is dropped, and a placement, shortcut or sidebar of the wrong kind is left out.
+export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
+  const { id, title, placement, shortcut, sidebar } = panel
+  return {
+    extension,
+    id,
+    title,
+    ...((placement === 'popup' || placement === 'dock') && { placement }),
+    ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
+    ...(sidebar === true && { sidebar }),
+  }
+}
+
 // What each host call needs listed. FREE_HOST_CALLS need nothing; any other call is refused.
 export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   chats: 'readChats',
@@ -90,11 +106,14 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   read: 'readChats',
   space: 'readChats',
   messages: 'readChats',
+  message: 'readChats',
   spaceValues: 'settings',
   setSpaceValue: 'settings',
   reaches: 'readChats',
   reachable: 'readChats',
   chatStorage: 'memory',
+  everyChatStorage: 'memory',
+  home: 'files',
   complete: 'models',
   send: 'sendMessages',
   createChat: 'sendMessages',
@@ -107,15 +126,18 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   spawn: 'run',
   openTerminal: 'run',
   reveal: 'run',
+  addContextFile: 'sendMessages',
   wait: 'panels',
+  showPanel: 'panels',
   endWait: 'panels',
   processes: 'panels',
   processAction: 'panels',
   processesChanged: 'panels',
 }
 
-// Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh']
+// Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
+// the clock.
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now']
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check
@@ -206,13 +228,16 @@ export function guardHost(host: ExtensionHost, extension: { name: string }, uses
       guarded[call] = host[call]
       continue
     }
-    guarded[call] = () => {
+    const refuse = () => {
       throw new Error(
         use
           ? `${extension.name} can't use host.${call}: its manifest doesn't list "${use}" (${EXTENSION_USES[use]})`
           : `${extension.name} can't use host.${call}: community extensions can't use it yet`,
       )
     }
+    // A value (host.home) refuses when it's read; a call when it's made.
+    if (typeof host[call] === 'function') guarded[call] = refuse
+    else Object.defineProperty(guarded, call, { get: refuse, enumerable: true })
   }
   return guarded as ExtensionHost
 }
@@ -226,14 +251,16 @@ export type CommunityExtension = CommunityInstall & { extension?: Extension; loa
 // turned on (see approvals.ts). An extension that's off is never imported, so installing one runs none of its code.
 // switchedOn is the extension's own switch alone (isOn also needs the Community extensions switch); it decides which
 // extensions a garage without approvals yet carries over.
+// It runs at startup, before the core opens, so the clock defaults here; tests pass their own.
 export async function loadCommunityExtensions(
   garage: string,
   isOn: (id: string) => boolean,
   switchedOn: (id: string) => boolean = isOn,
+  now: () => Date = () => new Date(),
 ): Promise<CommunityExtension[]> {
   const loaded: CommunityExtension[] = []
   const installs = installedExtensions(garage)
-  const approvals = approvalsFor(garage, installs, switchedOn)
+  const approvals = approvalsFor(garage, now, installs, switchedOn)
   for (const install of installs) {
     const { manifest, dir } = install
     if (!isOn(manifest.id)) {
@@ -243,7 +270,7 @@ export async function loadCommunityExtensions(
     const held = reviewOf(approvals[manifest.id], install)
     if (held) {
       console.error(`Didn't start the community extension in ${dir}: ${held}`)
-      logHistory(garage, { id: manifest.id, event: 'held', version: manifest.version, reason: held })
+      logHistory(garage, now, { id: manifest.id, event: 'held', version: manifest.version, reason: held })
       loaded.push({ ...install, held })
       continue
     }
@@ -273,3 +300,14 @@ export async function loadCommunityExtensions(
   }
   return loaded
 }
+
+/** The name of one of an extension's hooks: any of its members that's a function. */
+export type ExtensionHook = {
+  [K in keyof Extension]-?: NonNullable<Extension[K]> extends (...args: never[]) => unknown ? K : never
+}[keyof Extension]
+
+/** A community extension as the core keeps it: what's installed, the version running, and why it didn't load or start. */
+export type CommunityEntry = { manifest: ExtensionManifest; item: InstalledItem; running?: string; loadError?: string; held?: string }
+
+/** An extension that didn't load (off, or broken) as a stub with no hooks, so it can still be turned on or off. */
+export const stubOf = ({ id, name, description }: ExtensionManifest): Extension => ({ id, name, description, enabledByDefault: false })
