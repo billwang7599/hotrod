@@ -663,8 +663,9 @@ export type ExtensionPanel = {
   // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left
   // off; pick ones that are free.
   shortcut?: string
-  // An entry in the left sidebar, below the spaces, that opens the panel.
-  sidebar?: boolean
+  // Also show a launcher for this panel in the left sidebar; the panel is always a tab in the right panel. The user
+  // picks where launchers sit (Settings → Appearance), at the top of the sidebar by default.
+  launcher?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>

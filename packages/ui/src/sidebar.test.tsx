@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { afterEach, beforeEach, expect, test } from 'vitest'
-import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
+import { LAUNCHER_PLACES, placedLaunchers, placeLaunchers, reloadLaunchers, useLauncherPlace, type LauncherPlace } from './launchers.ts'
+import { ChatNav, NameDialog, SidebarFooter, type Launcher, type NameRequest } from './sidebar.tsx'
 import type { ChatView } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -142,4 +143,81 @@ test('the sidebar has one New space button, under the spaces; it opens the name 
   renderSidebar(false)
   expect(buttonsEnding('New space')[0]!.disabled).toBe(true)
   expect(buttonsEnding('Settings')[0]!.disabled).toBe(false)
+})
+
+const opened: string[] = []
+const NOTES: Launcher = { key: 'extension:notes/notes', label: 'Notes', keys: 'Mod+Shift+N', open: () => opened.push('notes') }
+const ARTIFACTS: Launcher = { key: 'extension:artifacts/artifacts', label: 'Artifacts', open: () => opened.push('artifacts') }
+
+// The sidebar as main.tsx puts it together: the chats, then the footer, with launchers where the user put them.
+function WithLaunchers() {
+  const { top, bottom } = placedLaunchers(useLauncherPlace(), [NOTES, ARTIFACTS])
+  return (
+    <>
+      <ChatNav chats={[SPACE, HOME]} selectedId="" connected send={() => {}} select={() => {}} askName={() => {}} launchers={top} />
+      <SidebarFooter openSettings={() => {}} launchers={bottom} />
+    </>
+  )
+}
+
+function renderLaunchers() {
+  act(() =>
+    root.render(
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider delayDuration={0}>
+            <WithLaunchers />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
+    ),
+  )
+}
+
+const launcherButton = (label: string) =>
+  [...container.querySelectorAll('button')].find((b) => b.textContent === label) as HTMLButtonElement | undefined
+const follows = (a: Element, b: Element) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+
+test('launchers sit at the top by default: under Home, above the spaces, apart from Settings; they open their panel', () => {
+  localStorage.clear()
+  reloadLaunchers()
+  opened.length = 0
+  renderLaunchers()
+  const notes = launcherButton('Notes')!
+  const artifacts = launcherButton('Artifacts')!
+  expect(notes.closest('nav')).not.toBeNull()
+  expect(notes.closest('[role="group"]')!.getAttribute('aria-label')).toBe('Extensions')
+  expect(follows(rowOf('Home'), notes)).toBe(true)
+  expect(follows(notes, artifacts)).toBe(true)
+  expect(follows(artifacts, spaces())).toBe(true)
+  // Lined up with the chat rows, and the shortcut shows on hover; one without keys gets no tooltip.
+  expect(notes.className).toContain('pl-7')
+  expect(notes.hasAttribute('data-hint')).toBe(true)
+  expect(artifacts.hasAttribute('data-hint')).toBe(false)
+  // Settings is alone at the bottom.
+  const footer = buttonsEnding('Settings')[0]!.parentElement!.closest('div.flex-col')!
+  expect([...footer.querySelectorAll('button')].map((b) => b.textContent)).toEqual(['⚙Settings'])
+  act(() => notes.click())
+  act(() => artifacts.click())
+  expect(opened).toEqual(['notes', 'artifacts'])
+})
+
+test('Bottom moves the launchers above Settings, Hidden drops them, and the choice is saved', () => {
+  localStorage.clear()
+  reloadLaunchers()
+  renderLaunchers()
+  act(() => placeLaunchers('bottom'))
+  expect(localStorage.getItem('kothar.launchers')).toBe('bottom')
+  const notes = launcherButton('Notes')!
+  expect(notes.closest('nav')).toBeNull()
+  expect(follows(notes, buttonsEnding('Settings')[0]!)).toBe(true)
+  expect(follows(launcherButton('Artifacts')!, buttonsEnding('Settings')[0]!)).toBe(true)
+  act(() => placeLaunchers('hidden'))
+  expect(launcherButton('Notes')).toBeUndefined()
+  expect(launcherButton('Artifacts')).toBeUndefined()
+  reloadLaunchers()
+  expect(LAUNCHER_PLACES.map((p) => p.value)).toEqual<LauncherPlace[]>(['top', 'bottom', 'hidden'])
+  localStorage.setItem('kothar.launchers', 'sideways')
+  act(() => reloadLaunchers())
+  expect(launcherButton('Notes')!.closest('nav')).not.toBeNull()
 })

@@ -7,14 +7,14 @@ import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { ExtensionView } from '@kothar/extension-api'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { ExtensionDock, useOpenDock } from './extension-dock.tsx'
-import { sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { launcherEntries, usePanelShortcuts } from './extension-popups.tsx'
 import { currentDock, openDock, showsFor, widenDock } from './panel-tab.ts'
 import { reloadShortcuts } from './shortcuts.ts'
 import { panelKey, type State } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-const artifacts: PanelTab = { extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock', shortcut: 'Mod+Shift+A', sidebar: true }
+const artifacts: PanelTab = { extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock', shortcut: 'Mod+Shift+A', launcher: true }
 const changes: PanelTab = { extension: 'git', id: 'changes', title: 'Changes' }
 
 let root: Root
@@ -128,7 +128,7 @@ test('its shortcut opens and closes it, and its sidebar entry opens it', () => {
   expect(currentDock().open).toBe('extension:artifacts/artifacts')
   act(() => got.handlers['extension:artifacts/artifacts']!())
   expect(currentDock().open).toBeNull()
-  const [entry] = sidebarEntries([artifacts, changes], {}, () => {})
+  const [entry] = launcherEntries([artifacts, changes], {}, () => {})
   act(() => entry!.open())
   act(() => entry!.open())
   expect(currentDock().open).toBe('extension:artifacts/artifacts')

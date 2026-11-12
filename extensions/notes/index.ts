@@ -692,7 +692,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
         title: 'Notes',
         placement: 'popup',
         shortcut: 'Mod+Shift+N',
-        sidebar: true,
+        launcher: true,
         render(chat, { host }) {
           watchFor(host, chat)
           const notes = notesFor(host, chat.id)

@@ -65,7 +65,7 @@ A `ExtensionPanel` has:
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
 | `placement` | Optional. `'tab'` (the default) or `'popup'`: a large window over the chat, for work that wants room, such as notes. Esc closes it. It draws for the chat that's open, as a tab does. |
 | `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
-| `sidebar` | Optional. `true` adds an entry to the left sidebar, above **Settings**, that opens the panel. |
+| `launcher` | Optional. `true` also shows a launcher for the panel in the left sidebar; the panel is always a tab in the right panel. Launchers sit at the top, under Home, unless the user moves them to the bottom or hides them in **Settings → Appearance**. |
 
 When the panel redraws:
 

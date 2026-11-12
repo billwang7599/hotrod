@@ -15,7 +15,8 @@ import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
-import { ExtensionPopup, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { ExtensionPopup, launcherEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { placedLaunchers, useLauncherPlace } from './launchers.ts'
 import { choosePanelTab, extensionTabId, openDock, showsFor } from './panel-tab.ts'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
@@ -208,7 +209,7 @@ function App() {
   const [marketplace, setMarketplace] = useState(false)
   const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
-  // The open chat's extension panels: popups, their keys and sidebar entries.
+  // The open chat's extension panels: popups, their keys and left-sidebar launchers.
   const panels = (selected && state.extensionUi?.chatId === selected.id && state.extensionUi.panels) || []
   const showContext = useCallback(() => {
     if (contextDocks) setContextOpen(true)
@@ -234,6 +235,7 @@ function App() {
   }
   useShortcuts(shortcuts)
   const keys = useBindings()
+  const launchers = placedLaunchers(useLauncherPlace(), launcherEntries(panels, keys, showContext))
   const [quitting, setQuitting] = useState(false)
   useEffect(() => window.kothar?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
@@ -269,11 +271,12 @@ function App() {
                     select={select}
                     askName={setNameRequest}
                     newSpaceKeys={keys.newSpace}
+                    launchers={launchers.top}
                   />
                   <SidebarFooter
                     settingsKeys={keys.settings}
                     openSettings={() => openSettings()}
-                    entries={sidebarEntries(panels, keys, showContext)}
+                    launchers={launchers.bottom}
                   />
                 </aside>
               </SidePanel>

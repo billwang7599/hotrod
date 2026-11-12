@@ -463,14 +463,14 @@ export type QueuedMessage = {
 }
 
 // An extension's tab in the right sidebar, and an extension's action in the General tab, for one chat.
-// placement, shortcut and sidebar as the panel declares them (ExtensionPanel).
+// placement, shortcut and launcher as the panel declares them (ExtensionPanel).
 export type PanelTab = {
   extension: string
   id: string
   title: string
   placement?: 'tab' | 'popup' | 'dock'
   shortcut?: string
-  sidebar?: boolean
+  launcher?: boolean
 }
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
 // An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.

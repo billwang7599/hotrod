@@ -8,12 +8,12 @@ import { ExtensionViewer } from './extension-view.tsx'
 import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
 import { clampPopup, type PopupSize, POPUP_DEFAULT_WIDTH, POPUP_MIN, POPUP_MARGIN, POPUP_STEP, POPUP_TOP, resetPopupSize, setPopupSize, usePopupSize } from './popup-size.ts'
 import { conflictsOf, normalize, parseBinding, refusal, registerShortcut, shortcutActions, type ShortcutHandlers } from './shortcuts.ts'
-import type { SidebarEntry } from './sidebar.tsx'
+import type { Launcher } from './sidebar.tsx'
 import { panelKey, type State } from './state.ts'
 
 /**
  * What extension panels add outside the right sidebar (ExtensionPanel in @kothar/extension-api): popups over the chat,
- * their keys in the shortcut registry, and entries in the left sidebar. Each belongs to the chat that's open.
+ * their keys in the shortcut registry, and launchers in the left sidebar. Each belongs to the chat that's open.
  */
 
 export const isPopup = (panel: PanelTab) => panel.placement === 'popup'
@@ -64,10 +64,10 @@ export function usePanelShortcuts(panels: PanelTab[], showTab: () => void): Shor
   )
 }
 
-/** The left sidebar's entries for the open chat's panels that ask for one. */
-export function sidebarEntries(panels: PanelTab[], keys: Record<string, string | null>, showTab: () => void): SidebarEntry[] {
+/** The left sidebar's launchers for the open chat's panels that ask for one. */
+export function launcherEntries(panels: PanelTab[], keys: Record<string, string | null>, showTab: () => void): Launcher[] {
   return panels
-    .filter((p) => p.sidebar)
+    .filter((p) => p.launcher)
     .map((panel) => {
       const id = extensionTabId(panel.extension, panel.id)
       return {

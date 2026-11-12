@@ -85,17 +85,17 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onProcessesChanged', 'panels'],
 ]
 
-// What the UI gets of a panel: where it shows, its keys and whether the left sidebar lists it. Anything else an
-// extension put there is dropped, and a placement, shortcut or sidebar of the wrong kind is left out.
+// What the UI gets of a panel: where it shows, its keys and whether it has a launcher in the left sidebar. Anything else an
+// extension put there is dropped, and a placement, shortcut or launcher of the wrong kind is left out.
 export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
-  const { id, title, placement, shortcut, sidebar } = panel
+  const { id, title, placement, shortcut, launcher } = panel
   return {
     extension,
     id,
     title,
     ...((placement === 'popup' || placement === 'dock') && { placement }),
     ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
-    ...(sidebar === true && { sidebar }),
+    ...(launcher === true && { launcher }),
   }
 }
 

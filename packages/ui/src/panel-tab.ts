@@ -31,7 +31,7 @@ export function usePanelTab() {
 
 /**
  * The extension popup that's open (ExtensionPanel.placement 'popup'), by extensionTabId, or null. Shared so a shortcut,
- * a sidebar entry or a note in the chat can open one. Not kept across reloads.
+ * a sidebar launcher or a note in the chat can open one. Not kept across reloads.
  */
 let popup: string | null = null
 const popupListeners = new Set<() => void>()
@@ -55,7 +55,7 @@ export function usePopup() {
 
 /**
  * The extension dock panel that's open beside the chat (ExtensionPanel.placement 'dock'), by extensionTabId, or null,
- * and whether it's widened to fill the chat pane. Shared so a shortcut, a sidebar entry, a note in the chat or the
+ * and whether it's widened to fill the chat pane. Shared so a shortcut, a sidebar launcher, a note in the chat or the
  * extension itself (host.showPanel) can open one. Not kept across reloads.
  */
 export type DockState = { open: string | null; wide: boolean }

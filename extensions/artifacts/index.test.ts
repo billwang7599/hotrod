@@ -218,7 +218,7 @@ it('docks beside the chat with a sidebar entry and keys, in spaces only', async 
     title: 'Artifacts',
     placement: 'dock',
     shortcut: 'Mod+Shift+A',
-    sidebar: true,
+    launcher: true,
   })
   expect(panelsOf('main').some((p) => p.extension === 'artifacts')).toBe(false)
 })

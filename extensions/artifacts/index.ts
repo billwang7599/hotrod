@@ -506,7 +506,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
         title: 'Artifacts',
         placement: 'dock',
         shortcut: 'Mod+Shift+A',
-        sidebar: true,
+        launcher: true,
         // Home keeps no files, so it has no artifacts.
         shown: (chat, { host }) => !!spaceOf(host, chat.id),
         render(chat, { host }) {

@@ -237,7 +237,7 @@ it('opens as a popup with a sidebar entry and keys, not a tab, in every chat', a
     title: 'Notes',
     placement: 'popup',
     shortcut: 'Mod+Shift+N',
-    sidebar: true,
+    launcher: true,
   })
 })
 

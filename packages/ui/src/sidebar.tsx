@@ -175,6 +175,8 @@ type SidebarProps = {
   askName: (request: NameRequest) => void
   // The New space shortcut, shown when the New space button is hovered.
   newSpaceKeys?: Binding | null
+  // Extension launchers to list at the top, under Home (Settings → Appearance can move them to the bottom).
+  launchers?: Launcher[]
 }
 
 export function ChatNav({
@@ -186,6 +188,7 @@ export function ChatNav({
   select,
   askName,
   newSpaceKeys,
+  launchers = [],
 }: SidebarProps) {
   const offline = connected ? undefined : 'Disconnected from the core'
   const settled = useSettled(chats.length > 0)
@@ -344,6 +347,11 @@ export function ChatNav({
   return (
     <nav className="flex flex-1 scroll-inset flex-col gap-1 overflow-y-auto pt-10 pr-0 pb-8 pl-8">
       <AnimatePresence>{tree.active.slice(0, split).filter(shown).map(row)}</AnimatePresence>
+      {launchers.length > 0 && (
+        <div role="group" aria-label="Extensions" className="flex flex-col gap-1">
+          <LauncherRows launchers={launchers} top />
+        </div>
+      )}
       {pinnedRows.length > 0 && (
         <>
           <h2 id="pinned-label" className={NAV_LABEL}>
@@ -461,33 +469,42 @@ export function NameDialog({ request, connected, send, close }: NameDialogProps)
   )
 }
 
+// As tall as a chat row, its label under the chat names: an empty slot where a row's dot sits (pl-7 plus the
+// button's 1px border makes the rows' pl-8), like the New space row.
+const LAUNCHER_ROW = 'flex h-control w-full shrink-0 items-center gap-8 pr-8 pl-7 text-left text-muted hover:text-text'
 const FOOTER_ROW = 'flex h-control w-full items-center gap-8 px-8'
 
-/** The sidebar's bottom row: Settings, with its shortcut on hover. New space sits under the spaces instead. */
-/** An entry an extension adds to the sidebar (ExtensionPanel.sidebar), above Settings. */
-export type SidebarEntry = { key: string; label: string; keys?: Binding | null; open: () => void }
+/** A launcher an extension panel asks for (ExtensionPanel.launcher): a row in the left sidebar that opens the panel. */
+export type Launcher = { key: string; label: string; keys?: Binding | null; open: () => void }
 
-type FooterProps = { settingsKeys?: Binding | null; openSettings: () => void; entries?: SidebarEntry[] }
+/** Launcher rows, each with its shortcut on hover; at the top, lined up with the chat rows around them. */
+function LauncherRows({ launchers, top = false }: { launchers: Launcher[]; top?: boolean }) {
+  return launchers.map((launcher) => {
+    const row = (
+      <Button variant="ghost" size="none" className={top ? LAUNCHER_ROW : FOOTER_ROW} onClick={launcher.open}>
+        {top && <span aria-hidden="true" className="w-7 shrink-0" />}
+        {launcher.label}
+      </Button>
+    )
+    return launcher.keys ? (
+      <Hint key={launcher.key} text={<Keys binding={launcher.keys} />} side="right">
+        {row}
+      </Hint>
+    ) : (
+      <div key={launcher.key} className="contents">
+        {row}
+      </div>
+    )
+  })
+}
 
-export function SidebarFooter({ settingsKeys, openSettings, entries = [] }: FooterProps) {
+type FooterProps = { settingsKeys?: Binding | null; openSettings: () => void; launchers?: Launcher[] }
+
+/** The sidebar's bottom: Settings with its shortcut on hover, and launchers above it when the user puts them there. */
+export function SidebarFooter({ settingsKeys, openSettings, launchers = [] }: FooterProps) {
   return (
     <div className="flex flex-col gap-1 px-8 pb-10">
-      {entries.map((entry) => {
-        const row = (
-          <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={entry.open}>
-            {entry.label}
-          </Button>
-        )
-        return entry.keys ? (
-          <Hint key={entry.key} text={<Keys binding={entry.keys} />} side="right">
-            {row}
-          </Hint>
-        ) : (
-          <div key={entry.key} className="contents">
-            {row}
-          </div>
-        )
-      })}
+      <LauncherRows launchers={launchers} />
       <Hint text={settingsKeys && <Keys binding={settingsKeys} />} side="right">
         <Button variant="ghost" size="none" className={FOOTER_ROW} onClick={openSettings}>
           <span aria-hidden="true">⚙</span>
