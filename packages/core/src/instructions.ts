@@ -34,6 +34,9 @@ export type InstructionParts = {
   setup?: { name: string; instructions?: string }
   // The chat's context items, in order; only enabled ones count.
   items: ContextItem[]
+  // Whose text each part is, for the Inspector: the extension id of each of extensions (in order), of memory, and of
+  // role (the extension whose chat this is).
+  sources?: { extensions: string[]; memory?: string; role?: string }
 }
 
 // A context item as the session sees it: a file pasted in full and tagged, other items as they are.
@@ -45,23 +48,48 @@ export const contextTextOf = (items: ContextItem[]) =>
     return [section === 'files' ? `<file path="${path}">\n${text.trimEnd()}\n</file>` : text.trim()]
   })
 
-export const buildInstructions = (parts: InstructionParts) => {
-  const { role, workDir, checkouts, folders, extensions, workers, memory, parentView, setup, items } = parts
-  const rules = [
-    ...(workDir !== undefined ? [`${WRITE_RULES}\nYour work folder: ${workDir}`] : []),
-    ...(checkouts.length
-      ? [[CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n')]
-      : []),
-    ...(folders.length ? [[FOLDER_RULES, ...folderLines(folders)].join('\n')] : []),
-  ]
-  const memoryText = [
-    ...(workers !== undefined ? [workers] : []),
-    ...memory,
-    ...(parentView ? [`Your parent chat's memory when it started you:\n\n${parentView}`] : []),
-  ]
-  // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.
-  const setupText = setup?.instructions ? [`Instructions from the setup "${setup.name}":\n\n${setup.instructions}`] : []
-  return [...(role ? [role] : []), ...rules, ...extensions, ...memoryText, ...setupText, ...contextTextOf(items)].join(
-    '\n\n',
-  )
+// One labelled part of a session's instructions, for the Inspector: joined with a blank line they make the
+// instructions exactly (buildInstructions). extension: the id of the extension whose text it is.
+export type InstructionSection = {
+  source: 'core' | 'context' | 'extension'
+  label: string
+  text: string
+  extension?: string
 }
+
+export const instructionSections = (parts: InstructionParts): InstructionSection[] => {
+  const { role, workDir, checkouts, folders, extensions, workers, memory, parentView, setup, items } = parts
+  const core = (label: string, text: string): InstructionSection => ({ source: 'core', label, text })
+  const from = (extension: string | undefined, label: string, text: string): InstructionSection =>
+    extension ? { source: 'extension', label, text, extension } : core(label, text)
+  const ids = parts.sources?.extensions ?? []
+  return [
+    ...(role ? [from(parts.sources?.role, 'Role of this chat', role)] : []),
+    ...(workDir !== undefined ? [core('Where you can write', `${WRITE_RULES}\nYour work folder: ${workDir}`)] : []),
+    ...(checkouts.length
+      ? [core('Git checkouts', [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n'))]
+      : []),
+    ...(folders.length ? [core('Folder modes', [FOLDER_RULES, ...folderLines(folders)].join('\n'))] : []),
+    ...extensions.map((text, i) => from(ids[i], 'Instructions', text)),
+    ...(workers !== undefined ? [from('workers', 'When to start workers', workers)] : []),
+    ...memory.map((text) => from(parts.sources?.memory, 'How to read the memory', text)),
+    ...(parentView ? [core("Parent chat's memory at launch", `Your parent chat's memory when it started you:\n\n${parentView}`)] : []),
+    // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.
+    ...(setup?.instructions
+      ? [{ source: 'context' as const, label: `Setup "${setup.name}"`, text: `Instructions from the setup "${setup.name}":\n\n${setup.instructions}` }]
+      : []),
+    ...contextSectionsOf(items),
+  ]
+}
+
+const CONTEXT_LABELS: Record<ContextItem['section'], string> = { agents: 'Instructions file', folders: 'Folder', files: 'File' }
+
+const contextSectionsOf = (items: ContextItem[]): InstructionSection[] =>
+  items.flatMap((item) =>
+    contextTextOf([item]).map((text) => ({ source: 'context' as const, label: `${CONTEXT_LABELS[item.section] ?? 'Context'}: ${item.path}`, text })),
+  )
+
+export const buildInstructions = (parts: InstructionParts) =>
+  instructionSections(parts)
+    .map((section) => section.text)
+    .join('\n\n')

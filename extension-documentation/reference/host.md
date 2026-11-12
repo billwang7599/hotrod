@@ -438,6 +438,7 @@ try {
 
 | Call | What it does |
 |---|---|
+| `prompt(id)` | One of this extension's [prompts](settings.md#prompts) as it's sent now: the user's edit from Settings, else its default. Throws for a prompt the extension doesn't declare. Needs nothing in `uses`. |
 | `toggled(chatId, id)` | Whether one of this extension's [composer toggles](panels.md#composer-toggles) is on in the chat (its `default` if the chat never set it). Throws for a toggle the extension doesn't have. |
 | `setToggle(chatId, id, on)` | Turns it on or off in the chat, as the user flipping it does, without calling `onChange`. The chip redraws. |
 

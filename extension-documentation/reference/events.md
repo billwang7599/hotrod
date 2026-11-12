@@ -229,6 +229,24 @@ export default lookOnly
 
 List `permissions` in the manifest's `uses`.
 
+## onTurnSent
+
+`onTurnSent(sent, context)` gets everything a turn's session was sent, as the session opens, in labelled sections in
+the order they were sent (`SentTurn`). It's what the Inspector shows. Kothar only builds it when an extension that's on
+has this hook.
+
+- `sent.kind` is `turn` when a session opens, and `steer` when the user's message enters the running turn (its `turn`
+  is the id of the turn it entered).
+- Each section has a `source`: `you`, `core` (Kothar's own rules), `context` (context items and the setup), `extension`
+  (with `extension`, its id, and the `prompts` it carries with whether the user `edited` each), `tools`, `turn` (engine,
+  model, account, sandbox, read only and who set it) or `engine`.
+- `part` says where it went. Joined with a blank line, the `instructions` sections are exactly the session's
+  instructions and the `prompt` sections exactly the prompt.
+- The engine adds its own system prompt and tools, which Kothar can't see; the last section says so. So does a section
+  for each MCP server an extension starts, whose tools the engine asks for itself.
+
+List `readChats` in the manifest's `uses`: the sections hold the chat's messages and context files.
+
 ## Transforms
 
 `transformMessage(text, chat, context)` rewrites each message on its way to the engine. The chat's log, and you, keep

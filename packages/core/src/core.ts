@@ -1,7 +1,8 @@
 import { homedir } from 'node:os'
 import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ChatDetail, Extension, ExtensionContext, SpaceDetail } from '@kothar/extension-api'
+import type { ChatDetail, Extension, ExtensionContext, SentTurn, SpaceDetail } from '@kothar/extension-api'
+import { randomUUID } from 'node:crypto'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups } from './setups.ts'
 import { openChatLifecycle } from './chat-lifecycle.ts'
@@ -33,6 +34,9 @@ import { moveExtensionsDir } from './vocab-move.ts'
 import { openProtocol } from './protocol.ts'
 import { openExtensionSwitches } from './extension-switches.ts'
 import { migrateExtensionSettings, openExtensionSettings } from './extension-settings.ts'
+import { openPrompts } from './prompts.ts'
+import { sentTurnOf } from './sent.ts'
+import type { SentInput } from './turn.ts'
 import { openPanels } from './panels.ts'
 import { openAppSettings } from './settings.ts'
 import { openContext } from './context.ts'
@@ -244,6 +248,11 @@ function assembleCore(options: {
       setEngine: (chat, engine) => updateChat(chat, { engine }),
       showRun: (chat) => broadcast({ type: 'chat.updated', chat: withRun(chat) }),
     })
+  const prompts = openPrompts({
+    settings,
+    saveSettings,
+    changed: (extension) => broadcast({ type: 'extension.updated', extension: extensionInfo(extension) }),
+  })
   const {
     extensionInfo,
     settingsViewChanged,
@@ -275,6 +284,7 @@ function assembleCore(options: {
     refreshExtension: (extension, chatId) => refreshExtension(extension, chatId),
     chainOf: (chat) => chainOf(chat),
     updateChat: (chat, change) => updateChat(chat, change),
+    promptsOf: prompts.infoOf,
   })
   const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
@@ -487,6 +497,7 @@ function assembleCore(options: {
     contextItems: (chat) => contextItems(chat),
     setupOf,
     roleOf: (chat) => extensionChatOf(chat)?.instructions,
+    roleOwnerOf: (chat) => extensionChatOf(chat)?.extension.id,
     isOnFor,
     valuesOf: extensionValues,
     detailOf: (chat) => detailOf(chat),
@@ -555,6 +566,7 @@ function assembleCore(options: {
       copies.copyOf(space, folder, workDir).finally(() => broadcastContext(space)),
     viewOf,
     instructionPartsOf,
+    turnSent: (chat, input) => turnSent(chat, input),
   })
 
   const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
@@ -601,6 +613,7 @@ function assembleCore(options: {
     accounts,
     run: () => runFor(),
     complete: completeFor,
+    promptText: prompts.textOf,
     broadcast,
     terminalRoots,
     openTerminalAt,
@@ -816,8 +829,36 @@ function assembleCore(options: {
     extensionTools: (chatId: string) =>
       extensions
         .filter((extension) => isOnFor(extension, chats.get(chatId)))
-        .flatMap((extension) => (extension.tools ?? []).map((tool) => ({ tool, values: extensionValues(extension), host: hostFor(extension) }))),
+        .flatMap((extension) =>
+          (extension.tools ?? []).map((tool) => ({
+            tool: prompts.toolAsSent(extension, tool),
+            values: extensionValues(extension),
+            host: hostFor(extension),
+            extension: extension.id,
+          })),
+        ),
   })
+
+  // What a turn's session was sent, labelled (sent.ts), for each extension that watches (onTurnSent). Built only when
+  // one does, so a turn costs nothing extra otherwise.
+  const turnSent = (chat: Chat, input: SentInput) => {
+    const watchers = watchersOf('onTurnSent', chat)
+    if (!watchers.length) return
+    let sent: SentTurn
+    try {
+      sent = sentTurnOf(summaryOf(chat.info), now().toISOString(), randomUUID(), input, {
+        extension: (id) => extensions.find((extension) => extension.id === id),
+        promptsOf: prompts.infoOf,
+        engineName: (engine) => adapterFor(engine)?.name ?? engine,
+        memoryOf: () => memoryExtension(chat)?.id,
+        toolsOf: (chatId) => mcp.toolsFor(chatId),
+      })
+    } catch (error) {
+      console.error('Kothar could not label what a turn was sent:', error)
+      return
+    }
+    for (const extension of watchers) callExtension(extension, () => extension.onTurnSent!(sent, contextOf(extension)))
+  }
 
   const handle = openProtocol({
     broadcast,
@@ -872,6 +913,7 @@ function assembleCore(options: {
     answerWait,
     setExtensionEnabled,
     setExtensionValue,
+    setPrompt: prompts.set,
     install,
     cancelInstall,
     settingsViewChanged,

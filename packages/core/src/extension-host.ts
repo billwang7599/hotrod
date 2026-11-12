@@ -123,6 +123,8 @@ export type HostDeps<C extends HostChat> = {
   accounts: Pick<Accounts, 'list' | 'use'>
   run: () => ExtensionRun
   complete: (request: CompletionRequest) => Promise<string>
+  /** One of the extension's prompts as it's sent: the user's edit, else its default. */
+  promptText: (extension: Extension, id: string) => string
   broadcast: (message: CoreMessage) => void
   /** Every folder the chat's Open in Terminal may open. */
   terminalRoots: (chat: C) => string[]
@@ -334,6 +336,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         return await tool.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
       },
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
+      prompt: (id) => deps.promptText(extension, String(id)),
       setToggle(chatId, toggle, on) {
         const chat = chatFor(String(chatId))
         const found = toggleOf(extension, toggle)

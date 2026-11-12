@@ -72,6 +72,7 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
     accounts: { list: () => [], use: unused },
     run: () => unused,
     complete: unused,
+    promptText: unused,
     broadcast: (message) => broadcasts.push(message),
     terminalRoots: () => [chat.dir],
     openTerminalAt: unused,

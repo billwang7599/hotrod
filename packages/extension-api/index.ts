@@ -371,6 +371,9 @@ export type ExtensionHost = {
   // Turns one of this extension's composerToggles on or off for the chat, as the user flipping it does, but without
   // calling onChange; the chip redraws.
   setToggle(chatId: string, toggle: string, on: boolean): void
+  // One of this extension's prompts (Extension.prompts) as it's sent now: the user's edit from Settings, else its
+  // default text. Throws for a prompt the extension doesn't declare.
+  prompt(id: string): string
 }
 
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
@@ -766,6 +769,49 @@ export type ExtensionCommand = {
   run(chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// Text an extension sends to agents that the user can read and change: in Settings, on the extension's page (Prompts),
+// and in the Inspector, where it shows labelled in what each turn was sent. Read it with host.prompt(id), which gives
+// the user's edit or else text, and send that, such as from instructions(). The user can reset an edit to text; when
+// text changes in an update, an edit made before it is marked "Updated default".
+// - id: lowercase letters, digits and dashes, unique in the extension.
+// - label: what it's for, such as "When to make artifacts".
+// - where: 'instructions' for text that goes in the session's instructions (from instructions() or memory.instructions);
+//   'message' for text put with the user's message, such as a memory's view header.
+// Each agent tool's description is a prompt too, without declaring it: id tool:<name>. Agents are sent the user's edit.
+export type ExtensionPrompt = { id: string; label: string; text: string; where: 'instructions' | 'message'; description?: string }
+
+// What a turn was sent, in order, as Kothar handed it to the engine (Extension.onTurnSent). Joining the instructions
+// sections with a blank line gives the session's instructions exactly, and the prompt sections the prompt.
+// source: you (the user's message), core (Kothar's own rules), context (the chat's context items and setup), extension
+// (an extension's text: extension is its id), tools (a tool the session is offered, with its owner), turn (how the turn
+// runs: engine, model, read only, sandbox), engine (what the engine adds itself, which Kothar can't see: text says so).
+export type SentSource = 'you' | 'core' | 'context' | 'extension' | 'tools' | 'turn' | 'engine'
+export type SentSection = {
+  source: SentSource
+  // 'instructions', 'prompt' (the message the engine gets), or 'other' (tools, how the turn runs, the engine's own)
+  part: 'instructions' | 'prompt' | 'other'
+  label: string
+  text: string
+  extension?: string
+  // The extension's prompts in it, with whether the user edited each; editable: the user can change it in Settings.
+  prompts?: { id: string; label: string; edited: boolean }[]
+  editable?: boolean
+}
+// kind 'turn': a turn's session opened with these sections. 'steer': a message entered the running turn (turn is the
+// id of the turn it entered), with one section.
+export type SentTurn = {
+  id: string
+  kind: 'turn' | 'steer'
+  turn: string
+  chat: ChatSummary
+  at: string
+  engine: string
+  model?: string
+  account?: string
+  continued: boolean
+  sections: SentSection[]
+}
+
 // Hooks run in the core. A hook that throws or rejects shows its error and doesn't stop the chat; the core doesn't wait
 // for async hooks except onPermissionRequested.
 export type Extension = {
@@ -774,6 +820,8 @@ export type Extension = {
   description: string
   enabledByDefault: boolean
   settings?: ExtensionSetting[]
+  // Text it sends agents that the user may edit (see ExtensionPrompt).
+  prompts?: ExtensionPrompt[]
   // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
   // a worker uses its space's. Read them with host.spaceValues, change them with host.setSpaceValue or with a switch or
   // picker in a panel. They're saved in the space's chat.json, so they go when the space is deleted.
@@ -821,6 +869,9 @@ export type Extension = {
   onSessionEnded?(ended: { chat: ChatDetail; error?: string }, context: ExtensionContext): void | Promise<void>
   // Every common event as it arrives, deltas included. Read-only, so keep it quick.
   onEvent?(chat: ChatDetail, event: EngineEvent, context: ExtensionContext): void
+  // What a turn's session was sent, as it opens, and each message steered into it (SentTurn). Called only when some
+  // extension that's on watches it, so the core builds nothing otherwise.
+  onTurnSent?(sent: SentTurn, context: ExtensionContext): void
   // A policy for permission requests the core would otherwise ask the user about, or would allow on its own. Return a
   // verdict to answer it, or nothing to leave it. Extensions are asked in load order; the first verdict wins. The
   // core's own denials (edits outside the work folder in a sandbox) always stand.
@@ -873,6 +924,7 @@ export type ExtensionUse =
   // Extension fields: tools; and host.callTool
   | 'tools'
   | 'mcpServers'
+  // instructions, prompts
   | 'instructions'
   // onPermissionRequested, turnOptions
   | 'permissions'
@@ -892,7 +944,7 @@ export type ExtensionUse =
   | 'setup'
   // memory, and host.chatStorage, everyChatStorage
   | 'memory'
-  // Host calls: chats, chat, read, space, messages, message, reaches, reachable.
+  // Host calls: chats, chat, read, space, messages, message, reaches, reachable; and onTurnSent.
   | 'readChats'
   // send, createChat, retry, continue, interrupt, addContextFile
   | 'sendMessages'

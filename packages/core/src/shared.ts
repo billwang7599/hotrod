@@ -344,6 +344,20 @@ export const levelsOf = (engine: EngineInfo | undefined, model?: string): Thinki
 // with every chat and never saves it; it's absent when nothing can run.
 export type Run = { engine: string; model: string; thinking?: ThinkingLevel }
 
+// One of an extension's prompts, for its Settings page: where it goes ('tool': a tool's description, tool names it), its
+// default and the text sent now. edited: the user changed it; updatedDefault: the default changed since they did.
+export type PromptInfo = {
+  id: string
+  label: string
+  where: 'instructions' | 'message' | 'tool'
+  tool?: string
+  description?: string
+  default: string
+  text: string
+  edited?: true
+  updatedDefault?: true
+}
+
 export type ExtensionInfo = {
   id: string
   name: string
@@ -357,6 +371,10 @@ export type ExtensionInfo = {
   loadError?: string
   // It has a chat of its own (Home). A setup can't leave it out of that chat, so setup forms don't list it.
   ownsChat?: boolean
+  // Its prompts the user can edit (Extension.prompts, and each tool's description), as sent now.
+  prompts?: PromptInfo[]
+  // It adds instructions the user can't edit: an instructions hook (or a memory's) with no 'instructions' prompt.
+  fixedInstructions?: boolean
   // A built-in extension's uses, read from the fields it sets, for its page (a community one's are community.uses).
   uses?: ExtensionUse[]
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
@@ -569,6 +587,8 @@ export type ClientMessage =
   | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'extension.setEnabled'; extensionId: string; enabled: boolean }
   | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
+  // Saves the user's edit of one of an extension's prompts; without text (or with the default), back to the default.
+  | { type: 'extension.prompt.set'; extensionId: string; promptId: string; text?: string }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
   // Draws the extension's settings view again (the page opened), answered with extension.updated.

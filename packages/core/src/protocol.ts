@@ -98,6 +98,7 @@ export type ProtocolDeps = {
   answerWait: (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => void
   setExtensionEnabled: (extension: Extension, enabled: boolean) => void
   setExtensionValue: (extension: Extension, key: string, value: unknown) => void
+  setPrompt: (extension: Extension, id: string, text: string | undefined) => void
   install: (extension: Extension) => void
   cancelInstall: (extension: Extension) => void
   settingsViewChanged: (extension: Extension) => void
@@ -287,6 +288,12 @@ export function openProtocol(deps: ProtocolDeps) {
       deps.setExtensionEnabled(deps.extensionFor(String(message.extensionId)), message.enabled === true),
     'extension.setValue': (message) =>
       deps.setExtensionValue(deps.extensionFor(String(message.extensionId)), String(message.key), message.value),
+    'extension.prompt.set': (message) =>
+      deps.setPrompt(
+        deps.extensionFor(String(message.extensionId)),
+        String(message.promptId),
+        typeof message.text === 'string' ? message.text : undefined,
+      ),
     'extension.install': (message) => deps.install(deps.extensionFor(String(message.extensionId))),
     'extension.settingsView.get': (message) => deps.settingsViewChanged(deps.extensionFor(String(message.extensionId))),
     'extension.settingsView.action': (message) =>

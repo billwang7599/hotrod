@@ -22,6 +22,8 @@ export type Settings = PermissionSwitches &
     editor?: string
     // The user's own command for files, with {file}, {line} and {col}.
     editorCommand?: string
+    // The user's edits of extensions' prompts, by extension and prompt id (prompts.ts).
+    prompts?: Record<string, Record<string, { text: string; base: string }>>
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */

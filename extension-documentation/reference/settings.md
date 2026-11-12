@@ -107,6 +107,51 @@ settingsView: {
 
 `settingsView` and `onSettingsChanged` need `settings` listed in the manifest's `uses`.
 
+## Prompts
+
+Text an extension sends agents is theirs to read and change. Declare it in `prompts`, read it with `host.prompt(id)`,
+and send what that returns. Kothar lists each prompt on the extension's page in Settings, under **Prompts**, with a text
+box and **Reset to default**. The [Inspector](../using-extensions.md#inspector) shows it, labelled, in what each turn
+was sent, with an **Edit** link to it.
+
+```ts
+const extension: Extension = {
+  id: 'tidy',
+  name: 'Tidy',
+  description: 'Keeps agents from leaving stray files.',
+  enabledByDefault: true,
+  prompts: [
+    {
+      id: 'clean-up',
+      label: 'Cleaning up',
+      text: 'Delete scratch files you made before you finish.',
+      where: 'instructions',
+    },
+  ],
+  instructions: (_session, { host }) => host.prompt('clean-up'),
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Lowercase letters, digits and dashes; unique in the extension |
+| `label` | What it's for, shown in Settings and the Inspector |
+| `text` | The default |
+| `where` | `instructions` for text in the session's instructions, `message` for text put with the user's message (such as a memory's header) |
+| `description` | Optional: more about it, under its label |
+
+- `host.prompt(id)` returns the user's edit, or `text` when there's none. Call it each time you build the text, so an
+  edit counts from the next session.
+- Build text around a prompt as you like (add a list of files, say). The Inspector shows what was actually sent.
+- **Tool descriptions are prompts too**, without declaring them: each of the extension's `tools` gets one with id
+  `tool:<name>`, and agents are offered the tool with the user's edit as its description.
+- When `text` changes in an update, an edit made against the old default is kept and marked **Updated default**, so the
+  user can compare and reset.
+- An extension with prompts gets a page in Settings, even with no settings. An `instructions` hook with no
+  `instructions` prompt still works; the Inspector shows its text as not editable.
+- Kothar's own instructions (where agents may write, folder modes, checkouts) are shown in the Inspector but can't be
+  edited, since they carry its safety rules.
+
 ## Settings per space
 
 `spaceSettings` lists settings kept for each space instead of once for all of Kothar. They take the same types as
