@@ -80,7 +80,8 @@ What works today:
   Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in
   Finder or copies the path.
 - **Setups, themes, the marketplace,** and the built-in extensions in `extensions/`: Artifacts, Browser, Git, Home,
-  Memory, Notes, Processes, Reconnect, Skills and Account rotation.
+  Memory, Notes, Pins, Processes, Reconnect, Skills and Account rotation. Pins puts a Pin button on each message;
+  the Pinned tab lists the chat's pins and jumps back to one, loading older history if needed.
 
 Not built yet: remote machines, sandboxing outside macOS, a signed release, and sync.
 
