@@ -300,9 +300,31 @@ export function messageRow(container: HTMLElement, entry: number): HTMLElement |
   return folded ?? rows.filter((row) => first(row) <= entry).at(-1)
 }
 
+// The nearest ancestor that scrolls, such as the transcript.
+function scrollerOf(el: HTMLElement): HTMLElement | undefined {
+  for (let at = el.parentElement; at && at !== document.documentElement; at = at.parentElement) {
+    const { overflowY } = getComputedStyle(at)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && at.scrollHeight > at.clientHeight) return at
+  }
+  return undefined
+}
+
+/**
+ * Scrolls only the target's own scroller to centre it. scrollIntoView also scrolls every ancestor, the window's root
+ * included, which pushes the app's top bar out of view.
+ */
+export function centreIn(target: HTMLElement) {
+  const scroller = scrollerOf(target)
+  if (!scroller) return target.scrollIntoView?.({ block: 'center' })
+  const box = target.getBoundingClientRect()
+  const view = scroller.getBoundingClientRect()
+  const top = scroller.scrollTop + box.top - view.top - (scroller.clientHeight - Math.min(box.height, scroller.clientHeight)) / 2
+  scroller.scrollTo?.({ top: Math.max(0, top) })
+}
+
 function flash(target: HTMLElement | undefined) {
   if (!target) return false
-  target.scrollIntoView?.({ block: 'center' })
+  centreIn(target)
   target.dataset.revealed = ''
   setTimeout(() => delete target.dataset.revealed, 1600)
   return true
