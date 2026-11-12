@@ -6,6 +6,11 @@ export const CONTINUE_PROMPT =
   'you already finished (files, commands, replies above) and continue the task from where you left off. Don’t redo ' +
   'finished work.'
 
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
 // How long an account counts as limited when its engine doesn't say when the limit resets.
 export const UNKNOWN_RESET_MS = 60 * 60_000
 
@@ -45,6 +50,7 @@ export function createAccountRotation(now = () => Date.now()): Extension {
       'When a turn hits its account’s usage limit, switch the engine to the next saved account and carry on: the ' +
       'agent continues from where it stopped, or gets the message again if it hadn’t started. Accounts that hit their limit are skipped until it resets. The switch is for every chat.',
     enabledByDefault: false,
+    prompts: [{ id: 'continue', label: 'Sent to carry on after switching accounts', text: CONTINUE_PROMPT, where: 'message' }],
     settings: [
       {
         key: 'accounts',
@@ -102,7 +108,7 @@ export function createAccountRotation(now = () => Date.now()): Extension {
         return host.retry(chatId)
       }
       host.note(chatId, `${switched} and continued`)
-      host.continue(chatId, CONTINUE_PROMPT)
+      host.continue(chatId, promptOf(host, 'continue', CONTINUE_PROMPT))
     },
   }
 }

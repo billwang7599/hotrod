@@ -103,27 +103,71 @@ export const REVIEW_SCHEMA = {
 }
 
 /** What a research worker is told. */
-export function workerPrompt(run: Run, sub: number): string {
-  const sources = run.plan?.sources.length ? run.plan.sources.join('; ') : 'whatever is most authoritative'
-  const perWorker = Math.max(2, Math.ceil(run.limits.sources / Math.max(1, run.subQuestions.length)))
-  return [
-    "You are a research worker for Kothar's Deep Research. Research one sub-question and report evidence. Don't write a report.",
-    '',
-    `Overall question: ${run.question}`,
-    `Your sub-question: ${run.subQuestions[sub]}`,
-    `Kinds of sources to check: ${sources}`,
-    '',
-    'How to work:',
+// The text of Deep Research's prompts (Settings → Extensions → Deep Research → Prompts), as sent unless the user edits
+// them. The workers' and the planner's, reviewer's and writer's go to models outside the chat's turn.
+export const TEXT = {
+  workerIntro: "You are a research worker for Kothar's Deep Research. Research one sub-question and report evidence. Don't write a report.",
+  workerHow: [
     '- Use your web search and web fetch tools first. Use a browser only when a page can’t be read otherwise (it needs JavaScript). Don’t sign in to anything, fill in forms or buy anything.',
     '- Read the pages themselves, not only search snippets. Prefer primary and authoritative sources, and recent ones where it matters.',
-    `- Aim for 3 to 8 findings from at most ${perWorker} different pages.`,
-    '',
+  ].join('\n'),
+  workerReply: [
     'Reply with only this block, nothing before or after it:',
     '<findings>',
     '{"findings": [{"claim": "one fact, in your words", "quote": "the exact sentence or sentences from the page that support it, copied character for character", "url": "the page’s URL", "title": "the page’s title"}], "gaps": "what you couldn’t find"}',
     '</findings>',
     '',
     'Each quote must be copied exactly from the page at its URL: Kothar fetches every page and drops any finding whose quote isn’t on it. Never make up a quote, a URL or a title. If you found nothing reliable, reply with an empty list.',
+  ].join('\n'),
+  plan:
+    'You plan research. Split the question into independent sub-questions that can each be researched on the web by a ' +
+    'separate worker, and together answer it. Name the kinds of sources worth checking (such as official documentation, ' +
+    'peer-reviewed papers, government statistics, reputable news). Answer with JSON only.',
+  review:
+    'You review research in progress. Name what the question still needs: sub-questions nobody answered well, and claims ' +
+    'that contradict each other and need checking. Each becomes a new web research task, so make each a standalone ' +
+    'question. Return empty lists when the findings already answer the question. Answer with JSON only.',
+  write:
+    'You write research reports from checked evidence only. Every point must cite the ids of the findings that support ' +
+    'it (such as ["F2", "F7"]) and say nothing the cited quotes don’t support; a point without a supporting finding is ' +
+    'dropped. Don’t write citation numbers or URLs in the text. Where findings disagree, add a disagreement citing both ' +
+    'sides, with section: the index of the section it belongs to. Confidence reflects how strong and how consistent the ' +
+    'sources are. Open questions are what the evidence leaves unanswered. Answer with JSON only.',
+}
+
+// Each prompt's id, for host.prompt.
+export const PROMPT_IDS = {
+  workerIntro: 'worker-intro',
+  workerHow: 'worker-how',
+  workerReply: 'worker-reply',
+  plan: 'planner',
+  review: 'reviewer',
+  write: 'writer',
+} as const satisfies Record<keyof typeof TEXT, string>
+
+export type PromptText = (key: keyof typeof TEXT) => string
+// One of the prompts as the user left it in Settings (host.prompt), else its default, as with a host that has no
+// prompts (a test's).
+export const promptsOf =
+  (host: { prompt?: (id: string) => string } | undefined): PromptText =>
+  (key) =>
+    typeof host?.prompt === 'function' ? host.prompt(PROMPT_IDS[key]) : TEXT[key]
+
+export function workerPrompt(run: Run, sub: number, text: PromptText = (key) => TEXT[key]): string {
+  const sources = run.plan?.sources.length ? run.plan.sources.join('; ') : 'whatever is most authoritative'
+  const perWorker = Math.max(2, Math.ceil(run.limits.sources / Math.max(1, run.subQuestions.length)))
+  return [
+    text('workerIntro'),
+    '',
+    `Overall question: ${run.question}`,
+    `Your sub-question: ${run.subQuestions[sub]}`,
+    `Kinds of sources to check: ${sources}`,
+    '',
+    'How to work:',
+    text('workerHow'),
+    `- Aim for 3 to 8 findings from at most ${perWorker} different pages.`,
+    '',
+    text('workerReply'),
   ].join('\n')
 }
 
@@ -146,10 +190,7 @@ export function openResearch(ports: Ports) {
     const subs = DEPTH_LIMITS[run.depth].subs
     try {
       const text = await ports.complete({
-        system:
-          'You plan research. Split the question into independent sub-questions that can each be researched on the web by a ' +
-          'separate worker, and together answer it. Name the kinds of sources worth checking (such as official documentation, ' +
-          'peer-reviewed papers, government statistics, reputable news). Answer with JSON only.',
+        system: promptsOf(host)('plan'),
         prompt: `Question: ${run.question}\n\nGive ${subs} sub-questions (never more than ${MAX_SUBS}), each one line, and 2 to 5 kinds of sources.`,
         schema: PLAN_SCHEMA,
         timeoutMs: PLAN_TIMEOUT_MS,
@@ -248,7 +289,7 @@ export function openResearch(ports: Ports) {
       const label = `Research: ${short(run.subQuestions[sub]!, 60)}`
       let result: Investigation
       try {
-        result = await ports.investigate(run, workerPrompt(run, sub), label, entry.abort.signal)
+        result = await ports.investigate(run, workerPrompt(run, sub, promptsOf(host)), label, entry.abort.signal)
       } catch (error) {
         result = { reply: '', error: error instanceof Error ? error.message : String(error) }
       }
@@ -267,10 +308,7 @@ export function openResearch(ports: Ports) {
     if (left <= 0) return []
     const verified = run.findings.filter((f) => f.verified)
     const text = await ports.complete({
-      system:
-        'You review research in progress. Name what the question still needs: sub-questions nobody answered well, and claims ' +
-        'that contradict each other and need checking. Each becomes a new web research task, so make each a standalone ' +
-        'question. Return empty lists when the findings already answer the question. Answer with JSON only.',
+      system: promptsOf(host)('review'),
       prompt: [
         `Question: ${run.question}`,
         '',
@@ -303,12 +341,7 @@ export function openResearch(ports: Ports) {
       listed += line
     }
     const text = await ports.complete({
-      system:
-        'You write research reports from checked evidence only. Every point must cite the ids of the findings that support ' +
-        'it (such as ["F2", "F7"]) and say nothing the cited quotes don’t support; a point without a supporting finding is ' +
-        'dropped. Don’t write citation numbers or URLs in the text. Where findings disagree, add a disagreement citing both ' +
-        'sides, with section: the index of the section it belongs to. Confidence reflects how strong and how consistent the ' +
-        'sources are. Open questions are what the evidence leaves unanswered. Answer with JSON only.',
+      system: promptsOf(host)('write'),
       prompt: [
         `Question: ${run.question}`,
         '',

@@ -496,7 +496,16 @@ function assembleCore(options: {
   const { instructionPartsOf } = openInstructionParts({
     contextItems: (chat) => contextItems(chat),
     setupOf,
-    roleOf: (chat) => extensionChatOf(chat)?.instructions,
+    // The user's edit of the chat's role prompt (ExtensionChat.prompt), else its instructions.
+    roleOf: (chat) => {
+      const declared = extensionChatOf(chat)
+      if (!declared?.prompt) return declared?.instructions
+      try {
+        return prompts.textOf(declared.extension, declared.prompt)
+      } catch {
+        return declared.instructions
+      }
+    },
     roleOwnerOf: (chat) => extensionChatOf(chat)?.extension.id,
     isOnFor,
     valuesOf: extensionValues,

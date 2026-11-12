@@ -349,7 +349,7 @@ export type Run = { engine: string; model: string; thinking?: ThinkingLevel }
 export type PromptInfo = {
   id: string
   label: string
-  where: 'instructions' | 'message' | 'tool'
+  where: 'instructions' | 'message' | 'background' | 'tool'
   tool?: string
   description?: string
   default: string

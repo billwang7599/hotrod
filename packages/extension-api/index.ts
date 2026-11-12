@@ -173,8 +173,9 @@ export type ExtensionComposerToggle = {
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
 // An extension's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its
-// own.
-export type ExtensionChat = { id: string; name: string; instructions: string; seesAll?: boolean }
+// own. prompt: the id of one of the extension's prompts (where 'instructions') that holds these instructions, so the
+// user can edit them in Settings; Kothar then sends the user's edit, else instructions.
+export type ExtensionChat = { id: string; name: string; instructions: string; prompt?: string; seesAll?: boolean }
 
 // provider: the model provider it signs in to, on engines with more than one (OpenCode); a model of one provider
 // doesn't run on another's account.
@@ -776,9 +777,10 @@ export type ExtensionCommand = {
 // - id: lowercase letters, digits and dashes, unique in the extension.
 // - label: what it's for, such as "When to make artifacts".
 // - where: 'instructions' for text that goes in the session's instructions (from instructions() or memory.instructions);
-//   'message' for text put with the user's message, such as a memory's view header.
+//   'message' for text put with the user's message, such as a memory's view header; 'background' for text the
+//   extension sends a model it calls on its own (host.complete, a quiet worker's prompt), outside the chat's turn.
 // Each agent tool's description is a prompt too, without declaring it: id tool:<name>. Agents are sent the user's edit.
-export type ExtensionPrompt = { id: string; label: string; text: string; where: 'instructions' | 'message'; description?: string }
+export type ExtensionPrompt = { id: string; label: string; text: string; where: 'instructions' | 'message' | 'background'; description?: string }
 
 // What a turn was sent, in order, as Kothar handed it to the engine (Extension.onTurnSent). Joining the instructions
 // sections with a blank line gives the session's instructions exactly, and the prompt sections the prompt.

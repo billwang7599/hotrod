@@ -4,7 +4,7 @@ import type { Extension } from '@kothar/extension-api'
 
 const HOME_ID = 'main'
 
-const INSTRUCTIONS =
+export const INSTRUCTIONS =
   "You are the user's personal assistant in Kothar, running in its main chat, Home. Answer general questions, help " +
   'with personal tasks and use your MCP tools. You may work in any directory the user names in this chat. No ' +
   'folder stays attached to Home; each message starts in a scratch folder. For ongoing ' +
@@ -20,7 +20,8 @@ const home: Extension = {
     'A main chat beside your spaces: your assistant for general questions and personal tasks. It can list, read ' +
     'and message every space, and make new ones. Off hides it; its history stays.',
   enabledByDefault: true,
-  chats: [{ id: HOME_ID, name: 'Home', instructions: INSTRUCTIONS, seesAll: true }],
+  prompts: [{ id: 'role', label: 'Home’s role', text: INSTRUCTIONS, where: 'instructions' }],
+  chats: [{ id: HOME_ID, name: 'Home', instructions: INSTRUCTIONS, prompt: 'role', seesAll: true }],
   tools: [
     {
       name: 'create_chat',

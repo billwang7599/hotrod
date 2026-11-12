@@ -9,7 +9,7 @@ import type {
   ExtensionView,
   TurnSummary,
 } from '@kothar/extension-api'
-import { limitsFor, openResearch, planFromText, type Investigation, type Outcome, type Ports } from './run.ts'
+import { limitsFor, openResearch, planFromText, PROMPT_IDS, TEXT, type Investigation, type Outcome, type Ports } from './run.ts'
 import { ACTIVE, DEPTHS, DEPTH_LIMITS, openStore, type Depth, type Phase, type Run, type Store } from './store.ts'
 
 export * from './report.ts'
@@ -24,6 +24,13 @@ export * from './store.ts'
 // After a follow-up round or two on the gaps, the report is written from the kept findings only, with numbered
 // citations made here from them, and saved as an artifact, else a note, else a file.
 
+// Put before the user's message while the chip is on (the prompt "chip").
+export const CHIP_TEXT = [
+  '[Deep research is on in this chat.] Call the deep_research tool with the message below as its question, word for',
+  'word, then reply with its summary and where the report was saved. Don’t research it yourself first. If the message',
+  'clearly isn’t a question to research (thanks, a greeting, a question about a report you already gave), answer it',
+  'normally instead.',
+].join('\n')
 const TOGGLE = 'research'
 const PANEL = 'research'
 const REPORT = 'report'
@@ -369,6 +376,32 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
     name: 'Deep Research',
     description: 'Long, multi-source research that ends in a cited report. Workers search and read the web; every claim in the report is backed by a quote Kothar found on its page.',
     enabledByDefault: true,
+    prompts: [
+      {
+        id: 'chip',
+        label: 'Put before your message while Deep research is on',
+        text: CHIP_TEXT,
+        where: 'message',
+      },
+      { id: PROMPT_IDS.plan, label: 'The planner’s instructions', text: TEXT.plan, where: 'background' },
+      {
+        id: PROMPT_IDS.workerIntro,
+        label: 'A research worker: who it is',
+        text: TEXT.workerIntro,
+        where: 'background',
+        description: 'The question, its sub-question and the kinds of sources follow it.',
+      },
+      { id: PROMPT_IDS.workerHow, label: 'A research worker: how to work', text: TEXT.workerHow, where: 'background' },
+      {
+        id: PROMPT_IDS.workerReply,
+        label: 'A research worker: how to reply',
+        text: TEXT.workerReply,
+        where: 'background',
+        description: 'Kothar reads the <findings> block, so keep its shape.',
+      },
+      { id: PROMPT_IDS.review, label: 'The reviewer’s instructions (follow-up rounds)', text: TEXT.review, where: 'background' },
+      { id: PROMPT_IDS.write, label: 'The report writer’s instructions', text: TEXT.write, where: 'background' },
+    ],
     settings: [
       {
         key: 'depth',
@@ -465,14 +498,8 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         return text
       }
       if (!on) return text
-      return [
-        '[Deep research is on in this chat.] Call the deep_research tool with the message below as its question, word for',
-        'word, then reply with its summary and where the report was saved. Don’t research it yourself first. If the message',
-        'clearly isn’t a question to research (thanks, a greeting, a question about a report you already gave), answer it',
-        'normally instead.',
-        '',
-        text,
-      ].join('\n')
+      const header = typeof h.prompt === 'function' ? h.prompt('chip') : CHIP_TEXT
+      return [header, '', text].join('\n')
     },
     onStart(context) {
       values = context.values

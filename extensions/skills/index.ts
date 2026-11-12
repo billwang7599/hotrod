@@ -18,18 +18,26 @@ export const MAX_READ = 200 * 1024
 
 const cut = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 
-export function skillIndex(skills: Skill[]) {
+// What comes before the list of skills in each session's instructions (the prompt "index").
+export const INDEX_INTRO = [
+  "Skills: the user's saved instructions for particular kinds of task. When a task fits one, call read_skill with its",
+  'name before starting and follow it; read_skill_file reads a file it mentions. Run a script it bundles with an',
+  'ordinary shell command, at the path read_skill gives.',
+].join('\n')
+
+export function skillIndex(skills: Skill[], intro = INDEX_INTRO) {
   const on = skills.filter((skill) => skill.on)
   if (!on.length) return undefined
   const lines = on.slice(0, MAX_INDEXED).map((skill) => `- ${skill.id}: ${cut(skill.description, MAX_INDEX_DESCRIPTION)}`)
   if (on.length > MAX_INDEXED) lines.push(`- …and ${on.length - MAX_INDEXED} more; read_skill with no match lists them all.`)
-  return [
-    "Skills: the user's saved instructions for particular kinds of task. When a task fits one, call read_skill with its",
-    'name before starting and follow it; read_skill_file reads a file it mentions. Run a script it bundles with an',
-    'ordinary shell command, at the path read_skill gives.',
-    ...lines,
-  ].join('\n')
+  return [intro, ...lines].join('\n')
 }
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
 
 // A short word for where a skill came from, for its badge: the engine's name, or GitHub, Folder, File, Agent, By hand.
 export function sourceBadge(source: string) {
@@ -140,11 +148,20 @@ export function createSkillsExtension(options: SkillsOptions = {}): Extension {
     description:
       'Saved instructions for particular kinds of task, in the Agent Skills format (a folder with a SKILL.md). Agents on every engine see a one-line list and read a skill when a task fits it.',
     enabledByDefault: true,
+    prompts: [
+      {
+        id: 'index',
+        label: 'Before the list of skills',
+        text: INDEX_INTRO,
+        where: 'instructions',
+        description: 'The list of your skills that are on follows it, one line each.',
+      },
+    ],
 
     instructions({ tools }, { host }) {
       // Without the Kothar MCP server the agent couldn't read a skill, so the list would only cost room.
       if (!tools) return undefined
-      return skillIndex(libraryOf(host).list())
+      return skillIndex(libraryOf(host).list(), promptOf(host, 'index', INDEX_INTRO))
     },
 
     tools: [

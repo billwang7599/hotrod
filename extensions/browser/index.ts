@@ -67,6 +67,11 @@ const ANSI = /\x1b\[[0-9;]*m/g
 export const HAND_OFF_TOOL = 'ask_user_in_browser'
 export const SHOW_TOOL = 'show_browser'
 
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
 export const BROWSER_INSTRUCTIONS =
   'Browser (the browser_* tools): read a page from its snapshot, the one each action returns or browser_snapshot, ' +
   'and take a screenshot only when how it looks matters. Fill a form with one browser_fill_form call, not a call ' +
@@ -691,6 +696,15 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       'When a page needs you (a login, CAPTCHA, payment) or the agent wants to show you something, the browser opens ' +
       'in a window, and the agent carries on when you click Done.',
     enabledByDefault: false,
+    prompts: [
+      { id: 'browser', label: 'How to use the browser', text: BROWSER_INSTRUCTIONS, where: 'instructions' },
+      {
+        id: 'your-chrome',
+        label: 'Your own Chrome (added when the browser is your Chrome, through the Kothar extension)',
+        text: YOUR_CHROME_INSTRUCTIONS,
+        where: 'instructions',
+      },
+    ],
     settingsVersion: 1,
     // Version 0 had a picker of where the browser ran (your Chrome, a debugging port, the Playwright Extension, a
     // window, a copy of your Chrome's logins). There is one way now, so those settings go.
@@ -772,8 +786,11 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     // Sessions that take MCP servers get the browser, so they get this too.
-    instructions: ({ tools }, { values }) =>
-      tools ? (usesExtension(values) ? `${BROWSER_INSTRUCTIONS} ${YOUR_CHROME_INSTRUCTIONS}` : BROWSER_INSTRUCTIONS) : undefined,
+    instructions: ({ tools }, { values, host: h }) => {
+      if (!tools) return undefined
+      const text = promptOf(h, 'browser', BROWSER_INSTRUCTIONS)
+      return usesExtension(values) ? `${text} ${promptOf(h, 'your-chrome', YOUR_CHROME_INSTRUCTIONS)}` : text
+    },
 
     async onStart({ host: given, values }) {
       host = given

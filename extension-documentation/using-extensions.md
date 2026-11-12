@@ -148,7 +148,9 @@ The Inspector shows what Kothar actually sends the engine, so nothing it adds is
   page, under **Prompts**. Change it there; **Reset to default** brings back the extension's own. A prompt you edited
   shows **Edited**, and **Updated default** if the extension changed its default since. Tool descriptions are editable
   the same way. Kothar core's own text is shown but can't be edited, since it carries the safety rules (such as where
-  agents may write). An extension's text it doesn't name as a prompt shows **(not editable)**.
+  agents may write). An extension's text it doesn't name as a prompt shows **(not editable)**. Every built-in
+  extension names all of its hidden text as prompts, including what it sends models outside your turn (Memory's
+  summarizer, Deep Research's planner, workers and writer), so its page lists all of it.
 - **Where it's kept:** in each chat's folder, so it goes when the chat is deleted. Each chat keeps its latest 30 turns
   (Settings → Inspector → Turns to keep), and text that repeats from turn to turn, such as the instructions, is stored
   once.

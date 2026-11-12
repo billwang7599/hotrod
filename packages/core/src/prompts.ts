@@ -20,7 +20,7 @@ export function declaredPrompts(extension: Extension): ExtensionPrompt[] {
       PROMPT_ID.test(prompt.id) &&
       typeof prompt.label === 'string' &&
       typeof prompt.text === 'string' &&
-      (prompt.where === 'instructions' || prompt.where === 'message') &&
+      (prompt.where === 'instructions' || prompt.where === 'message' || prompt.where === 'background') &&
       !seen.has(prompt.id)
     if (fit) seen.add(prompt.id)
     return fit

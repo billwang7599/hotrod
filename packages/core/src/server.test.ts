@@ -980,6 +980,33 @@ it('sends named prompts and tool descriptions as the user edited them, and says 
   session.end('ok')
 })
 
+it('sends an extension chat’s role from its prompt, as the user edited it', async () => {
+  const sent: SentTurn[] = []
+  const roled: Extension = {
+    ...mainExtension,
+    prompts: [{ id: 'role', label: 'Main’s role', text: 'MAIN ROLE', where: 'instructions' }],
+    chats: [{ id: 'main', name: 'Main', instructions: 'MAIN ROLE', prompt: 'role', seesAll: true }],
+  }
+  const watcher: Extension = { id: 'watcher', name: 'Watcher', description: '', enabledByDefault: true, onTurnSent: (turn) => void sent.push(turn) }
+  const { core, send } = await startHeld({ extensions: [roled, watcher] })
+  const handle = handleOn(core)
+  let session = send('main', 'hi')
+  expect(session.options.instructions.startsWith('MAIN ROLE')).toBe(true)
+  session.end('ok')
+  handle({ type: 'extension.prompt.set', extensionId: 'main-extension', promptId: 'role', text: 'MY ROLE' })
+  session = send('main', 'again')
+  expect(session.options.instructions.startsWith('MY ROLE')).toBe(true)
+  expect(session.options.instructions).not.toContain('MAIN ROLE')
+  await waitUntil(() => sent.length === 2)
+  expect(sent[1]!.sections[0]).toMatchObject({
+    source: 'extension',
+    text: 'MY ROLE',
+    prompts: [{ id: 'role', edited: true }],
+    editable: true,
+  })
+  session.end('ok')
+})
+
 it('records a message steered into a running turn against that turn', async () => {
   const sent: SentTurn[] = []
   const watcher: Extension = { id: 'watcher', name: 'Watcher', description: '', enabledByDefault: true, onTurnSent: (turn) => void sent.push(turn) }

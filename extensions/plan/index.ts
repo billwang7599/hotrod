@@ -41,6 +41,63 @@ export const APPROVED_PROMPT =
   'The user approved your plan (it is in your instructions). Carry it out now, step by step, with your usual ' +
   'permissions. After each step, call update_plan_step with its number and done or skipped, and a short note.'
 
+// The text the planning turn gets; without Kothar's tools, the words about submit_plan are left out.
+export const PLANNING_INSTRUCTIONS = [
+  'Plan first is on. This turn is read only: Kothar refuses edits and commands that change anything, so don’t try them.',
+  'Read and search the code to understand the change, then hand in a plan by calling submit_plan once: the goal, the ' +
+    'files you will touch, ordered steps, the risks, and how you will test it.',
+  'Keep your reply short: the user reviews the plan itself and approves, edits or cancels it.',
+].join('\n')
+const SUBMIT_WORDS = ' by calling submit_plan once'
+export const PLANNING_WORKER_INSTRUCTIONS =
+  'Your lead is planning, so this turn is read only. Read and report what you find; change nothing.'
+export const APPROVED_INSTRUCTIONS = 'The user approved this plan. Carry it out in order.'
+export const APPROVED_WORKER_INSTRUCTIONS =
+  'Your lead is working through this approved plan. Do the step or steps your task names, and nothing else of it.'
+export const STEPS_INSTRUCTIONS =
+  'After each step, call update_plan_step with its number and done or skipped (with a short note). If you lose track, read_plan shows it.'
+
+// Its prompts (Settings → Extensions → Plan → Prompts).
+export const PROMPTS: NonNullable<Extension['prompts']> = [
+  {
+    id: 'planning',
+    label: 'While Plan first is on',
+    text: PLANNING_INSTRUCTIONS,
+    where: 'instructions',
+    description: 'Without Kothar’s tools, “ by calling submit_plan once” is left out.',
+  },
+  { id: 'planning-worker', label: 'A worker while its lead plans', text: PLANNING_WORKER_INSTRUCTIONS, where: 'instructions' },
+  {
+    id: 'approved',
+    label: 'Once a plan is approved',
+    text: APPROVED_INSTRUCTIONS,
+    where: 'instructions',
+    description: 'The step tracking line and the plan follow it.',
+  },
+  {
+    id: 'approved-worker',
+    label: 'A worker while its lead carries out a plan',
+    text: APPROVED_WORKER_INSTRUCTIONS,
+    where: 'instructions',
+    description: 'The step tracking line and the plan follow it.',
+  },
+  { id: 'steps', label: 'Tracking steps (with Kothar’s tools)', text: STEPS_INSTRUCTIONS, where: 'instructions' },
+  { id: 'approved-message', label: 'Sent to start the work on Approve', text: APPROVED_PROMPT, where: 'message' },
+  {
+    id: 'read-only-reason',
+    label: 'Told the agent when Plan first refuses a change',
+    text: READ_ONLY_REASON,
+    where: 'message',
+  },
+]
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string) => {
+  const fallback = PROMPTS.find((prompt) => prompt.id === id)!.text
+  return typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+}
+
 const STATUSES: StepStatus[] = ['todo', 'done', 'skipped']
 const isText = (value: unknown): value is string => typeof value === 'string'
 const lines = (value: unknown): string[] =>
@@ -180,7 +237,7 @@ export function createPlanExtension(): Extension {
     host.endWait(chatId)
     host.refresh(chatId)
     try {
-      host.continue(chatId, APPROVED_PROMPT)
+      host.continue(chatId, promptOf(host, 'approved-message'))
     } catch {
       // The chat moved on (a queued message started): that turn runs with the plan in its instructions anyway.
       host.note(chatId, 'Plan approved. The next turn carries it out.', { panel: TAB })
@@ -311,6 +368,7 @@ export function createPlanExtension(): Extension {
       'while it works out a plan, then you approve, edit or cancel it, and the Plan tab ticks off its steps as the ' +
       'work goes on.',
     enabledByDefault: true,
+    prompts: PROMPTS,
     settings: [
       {
         key: 'showToggle',
@@ -341,30 +399,20 @@ export function createPlanExtension(): Extension {
     turnOptions(chat, { host }): TurnOptions | undefined {
       // A worker started while its lead plans is read only too.
       if (!planOn(host, ownerOf(chat))) return undefined
-      return { readOnly: true, reason: READ_ONLY_REASON, role: 'planning' }
+      return { readOnly: true, reason: promptOf(host, 'read-only-reason'), role: 'planning' }
     },
 
     instructions({ chat, tools }, { host }) {
       const owner = ownerOf(chat)
       if (planOn(host, owner)) {
-        if (chat.worker) return 'Your lead is planning, so this turn is read only. Read and report what you find; change nothing.'
-        return [
-          'Plan first is on. This turn is read only: Kothar refuses edits and commands that change anything, so don’t try them.',
-          'Read and search the code to understand the change, then hand in a plan' +
-            (tools ? ' by calling submit_plan once' : '') +
-            ': the goal, the files you will touch, ordered steps, the risks, and how you will test it.',
-          'Keep your reply short: the user reviews the plan itself and approves, edits or cancels it.',
-        ].join('\n')
+        if (chat.worker) return promptOf(host, 'planning-worker')
+        const text = promptOf(host, 'planning')
+        return tools ? text : text.replace(SUBMIT_WORDS, '')
       }
       const plan = store(host, owner).read()
       if (!plan || plan.status !== 'approved' || doneCount(plan) === plan.steps.length) return undefined
-      const how = tools
-        ? 'After each step, call update_plan_step with its number and done or skipped (with a short note). If you lose track, read_plan shows it.'
-        : ''
-      if (chat.worker) {
-        return `Your lead is working through this approved plan. Do the step or steps your task names, and nothing else of it.\n${how}\n\n${planMarkdown(plan)}`
-      }
-      return `The user approved this plan. Carry it out in order.\n${how}\n\n${planMarkdown(plan)}`
+      const how = tools ? promptOf(host, 'steps') : ''
+      return `${promptOf(host, chat.worker ? 'approved-worker' : 'approved')}\n${how}\n\n${planMarkdown(plan)}`
     },
 
     tools: [

@@ -137,7 +137,7 @@ const extension: Extension = {
 | `id` | Lowercase letters, digits and dashes; unique in the extension |
 | `label` | What it's for, shown in Settings and the Inspector |
 | `text` | The default |
-| `where` | `instructions` for text in the session's instructions, `message` for text put with the user's message (such as a memory's header) |
+| `where` | `instructions` for text in the session's instructions, `message` for text put with the user's message or sent to carry a turn on (such as Reconnect's), `background` for text sent to a model the extension calls on its own, outside the chat's turn (a summarizer's instructions with `host.complete`, a quiet worker's prompt) |
 | `description` | Optional: more about it, under its label |
 
 - `host.prompt(id)` returns the user's edit, or `text` when there's none. Call it each time you build the text, so an
@@ -149,6 +149,9 @@ const extension: Extension = {
   user can compare and reset.
 - An extension with prompts gets a page in Settings, even with no settings. An `instructions` hook with no
   `instructions` prompt still works; the Inspector shows its text as not editable.
+- Every built-in extension's hidden text is a prompt: Artifacts, Browser, Processes, Skills, Memory (and its
+  summarizers), Plan, Deep Research (its chip text, planner, workers, reviewer and writer), Reconnect, Account rotation
+  and Home's role. Their defaults are exactly the text they sent before they were prompts.
 - Kothar's own instructions (where agents may write, folder modes, checkouts) are shown in the Inspector but can't be
   edited, since they carry its safety rules.
 

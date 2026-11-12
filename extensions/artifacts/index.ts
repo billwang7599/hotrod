@@ -115,7 +115,19 @@ export const INSTRUCTIONS = {
     'for small changes. Short answers and snippets stay in the reply.',
 }
 
-export const instructionsFor = (make: unknown) => (make === MAKE.useful ? INSTRUCTIONS.useful : INSTRUCTIONS.asked)
+// Its prompts (Settings → Extensions → Artifacts → Prompts): the instructions for each Make artifacts choice.
+export const PROMPTS = {
+  asked: 'only-when-asked',
+  useful: 'when-useful',
+} as const
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
+export const instructionsFor = (make: unknown, host?: { prompt?: (id: string) => string }) =>
+  make === MAKE.useful ? promptOf(host, PROMPTS.useful, INSTRUCTIONS.useful) : promptOf(host, PROMPTS.asked, INSTRUCTIONS.asked)
 
 // What the space's web switch allows, as html-frame.tsx's frameCsp does: https: joins the sources a page may load
 // scripts, styles, images, fonts and media from; connect-src stays 'none'.
@@ -615,6 +627,10 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
       'documents and code files. Kept per space with every version, shown beside the chat, all of them in a library ' +
       '(⌘⇧A), and run in a sandbox, offline.',
     enabledByDefault: true,
+    prompts: [
+      { id: PROMPTS.asked, label: 'When to make artifacts (Make artifacts: Only when asked)', text: INSTRUCTIONS.asked, where: 'instructions' },
+      { id: PROMPTS.useful, label: 'When to make artifacts (Make artifacts: When useful)', text: INSTRUCTIONS.useful, where: 'instructions' },
+    ],
     // Saved as web, its name before; the key stays so saved values carry over.
     settings: [
       {
@@ -630,7 +646,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
       },
     ],
     spaceSettings: [{ key: 'web', label: 'Load files from the internet', type: 'boolean', default: false, description: WEB_HINT }],
-    instructions: ({ chat, tools }, { host, values }) => (tools && spaceOf(host, chat.id) ? instructionsFor(values.make) : undefined),
+    instructions: ({ chat, tools }, { host, values }) => (tools && spaceOf(host, chat.id) ? instructionsFor(values.make, host) : undefined),
     tools: [
       {
         name: 'create_artifact',

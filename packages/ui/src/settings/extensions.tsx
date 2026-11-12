@@ -247,6 +247,7 @@ function ExtensionPage({ extension, connected, send }: SetupProps) {
 const WHERE: Record<PromptInfo['where'], string> = {
   instructions: 'In every session’s instructions',
   message: 'With your message',
+  background: 'To a model it calls on its own',
   tool: 'A tool’s description',
 }
 

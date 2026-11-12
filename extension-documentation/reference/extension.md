@@ -77,6 +77,7 @@ A `ExtensionChat` has:
 | `id` | `string` | The chat's id. No other extension's chat may have it. |
 | `name` | `string` | Shown in the sidebar. |
 | `instructions` | `string` | The chat's role, given first in every session's instructions. |
+| `prompt` | `string`, optional | The id of one of the extension's [prompts](settings.md#prompts) (`where: 'instructions'`, its `text` the same as `instructions`) that holds the role, so the user can edit it in Settings. Kothar then sends the user's edit. Home's is `role`. |
 | `seesAll` | `boolean`, optional | The chat can list, read and message every chat through Kothar's own tools, as Home does. |
 
 An extension's chat is pinned. It can't be renamed, archived or deleted, and it keeps no folders, files or `AGENTS.md`
