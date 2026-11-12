@@ -154,6 +154,25 @@ The Inspector shows what Kothar actually sends the engine, so nothing it adds is
 - **Where it's kept:** in each chat's folder, so it goes when the chat is deleted. Each chat keeps its latest 30 turns
   (Settings → Inspector → Turns to keep), and text that repeats from turn to turn, such as the instructions, is stored
   once.
+- **Activity:** the **Activity** tab lists what Kothar and its extensions did on their own, outside the agent's tool
+  calls, newest first, each labelled with who did it and when:
+  - **Model calls** outside your turn, such as Memory's summaries and Deep Research's planner, reviewer and writer: the
+    model, what it was sent and its reply (folded; open a card to read it).
+  - **Permission answers**, allowed or denied, and **which rule decided**: a switch (such as Read anywhere without
+    asking), a folder mode, the sandbox, a read-only turn, an extension's policy, or you.
+  - **How extensions changed a turn**: made it read only (with the reason the agent is told), ran it on another model
+    list, a composer toggle that was on, or rewrote your message (before and after).
+  - **Workers and tools**: chats an extension started (such as Deep Research's quiet workers), messages it sent them,
+    and tools it called.
+  - **Carrying on**: Reconnect and Account rotation carrying a turn on (with what was sent), account switches, and
+    Browser launches and hand-offs.
+
+  **This chat**, **Whole space** (with its workers, labelled with where each happened) and **Not tied to a chat** (model
+  calls and account switches no chat asked for) pick what's listed; the kind buttons filter it. It's kept the same way
+  as what was sent: in the chat's folder, for the same number of turns, each long text stored once. The tab draws only
+  while it's open.
+- **What Activity can't show yet:** engine restarts, and what an engine does inside its own session (its own
+  sub-agents, retries and tools), which Kothar sees only as the tool calls the engine reports.
 - **Off:** nothing is recorded while the Inspector is off, and Kothar doesn't build the record at all, so turns sent
   then can't be looked at later. Turn it back on to record from the next message.
 

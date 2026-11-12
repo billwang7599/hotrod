@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { openAccounts } from './accounts.ts'
 import { openChatSetups, openSetups } from './setups.ts'
 import { openChatLifecycle } from './chat-lifecycle.ts'
+import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
 import { WORKERS_EXTENSION, workersFor } from './workers.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
@@ -339,16 +340,41 @@ function assembleCore(options: {
   }
 
   // A one-shot call on the model picked for summaries, for extensions (host.complete), run in Home's scratch folder.
-  const completeFor = async (request: CompletionRequest) => {
+  // Each call is listed in the Activity (activity.ts) under request.chatId, with what was sent and the reply.
+  const completeFor = async (request: CompletionRequest, from?: Extension) => {
     const { engine, model } = models.memory()
-    const adapter = engine === undefined ? undefined : adapterFor(engine)
-    if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
-    checkEnabled(adapter.id)
-    const cwd = join(chosenWorkFolder(), 'home')
-    mkdirSync(cwd, { recursive: true })
-    const sandbox = sandboxIn(cwd)
-    const options = { ...request, cwd, model, ...accounts.sessionFor(adapter.id), ...(sandbox && { sandbox }) }
-    return adapter.complete(machine, options)
+    const chatId = typeof request.chatId === 'string' && chats.has(request.chatId) ? request.chatId : undefined
+    const { chatId: _chatId, ...call } = request
+    const started = Date.now()
+    const record = (outcome: { result?: string; error?: unknown }) =>
+      activity.emit(chatId, () => ({
+        kind: 'model',
+        ...(from && { by: from }),
+        title: `Called ${model ?? 'a model'}${engine ? ` on ${adapterFor(engine)?.name ?? engine}` : ''}`,
+        ...(model && { model }),
+        detail: `${((Date.now() - started) / 1000).toFixed(1)} s${request.schema ? ', asked for JSON' : ''}`,
+        sections: [
+          { label: 'Instructions (system)', text: request.system },
+          { label: 'Prompt', text: request.prompt },
+        ],
+        ...(outcome.result !== undefined && { result: outcome.result }),
+        ...(outcome.error !== undefined && { error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error) }),
+      }))
+    try {
+      const adapter = engine === undefined ? undefined : adapterFor(engine)
+      if (!adapter?.complete || model === undefined) throw new Error('No engine that is on can write summaries')
+      checkEnabled(adapter.id)
+      const cwd = join(chosenWorkFolder(), 'home')
+      mkdirSync(cwd, { recursive: true })
+      const sandbox = sandboxIn(cwd)
+      const options = { ...call, cwd, model, ...accounts.sessionFor(adapter.id), ...(sandbox && { sandbox }) }
+      const result = await adapter.complete(machine, options)
+      record({ result })
+      return result
+    } catch (error) {
+      record({ error })
+      throw error
+    }
   }
   let enginesDetected = false
   // Extensions' background work (onStart) waits until model calls can run: engines detected and a work folder chosen.
@@ -460,6 +486,13 @@ function assembleCore(options: {
 
   // With a chat: only the extensions that shape its sessions (see isOnFor).
   const watchersOf = (hook: ExtensionHook, chat?: Chat) => extensions.filter((extension) => isOnFor(extension, chat) && extension[hook])
+  // What Kothar and its extensions do on their own, for extensions that watch (onActivity), such as the Inspector.
+  const activity = openActivity<Chat>({
+    now,
+    chat: (chatId) => chats.get(chatId),
+    watchers: (chat) => (quitting ? [] : watchersOf('onActivity', chat)),
+    deliver: (extension, event) => callExtension(extension, () => extension.onActivity!(event, contextOf(extension))),
+  })
   const callExtensions = (hook: ExtensionHook, run: (extension: Extension, context: ExtensionContext) => unknown) => {
     if (quitting) return
     for (const extension of watchersOf(hook)) callExtension(extension, () => run(extension, contextOf(extension)))
@@ -576,6 +609,7 @@ function assembleCore(options: {
     viewOf,
     instructionPartsOf,
     turnSent: (chat, input) => turnSent(chat, input),
+    activity,
   })
 
   const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
@@ -622,6 +656,7 @@ function assembleCore(options: {
     accounts,
     run: () => runFor(),
     complete: completeFor,
+    activity,
     promptText: prompts.textOf,
     broadcast,
     terminalRoots,

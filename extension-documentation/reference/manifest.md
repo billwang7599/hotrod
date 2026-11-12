@@ -58,7 +58,7 @@ extension and before you turn it on, and holds the extension to it:
 | `accounts` | Sees and switches your engine accounts | `host.accounts`, `host.useAccount` |
 | `models` | Makes model calls on your accounts | `host.complete` |
 | `memory` | Decides what agents remember of each chat | `memory`, `host.chatStorage`, `host.everyChatStorage` |
-| `readChats` | Reads your chats | `host.chats`, `host.chat`, `host.read`, `host.space`, `host.messages`, `host.message`, `host.reaches`, `host.reachable`, `onTurnSent` |
+| `readChats` | Reads your chats | `host.chats`, `host.chat`, `host.read`, `host.space`, `host.messages`, `host.message`, `host.reaches`, `host.reachable`, `onTurnSent`, `onActivity` |
 | `transforms` | Rewrites your messages or agents' replies | `transformMessage`, `transformOutput` |
 | `instructions` | Adds to every agent's instructions | `instructions`, `prompts` |
 | `tools` | Gives agents tools, and uses other extensions' tools | `tools`, `host.callTool` |

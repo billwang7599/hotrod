@@ -170,7 +170,9 @@ export type ExtensionComposerToggle = {
 }
 
 // A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
-export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
+// chatId: the chat it's for (a memory summary of that chat, a research run started in it), so the Inspector's Activity
+// lists the call under that chat; without one it's listed as not tied to a chat.
+export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number; chatId?: string }
 
 // An extension's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its
 // own. prompt: the id of one of the extension's prompts (where 'instructions') that holds these instructions, so the
@@ -375,7 +377,43 @@ export type ExtensionHost = {
   // One of this extension's prompts (Extension.prompts) as it's sent now: the user's edit from Settings, else its
   // default text. Throws for a prompt the extension doesn't declare.
   prompt(id: string): string
+  // Tells the user something the extension did on its own, outside what the agent's tool calls show (it launched a
+  // browser, handed one to the user, checked quotes): it's listed in the chat's Activity in the Inspector, labelled
+  // with the extension's name. Kothar already lists the extension's model calls (complete), messages it sends
+  // (send, continue, retry), chats it starts, account switches and tool calls (callTool), so don't repeat those.
+  activity(event: ActivityInput): void
 }
+
+// Something Kothar or an extension did on its own, outside the agent's own tool calls (Extension.onActivity).
+// kind: 'model' (a model call outside the chat's turn), 'permission' (a request answered, and which rule answered it),
+// 'turn' (how an extension changed a turn: read only, another model list, a toggle that was on, a rewritten message),
+// 'worker' (a chat started or sent a message by an extension, such as a quiet worker), 'tool' (an extension called
+// another's tool), 'retry' (a turn carried on or run again), 'account' (an account switch), 'browser', 'other'.
+export type ActivityKind = 'model' | 'permission' | 'turn' | 'worker' | 'tool' | 'retry' | 'account' | 'browser' | 'other'
+export type ActivityEvent = {
+  id: string
+  at: string
+  // The chat it's about; none for a model call not tied to a chat.
+  chatId?: string
+  // The chat's turn running then (SentTurn.turn), if any.
+  turn?: string
+  kind: ActivityKind
+  // Who did it: Kothar itself (no extension), or an extension by id and name.
+  by: { extension?: string; name: string }
+  title: string
+  detail?: string
+  // A model call's model, and what it was sent, labelled as in SentSection.
+  model?: string
+  sections?: { label: string; text: string }[]
+  result?: string
+  error?: string
+  // A permission request: how it was answered, and the rule that answered it.
+  decision?: 'allowed' | 'denied'
+  rule?: string
+}
+export type ActivityInput = { kind: ActivityKind; title: string; chatId?: string } & Partial<
+  Pick<ActivityEvent, 'detail' | 'model' | 'sections' | 'result' | 'error'>
+>
 
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
 // (such as a version) beside it. Each is plain text, cut if long.
@@ -876,6 +914,9 @@ export type Extension = {
   // What a turn's session was sent, as it opens, and each message steered into it (SentTurn). Called only when some
   // extension that's on watches it, so the core builds nothing otherwise.
   onTurnSent?(sent: SentTurn, context: ExtensionContext): void
+  // Something Kothar or an extension did on its own (ActivityEvent), as it happens. Like onTurnSent, called only when
+  // some extension that's on watches, so the core builds nothing otherwise.
+  onActivity?(event: ActivityEvent, context: ExtensionContext): void
   // A policy for permission requests the core would otherwise ask the user about, or would allow on its own. Return a
   // verdict to answer it, or nothing to leave it. Extensions are asked in load order; the first verdict wins. The
   // core's own denials (edits outside the work folder in a sandbox) always stand.

@@ -380,6 +380,7 @@ export function openCompactor(options: {
           prompt,
           schema: SUMMARIES_SCHEMA,
           timeoutMs: COMPLETE_TIMEOUT_MS,
+          chatId,
         })
         lines = parseReply(reply)
         if (!lines) reason = `the reply wasn't JSON (${clip(oneLine(reply), 200) || 'empty'})`

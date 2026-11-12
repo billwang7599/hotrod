@@ -1,6 +1,7 @@
 // What each extension gets from Kothar: its host (ExtensionHost) and context, made once per extension and kept, plus
 // the commands it starts with host.spawn. The core passes in everything a host reaches as plain functions; nothing here
 // keeps chats or settings.
+import { checkedActivity, type Activity } from './activity.ts'
 import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type {
@@ -122,7 +123,10 @@ export type HostDeps<C extends HostChat> = {
   // The rest of Kothar
   accounts: Pick<Accounts, 'list' | 'use'>
   run: () => ExtensionRun
-  complete: (request: CompletionRequest) => Promise<string>
+  /** A model call for an extension (host.complete); from: the extension, for the Activity record. */
+  complete: (request: CompletionRequest, from: Extension) => Promise<string>
+  /** Kothar's activity stream (activity.ts): what extensions do through the host is emitted to it. */
+  activity: Activity
   /** One of the extension's prompts as it's sent: the user's edit, else its default. */
   promptText: (extension: Extension, id: string) => string
   broadcast: (message: CoreMessage) => void
@@ -181,9 +185,26 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
           if (quiet !== undefined) throw new Error('Only a child chat (with parentId) can be quiet')
           return deps.createChat({ name, folders, files, engine })
         }
-        return deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }) })
+        const info = deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }) })
+        deps.activity.emit(String(parentId), () => ({
+          kind: 'worker',
+          by: extension,
+          title: `Started ${quiet === true ? 'a quiet worker' : 'a child chat'}: ${info.name}`,
+          ...(role !== undefined && { detail: `On the ${role} model list` }),
+        }))
+        return info
       },
-      send: (chatId, text) => deps.enqueue(chatFor(chatId), { text }),
+      send(chatId, text) {
+        const chat = chatFor(chatId)
+        deps.enqueue(chat, { text })
+        // A worker's goes under its parent too: a finished worker's chat (and its folder) is removed.
+        deps.activity.emit(chat.info.parentId ?? chat.info.id, () => ({
+          kind: 'worker',
+          by: extension,
+          title: `Sent ${chat.info.name} a message`,
+          sections: [{ label: 'The message', text: String(text) }],
+        }))
+      },
       chats: () => deps.shownChats().map(deps.detailOf),
       chat(chatId) {
         const chat = deps.chat(chatId)
@@ -221,9 +242,25 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         }))
         return { engine, active: found.active, accounts: list }
       },
-      useAccount: (engine, accountId) => deps.accounts.use(engine, accountId, true),
-      retry: (chatId) => deps.retry(chatFor(chatId)),
-      continue: (chatId, text) => deps.continueTurn(chatFor(chatId), text),
+      useAccount(engine, accountId) {
+        deps.accounts.use(engine, accountId, true)
+        deps.activity.emit(undefined, () => ({ kind: 'account', by: extension, title: `Switched ${engine} to the account ${accountId}` }))
+      },
+      retry(chatId) {
+        const chat = chatFor(chatId)
+        deps.retry(chat)
+        deps.activity.emit(chat.info.id, () => ({ kind: 'retry', by: extension, title: 'Ran the turn again' }))
+      },
+      continue(chatId, text) {
+        const chat = chatFor(chatId)
+        deps.continueTurn(chat, text)
+        deps.activity.emit(chat.info.id, () => ({
+          kind: 'retry',
+          by: extension,
+          title: 'Carried the turn on',
+          sections: [{ label: 'Sent to carry it on', text: String(text) }],
+        }))
+      },
       note(chatId, text, options) {
         const panel = options?.panel
         if (panel !== undefined && !extension.panels?.some((p) => p.id === panel)) {
@@ -264,7 +301,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       now: () => deps.now(),
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       message: (chatId, entry) => messageAt(chatFor(chatId).entries, Number(entry)),
-      complete: (request) => deps.complete(request),
+      complete: (request) => deps.complete(request, extension),
       refresh: (chatId) => deps.refresh(extension, chatId),
       showPanel(chatId, panel) {
         const chat = chatFor(String(chatId))
@@ -333,10 +370,31 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         const tool = owner?.tools?.find((t) => t.name === name && t.offered(caller))
         if (!owner || !tool) throw new Error(`No tool "${name}" is on for ${chat.info.name}`)
         if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new Error('A tool takes an object as its input')
-        return await tool.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
+        const record = (outcome: { result?: unknown; error?: unknown }) =>
+          deps.activity.emit(chat.info.id, () => ({
+            kind: 'tool',
+            by: extension,
+            title: `Called ${owner === extension ? 'its own' : `${owner.name}’s`} tool ${name}`,
+            sections: [{ label: 'Input', text: JSON.stringify(input, null, 2) }],
+            ...('result' in outcome && { result: typeof outcome.result === 'string' ? outcome.result : JSON.stringify(outcome.result) ?? '' }),
+            ...('error' in outcome && { error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error) }),
+          }))
+        try {
+          const result = await tool.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
+          record({ result })
+          return result
+        } catch (error) {
+          record({ error })
+          throw error
+        }
       },
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
       prompt: (id) => deps.promptText(extension, String(id)),
+      activity(input) {
+        const checked = checkedActivity(input)
+        const chatId = checked.chatId === undefined ? undefined : chatFor(String(checked.chatId)).info.id
+        deps.activity.emit(chatId, () => ({ ...checked, by: extension }))
+      },
       setToggle(chatId, toggle, on) {
         const chat = chatFor(String(chatId))
         const found = toggleOf(extension, toggle)

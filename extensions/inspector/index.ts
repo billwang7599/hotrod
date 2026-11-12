@@ -4,6 +4,7 @@
 // with the chat), capped at the last turns and with each distinct text stored once.
 import { createHash } from 'node:crypto'
 import type {
+  ActivityEvent,
   ChatDetail,
   Extension,
   ExtensionHost,
@@ -14,6 +15,12 @@ import type {
   SentSource,
   SentTurn,
 } from '@kothar/extension-api'
+import { activityStore, activityView, type Scope, type StoredEvent } from './activity.ts'
+
+// Compacted to the turns kept after this many events are added to one chat's Activity.
+const COMPACT_EVERY = 100
+// Open Activity tabs draw again at most this often while events come in.
+const REDRAW_MS = 300
 
 export const SENT_FILE = 'inspector/sent.json'
 export const TEXT_DIR = 'inspector/text'
@@ -195,19 +202,78 @@ export function createInspectorExtension(): Extension {
     text: 'Nothing recorded yet. Send a message and what Kothar sends the engine shows here.',
   }
   const keepOf = (values: Record<string, unknown>) => (typeof values.keep === 'number' ? values.keep : DEFAULT_KEEP)
+  // Activity: each chat's tab filters (its scope and kind); the chats whose Activity tab drew since the last event, so
+  // only those draw again (a closed tab doesn't draw, so it drops out); events added per store since its compaction.
+  const filters = new Map<string, { scope: Scope; kind: ActivityEvent['kind'] | 'all' }>()
+  const watching = new Set<string>()
+  const added = new Map<string, number>()
+  let redraw: ReturnType<typeof setTimeout> | undefined
+  const activityOf = (host: ExtensionHost, chatId: string | undefined) =>
+    activityStore(chatId === undefined ? host.storage : host.chatStorage(chatId))
+  const redrawSoon = (host: ExtensionHost) => {
+    if (redraw || !watching.size) return
+    redraw = setTimeout(() => {
+      redraw = undefined
+      const chats = [...watching]
+      watching.clear()
+      for (const chatId of chats) {
+        try {
+          host.refresh(chatId)
+        } catch {
+          // Gone.
+        }
+      }
+    }, REDRAW_MS)
+    redraw.unref?.()
+  }
+  // The space a chat is in (its top chat) and every chat under it, by id, with names.
+  const spaceChats = (host: ExtensionHost, chat: ChatDetail) => {
+    let top = chat as Pick<ChatDetail, 'id' | 'parentId' | 'name'>
+    for (let parent = top.parentId && host.chat(top.parentId); parent; parent = parent.parentId && host.chat(parent.parentId)) top = parent
+    const all = host.chats()
+    const inside = new Map<string, string>([[top.id, top.name]])
+    for (let grew = true; grew; ) {
+      grew = false
+      for (const other of all) {
+        if (other.parentId && inside.has(other.parentId) && !inside.has(other.id)) {
+          inside.set(other.id, other.name)
+          grew = true
+        }
+      }
+    }
+    return inside
+  }
+  const eventsFor = (host: ExtensionHost, chat: ChatDetail, scope: Scope) => {
+    type Shown = { event: StoredEvent; text: (hash: string) => string; where?: string }
+    const from = (chatId: string | undefined, where?: string): Shown[] => {
+      try {
+        const store = activityOf(host, chatId)
+        return store.read().map((event) => ({ event, text: store.text, ...(where && { where }) }))
+      } catch {
+        return []
+      }
+    }
+    if (scope === 'none') return from(undefined)
+    if (scope === 'chat') return from(chat.id)
+    return [...spaceChats(host, chat)]
+      .flatMap(([id, name]) => from(id, id === chat.id ? undefined : name))
+      .sort((a, b) => (a.event.at < b.event.at ? -1 : a.event.at > b.event.at ? 1 : 0))
+  }
   return {
     id: 'inspector',
     name: 'Inspector',
     description:
       'Shows what Kothar actually sends the engine each turn, beside your message: Kothar’s own rules, each ' +
       'extension’s prompts and tools, the chat’s context and memory, and how the turn ran, each labelled. Kept in the ' +
-      'chat’s folder, so it goes with the chat.',
+      'chat’s folder, so it goes with the chat. Its Activity tab lists what Kothar and extensions did on their own: model ' +
+      'calls, permission answers and the rule behind each, workers, retries and more.',
     enabledByDefault: true,
     settings: [
       {
         key: 'keep',
         label: 'Turns to keep',
-        description: 'How many of each chat’s latest turns to keep. Texts that repeat (such as the instructions) are stored once.',
+        description:
+          'How many of each chat’s latest turns to keep, for what was sent and for Activity. Texts that repeat (such as the instructions) are stored once.',
         type: 'number',
         default: DEFAULT_KEEP,
         min: 1,
@@ -215,6 +281,17 @@ export function createInspectorExtension(): Extension {
         integer: true,
       },
     ],
+    onActivity(event, { host, values }) {
+      const store = activityOf(host, event.chatId)
+      store.add(event)
+      const key = event.chatId ?? ''
+      const count = (added.get(key) ?? 0) + 1
+      if (count >= COMPACT_EVERY) {
+        store.compact(keepOf(values))
+        added.set(key, 0)
+      } else added.set(key, count)
+      redrawSoon(host)
+    },
     onTurnSent(sent, { host, values }) {
       storeOf(host, sent.chat.id).add(sent, keepOf(values))
       host.refresh(sent.chat.id)
@@ -239,6 +316,24 @@ export function createInspectorExtension(): Extension {
       },
     ],
     panels: [
+      {
+        id: 'activity',
+        title: 'Activity',
+        render(chat: ChatDetail, { host }) {
+          watching.add(chat.id)
+          const { scope, kind } = filters.get(chat.id) ?? { scope: 'chat', kind: 'all' }
+          return activityView(eventsFor(host, chat, scope), scope, kind)
+        },
+        onAction(action, chat) {
+          const current = filters.get(chat.id) ?? { scope: 'chat' as Scope, kind: 'all' as const }
+          if (action.name === 'scope' && (action.value === 'chat' || action.value === 'space' || action.value === 'none')) {
+            filters.set(chat.id, { scope: action.value, kind: 'all' })
+          }
+          if (action.name === 'kind' && typeof action.value === 'string') {
+            filters.set(chat.id, { ...current, kind: action.value as ActivityEvent['kind'] | 'all' })
+          }
+        },
+      },
       {
         id: 'sent',
         title: 'Sent',
@@ -285,6 +380,9 @@ export function createInspectorExtension(): Extension {
     ],
     onChatRemoved(chat) {
       shown.delete(chat.id)
+      filters.delete(chat.id)
+      watching.delete(chat.id)
+      added.delete(chat.id)
     },
   }
 }

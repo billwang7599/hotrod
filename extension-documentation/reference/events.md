@@ -247,6 +247,28 @@ has this hook.
 
 List `readChats` in the manifest's `uses`: the sections hold the chat's messages and context files.
 
+## onActivity
+
+`onActivity(event, context)` gets each thing Kothar or an extension does on its own, outside the agent's own tool calls
+(`ActivityEvent`), as it happens. It's what the Inspector's **Activity** tab lists. Like `onTurnSent`, Kothar builds
+nothing unless an extension that's on has this hook.
+
+| `kind` | What it is | Emitted by |
+|---|---|---|
+| `model` | A model call outside the chat's turn: `model`, the `sections` sent (instructions and prompt), the `result` or `error` | `host.complete` (under `chatId` if the call gave one) |
+| `permission` | A permission request answered: `decision` (`allowed` or `denied`) and the `rule` that answered it: a switch, a folder mode, the sandbox, a read-only turn, an extension (`Extension: <name>`) or `You` | Kothar |
+| `turn` | How an extension changed a turn: read only (with the reason), another model list, a composer toggle that was on, a message rewritten by `transformMessage` (before and after) | Kothar |
+| `worker` | A child chat an extension started (quiet or not), or a message it sent a chat (`host.send`; a worker's is listed under its parent too) | `host.createChat`, `host.send` |
+| `tool` | An extension called a tool (`host.callTool`): the input and the result or error | `host.callTool` |
+| `retry` | A turn carried on (`host.continue`, with what was sent) or run again (`host.retry`) | `host.continue`, `host.retry` |
+| `account` | An account switch, not tied to a chat | `host.useAccount` |
+| `browser`, `other` | What an extension reports itself | `host.activity` |
+
+`by` is who did it: `{ name: 'Kothar' }`, or the extension's `id` and `name`. `turn` is the id of the chat's turn
+running then, if any (as in `SentTurn`). Long texts are cut at 100,000 characters (a section) or 20,000 (a result).
+
+List `readChats` in the manifest's `uses`.
+
 ## Transforms
 
 `transformMessage(text, chat, context)` rewrites each message on its way to the engine. The chat's log, and you, keep

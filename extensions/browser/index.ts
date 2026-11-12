@@ -260,6 +260,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const launch = options.launch ? options.launch(host!) : chromiumLauncher(host!, findExecutable)
     return async (given) => {
       const choice = choiceOf(current)
+      const where =
+        choice.kind === 'kothar' ? (engineOf(current).kind === 'chromium' ? 'Kothar’s Chromium' : 'your installed Chrome, on Kothar’s profile for this space') : 'a copy of your browser profile'
+      activityOf(spaceId, `Launched the browser${given.cold ? '' : ' again'}`, `On ${where}`)
       if (choice.kind === 'error') throw new Error(`${choice.message}: pick a profile in Settings → Extensions → Browser`)
       if (choice.kind === 'extension') throw new Error(NOT_CONNECTED)
       if (choice.kind === 'kothar') {
@@ -271,6 +274,15 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       const copied = readMirror(mirror)
       if (given.cold || !copied || copied.source !== choice.dir) mirrorProfile(choice.dir, mirror)
       return launch({ ...given, profile: mirror, executable: choice.executable, keychain: 'real' })
+    }
+  }
+
+  // Listed in the chat's Activity (the Inspector); a host without activity (a test's) skips it.
+  const activityOf = (chatId: string, title: string, detail?: string) => {
+    try {
+      if (typeof host?.activity === 'function') host.activity({ kind: 'browser', chatId, title, ...(detail && { detail }) })
+    } catch {
+      // The chat is gone: nothing to list it under.
     }
   }
 
@@ -540,7 +552,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         throw new Error('Another chat in this space is waiting on the user in the browser; try again after')
       }
       asked.set(caller.id, name)
+      activityOf(caller.id, plain ? 'Handed the browser to you in a plain window' : 'Showed you the browser', `Why: ${reason}`)
       const result = await (plain ? browser.signIn(reason, caller.id) : browser.handOff(reason, caller.id))
+      activityOf(caller.id, 'Took the browser back', resultText(result))
       asked.delete(caller.id)
       notified.delete(caller.id)
       try {

@@ -288,6 +288,28 @@ export { titleFor }
 
 List `models` in the manifest's `uses`: each call runs on your account.
 
+Each call is listed in the Inspector's **Activity**, with your extension's name, the model, what was sent and the reply.
+Pass `chatId` (the chat the call is for, such as the chat a summary is of) to list it under that chat; without it, it's
+listed as not tied to a chat.
+
+## Activity
+
+`activity({ kind, title, chatId?, detail?, sections?, result?, error? })` lists something your extension did on its own
+in the chat's **Activity** (the Inspector), labelled with your extension's name: it launched a browser, handed one to the
+user, checked a source. `kind` is one of the [`ActivityKind`s](events.md#onactivity), usually `browser` or `other`.
+Kothar already lists your model calls, the messages you send (`send`, `continue`, `retry`), the chats you start, account
+switches and `callTool` calls, so don't repeat those. Any extension may call it.
+
+```ts
+import type { ExtensionHost } from '@kothar/extension-api'
+
+function launched(host: ExtensionHost, chatId: string) {
+  host.activity({ kind: 'browser', chatId, title: 'Launched the browser', detail: 'On Kothar’s Chromium' })
+}
+
+export { launched }
+```
+
 ## Settings per space
 
 | Call | What it does |

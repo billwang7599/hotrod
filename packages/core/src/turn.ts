@@ -25,7 +25,9 @@ import { summaryOf } from './kothar-mcp.ts'
 import { instructionSections, type InstructionParts, type InstructionSection } from './instructions.ts'
 import { continuationParts, messagesOf, seededParts, withAttachments, type PromptPart, type Report } from './memory.ts'
 import type { openModels } from './models.ts'
-import { verdictOf } from './permissions.ts'
+import { decide, type RuledVerdict, type verdictOf } from './permissions.ts'
+import type { Activity } from './activity.ts'
+import { isToggled } from './composer-toggles.ts'
 import {
   editsAnywhere,
   IMAGE_TYPES,
@@ -111,6 +113,8 @@ export type TurnDeps = {
   instructionPartsOf: (chat: Chat, zoomable: boolean) => SessionParts
   // What a turn's session was sent, or a message steered into it, for extensions that watch (onTurnSent).
   turnSent?: (chat: Chat, sent: SentInput) => void
+  // What Kothar and extensions do on their own (activity.ts): permission answers, how extensions changed a turn.
+  activity?: Activity
 }
 
 // What the core hands on of a turn as its session opens (kind 'turn'), or of a message steered into it ('steer'), for
@@ -439,11 +443,70 @@ export function openTurns(deps: TurnDeps) {
   }
 
   // Each extension's text transform in turn; one that throws leaves the text as it was.
+  // How extensions shaped a turn as it opened: read only, another model list, and the composer toggles that were on.
+  const recordTurnChanges = (chat: Chat, sent: NonNullable<TurnPlan['sent']>, readOnly: TurnPlan['readOnly']) => {
+    const activity = deps.activity
+    if (!activity?.listening(chat.info.id)) return
+    const extensionOf = (id: string) => watchersOf('turnOptions', chat).find((extension) => extension.id === id)
+    if (readOnly && sent.readOnlyBy) {
+      activity.emit(chat.info.id, () => ({
+        kind: 'turn',
+        ...(extensionOf(sent.readOnlyBy!) && { by: extensionOf(sent.readOnlyBy!) }),
+        title: 'Made this turn read only',
+        ...(readOnly.reason && { detail: `Told the agent when it tries a change: ${readOnly.reason}` }),
+      }))
+    }
+    if (sent.role) {
+      const { role, by, used } = sent.role
+      activity.emit(chat.info.id, () => ({
+        kind: 'turn',
+        ...(extensionOf(by) && { by: extensionOf(by) }),
+        title: used ? `Ran this turn on the ${role} model list` : `Asked for the ${role} model list, which is empty, so the chat’s own model ran`,
+      }))
+    }
+    for (const extension of deps.extensions.filter((e) => e.composerToggles?.length && deps.isOnFor(e, chat))) {
+      const on = extension.composerToggles!.filter((toggle) => isToggled(chat.info, extension, toggle))
+      if (!on.length) continue
+      activity.emit(chat.info.id, () => ({
+        kind: 'turn',
+        by: extension,
+        title: `On for this turn: ${on.map((toggle) => toggle.label).join(', ')}`,
+      }))
+    }
+  }
+
+  // Requests left to the user, by id, so their answer is recorded with what was asked.
+  const asked = new Map<string, PermissionRequest>()
+  const recordPermission = (chat: Chat, request: PermissionRequest, allow: boolean, rule: string, message?: string) =>
+    deps.activity?.emit(chat.info.id, () => ({
+      kind: 'permission',
+      title: `${allow ? 'Allowed' : 'Denied'}: ${request.summary || request.name}`,
+      decision: allow ? 'allowed' : 'denied',
+      rule,
+      detail: [
+        `${request.name} (${request.kind})`,
+        ...(request.path !== undefined ? [`Path: ${request.path}`] : []),
+        ...(request.command !== undefined ? [`Command: ${request.command}`] : []),
+        ...(message ? [`Told the agent: ${message}`] : []),
+      ].join('\n'),
+    }))
+
   const transformed = (hook: 'transformMessage' | 'transformOutput', chat: Chat, text: string) =>
     watchersOf(hook, chat).reduce((current, extension) => {
       try {
         const next = extension[hook]!(current, detailOf(chat), contextOf(extension))
         if (typeof next !== 'string') throw new Error(`${hook} must return text`)
+        if (hook === 'transformMessage' && next !== current) {
+          deps.activity?.emit(chat.info.id, () => ({
+            kind: 'turn',
+            by: extension,
+            title: 'Rewrote your message before it was sent',
+            sections: [
+              { label: 'Before', text: current },
+              { label: 'As sent', text: next },
+            ],
+          }))
+        }
         return next
       } catch (error) {
         extensionError(extension, error)
@@ -488,15 +551,15 @@ export function openTurns(deps: TurnDeps) {
   const extensionVerdict = (
     request: PermissionRequest,
     chat: Chat,
-  ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
+  ): RuledVerdict | undefined | Promise<RuledVerdict | undefined> => {
     const watchers = watchersOf('onPermissionRequested', chat)
     const checked = (extension: Extension, verdict: PermissionVerdict | undefined) => {
       if (verdict === undefined || verdict === null) return undefined
-      if (typeof verdict.allow === 'boolean') return verdict
+      if (typeof verdict.allow === 'boolean') return { ...verdict, rule: `Extension: ${extension.name}` }
       extensionError(extension, new Error('A permission verdict needs allow: true or false'))
       return undefined
     }
-    const ask = (from: number): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined> => {
+    const ask = (from: number): RuledVerdict | undefined | Promise<RuledVerdict | undefined> => {
       for (let i = from; i < watchers.length; i++) {
         const extension = watchers[i]!
         let answer: ReturnType<NonNullable<Extension['onPermissionRequested']>>
@@ -704,6 +767,7 @@ export function openTurns(deps: TurnDeps) {
           images: images?.length ?? 0,
         })
       }
+      if (sent && !sent.continued) recordTurnChanges(chat, sent, readOnly)
       const session = adapter.start(machine, options, events.emit)
       events.ref.session = session
       if (chat.status === 'idle') return session.close()
@@ -780,17 +844,19 @@ export function openTurns(deps: TurnDeps) {
         if (tool && tool.path === undefined) tool.path = event.path
       }
       const { requestId } = event
-      const settle = (verdict: PermissionVerdict | undefined) => {
+      const settle = (verdict: RuledVerdict | undefined) => {
         if (!verdict) {
           chat.pendingRequests.set(requestId, 'permission')
+          asked.set(requestId, event)
           return setStatus(chat, 'waiting')
         }
         chat.pendingRequests.delete(requestId)
         const resolvedAt = now().toISOString()
         append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
+        recordPermission(chat, event, verdict.allow, verdict.rule, verdict.message)
         ref.session?.respond(requestId, verdict.allow, verdict.message)
       }
-      const own = verdictOf(event, permissionsOf())
+      const own = decide(event, permissionsOf())
       // The core's denials stand; otherwise an extension's policy goes first.
       if (own?.allow === false) return settle(own)
       const fromExtensions = extensionVerdict(event, chat)
@@ -953,6 +1019,9 @@ export function openTurns(deps: TurnDeps) {
   const respond = (chat: Chat, requestId: string, allow: boolean) => {
     const entry = { at: now().toISOString(), type: 'permission.resolved' as const, requestId, allow }
     settle(chat, entry).respond(requestId, allow)
+    const request = asked.get(requestId)
+    asked.delete(requestId)
+    if (request) recordPermission(chat, request, allow, 'You')
   }
 
   const answer = (chat: Chat, requestId: string, answers: unknown) => {

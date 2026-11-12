@@ -191,6 +191,7 @@ export function openResearch(ports: Ports) {
     try {
       const text = await ports.complete({
         system: promptsOf(host)('plan'),
+        chatId: run.chatId,
         prompt: `Question: ${run.question}\n\nGive ${subs} sub-questions (never more than ${MAX_SUBS}), each one line, and 2 to 5 kinds of sources.`,
         schema: PLAN_SCHEMA,
         timeoutMs: PLAN_TIMEOUT_MS,
@@ -309,6 +310,7 @@ export function openResearch(ports: Ports) {
     const verified = run.findings.filter((f) => f.verified)
     const text = await ports.complete({
       system: promptsOf(host)('review'),
+      chatId: run.chatId,
       prompt: [
         `Question: ${run.question}`,
         '',
@@ -342,6 +344,7 @@ export function openResearch(ports: Ports) {
     }
     const text = await ports.complete({
       system: promptsOf(host)('write'),
+      chatId: run.chatId,
       prompt: [
         `Question: ${run.question}`,
         '',

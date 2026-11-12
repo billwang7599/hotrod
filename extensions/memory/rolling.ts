@@ -160,11 +160,11 @@ export function openRollingCompactor(options: {
       const fold = chat && foldOf(chat.messages, readRolling(chat.storage, chat.messages), options.minChars)
       return chat && fold ? { chat, fold } : undefined
     },
-    async work(_chatId, { chat, fold }) {
+    async work(chatId, { chat, fold }) {
       let reason = ''
       let text = ''
       try {
-        const reply = await options.complete({ system: options.system?.() ?? FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS })
+        const reply = await options.complete({ system: options.system?.() ?? FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS, chatId })
         text = reply.trim()
         if (!text) reason = 'the reply was empty'
       } catch (error) {

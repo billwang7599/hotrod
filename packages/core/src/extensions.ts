@@ -55,6 +55,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['instructions', 'instructions'],
   ['prompts', 'instructions'],
   ['onTurnSent', 'readChats'],
+  ['onActivity', 'readChats'],
   ['onPermissionRequested', 'permissions'],
   ['turnOptions', 'permissions'],
   ['transformMessage', 'transforms'],
@@ -145,7 +146,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
 
 // Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
 // the clock.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now', 'prompt']
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now', 'prompt', 'activity']
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check
