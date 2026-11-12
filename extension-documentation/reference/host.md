@@ -357,7 +357,11 @@ Without a chat, it does so for every chat. Call it when what your panels show ha
 
 `wait(chatId, { text, buttons })` puts a running chat in **waiting**, as an unanswered permission request does: it
 turns amber in the sidebar, and a bar above the composer shows `text` and the buttons. A worker's bar shows in its
-space too, where the user is. Each button is `{ id, label, primary?, hint? }`.
+space too, where the user is. Each button is `{ id, label, primary?, hint?, closes? }`.
+
+`closes: true` marks a button that answers the wait for good, such as Done. Clicking it ends the wait at once, in the
+bar and in the core, before `onWaitAction` runs. The bar goes on the click even if the extension then does slow work
+(closing a window, say), and a second click finds nothing to answer. Without it, the wait stays until `endWait`.
 
 When the user clicks a button, Kothar calls the extension's `onWaitAction(chat, { button }, context)`. When they send
 the chat a message instead, it calls `onWaitAction(chat, { message }, context)`, and the message still goes to the
@@ -379,7 +383,7 @@ const extension: Extension = {
       inputSchema: { type: 'object', properties: { why: { type: 'string' } } },
       offered: () => true,
       async run(input, { caller, host }) {
-        host.wait(caller.id, { text: String(input.why), buttons: [{ id: 'done', label: 'Done', primary: true }] })
+        host.wait(caller.id, { text: String(input.why), buttons: [{ id: 'done', label: 'Done', primary: true, closes: true }] })
         await new Promise<void>((resolve) => (answered = resolve))
         host.endWait(caller.id)
         return 'The user is done.'

@@ -978,6 +978,35 @@ test("an extension's wait shows above the composer with its buttons, in the chat
   expect(bar()).toBeNull()
 })
 
+test("a wait's closing button hides the bar on the click, before the core ends the wait, and can't be clicked twice", () => {
+  const sent: ClientMessage[] = []
+  const wait = {
+    extension: 'browser',
+    text: 'Browser: Look at the chart',
+    buttons: [
+      { id: 'open', label: 'Open browser' },
+      { id: 'done', label: 'Done', primary: true, closes: true },
+    ],
+  }
+  const bar = () => container.querySelector('[aria-label="Waiting for you"]')
+  const button = (label: string) => [...bar()!.querySelectorAll('button')].find((b) => b.textContent === label)!
+  const space = { ...SPACE, status: 'waiting' as const, items: [USER], waits: [wait] }
+  render(space, (m) => sent.push(m))
+  // A button that doesn't close leaves the bar up.
+  act(() => button('Open browser').click())
+  expect(bar()).not.toBeNull()
+  act(() => button('Done').click())
+  expect(sent.filter((m) => m.type === 'extension.wait.answer' && m.button === 'done')).toHaveLength(1)
+  // Gone at once, though the core still lists the wait.
+  expect(bar()).toBeNull()
+  render(space, (m) => sent.push(m))
+  expect(bar()).toBeNull()
+  // Once the core drops it, the same wait asked again shows again.
+  render({ ...space, waits: [] }, (m) => sent.push(m))
+  render(space, (m) => sent.push(m))
+  expect(bar()!.textContent).toContain('Browser: Look at the chart')
+})
+
 test("a worker's own view shows where its request waits, with a way to the space instead of Approve", () => {
   const select = vi.fn()
   render(worker(), () => {}, { chats: [SPACE], select })

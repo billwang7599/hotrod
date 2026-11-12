@@ -623,6 +623,7 @@ function assembleCore(options: {
       shownChats,
       detailOf,
       broadcast,
+      setWait,
     })
 
   const { loadAll, createChat, createChild, renameChat, archiveChat, moveChat, removeChats, deleteChat } = openChatLifecycle({

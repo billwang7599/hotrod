@@ -345,7 +345,11 @@ export type ExtensionNoteCard = { title: string; badge?: string; detail?: string
 export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
-export type ExtensionWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }
+// closes: the button answers the wait for good, such as Done. Clicking it ends the wait at once, in the UI and in the
+// core, before onWaitAction runs, so the bar goes the moment it's clicked, whatever slow work the extension then does,
+// and a second click finds nothing to answer. Without it the wait stays until the extension calls endWait.
+export type ExtensionWaitButton = { id: string; label: string; primary?: boolean; hint?: string; closes?: boolean }
+export type ExtensionWait = { text: string; buttons: ExtensionWaitButton[] }
 
 // How the user answered a wait: a button, or a message they sent the chat instead (it still goes to the agent).
 export type ExtensionWaitAnswer = { button: string } | { message: string }

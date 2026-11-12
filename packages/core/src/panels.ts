@@ -33,6 +33,8 @@ export type PanelDeps = {
   shownChats: () => Chat[]
   detailOf: (chat: Chat) => ChatDetail
   broadcast: (message: CoreMessage) => void
+  /** Sets or ends an extension's wait on a chat (turn.ts). */
+  setWait: (chat: Chat, extensionId: string, wait: ExtensionWait | undefined) => void
 }
 
 export function openPanels(deps: PanelDeps) {
@@ -51,6 +53,7 @@ export function openPanels(deps: PanelDeps) {
     shownChats,
     detailOf,
     broadcast,
+    setWait,
   } = deps
   type Offered = { shown?(chat: ChatDetail, context: ExtensionContext): boolean }
   const offeredBy = (extension: Extension, item: Offered, chat: Chat) => {
@@ -162,10 +165,11 @@ export function openPanels(deps: PanelDeps) {
   const answerWait = (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => {
     const wait = chat.waits.get(extensionId)
     if (!wait) throw new Error('Nothing is waiting there any more')
-    if ('button' in answer && !wait.buttons.some((b) => b.id === answer.button)) {
-      throw new Error(`No button "${answer.button}"`)
-    }
+    const button = 'button' in answer ? wait.buttons.find((b) => b.id === answer.button) : undefined
+    if ('button' in answer && !button) throw new Error(`No button "${answer.button}"`)
     const extension = extensionFor(extensionId)
+    // A closing button ends the wait first: the bar goes now, and a second click finds nothing waiting.
+    if (button?.closes) setWait(chat, extensionId, undefined)
     callExtension(extension, () => extension.onWaitAction?.(detailOf(chat), answer, contextOf(extension)))
   }
   const checkWait = (wait: ExtensionWait): ExtensionWait => {
@@ -173,7 +177,16 @@ export function openPanels(deps: PanelDeps) {
     for (const b of wait.buttons) {
       if (typeof b?.id !== 'string' || typeof b.label !== 'string') throw new Error('Each button needs an id and a label')
     }
-    return { text: wait.text, buttons: wait.buttons.map(({ id, label, primary, hint }) => ({ id, label, ...(primary && { primary }), ...(hint && { hint }) })) }
+    return {
+      text: wait.text,
+      buttons: wait.buttons.map(({ id, label, primary, hint, closes }) => ({
+        id,
+        label,
+        ...(primary && { primary }),
+        ...(hint && { hint }),
+        ...(closes && { closes }),
+      })),
+    }
   }
   const runCommand = (chat: Chat, extensionId: unknown, commandId: unknown) => {
     const extension = extensionFor(String(extensionId))
