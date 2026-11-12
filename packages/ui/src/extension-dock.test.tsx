@@ -8,7 +8,7 @@ import type { ExtensionView } from '@kothar/extension-api'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { ExtensionDock, useOpenDock } from './extension-dock.tsx'
 import { launcherEntries, usePanelShortcuts } from './extension-popups.tsx'
-import { currentDock, openDock, showsFor, widenDock } from './panel-tab.ts'
+import { currentDock, openDock, panelOverDock, resetDocks, rightColumn, selectDockChat, showsFor, widenDock } from './panel-tab.ts'
 import { reloadShortcuts } from './shortcuts.ts'
 import { panelKey, type State } from './state.ts'
 
@@ -24,6 +24,7 @@ let sent: ClientMessage[]
 beforeEach(() => {
   localStorage.clear()
   reloadShortcuts()
+  selectDockChat('space')
   sent = []
   host = document.createElement('div')
   document.body.append(host)
@@ -31,7 +32,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  act(() => openDock(null))
+  act(() => resetDocks())
   act(() => root.unmount())
   host.remove()
 })
@@ -109,7 +110,7 @@ test('closing or opening another narrows it again; only a dock panel of the chat
   expect(dock()).toBeNull()
   act(() => widenDock(true))
   act(() => openDock(null))
-  expect(currentDock()).toEqual({ open: null, wide: false })
+  expect(currentDock()).toEqual({ open: null, wide: false, panel: false })
   act(() => widenDock(true))
   expect(currentDock().wide).toBe(false)
 })
@@ -141,4 +142,30 @@ test('an extension’s panel opens for the chat the user looks at, or one above 
   expect(showsFor(chats, 'space', 'worker')).toBe(false)
   expect(showsFor(chats, 'other', 'space')).toBe(false)
   expect(showsFor(chats, '', 'space')).toBe(false)
+})
+
+test('docks are kept per chat, open in front of the right sidebar, and swap with it', () => {
+  act(() => openDock('extension:artifacts/artifacts', 'a'))
+  expect(currentDock('a').open).toBe('extension:artifacts/artifacts')
+  expect(currentDock('b').open).toBeNull()
+  act(() => panelOverDock(true, 'b'))
+  expect(currentDock('b')).toEqual({ open: null, wide: false, panel: false })
+  act(() => panelOverDock(true, 'a'))
+  expect(currentDock('a').panel).toBe(true)
+  // Opening one again brings it back to the front.
+  act(() => openDock('extension:artifacts/artifacts', 'a'))
+  expect(currentDock('a').panel).toBe(false)
+  // A launcher or shortcut for a dock behind the sidebar brings it to the front instead of closing it.
+  selectDockChat('a')
+  act(() => panelOverDock(true))
+  const [entry] = launcherEntries([artifacts], {}, () => {})
+  act(() => entry!.open())
+  expect(currentDock('a')).toMatchObject({ open: 'extension:artifacts/artifacts', panel: false })
+})
+
+test('only one right-hand column shows, and the sidebar comes back as the user left it', () => {
+  expect(rightColumn(true, { open: false, panel: false })).toEqual({ sidebar: true, dock: false })
+  expect(rightColumn(false, { open: false, panel: false })).toEqual({ sidebar: false, dock: false })
+  expect(rightColumn(true, { open: true, panel: false })).toEqual({ sidebar: false, dock: true })
+  expect(rightColumn(false, { open: true, panel: true })).toEqual({ sidebar: true, dock: false })
 })

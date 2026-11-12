@@ -1,7 +1,7 @@
 // A chat's view: its header, the transcript, what waits below it (queue, requests, waits) and the message box, with
 // the Context panel beside it. The transcript items, cards and message box live in chat/.
 import type { ExtensionAction } from '@kothar/extension-api'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type RefObject } from 'react'
 import { AnimatePresence, m, useReducedMotion } from 'motion/react'
 import {
   levelsOf,
@@ -19,7 +19,7 @@ import {
   type WorkFolder,
 } from '@kothar/core/shared'
 import { ContextPanel } from './context-panel.tsx'
-import { choosePanelTab, extensionTabId, openDock, openPopup } from './panel-tab.ts'
+import { choosePanelTab, extensionTabId, openDock, openPopup, useDock } from './panel-tab.ts'
 import { ExtensionDock, useOpenDock } from './extension-dock.tsx'
 import { ReportsOpen, StepsOpen, useReportsShown, useStepsShown } from './steps.ts'
 import { confirm, Hint, MOTION, SidePanel, useSettled } from './controls.tsx'
@@ -101,6 +101,21 @@ type ChatProps = {
 }
 
 const NO_PANELS: PanelTab[] = []
+
+/** The element's height while watching (undefined otherwise), kept up to date as it changes. */
+function useHeight(ref: RefObject<HTMLElement | null>, watching: boolean) {
+  const [height, setHeight] = useState<number>()
+  useLayoutEffect(() => {
+    const node = ref.current
+    if (!watching || !node) return setHeight(undefined)
+    setHeight(node.offsetHeight)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => setHeight(node.offsetHeight))
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [ref, watching])
+  return height
+}
 const NO_ACTIONS: MessageActionInfo[] = []
 const entryOf = (item: Item) => ('entry' in item && item.entry !== undefined ? [item.entry] : [])
 
@@ -290,7 +305,12 @@ export function Chat(props: ChatProps) {
   // How many older items loaded pages put in front of the first one loaded; rows stay keyed from that one.
   const shift = chat.shift ?? 0
   const { revealOf, draftKey, draftFrom } = useRevealNumbers(chat)
-  const dockPanel = useOpenDock(props.extensionUi?.chatId === chat.id ? props.extensionUi.panels : NO_PANELS)
+  const dockPanel = useOpenDock(props.extensionUi?.chatId === chat.id ? props.extensionUi.panels : NO_PANELS, chat.id)
+  // One right-hand column at a time: with the right sidebar docked in front, the dock waits out of sight.
+  const dockHidden = useDock(chat.id).panel && !props.contextOverlay
+  // A dock that fills the pane stops above the bars waiting on the user, so an approval is never covered.
+  const bottomRef = useRef<HTMLDivElement>(null)
+  const bottomPx = useHeight(bottomRef, asking || waits.length > 0)
   const itemProps = {
     chat,
     ...(!reduceMotion && { revealOf }),
@@ -308,7 +328,7 @@ export function Chat(props: ChatProps) {
       if (action && connected) send({ type: 'extension.panel.action', chatId: chat.id, extension, panel, action })
       const placement = props.extensionUi?.panels.find((p) => p.extension === extension && p.id === panel)?.placement
       if (placement === 'popup') return openPopup(extensionTabId(extension, panel))
-      if (placement === 'dock') return openDock(extensionTabId(extension, panel))
+      if (placement === 'dock') return openDock(extensionTabId(extension, panel), chat.id)
       choosePanelTab(extensionTabId(extension, panel))
       if (!props.contextOpen) props.toggleContext()
     },
@@ -422,7 +442,7 @@ export function Chat(props: ChatProps) {
             </FileLinks.Provider>
           </div>
         </div>
-        <div className="relative shrink-0 px-24 pb-16">
+        <div ref={bottomRef} className="relative shrink-0 px-24 pb-16">
           <div className="pointer-events-none absolute inset-x-24 bottom-full mx-auto flex max-w-column justify-end pb-12">
             <AnimatePresence>
               {jumpShown && (
@@ -532,6 +552,8 @@ export function Chat(props: ChatProps) {
             panelViews={props.panelViews}
             connected={connected}
             send={send}
+            hidden={dockHidden}
+            clearBottom={bottomPx}
           />
         )}
       </AnimatePresence>

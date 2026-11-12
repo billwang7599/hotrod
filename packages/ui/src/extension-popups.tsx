@@ -5,7 +5,7 @@ import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, Hint, MOTION } from './controls.tsx'
 import { revealLater } from './search.tsx'
 import { ExtensionViewer, whileStale } from './extension-view.tsx'
-import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
+import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, panelOverDock, usePopup } from './panel-tab.ts'
 import { clampPopup, type PopupSize, POPUP_DEFAULT_WIDTH, POPUP_MIN, POPUP_MARGIN, POPUP_STEP, POPUP_TOP, resetPopupSize, setPopupSize, usePopupSize } from './popup-size.ts'
 import { conflictsOf, normalize, parseBinding, refusal, registerShortcut, shortcutActions, type ShortcutHandlers } from './shortcuts.ts'
 import type { Launcher } from './sidebar.tsx'
@@ -22,7 +22,15 @@ export const isPopup = (panel: PanelTab) => panel.placement === 'popup'
 function opener(panel: PanelTab, showTab: () => void, toggle: boolean) {
   const id = extensionTabId(panel.extension, panel.id)
   if (panel.placement === 'popup') return () => openPopup(toggle && currentPopup() === id ? null : id)
-  if (panel.placement === 'dock') return () => openDock(toggle && currentDock().open === id ? null : id)
+  if (panel.placement === 'dock') {
+    return () => {
+      const dock = currentDock()
+      if (dock.open !== id) return openDock(id)
+      // Behind the right sidebar, it comes back to the front; in front, a toggle closes it.
+      if (dock.panel) return panelOverDock(false)
+      if (toggle) openDock(null)
+    }
+  }
   return () => {
     choosePanelTab(id)
     showTab()

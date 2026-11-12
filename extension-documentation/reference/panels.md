@@ -63,7 +63,7 @@ A `ExtensionPanel` has:
 | `shown(chat, context)` | Optional. Whether this chat gets the tab. Without it, every chat does. |
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
-| `placement` | Optional. `'tab'` (the default) or `'popup'`: a large window over the chat, for work that wants room, such as notes. Esc closes it. It draws for the chat that's open, as a tab does. |
+| `placement` | Optional. `'tab'` (the default), `'popup'`: a large window over the chat, for work that wants room, such as notes (Esc closes it), or `'dock'`: a column beside the chat, for something to look at while the chat goes on, such as an artifact. Only one right-hand column shows at a time: while a dock is open, the right sidebar hides, and the right sidebar's toggle swaps the two (the dock keeps its scroll and drafts). Closing the dock brings the right sidebar back as the user left it. A dock is kept per chat. Whichever, it draws for the chat that's open, as a tab does. |
 | `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
 | `launcher` | Optional. `true` also shows a launcher for the panel in the left sidebar; the panel is always a tab in the right panel. Launchers sit at the top, under Home, unless the user moves them to the bottom or hides them in **Settings → Appearance**. |
 

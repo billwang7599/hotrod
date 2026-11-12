@@ -3,11 +3,11 @@ import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { domAnimation, LazyMotion, MotionConfig } from 'motion/react'
 import { Tooltip } from 'radix-ui'
-import { afterEach, beforeEach, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { Chat, FOLLOW_PX, JUMP_BELOW_PX } from './chat.tsx'
 import { PERMISSIONS } from './context-panel.tsx'
 import { DRAFT_SAVE_MS } from './drafts.ts'
-import { currentDock, openDock } from './panel-tab.ts'
+import { currentDock, openDock, panelOverDock, resetDocks, rightColumn, widenDock } from './panel-tab.ts'
 import { showPaths } from './paths.ts'
 import { resetReveals } from './smooth.ts'
 import { reloadSteps, showReportsByDefault, showStepsByDefault, showStepsIn } from './steps.ts'
@@ -1325,8 +1325,8 @@ test("an extension's card stays in view when the turn folds, and opens its panel
     panel: 'artifacts',
     action: { name: 'open', value: 'chart' },
   })
-  expect(currentDock().open).toBe('extension:artifacts/artifacts')
-  act(() => openDock(null))
+  expect(currentDock('c1').open).toBe('extension:artifacts/artifacts')
+  act(() => openDock(null, 'c1'))
 })
 
 test("extensions' message actions sit beside Copy on messages with a log entry, marked ones stay shown", () => {
@@ -1383,4 +1383,92 @@ test("another chat's composer toggles aren't shown", () => {
   const toggles = [{ extension: 'deep-research', id: 'research', label: 'Deep research', on: true }]
   render({}, () => {}, { extensionUi: { chatId: 'other', panels: [], commands: [], toggles } })
   expect(container.querySelectorAll('[data-composer-toggle]')).toHaveLength(0)
+})
+
+describe('one right-hand column at a time', () => {
+  const panels = [{ extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock' as const }]
+  const extensionUi = { chatId: 'c1', panels, commands: [] }
+  const dock = () => container.querySelector('[data-dock]') as HTMLElement | null
+  const sidebar = () => container.querySelector('aside[aria-label="Context"]') as HTMLElement | null
+  // What main.tsx passes as contextOpen, with the user's own open/closed choice for the right sidebar.
+  const show = (sidebarOpen: boolean, chat: Partial<ChatView> = {}) => {
+    const d = currentDock(chat.id ?? 'c1')
+    const contextOpen = rightColumn(sidebarOpen, { open: d.open !== null, panel: d.panel }).sidebar
+    render({ items: [USER], ...chat }, () => {}, { extensionUi: { ...extensionUi, chatId: chat.id ?? 'c1' }, contextOpen })
+  }
+  afterEach(() => act(() => resetDocks()))
+
+  test('opening a beside view hides the right sidebar; closing it brings the sidebar back as it was, at its width', async () => {
+    show(true)
+    const width = sidebar()!.style.width
+    expect(width).toMatch(/px$/)
+    act(() => openDock('extension:artifacts/artifacts', 'c1'))
+    show(true)
+    expect(dock()).not.toBeNull()
+    await act(() => new Promise((done) => setTimeout(done, 300)))
+    expect(sidebar()).toBeNull()
+    act(() => openDock(null, 'c1'))
+    show(true)
+    expect(sidebar()!.style.width).toBe(width)
+    // A sidebar the user had closed stays closed.
+    act(() => openDock('extension:artifacts/artifacts', 'c1'))
+    act(() => openDock(null, 'c1'))
+    show(false)
+    await act(() => new Promise((done) => setTimeout(done, 300)))
+    expect(sidebar()).toBeNull()
+  })
+
+  test('toggling the sidebar swaps it with the beside view, which stays mounted with its scroll', async () => {
+    act(() => openDock('extension:artifacts/artifacts', 'c1'))
+    show(false)
+    const shown = dock()!
+    const scroller = shown.querySelector('.overflow-y-auto') as HTMLElement
+    scroller.scrollTop = 300
+    act(() => panelOverDock(true, 'c1'))
+    show(false)
+    expect(sidebar()).not.toBeNull()
+    // Same element, out of sight and out of reach: not remounted, so a draft in it isn't lost.
+    expect(dock()).toBe(shown)
+    expect(shown.dataset.hidden).toBe('true')
+    expect(shown.hasAttribute('inert')).toBe(true)
+    act(() => panelOverDock(false, 'c1'))
+    show(false)
+    await act(() => new Promise((done) => setTimeout(done, 300)))
+    expect(sidebar()).toBeNull()
+    expect(dock()).toBe(shown)
+    expect(shown.dataset.hidden).toBeUndefined()
+    expect(scroller.scrollTop).toBe(300)
+  })
+
+  test('each chat keeps its own beside view', async () => {
+    act(() => openDock('extension:artifacts/artifacts', 'c1'))
+    show(true)
+    expect(dock()).not.toBeNull()
+    show(true, { id: 'c2' })
+    await act(() => new Promise((done) => setTimeout(done, 300)))
+    expect(dock()).toBeNull()
+    expect(sidebar()).not.toBeNull()
+    expect(currentDock('c2').open).toBeNull()
+    show(true)
+    expect(dock()).not.toBeNull()
+  })
+
+  test('a beside view filling the pane stops above a bar waiting for approval', () => {
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, get: () => 140 })
+    try {
+      const wait = { extension: 'plan', text: 'Plan: ready', buttons: [{ id: 'approve', label: 'Approve', primary: true }] }
+      act(() => openDock('extension:artifacts/artifacts', 'c1'))
+      act(() => widenDock(true, 'c1'))
+      show(false, { status: 'waiting', waits: [wait] })
+      expect(dock()!.dataset.wide).toBe('true')
+      expect(dock()!.style.bottom).toBe('140px')
+      const approve = [...container.querySelectorAll('[aria-label="Waiting for you"] button')].find((b) => b.textContent === 'Approve')
+      expect(dock()!.contains(approve!)).toBe(false)
+      // Nothing waiting: it fills the pane down to the bottom, as before.
+      show(false)
+      expect(dock()!.style.bottom).toBe('')
+    } finally {
+      delete (HTMLElement.prototype as unknown as Record<string, unknown>).offsetHeight
+    }
+  })
 })

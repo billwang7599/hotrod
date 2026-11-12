@@ -728,10 +728,11 @@ export type ExtensionPanel = {
   id: string
   title: string
   // 'tab' (the default): a tab in the right sidebar. 'popup': a large window over the chat, for work that wants room,
-  // such as notes; Esc closes it. 'dock': a column beside the chat, between the transcript and the right sidebar, for
-  // something to look at while the chat goes on, such as an artifact: the user resizes it by its edge, widens it to
-  // fill the chat pane, and closes it; it takes no focus when it opens. One dock panel shows at a time. Whichever, it
-  // belongs to the chat that's open, and draws for it.
+  // such as notes; Esc closes it. 'dock': a column beside the chat, for something to look at while the chat goes on,
+  // such as an artifact: the user resizes it by its edge, widens it to fill the chat pane, and closes it; it takes no
+  // focus when it opens. One dock panel shows at a time, kept per chat. Only one right-hand column shows: while a dock
+  // is open the right sidebar hides, and the sidebar's toggle swaps the two. Whichever, it belongs to the chat that's
+  // open, and draws for it.
   placement?: 'tab' | 'popup' | 'dock'
   // Keys that open the panel (a popup) or show its tab, out of the box, such as 'Mod+Shift+N' (Mod is ⌘ on macOS,
   // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left

@@ -27,11 +27,15 @@ type DockProps = {
   panelViews?: State['panelViews']
   connected: boolean
   send: (m: ClientMessage) => void
+  // The right sidebar is in front: the dock stays mounted but out of sight, so its scroll and drafts survive.
+  hidden?: boolean
+  // When it fills the pane, how much of the pane's bottom to leave clear, such as for a bar waiting for approval.
+  clearBottom?: number
 }
 
-/** The open chat's dock panel, if one is open. */
-export function useOpenDock(panels: PanelTab[]) {
-  const { open } = useDock()
+/** The chat's dock panel, if one is open there (and the chat still has that panel). */
+export function useOpenDock(panels: PanelTab[], chatId?: string) {
+  const { open } = useDock(chatId)
   return panels.find((p) => isDock(p) && extensionTabId(p.extension, p.id) === open)
 }
 
@@ -51,8 +55,8 @@ function useParentWidth() {
 }
 
 /** Drawn inside an AnimatePresence, keyed by panel, so it slides in and out. */
-export function ExtensionDock({ chatId, panel, panelViews, connected, send }: DockProps) {
-  const { wide } = useDock()
+export function ExtensionDock({ chatId, panel, panelViews, connected, send, hidden, clearBottom }: DockProps) {
+  const { wide } = useDock(chatId)
   const width = usePanelWidth('dock')
   const [ref, paneWidth] = useParentWidth()
   // Whether it fills, as it last settled: until a change of fill has animated, the width animates.
@@ -63,13 +67,13 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
   }, [chatId, connected, extension, id, send])
   // Esc narrows a widened dock again, unless something inside it (a dialog, a field) used the key.
   useEffect(() => {
-    if (!wide) return
+    if (!wide || hidden) return
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !e.defaultPrevented) widenDock(false)
+      if (e.key === 'Escape' && !e.defaultPrevented) widenDock(false, chatId)
     }
     addEventListener('keydown', onKeyDown)
     return () => removeEventListener('keydown', onKeyDown)
-  }, [wide])
+  }, [wide, hidden, chatId])
   const cramped = paneWidth !== undefined && paneWidth < DOCK_CHAT_MIN_PX + DOCK_MIN_PX
   const fills = wide || cramped
   useEffect(() => {
@@ -87,12 +91,24 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
       aria-label={title}
       data-dock={extensionTabId(panel.extension, panel.id)}
       data-wide={fills || undefined}
+      data-hidden={hidden || undefined}
+      // Out of sight, it keeps its layout (so its scroll stays) but takes no room, clicks or focus.
+      inert={hidden}
+      aria-hidden={hidden || undefined}
       className={
-        fills
-          ? 'absolute inset-y-0 right-0 z-10 flex min-w-0 flex-col bg-panel'
-          : 'relative flex shrink-0 flex-col overflow-hidden border-l bg-panel'
+        hidden
+          ? 'invisible pointer-events-none absolute inset-y-0 right-0 flex min-w-0 flex-col overflow-hidden bg-panel'
+          : fills
+            ? 'absolute inset-y-0 right-0 z-10 flex min-w-0 flex-col bg-panel'
+            : 'relative flex shrink-0 flex-col overflow-hidden border-l bg-panel'
       }
-      style={fills ? undefined : { maxWidth: `calc(100% - ${DOCK_CHAT_MIN_PX}px)` }}
+      style={
+        fills
+          ? clearBottom && !hidden
+            ? { bottom: clearBottom, borderBottomWidth: 1 }
+            : undefined
+          : { maxWidth: `calc(100% - ${DOCK_CHAT_MIN_PX}px)` }
+      }
       // Slides in from the edge; widening grows it over the transcript.
       initial={{ width: 0 }}
       animate={{ width: fills ? '100%' : width }}
@@ -111,7 +127,7 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
               className="grid place-items-center"
               aria-label={wide ? `Narrow ${title}` : `Widen ${title}`}
               aria-pressed={wide}
-              onClick={() => widenDock(!wide)}
+              onClick={() => widenDock(!wide, chatId)}
             >
               <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
                 {wide ? (
@@ -132,7 +148,7 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
             if (ref.current?.contains(document.activeElement) && document.activeElement instanceof HTMLElement) {
               document.activeElement.blur()
             }
-            openDock(null)
+            openDock(null, chatId)
           }}
         >
           ×
