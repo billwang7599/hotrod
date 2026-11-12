@@ -16,8 +16,9 @@ Kothar has two kinds of extensions:
 Open **Settings → Built-in extensions** and flip an extension's switch. A built-in extension switches on or off without
 a restart. Chats pick up the change at their next message.
 
-An extension with settings, or with a setup step, gets a page of its own under **Extensions** in Settings while it's on.
-A setup step installs something the extension needs, such as a browser. Its page shows whether the extension is ready,
+An extension with settings, a setup step or prompts gets a page of its own under **Extensions** in Settings, as in
+Obsidian; one with none of those has no page. Each page starts with what the extension is (built-in, or a community
+extension's version and author), its switch, and what it does through the extension API. A setup step installs something the extension needs, such as a browser. Its page shows whether the extension is ready,
 with an **Install** button when it isn't.
 
 The built-in extensions today:
@@ -36,6 +37,7 @@ The built-in extensions today:
 | Plan | Yes | A **Plan first** chip beside the message box, for coding sessions. While it's on, the chat is read only: Kothar's sandbox and permission answers refuse edits and commands that change anything, on every engine, and it plans on your Planning models if you've set some. The agent hands in a plan (goal, files, steps, risks, tests) and the amber bar asks you to approve, edit or cancel it, as Deep Research does with its plan. Edit closes the bar and opens the plan in the Plan tab, where **Approve and start** saves and approves it. Approve turns the chip off and starts the work; the Plan tab ticks steps off as the agent goes. Its page in Settings hides the chip, and can stop requiring a tests step. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
+| Inspector | Yes | **See what was sent** on each of your messages, and a **Sent** tab: everything Kothar handed the engine for that turn, labelled. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
 | Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
 
 ### Where Memory keeps its summaries, and cleaning up
@@ -125,6 +127,33 @@ up the settings page") and the agent makes it with a tool instead of pasting it 
   to look at, run or keep. Extensions that save into Artifacts for you, such as Deep Research's reports, aren't affected.
   Agents use `create_artifact`, `update_artifact`, `list_artifacts` and `read_artifact`, which see only their own
   space's; a worker shares its space's artifacts.
+
+### Inspector
+
+The Inspector shows what Kothar actually sends the engine, so nothing it adds is hidden from you.
+
+- **See what was sent:** hover one of your messages and click the eye. What went out with it opens beside the chat;
+  **Older** and **Newer** step through the turns kept. The **Sent** tab in the right sidebar shows the latest turn.
+- **Sections, in the order they were sent,** each labelled by who it's from: **Kothar core** (where agents may write,
+  folder modes, checkouts), **Context** (your AGENTS.md files, files and the setup), each **extension** by name, the
+  conversation so far (from Memory, or Kothar's own window), **You** (your message, noted if an extension rewrote it),
+  every **tool** Kothar offers with its description, and **how the turn ran** (engine, model, account, sandbox, read only
+  and which extension set it). Each shows a rough token count (about 4 characters a token), with a total and **Copy
+  all**.
+- **What it can't show:** the engine adds its own system prompt and built-in tools on top (Claude Code's, Codex's, and so
+  on), plus tool results and reminders as the turn goes. The last section, **Added by <engine>, not visible to
+  Kothar**, says so. So does a section for each MCP server an extension starts (such as Browser's), whose tools the
+  engine asks the server for itself.
+- **Editing:** a section from an extension's prompt has an **Edit** link to that prompt on the extension's Settings
+  page, under **Prompts**. Change it there; **Reset to default** brings back the extension's own. A prompt you edited
+  shows **Edited**, and **Updated default** if the extension changed its default since. Tool descriptions are editable
+  the same way. Kothar core's own text is shown but can't be edited, since it carries the safety rules (such as where
+  agents may write). An extension's text it doesn't name as a prompt shows **(not editable)**.
+- **Where it's kept:** in each chat's folder, so it goes when the chat is deleted. Each chat keeps its latest 30 turns
+  (Settings → Inspector → Turns to keep), and text that repeats from turn to turn, such as the instructions, is stored
+  once.
+- **Off:** nothing is recorded while the Inspector is off, and Kothar doesn't build the record at all, so turns sent
+  then can't be looked at later. Turn it back on to record from the next message.
 
 ### Deep Research
 

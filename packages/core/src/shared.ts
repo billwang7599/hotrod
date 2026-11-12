@@ -506,7 +506,7 @@ export type MessageActionInfo = {
   id: string
   label: string
   activeLabel?: string
-  icon: 'pin' | 'bookmark' | 'star'
+  icon: 'pin' | 'bookmark' | 'star' | 'eye'
   hint?: string
   activeHint?: string
   kinds: ('user' | 'work' | 'talk')[]

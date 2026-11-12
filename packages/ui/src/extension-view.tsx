@@ -48,6 +48,31 @@ const SetValueContext = createContext<SetValue | undefined>(undefined)
 // Show in Finder for a text with reveal; the core checks the path (host.reveal's rule).
 type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
+
+// Opens a page of Kothar's Settings, and scrolls to the element with id anchor on it: what a link to
+// kothar:settings/<page>#<anchor> does (such as the Inspector's Edit, to an extension's prompt). Without it (in tests,
+// say) such a link is plain text.
+export type OpenSettingsLink = (page: string, anchor?: string) => void
+export const SettingsLinkContext = createContext<OpenSettingsLink | undefined>(undefined)
+const SETTINGS_LINK = /^kothar:settings\/([^#]+)(?:#(.+))?$/
+
+function Link({ text, url }: { text: string; url: string }) {
+  const open = useContext(SettingsLinkContext)
+  const settings = url.match(SETTINGS_LINK)
+  if (settings) {
+    if (!open) return <span className="w-fit text-muted">{text}</span>
+    return (
+      <button type="button" className="w-fit text-left text-accent hover:underline" onClick={() => open(settings[1]!, settings[2])}>
+        {text}
+      </button>
+    )
+  }
+  return (
+    <a className="w-fit text-accent hover:underline" href={url} target="_blank" rel="noreferrer">
+      {text}
+    </a>
+  )
+}
 // The extension whose view this is, so its pictures can be read from its own folders (an editor's files).
 const ExtensionIdContext = createContext<string | undefined>(undefined)
 // Scrolls the panel's chat to the message at an entry of its log, for a quoted message.
@@ -643,11 +668,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
     }
     case 'link':
-      return (
-        <a className="w-fit text-accent hover:underline" href={node.url} target="_blank" rel="noreferrer">
-          {node.text}
-        </a>
-      )
+      return <Link text={node.text} url={node.url} />
     case 'list':
       return <List node={node} act={act} />
     case 'code':

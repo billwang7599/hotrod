@@ -52,6 +52,7 @@ export function sentTurnOf(chat: ChatSummary, at: string, id: string, input: Sen
       label: `${nameOf(id)}: ${section.label.toLowerCase()}${editable ? '' : ' (not editable)'}`,
       text: section.text,
       extension: id,
+      extensionName: nameOf(id),
       ...(prompts.length && { prompts }),
       editable,
     })
@@ -66,7 +67,12 @@ export function sentTurnOf(chat: ChatSummary, at: string, id: string, input: Sen
         part: 'other',
         label: `${tool.extension ? nameOf(tool.extension) : 'Kothar'} tool: ${tool.name}`,
         text: `${tool.description}\n\nInput: ${JSON.stringify(tool.schema)}`,
-        ...(tool.extension && { extension: tool.extension, prompts, editable: prompts.some((p) => p.id === TOOL_PROMPT + tool.name) }),
+        ...(tool.extension && {
+          extension: tool.extension,
+          extensionName: nameOf(tool.extension),
+          prompts,
+          editable: prompts.some((p) => p.id === TOOL_PROMPT + tool.name),
+        }),
       })
     }
   }
@@ -106,6 +112,7 @@ function promptSection(
       label: `${nameOf(memory)}: the conversation so far`,
       text: part.text,
       extension: memory,
+      extensionName: nameOf(memory),
       ...(prompts.length && { prompts }),
       editable: prompts.length > 0,
     }

@@ -2,6 +2,7 @@
 import './renamed-storage.ts'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { SettingsLinkContext } from './extension-view.tsx'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
@@ -147,6 +148,22 @@ function App() {
     if (page) setSettingsPage(page)
     setSettingsOpen(true)
   }, [])
+  // A kothar:settings/<page>#<anchor> link in an extension's view: the page, then its anchor scrolled into view once
+  // it's drawn.
+  const openSettingsLink = useCallback(
+    (page: string, anchor?: string) => {
+      openSettings(page as SettingsPage)
+      if (!anchor) return
+      let tries = 30
+      const find = () => {
+        const target = document.getElementById(anchor)
+        if (target) return target.scrollIntoView({ block: 'start' })
+        if (--tries > 0) requestAnimationFrame(find)
+      }
+      requestAnimationFrame(find)
+    },
+    [openSettings],
+  )
   const [contextOpen, setContextOpen] = useState(() => storedFlag(localStorage.getItem(CONTEXT_OPEN_KEY), false))
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
@@ -265,6 +282,7 @@ function App() {
   const reduceMotion = useReducedMotion()
 
   return (
+    <SettingsLinkContext.Provider value={openSettingsLink}>
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : TRANSITION}>
         <div
@@ -481,6 +499,7 @@ function App() {
         </div>
       </MotionConfig>
     </LazyMotion>
+    </SettingsLinkContext.Provider>
   )
 }
 

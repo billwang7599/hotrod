@@ -138,7 +138,7 @@ export type ExtensionMessageAction = {
   // Such as "Pin", and "Unpin" on a marked message; both default to label.
   label: string
   activeLabel?: string
-  icon: 'pin' | 'bookmark' | 'star'
+  icon: 'pin' | 'bookmark' | 'star' | 'eye'
   hint?: string
   activeHint?: string
   // The kinds of message it's offered on; all three without it.
@@ -793,6 +793,8 @@ export type SentSection = {
   label: string
   text: string
   extension?: string
+  // The extension's name, as Settings shows it.
+  extensionName?: string
   // The extension's prompts in it, with whether the user edited each; editable: the user can change it in Settings.
   prompts?: { id: string; label: string; edited: boolean }[]
   editable?: boolean

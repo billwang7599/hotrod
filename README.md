@@ -80,13 +80,15 @@ What works today:
   Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in
   Finder or copies the path.
 - **Setups, themes, the marketplace,** and the built-in extensions in `extensions/`: Artifacts, Browser, Git, Home,
-  Memory, Notes, Pins, Plan, Processes, Reconnect, Skills, Deep Research and Account rotation. Pins puts a Pin button
+  Inspector, Memory, Notes, Pins, Plan, Processes, Reconnect, Skills, Deep Research and Account rotation. Pins puts a Pin button
   on each message; the Pinned tab lists the chat's pins and jumps back to one, loading older history if needed. Deep
   Research turns a question into a cited report: a plan you approve, workers that search and read the web, and only
   claims backed by a quote found on their page (a Deep research chip in the composer, New research ⌘⇧D, or the agent's
   `deep_research` tool). Plan adds a **Plan first** chip to the composer: the chat is read only (enforced by the
   sandbox and Kothar's permission answers, on every engine) until you approve the plan the agent hands in, and the
-  Plan tab ticks its steps off as the work goes.
+  Plan tab ticks its steps off as the work goes. Inspector shows what Kothar actually sent the engine for each message
+  (See what was sent, beside the chat, and a Sent tab), each part labelled by who it's from, with Edit links to the
+  extension prompts behind it; extensions' prompts and tool descriptions are editable on their Settings pages.
 
 Not built yet: remote machines, sandboxing outside macOS, a signed release, and sync.
 

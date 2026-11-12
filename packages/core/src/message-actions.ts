@@ -4,7 +4,7 @@ import type { ExtensionMessage, ExtensionMessageAction } from '@kothar/extension
 import type { ChatEntry, MessageActionInfo } from './shared.ts'
 
 const KINDS: readonly ExtensionMessage['kind'][] = ['user', 'work', 'talk']
-const ICONS: readonly ExtensionMessageAction['icon'][] = ['pin', 'bookmark', 'star']
+const ICONS: readonly ExtensionMessageAction['icon'][] = ['pin', 'bookmark', 'star', 'eye']
 // More marks than this in one chat are left off, so a runaway list can't swamp the UI.
 export const MAX_MARKS = 1000
 
