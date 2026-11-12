@@ -112,6 +112,9 @@ export type SessionOptions = {
   model?: string
   thinking?: ThinkingLevel
   sandbox?: Sandbox
+  // The turn may read but change nothing (an extension's TurnOptions): an engine with a read-only mode starts in it.
+  // Kothar's sandbox and permission answers enforce it either way.
+  readOnly?: boolean
 }
 
 export type ImageInput = { mimeType: string; base64: string }

@@ -53,7 +53,7 @@ extension and before you turn it on, and holds the extension to it:
 | `files` | Reads or writes your files | `host.home`, and Node's `node:fs` and `fs/promises`, for anything beyond `host.storage` |
 | `setup` | Installs software it needs | `setup` |
 | `mcpServers` | Starts MCP servers for agents | `mcpServers` |
-| `permissions` | Approves or denies agents' requests for you | `onPermissionRequested` |
+| `permissions` | Approves or denies agents' requests for you, and makes turns read only | `onPermissionRequested`, `turnOptions` |
 | `sendMessages` | Sends messages and starts chats as you | `host.send`, `host.createChat`, `host.retry`, `host.continue`, `host.interrupt`, `host.addContextFile` |
 | `accounts` | Sees and switches your engine accounts | `host.accounts`, `host.useAccount` |
 | `models` | Makes model calls on your accounts | `host.complete` |

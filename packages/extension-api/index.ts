@@ -439,6 +439,19 @@ export type TurnSummary = {
 // message is shown to the agent when the request is denied.
 export type PermissionVerdict = { allow: boolean; message?: string }
 
+// How one turn of a chat runs, set by an extension as the turn starts (Extension.turnOptions). It can only make a turn
+// stricter, or pick the model list it runs on; nothing here gives a turn more than the chat's own settings do.
+// - readOnly: the turn may read but change nothing. Kothar enforces it, not the agent: where the chat is sandboxed,
+//   nothing in the work folder, checkouts or folders is writable (only the session's scratch .tmp folder and the
+//   engine's own state); edit requests are refused; a command is refused unless Kothar can tell it only reads; and the
+//   engine is started read-only where it has such a mode (Codex's read-only sandbox, OpenCode's edits denied, Claude
+//   Code's edit tools off). Reads, searches and fetches are answered as the chat's switches say. These refusals are the
+//   core's, so no extension's onPermissionRequested can allow them.
+// - reason: what the agent is told when a request is refused for readOnly, such as "Plan first is on: …".
+// - role: the turn runs on this model list (Settings → Models) when the user has put models in it; otherwise on the
+//   chat's own model, as usual. The chat's saved engine and model don't change.
+export type TurnOptions = { readOnly?: boolean; reason?: string; role?: ModelRole }
+
 export type ExtensionTool = {
   name: string
   description: string
@@ -815,6 +828,11 @@ export type Extension = {
     chat: ChatDetail,
     context: ExtensionContext,
   ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined>
+  // How the chat's next turn runs (TurnOptions), asked as each turn starts, continuations included, before its
+  // session opens: read only, and on which model list. Return nothing to leave the turn as it is. Every extension
+  // that's on for the chat is asked: the turn is read only if any says so (the first one's reason is used), and runs on
+  // the first role given. Keep it quick and synchronous; one that throws shows its error and counts as nothing.
+  turnOptions?(chat: ChatDetail, context: ExtensionContext): TurnOptions | undefined
   // Rewrites a message on its way to the engine. The log and the user keep the original. Extensions chain in load
   // order.
   transformMessage?(text: string, chat: ChatDetail, context: ExtensionContext): string
@@ -855,7 +873,7 @@ export type ExtensionUse =
   | 'tools'
   | 'mcpServers'
   | 'instructions'
-  // onPermissionRequested
+  // onPermissionRequested, turnOptions
   | 'permissions'
   // transformMessage, transformOutput
   | 'transforms'

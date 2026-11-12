@@ -38,6 +38,7 @@ after it cover each group in detail.
 | `onStart`, `onStop` | Start and stop background work | [Events and hooks](events.md#background-work) |
 | `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
 | `onPermissionRequested` | A policy that answers permission requests | [Events and hooks](events.md#onpermissionrequested) |
+| `turnOptions` | Makes a turn read only, or runs it on another model list | [Events and hooks](events.md#turnoptions) |
 | `transformMessage`, `transformOutput` | Rewrites of messages and replies | [Events and hooks](events.md#transforms) |
 | `onWaitAction` | The user's answer to the extension's wait on a chat | [The host](host.md#waiting-for-the-user) |
 | `processes`, `onProcessAction`, `onProcessesChanged` | Rows of the extension's own in the Processes tab | [The host](host.md#processes-rows) |

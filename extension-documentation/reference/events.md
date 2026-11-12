@@ -8,7 +8,7 @@ description: React to chats and turns, answer permission requests, and rewrite m
 Hooks let an extension react as chats run. They all run in Kothar's core. Each gets the extension's
 [context](../anatomy.md#the-context), `{ values, host }`, as its last argument.
 
-Every hook on this page except `onPermissionRequested` and the transforms needs `events` in the manifest's `uses`.
+Every hook on this page except `onPermissionRequested`, `turnOptions` and the transforms needs `events` in the manifest's `uses`.
 
 ## Background work
 
@@ -184,6 +184,48 @@ export default noForcePush
   then.
 - Kothar's own denials, such as edits outside the work folder in a sandbox, always stand.
 - pi never asks before running a tool, so pi sessions have no permission requests.
+
+List `permissions` in the manifest's `uses`.
+
+## turnOptions
+
+`turnOptions(chat, context)` says how the chat's next turn runs. Kothar asks it as each turn starts (continuations
+too), before the turn's session opens. It can only make a turn stricter, or pick which model list it runs on: nothing
+it returns gives a turn more than the chat's own settings.
+
+```ts
+import type { Extension } from '@kothar/extension-api'
+
+const lookOnly: Extension = {
+  id: 'look-only',
+  name: 'Look only',
+  description: 'A switch in the composer that makes the chat read only.',
+  enabledByDefault: false,
+  composerToggles: [{ id: 'look', label: 'Look only' }],
+  turnOptions(chat, { host }) {
+    if (!host.toggled(chat.id, 'look')) return undefined
+    return { readOnly: true, reason: 'Look only is on: read and explain, change nothing.', role: 'planning' }
+  },
+}
+
+export default lookOnly
+```
+
+- `readOnly: true` makes the turn read only, and Kothar enforces it rather than asking the agent:
+  - **Sandboxed chats** (the usual case on macOS): the sandbox has nothing writable but the session's scratch `.tmp`
+    folder and the engine's own state, so nothing in the work folder, checkouts or folders can change, whatever runs.
+  - **Every chat:** edit requests are refused, and so is any command Kothar can't tell only reads (`git log`, `git
+    diff`, `ls`, `grep`, `cat` and the like pass). Reads, searches and fetches are answered as the chat's switches say.
+    These refusals are Kothar's own, so no extension's `onPermissionRequested` can allow them.
+  - **Engines** start in their own read-only mode where they have one: Codex in its `read-only` sandbox (when Kothar
+    isn't sandboxing it), OpenCode with edits denied, Claude Code without its Edit, Write, MultiEdit and NotebookEdit
+    tools. pi never asks before using a tool, so outside the sandbox (Edits anywhere on) nothing stops it writing.
+- `reason` is what the agent is told when a request is refused for being read only.
+- `role` runs the turn on that model list (Settings → Models) when the user has put models in it, and on the chat's own
+  model otherwise. The chat's saved engine and model don't change.
+- Every extension that's on for the chat is asked. The turn is read only if any of them says so, with the first one's
+  `reason`, and runs on the first `role` given.
+- Keep it quick and synchronous. If it throws, its error shows and the turn runs as if it had returned nothing.
 
 List `permissions` in the manifest's `uses`.
 

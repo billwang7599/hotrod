@@ -26,11 +26,25 @@ export type PermissionContext = {
   // The turn's attached folders: each one's mode, or a git folder's checkout. Edits in a folder set to Edit in place
   // are answered like the work folder's; edits in one set to Read only are refused, sandboxed or not.
   folders?: FolderPlace[]
+  // The turn is read only (an extension's TurnOptions): edits and commands that may change anything are refused, with
+  // reason (or a default) as the agent's message. Reads still follow the switches.
+  readOnly?: { reason?: string }
 }
+
+export const READ_ONLY_REASON = 'This turn is read only: it may read and search, but not edit files or run commands that change anything.'
 
 // A verdict answers the request; undefined leaves it to extensions and then the user.
 export const verdictOf = (request: PermissionRequest, context: PermissionContext): PermissionVerdict | undefined => {
-  const { cwd, workDir, sandboxed, switches, home, garage, folders = [] } = context
+  const { cwd, workDir, sandboxed, switches, home, garage, folders = [], readOnly } = context
+  if (readOnly) {
+    const refused = { allow: false, message: readOnly.reason?.trim() || READ_ONLY_REASON }
+    if (request.kind === 'edit') return refused
+    // Whether the command only reads is asked without the login folders, so reading one still asks below rather than
+    // being refused as a change.
+    if (request.kind === 'shell' && (request.command === undefined || !isReadOnlyCommand(request.command, { cwd, home, secrets: [] }))) {
+      return refused
+    }
+  }
   if (request.kind === 'edit' && request.path !== undefined) {
     // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
     const target = realPath(resolve(cwd, request.path))

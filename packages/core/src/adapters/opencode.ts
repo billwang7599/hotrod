@@ -466,9 +466,10 @@ export function createOpencode(user: UserEnv = processUserEnv()): Adapter {
         const restored = { ...server, command: '/bin/sh', args: ['-c', RESTORED_SERVER, server.name, server.command, ...(server.args ?? [])] }
         servers.push(acpStdioServer(restored))
       }
-      // Edits, commands, fetches and the extension servers' tools ask; Kothar answers or asks the user.
+      // Edits, commands, fetches and the extension servers' tools ask; Kothar answers or asks the user. A read-only turn
+      // has OpenCode refuse edits itself.
       const permission: Record<string, unknown> = {
-        edit: 'ask',
+        edit: options.readOnly ? 'deny' : 'ask',
         bash: 'ask',
         webfetch: 'ask',
         websearch: 'ask',

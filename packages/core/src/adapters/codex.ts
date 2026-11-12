@@ -433,9 +433,11 @@ export function createCodex(user: UserEnv = processUserEnv()): Adapter {
       const { cwd, instructions, accountDir, apiKey, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox } =
         options
       // Inside Kothar's sandbox Codex can't start its own (macOS won't nest them), and needs none; without it, Codex's
-      // workspace sandbox keeps writes to the session's folders and asks before anything else.
-      const codexSandbox = sandbox ? 'danger-full-access' : 'workspace-write'
-      const config = configOf({ kotharMcp, mcpServers, ...(!sandbox && { writableRoots: extraDirs }) })
+      // workspace sandbox keeps writes to the session's folders and asks before anything else. A read-only turn outside
+      // Kothar's sandbox uses Codex's read-only one (inside it, Kothar's sandbox has nothing writable).
+      const codexSandbox = sandbox ? 'danger-full-access' : options.readOnly ? 'read-only' : 'workspace-write'
+      const writableRoots = !sandbox && !options.readOnly ? extraDirs : undefined
+      const config = configOf({ kotharMcp, mcpServers, ...(writableRoots && { writableRoots }) })
       const env = launchEnv(user, config, accountDir, apiKey, kotharMcp ? { KOTHAR_MCP_TOKEN: kotharMcp.token } : {})
       const proc = machine.spawn('/bin/sh', ['-c', LAUNCH, 'codex', 'app-server'], {
         cwd,

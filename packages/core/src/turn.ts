@@ -12,6 +12,7 @@ import type {
   ExtensionWait,
   ExtensionWaitAnswer,
   McpServer,
+  ModelRole,
   PermissionRequest,
   PermissionVerdict,
 } from '@kothar/extension-api'
@@ -30,6 +31,7 @@ import {
   IMAGE_TYPES,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
+  MODEL_ROLES,
   type Adapter,
   type Answers,
   type Attachment,
@@ -88,7 +90,7 @@ export type TurnDeps = {
 
   // Engines and sessions
   adapterFor: (engine: string) => Adapter | undefined
-  models: Pick<ReturnType<typeof openModels>, 'runOf' | 'whyNot'>
+  models: Pick<ReturnType<typeof openModels>, 'runOf' | 'whyNot' | 'lists'>
   choosesOf: (chat: Chat) => Parameters<ReturnType<typeof openModels>['runOf']>[0]
   accounts: Pick<ReturnType<typeof openAccounts>, 'sessionFor' | 'activeOf'>
   takesMcp: (engine: string) => boolean
@@ -127,6 +129,9 @@ export type TurnPlan = {
   // The folders that aren't git repos, with their modes (folder-modes.ts).
   places: FolderPlace[]
   sandbox?: Sandbox
+  // Extensions made the turn read only (TurnOptions): nothing it reaches is writable, and edits and changing commands
+  // are refused with reason.
+  readOnly?: { reason?: string }
 }
 
 /** What a session is told, but where it runs and its checkouts (buildInstructions). */
@@ -137,7 +142,7 @@ export type SessionParts = Omit<InstructionParts, 'workDir' | 'checkouts' | 'fol
 // attached folder's place for the permission answers.
 // copies: each folder set to Work on a copy, by the path of its copy in the work folder.
 export function sessionPlaceOf(
-  plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'places' | 'sandbox'>,
+  plan: Pick<TurnPlan, 'workDir' | 'parts' | 'attachmentsDir' | 'folders' | 'repos' | 'places' | 'sandbox' | 'readOnly'>,
   checkouts: Checkout[],
   copies: Record<string, string> = {},
 ) {
@@ -158,9 +163,10 @@ export function sessionPlaceOf(
   ]
   const readOnly = [...(sandbox?.readOnly ?? []), ...checkouts.flatMap((c) => c.readOnly)]
   const { readOnly: _, ...rest } = sandbox ?? {}
+  // A read-only turn writes only to the sandbox's scratch folder (tmpDir), which the Machine always allows.
   const jail = sandbox && {
     ...rest,
-    writable: [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
+    writable: plan.readOnly ? [] : [...sandbox.writable, ...checkouts.flatMap((c) => c.writable)],
     ...(readOnly.length && { readOnly }),
   }
   const checkoutPlaces = checkouts.map((c): FolderPlace => ({ path: c.folder, mode: 'checkout', where: c.worktree.path }))
@@ -422,6 +428,30 @@ export function openTurns(deps: TurnDeps) {
     append(chat, { at, type: 'text.completed', text: done })
   }
 
+  // How the turn runs, from every extension that's on for the chat (Extension.turnOptions): read only if any says so,
+  // on the first role named. Only ever stricter, or another model list.
+  const turnOptionsOf = (chat: Chat): { readOnly?: { reason?: string }; role?: ModelRole } => {
+    let readOnly: { reason?: string } | undefined
+    let role: ModelRole | undefined
+    for (const extension of watchersOf('turnOptions', chat)) {
+      try {
+        const options = extension.turnOptions!(detailOf(chat), contextOf(extension))
+        if (options === undefined || options === null) continue
+        if (typeof options !== 'object') throw new Error('turnOptions must return an object or nothing')
+        if (options.readOnly === true && !readOnly) {
+          readOnly = typeof options.reason === 'string' && options.reason.trim() ? { reason: options.reason.trim() } : {}
+        }
+        if (role === undefined && options.role !== undefined) {
+          if (!MODEL_ROLES.includes(options.role)) throw new Error(`Unknown model role "${String(options.role)}"`)
+          role = options.role
+        }
+      } catch (error) {
+        extensionError(extension, error)
+      }
+    }
+    return { ...(readOnly && { readOnly }), ...(role && { role }) }
+  }
+
   // The first extension with a verdict answers; an extension's promise is waited for before asking the next.
   const extensionVerdict = (
     request: PermissionRequest,
@@ -478,11 +508,13 @@ export function openTurns(deps: TurnDeps) {
     reports: Report[] = [],
     continuation?: string,
   ) => {
-    const { run, adapter, editAnywhere } = checkCanStart(chat)
+    const { readOnly, role } = turnOptionsOf(chat)
+    const { run, adapter, editAnywhere } = checkCanStart(chat, role)
     const workDir = workDirOf(chat)
     mkdirSync(workDir, { recursive: true })
     const { prompt, zoomable } = logTurn(chat, adapter, { text, attachments, reports, continuation })
-    const plan: TurnPlan = { run, adapter, prompt, zoomable, attachments, ...planSession(chat, workDir, zoomable, editAnywhere) }
+    const session = planSession(chat, workDir, zoomable, editAnywhere)
+    const plan: TurnPlan = { run, adapter, prompt, zoomable, attachments, ...session, ...(readOnly && { readOnly }) }
     const start = (checkouts: Checkout[], copies: Record<string, string> = {}) => openSession(chat, plan, checkouts, copies)
     const { repos, places, sandbox } = plan
     const copied = places.filter((place) => place.mode === 'copy').map((place) => place.path)
@@ -508,16 +540,18 @@ export function openTurns(deps: TurnDeps) {
     )
   }
 
-  // Whether the chat can take a turn now, and on what. Throws why not.
-  const checkCanStart = (chat: Chat) => {
+  // Whether the chat can take a turn now, and on what. Throws why not. role: an extension's model list for this turn
+  // (TurnOptions), used when it has models that can run; the chat keeps its own engine and model.
+  const checkCanStart = (chat: Chat, role?: ModelRole) => {
     if (isQuitting()) throw new Error('Kothar is quitting')
     if (chat.status !== 'idle') throw new Error('A turn is already running in this chat')
     checkActive(chat)
-    const run = models.runOf(choosesOf(chat))
-    if (run && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
+    const roleRun = role && models.lists()[role].length ? models.runOf({ engine: chat.info.engine, role }) : undefined
+    const run = roleRun ?? models.runOf(choosesOf(chat))
+    if (run && !roleRun && run.engine !== chat.info.engine) updateChat(chat, { engine: run.engine })
     const cant = run ? undefined : models.whyNot(choosesOf(chat))
     if (cant) throw new Error(cant)
-    const adapter = adapterFor(chat.info.engine)!
+    const adapter = adapterFor(roleRun?.engine ?? chat.info.engine)!
     const editAnywhere = editsAnywhere(...switchesOf(chat))
     if (!machine.canSandbox && !editAnywhere && UNSANDBOXED_NEEDS_EDIT_ANYWHERE) {
       throw new Error("Kothar can't sandbox engines on this system yet. Turn on Edits anywhere in this chat's Context panel, or as the default in Settings → Work folder, to run it unsandboxed.")
@@ -573,7 +607,17 @@ export function openTurns(deps: TurnDeps) {
     const { cwd, instructions, extraDirs, jail, folderPlaces } = sessionPlaceOf(plan, checkouts, copies)
     // Read at each request, so a switch flipped mid-turn counts at once. Folder modes count from the next turn, as
     // the sandbox does.
-    const permissionsOf = () => ({ cwd, workDir, sandboxed: !!jail, switches: switchesOf(chat), home, garage, folders: folderPlaces })
+    const { readOnly } = plan
+    const permissionsOf = () => ({
+      cwd,
+      workDir,
+      sandboxed: !!jail,
+      switches: switchesOf(chat),
+      home,
+      garage,
+      folders: folderPlaces,
+      ...(readOnly && { readOnly }),
+    })
     const events = sessionEvents(chat, permissionsOf)
     try {
       chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
@@ -593,6 +637,7 @@ export function openTurns(deps: TurnDeps) {
         ...(model && { model }),
         ...(thinking && { thinking }),
         ...(jail && { sandbox: jail }),
+        ...(readOnly && { readOnly: true }),
       }
       chat.account = accounts.activeOf(adapter.id)
       chat.runModel = model

@@ -54,6 +54,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['mcpServers', 'mcpServers'],
   ['instructions', 'instructions'],
   ['onPermissionRequested', 'permissions'],
+  ['turnOptions', 'permissions'],
   ['transformMessage', 'transforms'],
   ['transformOutput', 'transforms'],
   ['onEvent', 'events'],

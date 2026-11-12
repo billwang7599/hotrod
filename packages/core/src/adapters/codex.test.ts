@@ -137,6 +137,16 @@ describe('codex adapter', () => {
     expect(free.config()).toContain('[sandbox_workspace_write]\nwritable_roots = ["/tmp/other"]')
   })
 
+  it("starts a read-only turn in Codex's read-only sandbox without Kothar's, and in Kothar's (with nothing writable) with it", async () => {
+    const free = startSession({ readOnly: true, extraDirs: ['/tmp/other'] })
+    await free.pump()
+    expect(free.sent('thread/start')[0].params.sandbox).toBe('read-only')
+    expect(free.config()).not.toContain('sandbox_workspace_write')
+    const jailed = startSession({ readOnly: true, sandbox: { writable: [] } })
+    await jailed.pump()
+    expect(jailed.sent('thread/start')[0].params.sandbox).toBe('danger-full-access')
+  })
+
   it('starts a turn with the text, images as data URLs, the model and the thinking level as effort', async () => {
     const s = startSession({ model: 'gpt-6-luna', thinking: 'off' })
     await s.pump()

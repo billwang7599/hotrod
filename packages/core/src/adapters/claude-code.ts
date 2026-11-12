@@ -96,6 +96,9 @@ const accountEnv = (accountDir?: string, apiKey?: string): { env?: Record<string
 
 // Claude Code ignores TMPDIR, and needs its shell snapshots for Bash. A login refresh takes the refresh lock, then
 // the storage lock to save to the keychain; without the second, the new login is lost and the account signed out.
+// Claude Code's tools that write files, taken away in a read-only turn.
+export const READ_ONLY_DENIED = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
+
 function jailed(user: UserEnv, sandbox: Sandbox, accountDir?: string) {
   const configDir = accountDir ?? user.env.CLAUDE_CONFIG_DIR ?? join(user.home, '.claude')
   const locks = [join(configDir, '.oauth_refresh.lock*'), join(configDir, '.storage-write.lock')]
@@ -255,6 +258,8 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
         // Claude Code's own subagents run out of sight, where the user can't open or stop them; Kothar's
         // spawn_worker replaces them. `Task` is the tool's name before Claude Code 2.1.
         '--disallowedTools', 'Agent', 'Task',
+        // A read-only turn has no edit tools at all; Bash still asks, and Kothar refuses commands that change anything.
+        ...(options.readOnly ? READ_ONLY_DENIED : []),
         // Echoes a steered message, with its uuid, once a turn takes it in.
         '--replay-user-messages',
       ]

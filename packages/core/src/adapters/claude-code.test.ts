@@ -47,6 +47,12 @@ describe('claudeCode adapter', () => {
     ])
   })
 
+  it('takes the edit tools away in a read-only turn; Bash still asks', () => {
+    const args = startSession('', { readOnly: true }).fake.spawned[0]!.args
+    const from = args.indexOf('--disallowedTools')
+    expect(args.slice(from + 1, from + 7)).toEqual(['Agent', 'Task', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+  })
+
   it("connects Kothar's MCP server with the token in the env, and runs its tools without asking", () => {
     const fake = fakeMachine()
     const token = 'kothar-token-5678'
