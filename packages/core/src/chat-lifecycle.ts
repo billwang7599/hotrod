@@ -28,7 +28,7 @@ import {
 } from './shared.ts'
 
 // What createChat takes: a new space from the UI or an extension, or (parentId and worker) a worker below a chat.
-export type ChatSpec = NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string }
+export type ChatSpec = NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string; quiet?: boolean }
 
 export type ChatLifecycleDeps = {
   chats: Map<string, Chat>
@@ -158,6 +158,7 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
         worker: true,
         role,
         parentMessages: parentMessages.length,
+        ...(spec.quiet === true && { quiet: true as const }),
       }),
       folders,
       files,
@@ -177,10 +178,10 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
   }
 
   // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
-  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole }) => {
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole; quiet?: boolean }) => {
     if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
     if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
-    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role })
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role, quiet: spec.quiet === true })
   }
 
   const renameChat = (chat: Chat, name: unknown) => {

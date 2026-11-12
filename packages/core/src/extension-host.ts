@@ -170,12 +170,13 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     const dir = join(deps.garage, 'extensions', extension.id)
     const chatStorageOf = (chat: C) => storageAt(chat.dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles)
     const host: ExtensionHost = {
-      createChat({ name, folders, files, engine, parentId, role }) {
+      createChat({ name, folders, files, engine, parentId, role, quiet }) {
         if (parentId === undefined) {
           if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
+          if (quiet !== undefined) throw new Error('Only a child chat (with parentId) can be quiet')
           return deps.createChat({ name, folders, files, engine })
         }
-        return deps.createChild(String(parentId), { name, engine, role, folders, files })
+        return deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }) })
       },
       send: (chatId, text) => deps.enqueue(chatFor(chatId), { text }),
       chats: () => deps.shownChats().map(deps.detailOf),

@@ -126,6 +126,9 @@ Here the review turn only sends again if it edited files.
 - It runs on the model list named by `role`: `chat`, `planning`, `searching` or `workers` (the default). Use `role`
   only with `parentId`.
 - Its final reply joins the parent's queue as a report and wakes the parent. Then the child is removed.
+- With `quiet: true`, its final reply goes to your extension instead: read it in
+  [`onTurnCompleted`](events.md) (`turn.text`, with `turn.chat` the child). The parent gets no report and isn't woken.
+  Use it for children whose work you gather yourself, such as research workers. Use `quiet` only with `parentId`.
 - A child can't have children of its own, and its parent must not be archived.
 
 The host sets no limit on how many children run at once. Keep your own count.

@@ -231,6 +231,10 @@ export type NewChatSpec = {
   parentId?: string
   // A child's model list; only with parentId.
   role?: ModelRole
+  // Only with parentId: the child's final reply isn't queued for its parent as a report and doesn't wake it. The
+  // extension reads it in onTurnCompleted (TurnSummary.text, for the child's chat), for children whose work it gathers
+  // itself, such as research workers. It's still listed under its parent while it runs, and removed once it's done.
+  quiet?: boolean
 }
 
 // Each extension gets a host of its own, so storage and notes know which extension they belong to.
@@ -241,7 +245,8 @@ export type ExtensionHost = {
   // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
   // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
   // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
-  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's.
+  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's. With quiet, its reply comes
+  // to the extension instead (NewChatSpec.quiet).
   createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void

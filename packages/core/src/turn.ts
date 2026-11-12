@@ -304,7 +304,7 @@ export function openTurns(deps: TurnDeps) {
 
   // What follows a turn that's over: a worker reports and goes, queued messages run.
   const finishTurn = (chat: Chat, error?: string) => {
-    const parent = chat.info.worker ? parentOf(chat) : undefined
+    const parent = chat.info.worker && !chat.info.quiet ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, error)))
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
@@ -329,7 +329,7 @@ export function openTurns(deps: TurnDeps) {
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
     if (!chat.info.worker || !chats.has(chat.info.id)) return
-    const parent = parentOf(chat)
+    const parent = chat.info.quiet ? undefined : parentOf(chat)
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, `its folder ${chat.dir} is gone`)))
     removeChats(familyOf(chat))
   }

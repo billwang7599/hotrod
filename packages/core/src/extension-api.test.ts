@@ -413,6 +413,24 @@ describe('a wait as the turn ends', () => {
     await until(() => t.chat(space).status === 'idle')
     expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(1)
   })
+
+  it('gives a quiet child’s reply to the extension, not its parent, and still removes it', async () => {
+    const replies: string[] = []
+    const t = withHost({
+      onTurnCompleted({ chat, text }) {
+        if (chat.worker) replies.push(`${chat.name}: ${text}`)
+      },
+    })
+    const space = t.create()
+    const quiet = t.host().createChat({ name: 'Quiet', parentId: space, quiet: true })
+    t.host().send(quiet.id, 'Task')
+    await until(() => !t.core.chats().some((c) => c.id === quiet.id))
+    expect(replies).toEqual(['Quiet: Done'])
+    expect(t.chat(space).entries.some((e) => e.type === 'worker.report')).toBe(false)
+    expect(t.chat(space).status).toBe('idle')
+    expect(t.chat(space).queue).toEqual([])
+    expect(() => t.host().createChat({ name: 'Odd', quiet: true })).toThrow('Only a child chat (with parentId) can be quiet')
+  })
 })
 
 describe('the host', () => {
