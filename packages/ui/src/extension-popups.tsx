@@ -4,7 +4,7 @@ import { Dialog } from 'radix-ui'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, Hint, MOTION } from './controls.tsx'
 import { revealLater } from './search.tsx'
-import { ExtensionViewer } from './extension-view.tsx'
+import { ExtensionViewer, whileStale } from './extension-view.tsx'
 import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, usePopup } from './panel-tab.ts'
 import { clampPopup, type PopupSize, POPUP_DEFAULT_WIDTH, POPUP_MIN, POPUP_MARGIN, POPUP_STEP, POPUP_TOP, resetPopupSize, setPopupSize, usePopupSize } from './popup-size.ts'
 import { conflictsOf, normalize, parseBinding, refusal, registerShortcut, shortcutActions, type ShortcutHandlers } from './shortcuts.ts'
@@ -194,7 +194,7 @@ export function ExtensionPopup({ chatId, panels, panelViews, connected, send }: 
                     </Button>
                   </Dialog.Close>
                 </header>
-                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-16">
+                <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-16" {...whileStale(shown?.stale)}>
                   <ExtensionViewer
                     extension={panel.extension}
                     view={view}

@@ -766,6 +766,12 @@ type ViewerProps = {
   showMessage?: ShowMessage
 }
 
+/**
+ * Spread on what holds a view or panel drawn from another chat while this chat's own is on its way (state.ts follow):
+ * it shows, so nothing blinks, but can't be clicked or typed in, and reads as busy.
+ */
+export const whileStale = (stale: boolean | undefined) => (stale ? { inert: true, 'aria-busy': true } : {})
+
 export function ExtensionViewer({ view, error, act, set, reveal, extension, showMessage }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>
   if (!view) return <p className="text-sm text-faint">Loading…</p>

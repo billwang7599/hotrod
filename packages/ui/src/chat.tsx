@@ -84,6 +84,8 @@ type ChatProps = {
   contextOverlay: boolean
   toggleContext: () => void
   contextItems?: ContextItem[]
+  // The context items are the last chat's, shown in the right panel until this chat's arrive (state.ts follow).
+  contextStale?: boolean
   extensionUi?: State['extensionUi']
   extensions?: State['extensions']
   panelViews?: State['panelViews']
@@ -292,7 +294,7 @@ export function Chat(props: ChatProps) {
   const itemProps = {
     chat,
     ...(!reduceMotion && { revealOf }),
-    contextItems: props.contextItems,
+    contextItems: props.contextStale ? undefined : props.contextItems,
     connected,
     send,
     messageActions: props.extensionUi?.chatId === chat.id ? (props.extensionUi.messageActions ?? NO_ACTIONS) : NO_ACTIONS,
@@ -538,6 +540,7 @@ export function Chat(props: ChatProps) {
             <ContextPanel
               chatId={chat.id}
               items={props.contextItems}
+              itemsStale={props.contextStale}
               chats={props.chats}
               workFolder={workFolder}
               readOnly={archived}

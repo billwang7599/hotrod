@@ -365,6 +365,7 @@ function App() {
                 setColumnPx={setColumnPx}
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
+                contextStale={state.context?.stale}
                 extensionUi={state.extensionUi}
                 extensions={state.extensions}
                 panelViews={state.panelViews}

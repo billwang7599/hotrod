@@ -26,7 +26,7 @@ import { showReportsIn, showStepsIn, useReportsShown, useStepsShown } from './st
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { PanelTabs, type TabEntry } from './panel-tabs.tsx'
 import { revealLater } from './search.tsx'
-import { ExtensionViewer } from './extension-view.tsx'
+import { ExtensionViewer, whileStale } from './extension-view.tsx'
 import { SETUP_HINT } from './setups-page.tsx'
 import { choosePanelTab, extensionTabId, usePanelTab } from './panel-tab.ts'
 import { folderName, lineOf, panelKey, terminalKey, type ChatView, type State } from './state.ts'
@@ -723,6 +723,8 @@ function About({ intro, notes }: { intro: string; notes: readonly { label: strin
 type ContextPanelProps = {
   chatId: string
   items?: ContextItem[]
+  // The items are the last chat's, shown until this chat's arrive (state.ts follow).
+  itemsStale?: boolean
   chats: ChatView[]
   workFolder: WorkFolder
   readOnly: boolean
@@ -807,6 +809,7 @@ export function ContextPanel(props: ContextPanelProps) {
         className="flex flex-1 scroll-inset flex-col gap-18 overflow-y-auto py-12 pl-12"
         role="tabpanel"
         aria-label={extensionTab?.title ?? TAB_LABEL[shown]}
+        {...whileStale(extensionTab ? panelView?.stale || extensionUi?.stale : props.itemsStale || extensionUi?.stale)}
       >
         {shown === 'context' && (
           <About intro={`${intro} Edits apply from the next message.`} notes={sections.map((s) => SECTIONS[s])} />

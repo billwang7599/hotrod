@@ -3,7 +3,7 @@ import { m } from 'motion/react'
 import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { Button, Hint, TRANSITION } from './controls.tsx'
 import { revealLater } from './search.tsx'
-import { ExtensionViewer } from './extension-view.tsx'
+import { ExtensionViewer, whileStale } from './extension-view.tsx'
 import { extensionTabId, openDock, useDock, widenDock } from './panel-tab.ts'
 import { ResizeHandle, usePanelWidth } from './panel-width.tsx'
 import { panelKey, type State } from './state.ts'
@@ -138,7 +138,7 @@ export function ExtensionDock({ chatId, panel, panelViews, connected, send }: Do
           ×
         </Button>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-12">
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-12" {...whileStale(shown?.stale)}>
         <ExtensionViewer
           extension={panel.extension}
           view={shown?.view}

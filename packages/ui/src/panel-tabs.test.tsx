@@ -169,3 +169,52 @@ test('widening the panel brings folded tabs back', () => {
   expect(tabs()).toEqual(['General', 'Context', 'Changes', 'Processes'])
   expect(more()).toBeNull()
 })
+
+describe('switching to a chat whose panels are on their way', () => {
+  const borrowed: State['extensionUi'] = { ...extensionUi!, stale: true }
+  const views = (stale?: true): State['panelViews'] => ({
+    'space/git/changes': { view: { type: 'text', text: 'Last chat changes' } as never, ...(stale && { stale }) },
+  })
+  function show(props: Partial<Parameters<typeof ContextPanel>[0]>) {
+    act(() =>
+      root.render(
+        <LazyMotion features={domAnimation} strict>
+          <MotionConfig transition={{ duration: 0 }}>
+            <Tooltip.Provider delayDuration={0}>
+              <ContextPanel
+                chatId="space"
+                chats={[space]}
+                workFolder={{ defaultPath: '/w', canSandbox: true }}
+                readOnly={false}
+                connected
+                send={() => {}}
+                {...props}
+              />
+            </Tooltip.Provider>
+          </MotionConfig>
+        </LazyMotion>,
+      ),
+    )
+  }
+  const panel = () => host.querySelector<HTMLElement>('[role="tabpanel"]')!
+
+  test("keeps the open extension tab and the last chat's view, inert, instead of falling back to Context or Loading", () => {
+    localStorage.setItem('kothar.panelTab', 'extension:git/changes')
+    show({ extensionUi: borrowed, panelViews: views(true) })
+    expect(panel().getAttribute('aria-label')).toBe('Changes')
+    expect(panel().textContent).not.toContain('Loading…')
+    expect(panel().hasAttribute('inert')).toBe(true)
+    expect(panel().getAttribute('aria-busy')).toBe('true')
+
+    show({ extensionUi, panelViews: views() })
+    expect(panel().getAttribute('aria-label')).toBe('Changes')
+    expect(panel().hasAttribute('inert')).toBe(false)
+  })
+
+  test("marks the Context tab busy while its items are the last chat's", () => {
+    show({ items: [], itemsStale: true, extensionUi })
+    expect(panel().hasAttribute('inert')).toBe(true)
+    show({ items: [], extensionUi })
+    expect(panel().hasAttribute('inert')).toBe(false)
+  })
+})
