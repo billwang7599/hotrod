@@ -80,8 +80,11 @@ What works today:
   Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in
   Finder or copies the path.
 - **Setups, themes, the marketplace,** and the built-in extensions in `extensions/`: Artifacts, Browser, Git, Home,
-  Memory, Notes, Pins, Processes, Reconnect, Skills and Account rotation. Pins puts a Pin button on each message;
-  the Pinned tab lists the chat's pins and jumps back to one, loading older history if needed.
+  Memory, Notes, Pins, Processes, Reconnect, Skills, Deep Research and Account rotation. Pins puts a Pin button on each
+  message; the Pinned tab lists the chat's pins and jumps back to one, loading older history if needed. Deep Research
+  turns a question into a cited report: a plan you approve, workers that search and read the web, and only claims
+  backed by a quote found on their page (a Deep research chip in the composer, New research ⌘⇧D, or the agent's
+  `deep_research` tool).
 
 Not built yet: remote machines, sandboxing outside macOS, a signed release, and sync.
 

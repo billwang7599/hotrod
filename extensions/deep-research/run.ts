@@ -388,14 +388,17 @@ export function openResearch(ports: Ports) {
     run.endedAt = host.now().toISOString()
     save(run)
     live.delete(run.id)
-    try {
-      host.note(run.chatId, summary, {
-        panel: 'research',
-        action: { name: 'open', value: run.id },
-        card: { title: short(run.question, 120), badge: run.partial ? 'Partial research' : 'Research', detail: `${cited.length} source${cited.length === 1 ? '' : 's'}` },
-      })
-    } catch {
-      // The chat went.
+    // An artifact posts its own card in the chat; one card per report is enough.
+    if (run.report?.kind !== 'artifact') {
+      try {
+        host.note(run.chatId, summary, {
+          panel: 'research',
+          action: { name: 'open', value: run.id },
+          card: { title: short(run.question, 120), badge: run.partial ? 'Partial research' : 'Research', detail: `${cited.length} source${cited.length === 1 ? '' : 's'}` },
+        })
+      } catch {
+        // The chat went.
+      }
     }
     return {
       status: run.partial ? 'partial' : 'done',

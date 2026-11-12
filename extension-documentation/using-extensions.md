@@ -35,6 +35,7 @@ The built-in extensions today:
 | Artifacts | Yes | What agents make for you, such as pages, small apps, diagrams, documents and code files, kept per space with every version, shown sandboxed beside the chat, and all in a library popup (⌘⇧A). |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
+| Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
 
 ### Where Memory keeps its summaries, and cleaning up
 
@@ -119,6 +120,38 @@ up the settings page") and the agent makes it with a tool instead of pasting it 
   is deleted. Home keeps none.
 - **Agents** are told when to make one. They use `create_artifact`, `update_artifact`, `list_artifacts` and
   `read_artifact`, which see only their own space's; a worker shares its space's artifacts.
+
+### Deep Research
+
+Deep Research answers a question from many web sources and writes a report with numbered citations.
+
+- **Starting one:** turn on the **Deep research** chip beside Attach in a chat's composer. It's off in each chat until you
+  turn it on, and stays on until you turn it off: each message you send then goes to research (a plain "thanks" is just
+  answered). Or open **New research** (left sidebar, or **⌘⇧D**) and type a question, or ask the agent to research
+  something in depth; agents have a `deep_research` tool.
+- **The plan:** first it drafts 3 to 8 sub-questions and the kinds of sources to check, and waits: **Start**, **Edit**
+  (change the sub-questions in the **Research** tab) or **Cancel**. Nothing is searched until you start. Turn off **Ask
+  before starting research** in **Settings → Extensions → Deep Research** to skip this.
+- **The research:** each sub-question goes to a worker, listed under the space while it runs, on your **Searching**
+  models (Settings → Models) unless you pick another list. Workers use web search and fetch first, and a browser only
+  when a page needs one. Each returns findings: a claim, the exact quote that supports it, and the page. Kothar then
+  fetches each page itself and keeps a finding only if the quote is on it. A review step then looks for gaps and
+  contradictions and runs one or two more rounds (Standard and Thorough).
+- **The report:** an executive summary, sections, notes where sources disagree, a confidence and open questions
+  section, and a numbered source list with each page's title, link and the date it was read. Every statement cites a
+  kept finding; anything the writer says without one is left out, and the report says how much was. It's saved as an
+  artifact if Artifacts is on, else as a note if Notes is on, else as a file in the space's folder, and a card in the chat
+  opens it.
+- **The Research tab** lists each space's research, newest first, with its phase ("Researching 2 of 5"), sources read
+  and time so far. **Stop** ends one early, and you still get a report from what was found, marked partial. A finished
+  one opens its report beside the chat in one click; **⋯** shows the evidence (every finding, kept or dropped, with its
+  quote) or deletes it.
+- **Limits:** depth sets how far it goes: Quick (about 3 sub-questions, up to 4 workers and 12 sources), Standard (4 to 6,
+  10 and 30, one follow-up round) and Thorough (6 to 8, 20 and 60, two). **Most workers** and **Most sources** in its
+  settings cap any run. Reaching a cap ends the research with a partial report.
+- **Files:** each run's plan, findings and sources are in `<data folder>/extensions/deep-research/runs/<space id>/`, so
+  you can check where a claim came from later. They go when the space is deleted.
+- **What it can't check:** some sites refuse plain page fetches, and their findings are dropped. PDFs aren't read.
 
 ### When the connection drops
 

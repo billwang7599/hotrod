@@ -26,6 +26,8 @@ export * from './store.ts'
 
 const TOGGLE = 'research'
 const PANEL = 'research'
+const REPORT = 'report'
+const NEW = 'new'
 const FETCH_TIMEOUT_MS = 20_000
 const MAX_PAGE_BYTES = 3_000_000
 const MAX_QUESTION = 2000
@@ -98,6 +100,9 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
   // The run each chat is editing the plan of in the Research tab, and the run each chat's tab shows.
   const editing = new Map<string, string>()
   const opened = new Map<string, string>()
+  // By space: the run the report dock shows, whether it shows the evidence instead, and the popup's depth.
+  const docked = new Map<string, { run: string; evidence: boolean }>()
+  const popupDepth = new Map<string, Depth>()
 
   // Each sub-question to a quiet child of the run's space, on the model list the settings pick.
   const investigate: Ports['investigate'] = (run, prompt, label, signal) =>
@@ -187,7 +192,8 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       key: run.id,
       label: run.question,
       detail,
-      ...(active && { since: Date.parse(run.startedAt) }),
+      // A running one ticks its time where the detail goes, so its phase shows as a badge.
+      ...(active && { since: Date.parse(run.startedAt), badges: [{ text: phaseText(run), tone: 'accent' as const }] }),
       dot: active ? 'accent' : run.phase === 'done' ? (run.partial ? 'warning' : 'success') : run.phase === 'failed' ? 'error' : 'faint',
       selected,
       action: { name: 'open', value: run.id },
@@ -241,18 +247,114 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       )
       return { type: 'stack', children }
     }
-    if (active && run.phase !== 'planning') {
-      children.push({ type: 'button', label: 'Stop', action: { name: 'stop', value: run.id }, hint: 'Stop and write a partial report from what was found' })
-    }
     if (run.error) children.push({ type: 'text', text: run.error, tone: 'error' })
-    const where = placeText(run)
-    if (where) children.push({ type: 'text', text: where, tone: 'muted', small: true })
     const report = store?.readReport(run.spaceId, run.id)
-    if (report) children.push({ type: 'markdown', text: report })
-    else if (run.subQuestions.length) {
+    if (report) {
+      const where = placeText(run)
+      if (run.summary) children.push({ type: 'text', text: run.summary })
+      if (where) children.push({ type: 'text', text: where, tone: 'muted', small: true })
+      children.push({
+        type: 'row',
+        children: [
+          { type: 'button', label: 'Open report', variant: 'primary', action: { name: 'report', value: run.id } },
+          runMenu(run),
+        ],
+      })
+    } else if (run.subQuestions.length) {
       children.push({ type: 'list', label: 'Sub-questions', items: run.subQuestions.map((q, i) => ({ key: String(i), label: q, detail: workersText(run, i) })) })
+      if (!active) children.push({ type: 'row', justify: 'end', children: [runMenu(run)] })
     }
     return { type: 'stack', children }
+  }
+
+  // The rarer things to do with a finished run.
+  const runMenu = (run: Run): ExtensionView => ({
+    type: 'menu',
+    label: `More for ${run.question.slice(0, 60)}`,
+    items: [
+      { label: 'Show evidence', action: { name: 'evidence', value: run.id }, hint: 'Every finding the workers returned, kept or dropped, with its quote' },
+      { type: 'divider' },
+      {
+        label: 'Delete research',
+        danger: true,
+        action: { name: 'delete', value: run.id },
+        confirm: { text: 'Delete this research?', body: 'Its plan, evidence and report here go. A report saved as an artifact or a note stays.', ok: 'Delete', danger: true },
+      },
+    ],
+  })
+
+  // The report, or the run's evidence: each finding with its quote and why it was kept or dropped.
+  const reportView = (run: Run, evidence: boolean): ExtensionView => {
+    const report = store?.readReport(run.spaceId, run.id)
+    const where = placeText(run)
+    const top: ExtensionView = {
+      type: 'row',
+      justify: 'between',
+      children: [
+        { type: 'badge', text: evidence ? 'Evidence' : run.partial ? 'Partial report' : 'Report', tone: run.partial ? 'warning' : 'muted' },
+        {
+          type: 'row',
+          justify: 'end',
+          children: [
+            ...(report && !evidence
+              ? [
+                  { type: 'copy' as const, text: report, label: 'Copy', hint: 'Copy the report as Markdown' },
+                  { type: 'download' as const, text: report, filename: `research-${run.id}.md`, label: 'Download', mimeType: 'text/markdown' },
+                ]
+              : []),
+            { type: 'button', label: evidence ? 'Report' : 'Evidence', variant: 'ghost', action: { name: evidence ? 'report' : 'evidence', value: run.id } },
+          ],
+        },
+      ],
+    }
+    if (!evidence) {
+      return { type: 'stack', children: [top, ...(where ? [{ type: 'text' as const, text: where, tone: 'muted' as const, small: true }] : []), report ? { type: 'markdown', text: report } : { type: 'empty', text: 'This research has no report.' }] }
+    }
+    const items: ExtensionListItem[] = run.findings.map((f) => ({
+      key: f.id,
+      label: f.claim,
+      excerpt: { text: `“${f.quote}”` },
+      detail: f.dropped ? `Dropped: ${f.dropped}` : (run.sources[f.url]?.title ?? f.title),
+      dot: f.verified ? 'success' : 'faint',
+      link: { text: new URL(f.url).hostname, url: f.url },
+    }))
+    return { type: 'stack', children: [top, { type: 'heading', text: run.question }, { type: 'list', label: 'Findings', items, empty: 'No findings.' }] }
+  }
+
+  const openReport = (h: ExtensionHost, chatId: string, spaceId: string, runId: string, evidence = false) => {
+    docked.set(spaceId, { run: runId, evidence })
+    h.showPanel(chatId, REPORT)
+    h.refresh(chatId)
+  }
+
+  const newView = (spaceId: string, defaultDepth: Depth): ExtensionView => {
+    const depth = popupDepth.get(spaceId) ?? defaultDepth
+    return {
+      type: 'stack',
+      gap: 'loose',
+      children: [
+        { type: 'text', text: 'Workers search and read the web; the report cites only quotes found on their pages.', tone: 'muted', small: true },
+        {
+          type: 'row',
+          children: [
+            { type: 'text', text: 'Depth', small: true, tone: 'muted' },
+            ...DEPTHS.map((d): ExtensionView => ({
+              type: 'button',
+              label: d[0]!.toUpperCase() + d.slice(1),
+              variant: d === depth ? 'primary' : 'ghost',
+              action: { name: 'depth', value: d },
+              hint: `${DEPTH_LIMITS[d].subs} sub-questions, up to ${DEPTH_LIMITS[d].workers} workers and ${DEPTH_LIMITS[d].sources} sources`,
+            })),
+          ],
+        },
+        {
+          type: 'form',
+          key: `new-${spaceId}`,
+          fields: [{ name: 'question', label: 'What should be researched?', placeholder: 'Such as: How do heat pumps compare with gas boilers on running cost in the UK?', rows: 4 }],
+          submit: { label: 'Research', action: 'start-new' },
+        },
+      ],
+    }
   }
 
   const workersText = (run: Run, sub: number) => {
@@ -399,6 +501,8 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       }
       editing.delete(chat.id)
       opened.delete(chat.id)
+      docked.delete(chat.id)
+      popupDepth.delete(chat.id)
     },
     onSpaceRemoved(space, context) {
       ensure(context.host)
@@ -433,7 +537,7 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
           if (!runs.length) {
             return {
               type: 'empty',
-              text: 'No research yet. Turn on Deep research in the composer and send a question, or ask the agent to research something in depth.',
+              text: 'No research yet. Start one from New research, turn on Deep research in the composer and send a question, or ask the agent to research something in depth.',
             }
           }
           const list: ExtensionView = { type: 'list', label: 'Research', items: runs.map((r) => rowOf(r, r.id === selected?.id)) }
@@ -444,9 +548,26 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
           const spaceId = spaceOf(context.host, chat.id)
           const runId = typeof action.value === 'string' ? action.value : (opened.get(spaceId) ?? '')
           switch (action.name) {
-            case 'open':
+            case 'open': {
               opened.set(spaceId, runId)
+              // A finished run's report opens in one click.
+              if (store!.readReport(spaceId, runId)) openReport(context.host, chat.id, spaceId, runId)
               return
+            }
+            case 'report':
+            case 'evidence':
+              openReport(context.host, chat.id, spaceId, runId, action.name === 'evidence')
+              return
+            case 'delete': {
+              if (research!.isLive(runId)) throw new Error('Stop the research first')
+              store!.remove(spaceId, runId)
+              if (opened.get(spaceId) === runId) opened.delete(spaceId)
+              if (docked.get(spaceId)?.run === runId) {
+                docked.delete(spaceId)
+                context.host.closePanel(chat.id, REPORT)
+              }
+              return
+            }
             case 'stop':
               research!.stop(runId)
               return
@@ -473,6 +594,53 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
               return
             }
           }
+        },
+      },
+      {
+        id: REPORT,
+        title: 'Research report',
+        placement: 'dock',
+        shown: (chat) => !chat.extension,
+        render(chat, context) {
+          ensure(context.host)
+          const spaceId = spaceOf(context.host, chat.id)
+          const shown = docked.get(spaceId)
+          const run = shown && store!.read(spaceId, shown.run)
+          if (!run) return { type: 'empty', text: 'Pick a finished research in the Research tab to read its report.' }
+          return reportView(run, shown.evidence)
+        },
+        onAction(action, chat, context) {
+          ensure(context.host)
+          const spaceId = spaceOf(context.host, chat.id)
+          if ((action.name === 'report' || action.name === 'evidence') && typeof action.value === 'string') {
+            docked.set(spaceId, { run: action.value, evidence: action.name === 'evidence' })
+          }
+        },
+      },
+      {
+        id: NEW,
+        title: 'New research',
+        placement: 'popup',
+        launcher: true,
+        shortcut: 'Mod+Shift+D',
+        shown: (chat) => !chat.extension,
+        render(chat, context) {
+          ensure(context.host)
+          return newView(spaceOf(context.host, chat.id), settingsOf(context).depth)
+        },
+        onAction(action, chat, context) {
+          const h = context.host
+          ensure(h)
+          const spaceId = spaceOf(h, chat.id)
+          if (action.name === 'depth' && DEPTHS.includes(action.value as Depth)) return void popupDepth.set(spaceId, action.value as Depth)
+          if (action.name !== 'start-new') return
+          const question = (action.value as { question?: unknown } | null)?.question
+          if (typeof question !== 'string' || !question.trim()) throw new Error('Type a question to research')
+          const depth = popupDepth.get(spaceId) ?? settingsOf(context).depth
+          // In the background: the plan, if asked for, waits in the Research tab, and a card comes when it's done.
+          void start(h, context, { chatId: spaceId, question, depth }).catch((error) => h.error(error instanceof Error ? error.message : String(error)))
+          h.closePanel(chat.id, NEW)
+          h.showPanel(chat.id, PANEL)
         },
       },
     ],
