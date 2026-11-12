@@ -170,6 +170,7 @@ export type BrowserExtensionOptions = {
   ops?: BrowserOps
   pollMs?: number
   handOffMs?: number
+  finishMs?: number
   // Where to look for the user's browsers, and the platform whose Chrome paths apply.
   places?: Places
   platform?: NodeJS.Platform
@@ -263,6 +264,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       ...(options.ops && { ops: options.ops }),
       ...(options.pollMs !== undefined && { pollMs: options.pollMs }),
       ...(options.handOffMs !== undefined && { handOffMs: options.handOffMs }),
+      ...(options.finishMs !== undefined && { finishMs: options.finishMs }),
       onChange: () => changed(spaceId),
     })
     browsers.set(spaceId, browser)
@@ -284,7 +286,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const waiting = browser?.waitingChat
     for (const chat of host.chats()) {
       if (chat.id !== spaceId && chat.parentId !== spaceId) continue
-      if (chat.id === waiting && browser?.mode === 'window') {
+      // Once the user is done (ending), the bar goes at once, while the window closes in the background.
+      if (chat.id === waiting && browser?.mode === 'window' && !browser.ending) {
         if (!['running', 'waiting'].includes(chat.status)) continue
         const shown = `${browser.since}:${browser.reason}`
         if (notified.get(chat.id) !== shown) {
@@ -299,7 +302,13 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
           text: `Browser: ${browser.reason}`,
           buttons: [
             { id: 'open', label: 'Open browser', hint: 'Bring the browser window to the front' },
-            { id: 'done', label: 'Done', primary: true, hint: 'Close the window; the agent carries on in the background' },
+            {
+              id: 'done',
+              label: 'Done',
+              primary: true,
+              closes: true,
+              hint: 'Close the window; the agent carries on in the background',
+            },
           ],
         })
       } else if (['running', 'waiting'].includes(chat.status)) {
@@ -335,7 +344,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     return browser?.stop()
   }
 
-  const resultText = ({ how, tabs, error }: HandOffResult) => {
+  const resultText = ({ how, tabs, error, late }: HandOffResult) => {
     const said = {
       done: 'The user is done.',
       message: 'The user sent you a message instead of clicking Done; it follows this result.',
@@ -346,8 +355,15 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const list = tabs.length
       ? tabs.map((t) => `${t.active ? '* ' : '- '}${t.title ? `${t.title} — ` : ''}${t.url}`).join('\n')
       : '(no tabs)'
-    const where = how === 'stopped' ? 'The browser is closed.' : 'The browser is back in the background.'
-    return `${said}${error ? ` (${error})` : ''} ${where} Open tabs (* is the one in front):\n${list}`
+    const where =
+      how === 'stopped'
+        ? 'The browser is closed.'
+        : late
+          ? 'The browser is still going back to the background; your next browser call waits for it.'
+          : error
+            ? 'The browser could not go back to the background; it starts again when you next browse.'
+            : 'The browser is back in the background.'
+    return `${said}${error && !late ? ` (${error})` : ''} ${where} Open tabs (* is the one in front):\n${list}`
   }
 
   // Which browser and profile a space's browser runs, in words, for hints.
@@ -362,7 +378,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const browser = browsers.get(spaceId)
     if (!browser?.busy) return []
     const window = browser.mode === 'window'
-    const actions: ExtensionProcessRow['actions'] = !window
+    const actions: ExtensionProcessRow['actions'] = browser.ending
+      ? [{ name: 'stop', label: 'Stop', hint: 'Close the browser' }]
+      : !window
       ? [
           { name: 'open', label: 'Show', hint: 'Show the agents’ tabs in a window, to look or take over' },
           { name: 'signin', label: 'Sign in…', hint: SIGN_IN_HINT },
@@ -383,7 +401,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       {
         key: 'browser',
         label: 'Browser',
-        detail: window
+        detail: browser.ending
+          ? 'Going back to the background'
+          : window
           ? `Open for you${browser.plain ? ', not under automation' : ''}${browser.reason ? `: ${browser.reason}` : ''}`
           : 'In the background',
         ...(browser.since !== undefined && { since: browser.since }),

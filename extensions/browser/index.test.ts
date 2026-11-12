@@ -292,6 +292,109 @@ it('ends a hand-off when the user closes the window, sends a message, or the cha
   expect(extension.processes!('space', context)).toEqual([])
 })
 
+// The Browser extension on fake browsers whose windows take as long to quit as the test says: each window's stop waits
+// for slow.release(), or forever if the test never calls it.
+async function slowToQuit(finishMs?: number) {
+  const fakes = fakeBrowsers()
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => (release = resolve))
+  const launch: Launcher = async (options) => {
+    const running = await fakes.launch(options)
+    if (options.headless) return running
+    return { ...running, stop: async () => (await gate, running.stop()) }
+  }
+  const { extension } = createBrowserExtension({
+    launch: () => launch,
+    ops: fakes.ops,
+    pollMs: 10,
+    ...(finishMs !== undefined && { finishMs }),
+    ...NO_CHROME,
+  })
+  const h = fakeHost(tempDir('kothar-browser-extension-'))
+  await extension.onStart!({ values: defaults, host: h.host })
+  cleanups.push(async () => {
+    release()
+    await extension.onStop!({ values: defaults, host: h.host })
+  })
+  const space = h.chat('space')
+  const context = { values: defaults, host: h.host }
+  const show = extension.tools!.find((t) => t.name === SHOW_TOOL)!
+  let returned: string | undefined
+  const handOff = async () => {
+    returned = undefined
+    const call = Promise.resolve(show.run({ reason: 'Look' }, { caller: space, values: defaults, host: h.host })).then(
+      (text) => (returned = String(text)),
+    )
+    await until(() => h.waits.has('space'))
+    return { call, window: fakes.launched.at(-1)! }
+  }
+  return { extension, fakes, space, context, handOff, release, returned: () => returned, ...h }
+}
+
+it('ends the wait the moment Done is clicked, while the window is still closing, and the agent hears once it is back', async () => {
+  const t = await slowToQuit()
+  const { call, window } = await t.handOff()
+  // Done marks itself as closing, so the bar goes on the click in the UI and core too.
+  expect(t.waits.get('space')!.buttons.find((b) => b.id === 'done')).toMatchObject({ closes: true })
+  const finished = t.extension.onWaitAction!(t.space, { button: 'done' }, t.context)
+  // Synchronously, before Chrome has quit.
+  expect(t.waits.has('space')).toBe(false)
+  expect(t.extension.processes!('space', t.context)).toEqual([
+    expect.objectContaining({ detail: 'Going back to the background', actions: [expect.objectContaining({ name: 'stop' })] }),
+  ])
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  expect(window.alive).toBe(true)
+  expect(t.waits.has('space')).toBe(false)
+  expect(t.returned()).toBeUndefined()
+  // A second click, from the row or a bar that hadn't gone yet, is the same finish: one relaunch, one result.
+  const again = t.extension.onWaitAction!(t.space, { button: 'done' }, t.context)
+  const fromRow = t.extension.onProcessAction!('space', 'browser', 'done', t.context)
+  t.release()
+  await Promise.all([finished, again, fromRow])
+  const text = await call
+  expect(text).toContain('The user is done.')
+  expect(text).toContain('The browser is back in the background.')
+  expect(t.fakes.launched.filter((b) => b.launch.headless)).toHaveLength(1)
+  expect(t.fakes.launched.at(-1)!.launch.headless).toBe(true)
+  expect(t.waits.has('space')).toBe(false)
+})
+
+it('lets the agent go on when the window never finishes closing, and says the browser is still on its way back', async () => {
+  const t = await slowToQuit(50)
+  const { call, window } = await t.handOff()
+  void t.extension.onWaitAction!(t.space, { button: 'done' }, t.context)
+  expect(t.waits.has('space')).toBe(false)
+  const text = await call
+  expect(text).toContain('The user is done.')
+  expect(text).toContain('still going back to the background; your next browser call waits for it')
+  expect(window.alive).toBe(true)
+  expect(t.waits.has('space')).toBe(false)
+})
+
+it('ends the wait at once when the user closes the window or messages, though the window is slow to close', async () => {
+  const t = await slowToQuit()
+  // Every tab closed, as closing the window on macOS: noticed by the next read, and the bar goes then, not after.
+  let { call, window } = await t.handOff()
+  window.tabs = []
+  await until(() => !t.waits.has('space'))
+  expect(window.alive).toBe(true)
+  expect(t.returned()).toBeUndefined()
+  t.release()
+  expect(await call).toContain('The user closed the browser window.')
+
+  // A message instead of Done.
+  ;({ call, window } = await t.handOff())
+  void t.extension.onWaitAction!(t.space, { message: 'seen it' }, t.context)
+  expect(t.waits.has('space')).toBe(false)
+  expect(await call).toContain('The user sent you a message')
+
+  // Quitting the browser: it's gone already, so the bar goes with it.
+  ;({ call, window } = await t.handOff())
+  window.quit()
+  await until(() => !t.waits.has('space'))
+  expect(await call).toContain('The user closed the browser window.')
+})
+
 it('times out a hand-off nobody answers, and lets only one chat in a space wait at a time', async () => {
   const fakes = fakeBrowsers()
   const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, handOffMs: 50, ...NO_CHROME })
