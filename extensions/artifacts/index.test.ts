@@ -7,7 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
-import { ago, applyEdits, createArtifactsExtension, diffLines, MAX_CONTENT_BYTES, openerFor, slugOf } from './index.ts'
+import { ago, applyEdits, createArtifactsExtension, diffLines, INSTRUCTIONS, MAX_CONTENT_BYTES, openerFor, slugOf, toolDescription } from './index.ts'
 import { until as waitUntil } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -177,11 +177,39 @@ it('refuses an artifact without a title or content, of an unknown type, or too b
   expect(JSON.parse((await tool(app, 'create_artifact', { title: '!!!', type: 'html', content: '<p/>' })).text).name).toBe('artifact')
 })
 
-it('tells agents when to make one, and only chats in a space with the tools', async () => {
+it('tells agents to make one only when asked, and only chats in a space with the tools', async () => {
   const { create, tool } = await start()
   const made = await tool(create('App'), 'list_artifacts')
-  expect(made.instructions).toContain('create_artifact rather than pasting it into your reply')
+  expect(made.instructions).toContain(INSTRUCTIONS.asked)
+  expect(made.instructions).not.toContain('rather than pasting it into your reply')
   expect((await tool('main', 'list_artifacts')).instructions).not.toContain('create_artifact')
+})
+
+it('says only when asked in its tool descriptions, and no longer pushes long content into artifacts', () => {
+  const tools = createArtifactsExtension().tools!
+  const description = (name: string) => tools.find((t) => t.name === name)!.description
+  expect(description('create_artifact')).toBe(toolDescription.create)
+  expect(description('create_artifact')).toContain('only when the user asks')
+  expect(description('create_artifact')).toContain('code for a coding task in files')
+  expect(description('create_artifact')).not.toContain('15 lines')
+  expect(description('update_artifact')).toContain('only when the user asks')
+})
+
+it('has a Make artifacts setting, Only when asked by default, and When useful brings back the old instructions', async () => {
+  const setting = createArtifactsExtension().settings?.find((s) => s.key === 'make')
+  expect(setting).toMatchObject({ label: 'Make artifacts', type: 'select', default: 'asked' })
+  expect(setting?.type === 'select' && setting.options.map((o) => o.label)).toEqual(['Only when asked', 'When useful'])
+
+  const { create, tool, handle, garage } = await start()
+  const app = create('App')
+  handle({ type: 'extension.setValue', extensionId: 'artifacts', key: 'make', value: 'useful' })
+  const useful = (await tool(app, 'list_artifacts')).instructions
+  expect(useful).toContain(INSTRUCTIONS.useful)
+  expect(useful).not.toContain(INSTRUCTIONS.asked)
+  // Saved, so it lasts past a restart.
+  await until(() => existsSync(join(garage, 'settings.json')) && readFileSync(join(garage, 'settings.json'), 'utf8').includes('"useful"'))
+  handle({ type: 'extension.setValue', extensionId: 'artifacts', key: 'make', value: 'asked' })
+  expect((await tool(app, 'list_artifacts')).instructions).toContain(INSTRUCTIONS.asked)
 })
 
 it('puts a card in the chat that opens the artifact, and slides the panel in beside the chat', async () => {

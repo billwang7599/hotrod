@@ -119,8 +119,12 @@ up the settings page") and the agent makes it with a tool instead of pasting it 
 - **Files:** a space's artifacts are in `<data folder>/chats/<space id>/artifacts/<name>/`: `v1.html`, `v2.html`…
   (each type with its own extension) and `artifact.json` (title, type, description, versions). They go when the space
   is deleted. Home keeps none.
-- **Agents** are told when to make one. They use `create_artifact`, `update_artifact`, `list_artifacts` and
-  `read_artifact`, which see only their own space's; a worker shares its space's artifacts.
+- **Agents** make one only when you ask for it ("make an artifact", "make me a page I can open"), and change one only
+  when you ask them to. Otherwise they answer in the chat, and code for a coding task goes in files. **Make artifacts** in
+  Settings → Extensions → Artifacts switches this to **When useful**, where agents make one whenever you'd want something
+  to look at, run or keep. Extensions that save into Artifacts for you, such as Deep Research's reports, aren't affected.
+  Agents use `create_artifact`, `update_artifact`, `list_artifacts` and `read_artifact`, which see only their own
+  space's; a worker shares its space's artifacts.
 
 ### Deep Research
 

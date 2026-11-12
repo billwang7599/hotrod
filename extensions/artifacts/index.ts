@@ -79,29 +79,43 @@ export function ago(at: string, now = Date.now()) {
   return new Date(at).toLocaleDateString()
 }
 
-const toolDescription = {
+// Read when a session starts, so they can't follow the Make artifacts setting; they say only when asked, and the
+// instructions for When useful widen that (see INSTRUCTIONS).
+export const toolDescription = {
   create:
-    'Shows the user something to look at, use or keep in Kothar’s Artifacts panel beside the chat. Make one for ' +
-    'self-contained content of more than about 15 lines that the user will view, change or reuse: a web page or small ' +
-    'app, a React component, an SVG, a diagram, a document, or a whole code file. Reply inline instead for short ' +
-    'answers, explanations and snippets. One artifact per thing; change it later with update_artifact (old versions are ' +
-    'kept). type: html (a whole page; inline all CSS and JS), react (one component file whose default export is the ' +
+    'Shows the user something in Kothar’s Artifacts panel beside the chat: a web page or small app, a React ' +
+    'component, an SVG, a diagram or a document. Use it only when the user asks for an artifact (or for a page, app or ' +
+    'diagram they can open), unless your instructions say Artifacts may be made when useful. Otherwise answer in the ' +
+    'chat, and put code for a coding task in files. One artifact per thing; change it later with update_artifact (old ' +
+    'versions are kept). type: html (a whole page; inline all CSS and JS), react (one component file whose default export is the ' +
     'app; only react can be imported; Tailwind classes work), svg, mermaid (the diagram source alone), markdown, or ' +
     'code (with language). It runs offline in a sandbox: no fetch or other network, and no external scripts, styles, ' +
     'images or fonts (use inline SVG or data: URLs). Returns its name.',
   update:
     'Saves a new version of an artifact in this space, by name (or title); the earlier ones stay. For a small change ' +
     'send edits: exact replacements { old, new }, each old text appearing once in the latest version. Otherwise send ' +
-    'the whole new content. change: one short line on what changed. Same rules as create_artifact.',
+    'the whole new content. change: one short line on what changed. Use it only when the user asks to change an ' +
+    'artifact, or for one you were asked to make.',
   list: 'Lists this space’s artifacts: name, title, type, description, latest version and its file.',
   read: 'Reads an artifact’s content, by name (or title): the latest version, or version.',
 }
 
-const INSTRUCTIONS =
-  'Artifacts: when the user wants something to look at, run or keep (a page, app, component, diagram, document or ' +
-  'file of more than about 15 lines), make it with create_artifact rather than pasting it into your reply, then say ' +
-  'in a line or two what you made. Change it with update_artifact, using edits for small changes. Short answers and ' +
-  'snippets stay in the reply.'
+// The Make artifacts setting: only when the user asks (the default), or whenever one would be useful (as before).
+export const MAKE = { asked: 'asked', useful: 'useful' } as const
+
+export const INSTRUCTIONS = {
+  asked:
+    'Artifacts: make one with create_artifact only when the user asks for it, such as "make an artifact" or "make me a ' +
+    'page I can open", and change one with update_artifact only when they ask you to. Otherwise answer in the chat, and ' +
+    'put code for a coding task in files, never in an artifact.',
+  useful:
+    'Artifacts may be made when useful: when the user wants something to look at, run or keep (a page, app, ' +
+    'component, diagram, document or file of more than about 15 lines), make it with create_artifact rather than ' +
+    'pasting it into your reply, then say in a line or two what you made. Change it with update_artifact, using edits ' +
+    'for small changes. Short answers and snippets stay in the reply.',
+}
+
+export const instructionsFor = (make: unknown) => (make === MAKE.useful ? INSTRUCTIONS.useful : INSTRUCTIONS.asked)
 
 // What the space's web switch allows, as html-frame.tsx's frameCsp does: https: joins the sources a page may load
 // scripts, styles, images, fonts and media from; connect-src stays 'none'.
@@ -602,8 +616,21 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
       '(⌘⇧A), and run in a sandbox, offline.',
     enabledByDefault: true,
     // Saved as web, its name before; the key stays so saved values carry over.
+    settings: [
+      {
+        key: 'make',
+        label: 'Make artifacts',
+        description: 'When agents make an artifact: only when you ask for one, or whenever they think one would be useful.',
+        type: 'select',
+        options: [
+          { value: MAKE.asked, label: 'Only when asked' },
+          { value: MAKE.useful, label: 'When useful' },
+        ],
+        default: MAKE.asked,
+      },
+    ],
     spaceSettings: [{ key: 'web', label: 'Load files from the internet', type: 'boolean', default: false, description: WEB_HINT }],
-    instructions: ({ chat, tools }, { host }) => (tools && spaceOf(host, chat.id) ? INSTRUCTIONS : undefined),
+    instructions: ({ chat, tools }, { host, values }) => (tools && spaceOf(host, chat.id) ? instructionsFor(values.make) : undefined),
     tools: [
       {
         name: 'create_artifact',
