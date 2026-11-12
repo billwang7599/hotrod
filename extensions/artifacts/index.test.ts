@@ -287,6 +287,10 @@ it('steps through versions, shows the code and what changed, restores one, and r
 
   // The space's switch lets its pages load from the web; the list shows it.
   handle({ type: 'extension.space.set', chatId: app, extension: 'artifacts', key: 'web', value: true })
+  const web = nodeOf(await panel(app, { name: 'list', value: true }), 'switch')!
+  expect(web).toMatchObject({ setting: 'web', label: 'Load files from the internet', value: true })
+  expect(web.hint).toContain('can’t fetch data')
+  await panel(app, { name: 'list', value: false })
   expect(nodeOf(await panel(app), 'html')!.web).toBe(true)
 
   view = await panel(app, { name: 'renaming', value: true })
@@ -343,7 +347,8 @@ it('keeps a library of every space’s artifacts in a popup, filtered by space a
   let view = await library(app)
   expect(view.type).toBe('split')
   expect(listed(view)).toEqual(['Other chart', 'Sales chart'])
-  expect(nodeOf(view, 'list')!.items[0]).toMatchObject({ detail: expect.stringMatching(/^Other · /), selected: true, badges: [{ text: 'SVG', tone: 'muted' }] })
+  expect(nodeOf(view, 'list')!.items[0]).toMatchObject({ detail: expect.stringMatching(/^Other · /), selected: true })
+  expect(nodeOf(view, 'list')!.items[0]!.badges).toBeUndefined()
   expect(nodeOf(view, 'search')).toMatchObject({ autofocus: true, submit: 'go' })
   expect(texts(view)).toContain('All spaces')
   // The space filter: All, then each space (Home keeps none, so isn't one).

@@ -103,6 +103,13 @@ const INSTRUCTIONS =
   'in a line or two what you made. Change it with update_artifact, using edits for small changes. Short answers and ' +
   'snippets stay in the reply.'
 
+// What the space's web switch allows, as html-frame.tsx's frameCsp does: https: joins the sources a page may load
+// scripts, styles, images, fonts and media from; connect-src stays 'none'.
+const WEB_HINT =
+  'Lets artifact previews load scripts, styles, fonts, images and media from https: sites, such as a library from a ' +
+  'CDN. They still can’t fetch data or open WebSockets, but each site they load from sees the request, and a page’s ' +
+  'script could put data in the addresses it loads.'
+
 const fresh = (): ViewState => ({ tab: 'preview', query: '', renaming: false })
 
 export function createArtifactsExtension({ platform = process.platform }: { platform?: string } = {}): Extension {
@@ -162,11 +169,12 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
       .sort((a, b) => latest(b).at.localeCompare(latest(a).at))
   }
 
-  const itemOf = (artifact: Artifact, state: ViewState, detail: string): ExtensionListItem => ({
+  // badge: its type, where the list has room for it (the library's narrow column hasn't; the open one's header says).
+  const itemOf = (artifact: Artifact, state: ViewState, detail: string, badge = true): ExtensionListItem => ({
     key: keyOf(artifact),
     label: artifact.title,
     detail,
-    badges: [{ text: badgeOf(artifact), tone: 'muted' }],
+    ...(badge && { badges: [{ text: badgeOf(artifact), tone: 'muted' as const }] }),
     selected: isOpen(state, artifact),
     action: { name: 'open', value: { space: artifact.spaceId, slug: artifact.slug } },
     ...(artifact.description && { hint: artifact.description }),
@@ -196,7 +204,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
         {
           type: 'switch',
           setting: 'web',
-          hint: 'Lets this space’s pages load scripts, styles, images and fonts from https: sites, such as a chart library. They still can’t fetch or send data.',
+          hint: WEB_HINT,
         },
       ],
     }
@@ -455,7 +463,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
         {
           type: 'list',
           label: 'Artifacts',
-          items: found.map((a) => itemOf(a, library, [!library.space && names.get(a.spaceId), ago(latest(a).at)].filter(Boolean).join(' · '))),
+          items: found.map((a) => itemOf(a, library, [!library.space && names.get(a.spaceId), ago(latest(a).at)].filter(Boolean).join(' · '), false)),
           empty: library.query.trim() ? 'Nothing matches.' : library.space ? 'No artifacts in this space yet.' : 'No artifacts yet.',
         },
       ],
@@ -593,7 +601,8 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
       'documents and code files. Kept per space with every version, shown beside the chat, all of them in a library ' +
       '(⌘⇧A), and run in a sandbox, offline.',
     enabledByDefault: true,
-    spaceSettings: [{ key: 'web', label: 'Load from the web', type: 'boolean', default: false }],
+    // Saved as web, its name before; the key stays so saved values carry over.
+    spaceSettings: [{ key: 'web', label: 'Load files from the internet', type: 'boolean', default: false, description: WEB_HINT }],
     instructions: ({ chat, tools }, { host }) => (tools && spaceOf(host, chat.id) ? INSTRUCTIONS : undefined),
     tools: [
       {
