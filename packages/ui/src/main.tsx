@@ -17,7 +17,7 @@ import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
 import { ExtensionPopup, launcherEntries, usePanelShortcuts } from './extension-popups.tsx'
 import { placedLaunchers, useLauncherPlace } from './launchers.ts'
-import { choosePanelTab, extensionTabId, openDock, showsFor } from './panel-tab.ts'
+import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, showsFor } from './panel-tab.ts'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -107,6 +107,14 @@ function App() {
           choosePanelTab(id)
           showTabRef.current()
         }
+        return
+      }
+      if (action.type === 'extension.panel.close') {
+        const { chats, selectedId } = seenRef.current
+        if (!showsFor(chats, selectedId, action.chatId)) return
+        const id = extensionTabId(action.extension, action.panel)
+        if (action.placement === 'popup' && currentPopup() === id) openPopup(null)
+        if (action.placement === 'dock' && currentDock().open === id) openDock(null)
         return
       }
       dispatch(action)

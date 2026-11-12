@@ -686,6 +686,8 @@ export type CoreMessage =
   | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
   // An extension asks the UI to open one of its panels for the chat (host.showPanel), without taking focus.
   | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
+  // An extension closes its popup or dock for the chat, if the user has it open there (host.closePanel).
+  | { type: 'extension.panel.close'; chatId: string; extension: string; panel: string; placement: 'popup' | 'dock' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
   // copied: how many files the last copyBack copied back.

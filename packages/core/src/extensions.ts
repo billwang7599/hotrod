@@ -129,6 +129,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   addContextFile: 'sendMessages',
   wait: 'panels',
   showPanel: 'panels',
+  closePanel: 'panels',
   endWait: 'panels',
   processes: 'panels',
   processAction: 'panels',

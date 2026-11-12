@@ -567,8 +567,9 @@ function reduceAll(state: State, action: Action): State {
     }
     // Shown by the notifier (notifications.ts), not kept in state.
     case 'notify':
-    // Opens a dock or a tab (main.tsx), not kept in state.
+    // Open or close a dock, a tab or a popup (main.tsx), not kept in state.
     case 'extension.panel.show':
+    case 'extension.panel.close':
     // Kept by the file link cache, so a check's answer re-renders only the messages that asked.
     case 'files.checked':
     // Kept by Copy changes back (folder-copies.tsx), the only one that reads it.

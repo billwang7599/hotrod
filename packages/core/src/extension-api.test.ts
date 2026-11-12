@@ -648,6 +648,20 @@ describe('showPanel', () => {
     expect(() => t.host().showPanel('nope', 'side')).toThrow('Unknown chat "nope"')
   })
 
+  it('asks the UI to close a popup or a dock for a chat; a tab stays', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.host().closePanel(id, 'pop')
+    t.host().closePanel(id, 'side')
+    t.host().closePanel(id, 'tab')
+    expect(t.messages.filter((m) => m.type === 'extension.panel.close')).toEqual([
+      { type: 'extension.panel.close', chatId: id, extension: 'test', panel: 'pop', placement: 'popup' },
+      { type: 'extension.panel.close', chatId: id, extension: 'test', panel: 'side', placement: 'dock' },
+    ])
+    expect(() => t.host().closePanel(id, 'nope')).toThrow('Test extension has no panel "nope"')
+    expect(() => t.host().closePanel('nope', 'pop')).toThrow('Unknown chat "nope"')
+  })
+
   it('keeps a dock placement for the UI', () => {
     const t = withHost({ panels })
     const id = t.create()

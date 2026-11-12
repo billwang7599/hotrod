@@ -271,6 +271,14 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
           placement: found.placement === 'dock' ? 'dock' : 'tab',
         })
       },
+      closePanel(chatId, panel) {
+        const chat = chatFor(String(chatId))
+        const found = extension.panels?.find((p) => p.id === panel)
+        if (!found) throw new Error(`${extension.name} has no panel "${panel}"`)
+        // A tab has nothing to close: it stays among the right sidebar's tabs.
+        if (found.placement !== 'popup' && found.placement !== 'dock') return
+        deps.broadcast({ type: 'extension.panel.close', chatId: chat.info.id, extension: extension.id, panel: found.id, placement: found.placement })
+      },
       wait(chatId, wait) {
         const chat = chatFor(chatId)
         if (!['running', 'waiting'].includes(chat.status) && !chat.ending) {

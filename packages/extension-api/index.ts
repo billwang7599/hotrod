@@ -313,6 +313,10 @@ export type ExtensionHost = {
   // isn't opened, since it would take over the window. For something new the user will want to see, such as an artifact
   // an agent just made; not for every change.
   showPanel(chatId: string, panel: string): void
+  // Closes one of this extension's panels for the chat, if the user has it open there: a popup or a dock closes; a tab
+  // stays. For a panel's own action that hands off elsewhere, such as a popup's Open beside chat; not to take a panel
+  // away from the user unasked.
+  closePanel(chatId: string, panel: string): void
   // Draws this extension's panels and commands for the chat again, and its open panels: call it when what they show
   // changed. Without a chat, for every chat.
   refresh(chatId?: string): void
