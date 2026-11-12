@@ -318,9 +318,10 @@ async function slowToQuit(finishMs?: number) {
   })
   const space = h.chat('space')
   const context = { values: defaults, host: h.host }
-  const show = extension.tools!.find((t) => t.name === SHOW_TOOL)!
   let returned: string | undefined
-  const handOff = async () => {
+  // tool: show_browser, a window Kothar reads, or ask_user_in_browser, a plain one.
+  const handOff = async (name = SHOW_TOOL) => {
+    const show = extension.tools!.find((t) => t.name === name)!
     returned = undefined
     const call = Promise.resolve(show.run({ reason: 'Look' }, { caller: space, values: defaults, host: h.host })).then(
       (text) => (returned = String(text)),
@@ -357,6 +358,29 @@ it('ends the wait the moment Done is clicked, while the window is still closing,
   expect(t.fakes.launched.filter((b) => b.launch.headless)).toHaveLength(1)
   expect(t.fakes.launched.at(-1)!.launch.headless).toBe(true)
   expect(t.waits.has('space')).toBe(false)
+})
+
+it('waits for a plain sign-in window to quit by itself before the browser goes back to the background with DevTools', async () => {
+  const t = await slowToQuit()
+  const { call, window } = await t.handOff(HAND_OFF_TOOL)
+  // Signing in: a plain window, with nothing attached to it.
+  expect(window.launch.plain).toBe(true)
+  expect(window.endpoint).toBe('')
+  const finished = t.extension.onWaitAction!(t.space, { button: 'done' }, t.context)
+  // The popup goes on the click, as for any window.
+  expect(t.waits.has('space')).toBe(false)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  // Nothing starts on the profile while the window is still saving it.
+  expect(window.alive).toBe(true)
+  expect(t.fakes.launched).toHaveLength(1)
+  t.release()
+  await finished
+  expect(String(await call)).toContain('The user is done.')
+  const back = t.fakes.launched[1]!
+  expect(back.launch).toMatchObject({ headless: true, restoreSession: true })
+  expect(back.launch.plain).toBeUndefined()
+  expect(back.endpoint).toMatch(/^http:\/\/fake:/)
+  expect(t.fakes.launched).toHaveLength(2)
 })
 
 it('lets the agent go on when the window never finishes closing, and says the browser is still on its way back', async () => {
@@ -693,6 +717,7 @@ it('runs a copy of the picked profile on that browser’s own app, copied again 
   // The settings page says where logins come from, and that a missing folder can't be used.
   const view = JSON.stringify(extension.settingsView!.render({ values, host: h.host }))
   expect(view).toContain('Logins from Chrome: Person 1 (me@example.com)')
+  expect(view).toContain('Google (Gmail, YouTube and the like) signs you out in a copy')
   expect(view).toContain('Refresh logins now')
   const broken = { ...values, profile: 'folder', profileFolder: join(chrome.places.home, 'nope') }
   expect(JSON.stringify(extension.settingsView!.render({ values: broken, host: h.host }))).toContain('doesn\'t exist')
@@ -745,12 +770,24 @@ it('offers show_browser beside ask_user_in_browser, and tells agents when to use
 it('runs a plain window and the headless browser with no automation tells, and only the plain one without DevTools', () => {
   const headless = chromiumArgs({ profile: '/p', headless: true })
   const plain = chromiumArgs({ profile: '/p', headless: true, plain: true, urls: ['https://a.example/', 'https://b.example/'] })
-  for (const args of [headless, plain]) {
-    expect(args).toContain('--disable-blink-features=AutomationControlled')
+  const window = chromiumArgs({ profile: '/p', headless: false })
+  for (const args of [headless, plain, window]) {
     expect(args).not.toContain('--enable-automation')
+    expect(args.some((a) => a.startsWith('--enable-automation') || a.startsWith('--remote-debugging-pipe'))).toBe(false)
+    // The keychain is the same in every mode, so the cookies one saves the others read.
     expect(args).toContain('--use-mock-keychain')
   }
+  // Headless Chrome says navigator.webdriver unless told not to; a window doesn't, and the flag would only put Chrome's
+  // "unsupported command-line flag" bar on it.
+  expect(headless).toContain('--disable-blink-features=AutomationControlled')
+  expect(window.some((a) => a.startsWith('--disable-blink-features'))).toBe(false)
+  expect(headless.filter((a) => a.startsWith('--remote-debugging'))).toHaveLength(2)
+  // Signing in: as close as can be to the Chrome the user opens. No DevTools, no flags Chrome warns about, and sync on,
+  // which Chrome's own sign-in finishes through.
   expect(plain.filter((a) => a.startsWith('--remote-debugging'))).toEqual([])
+  expect(plain.some((a) => a.startsWith('--disable-blink-features'))).toBe(false)
+  expect(plain).not.toContain('--disable-sync')
+  expect(plain.some((a) => a.startsWith('--disable-features'))).toBe(false)
   expect(plain).not.toContain('--headless')
   expect(plain.slice(-2)).toEqual(['https://a.example/', 'https://b.example/'])
   // After a plain window, the headless browser reopens the tabs it saved, instead of a blank one.
@@ -866,13 +903,71 @@ it('hands the browser over for signing in as a plain window, and the headless on
   expect(fakes.launched[6]!.launch).toMatchObject({ headless: true, restoreSession: true })
 })
 
-it('starts a plain window with no DevTools, up once it locks its profile, and stops it by asking it to quit', async () => {
+// A host whose spawned "browser" locks its profile as the given pid. quits: whether a SIGTERM to that pid makes it quit
+// (Chrome's clean quit); kill is never really run, so no real process is signalled.
+function plainHost(profile: string, pid: number, quits: boolean) {
+  const spawned: { command: string; args: string[] }[] = []
+  const signalled: string[][] = []
+  let exit!: (code: number | null, tail: string) => void
+  let stopped = 0
+  const host = {
+    run: async (command: string, args: string[]) => {
+      if (command === '/bin/kill') {
+        signalled.push(args)
+        if (quits && args.join(' ') === `-TERM ${pid}`) setTimeout(() => exit(0, ''), 20)
+      }
+      return { code: 0, stdout: '', stderr: '' }
+    },
+    spawn: async (command: string, args: string[]) => {
+      spawned.push({ command, args })
+      setTimeout(() => symlinkSync(`host-${pid}`, join(profile, 'SingletonLock')), 20)
+      const proc: ExtensionProcess = {
+        onOutput: () => {},
+        onExit: (listener) => void (exit = listener),
+        stop: () => {
+          stopped++
+          exit(0, '')
+        },
+      }
+      return proc
+    },
+  } as unknown as ExtensionHost
+  return { host, spawned, signalled, stopped: () => stopped }
+}
+
+it('stops a plain window by asking its browser process alone to quit, and waits for it, so a new login is saved', async () => {
+  const profile = join(tempDir('kothar-plain-'), 'profile')
+  const fake = plainHost(profile, 424242, true)
+  const launcher = chromiumLauncher(fake.host, async () => '/bundled/chromium', [], 2000)
+  const running = await launcher({ profile, headless: false, plain: true, executable: '/chrome', urls: ['https://accounts.google.com/'] })
+  expect(running.endpoint).toBe('')
+  const args = fake.spawned[0]!.args
+  expect(args.some((a) => /^--(remote-debugging|enable-automation|disable-blink-features)/.test(a))).toBe(false)
+  await running.stop()
+  // SIGTERM to the browser only, not the process group: Chrome closes its helpers itself after saving.
+  expect(fake.signalled).toEqual([['-TERM', '424242']])
+  expect(fake.stopped()).toBe(0)
+  await running.exited
+})
+
+it('kills a plain window that is still there after its grace period', async () => {
+  const profile = join(tempDir('kothar-plain-'), 'profile')
+  const fake = plainHost(profile, 424243, false)
+  const launcher = chromiumLauncher(fake.host, async () => '/bundled/chromium', [], 50)
+  const running = await launcher({ profile, headless: false, plain: true, executable: '/chrome' })
+  await running.stop()
+  expect(fake.signalled).toEqual([['-TERM', '424243']])
+  expect(fake.stopped()).toBe(1)
+})
+
+it('starts a plain window with no DevTools, up once it locks its profile', async () => {
   const profile = join(tempDir('kothar-plain-'), 'profile')
   const spawned: { command: string; args: string[] }[] = []
   let exit!: (code: number | null, tail: string) => void
   let stopped = 0
+  // Its pid is a process that's gone, so the stop goes straight to the process's own.
   const host = {
-    run,
+    run: async () => ({ code: 1, stdout: '', stderr: '' }),
     spawn: async (command: string, args: string[]) => {
       spawned.push({ command, args })
       // The browser locks its profile as it starts.
@@ -888,7 +983,7 @@ it('starts a plain window with no DevTools, up once it locks its profile, and st
       return proc
     },
   } as unknown as ExtensionHost
-  const launcher = chromiumLauncher(host, async () => '/bundled/chromium')
+  const launcher = chromiumLauncher(host, async () => '/bundled/chromium', [], 50)
   const running = await launcher({ profile, headless: false, plain: true, executable: '/chrome', urls: ['https://accounts.google.com/'] })
   expect(running.endpoint).toBe('')
   expect(spawned[0]!.command).toBe('/chrome')

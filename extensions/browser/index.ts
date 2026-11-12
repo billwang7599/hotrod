@@ -88,13 +88,20 @@ export const SHOW_DESCRIPTION =
   'to see. It opens in a window on their screen with your tabs, the current one in front, and this call waits until ' +
   'they click Done (or close the window, or send you a message); then it goes back to the background and this returns ' +
   'the open tabs. For something they must do (log in, pay, confirm), use ' +
-  `${HAND_OFF_TOOL} instead. Afterwards your earlier page references are gone: take a browser_snapshot first.`
+  `${HAND_OFF_TOOL} instead: this window is under automation, so Google and other sites may refuse to sign the user in ` +
+  'there. Afterwards your earlier page references are gone: take a browser_snapshot first.'
+
+// Google ties a login to the profile it was made in, so a copied one comes up signed out.
+export const GOOGLE_COPY_NOTE =
+  'Google (Gmail, YouTube and the like) signs you out in a copy. For Google, pick Kothar’s own profile and use its ' +
+  'Sign in… button.'
 
 export const PROFILE_HINT =
   'A copy of one of your profiles: its cookies, site storage and saved passwords, copied into a folder of Kothar’s ' +
   'own each time a space’s browser starts, and run on that browser’s own app, which reads them with your Keychain. ' +
   'Your browser and its profile are only ever read. Logins made in the agents’ browser last until the next copy; to ' +
-  'keep one, log in in your own browser.'
+  'keep one, log in in your own browser. ' +
+  GOOGLE_COPY_NOTE
 
 export function profileSetting(found: BrowserProfile[]): ExtensionSetting {
   return {
@@ -382,7 +389,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       ? [{ name: 'stop', label: 'Stop', hint: 'Close the browser' }]
       : !window
       ? [
-          { name: 'open', label: 'Show', hint: 'Show the agents’ tabs in a window, to look or take over' },
+          { name: 'open', label: 'Show', hint: 'Show the agents’ tabs in a window, to look or take over. To sign in, use Sign in…' },
           { name: 'signin', label: 'Sign in…', hint: SIGN_IN_HINT },
           { name: 'stop', label: 'Stop', hint: 'Close the browser; it starts again when an agent browses' },
         ]
@@ -487,6 +494,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       const skipped = [...new Set([...browsers.keys()].flatMap((id) => readMirror(mirrorOf(id))?.skipped ?? []))]
       children.push(
         { type: 'text', text: `Logins from ${choice.label}` },
+        { type: 'text', text: GOOGLE_COPY_NOTE, small: true, tone: 'warning' },
         { type: 'text', text: 'Read from', small: true, tone: 'faint' },
         { type: 'text', text: choice.dir, mono: true, small: true, tone: 'muted', copy: true },
       )
