@@ -662,6 +662,7 @@ it('runs a copy of the picked profile on that browser’s own app, copied again 
   const profile = extension.settings!.find((s) => s.key === 'profile')!
   expect(profile.type === 'select' && profile.options).toEqual([
     { value: 'kothar', label: 'Kothar’s own' },
+    { value: 'kothar-extension', label: 'Your Chrome (Kothar extension)' },
     { value: 'chrome:Default', label: 'Chrome: Person 1 (me@example.com)' },
     { value: 'folder', label: 'Other folder…' },
   ])

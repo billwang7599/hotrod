@@ -18,6 +18,16 @@ export function parseCode(code) {
   return port > 0 && port < 65536 ? { port, token: match[2] } : undefined
 }
 
+// chrome.debugger rejects with the DevTools error as JSON text; Playwright wants its message.
+export function errorText(error) {
+  const text = String(error?.message ?? error)
+  try {
+    const parsed = JSON.parse(text)
+    if (typeof parsed?.message === 'string') return parsed.message
+  } catch {}
+  return text
+}
+
 export function createAgent({ chrome, WebSocket, setTimer = setTimeout }) {
   // Which space each Kothar group is: spaceId → groupId, kept for the browser session (group ids change on restart).
   let groups = {}
@@ -179,7 +189,7 @@ export function createAgent({ chrome, WebSocket, setTimer = setTimeout }) {
       const result = await call(message.method, message.params)
       socket?.send(JSON.stringify({ id: message.id, result: result ?? {} }))
     } catch (error) {
-      socket?.send(JSON.stringify({ id: message.id, error: { message: String(error?.message ?? error) } }))
+      socket?.send(JSON.stringify({ id: message.id, error: { message: errorText(error) } }))
     }
   }
 

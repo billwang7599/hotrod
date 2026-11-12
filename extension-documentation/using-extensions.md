@@ -28,7 +28,7 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
+| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
@@ -155,6 +155,27 @@ that window, so closing its last window doesn't end it on macOS; Done or quittin
 **Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
 space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
 have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
+
+**Your own Chrome.** Pick **Your Chrome (Kothar extension)** in **Profile** and agents browse in the Chrome you use
+every day, with your logins, Google included, and nothing copied. No browser of Kothar's starts. Setting it up once:
+
+1. In Chrome, open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and pick the folder Settings → Extensions → Browser shows
+   (`extensions/browser/chrome-extension/` in Kothar).
+3. Click the Kothar extension's icon and paste the pairing code from the same settings page. It turns **Connected**.
+
+Each space gets a blue **Kothar · *space*** tab group, which opens in a window of its own behind yours. Agents open,
+read, click, type and close tabs only in their space's group. The extension refuses any other tab, and Kothar refuses
+calls that read every cookie, change permissions or close Chrome. Drag a tab out of the group to take it back: agents
+lose it at once. Popups from an agent's tab join its group. While agents work, Chrome shows its own "Kothar started
+debugging this browser" bar. Clicking its Cancel detaches them until they next browse. `show_browser` and
+`ask_user_in_browser` bring the space's group to the front, and **Done** carries on, as above. **Show browser** in a
+chat's General tab does the same.
+
+The extension talks only to Kothar on `127.0.0.1`. It has to present the pairing code, and its connection must come
+from the extension itself, so web pages can't connect. **New code** on the settings page makes a new code and
+disconnects the extension until you paste the new one. If Kothar isn't running, or the extension isn't paired, an
+agent's browser calls say so, and it asks you instead.
 
 **How your profile is used.** Never in place: your browser keeps running untouched, and its profile folder is only
 read. When a space's browser starts, Kothar copies the profile's login state into a folder of its own

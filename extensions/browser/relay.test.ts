@@ -5,6 +5,8 @@ import { afterAll, afterEach, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { until as waitUntil } from '@kothar/core/test-wait'
 import { createAgent, parseCode } from './chrome-extension/agent.js'
+import type { ChatDetail, ExtensionHost, ExtensionTool, ExtensionWait } from '@kothar/extension-api'
+import browser, { createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL, YOUR_CHROME } from './index.ts'
 import { extensionId, EXTENSION_DIR, NOT_CONNECTED, type Relay, startRelay } from './relay.ts'
 
 const dirs: string[] = []
@@ -348,3 +350,119 @@ it("the agents' endpoint refuses a wrong token and requests from web pages", asy
   expect((await fetch(`${url}/json/version`)).status).toBe(200)
 })
 
+
+// The Browser extension with "Your Chrome (Kothar extension)" picked: no browser of its own ever launches.
+async function yourChrome() {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-your-chrome-')))
+  dirs.push(dir)
+  const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
+  const values = { ...defaults, profile: YOUR_CHROME }
+  const launches: unknown[] = []
+  const { extension } = createBrowserExtension({
+    launch: () => async (given) => {
+      launches.push(given)
+      throw new Error('launched')
+    },
+    relay: { port: 0, origin: ORIGIN },
+  })
+  const chats: ChatDetail[] = []
+  const waits = new Map<string, ExtensionWait>()
+  const host = {
+    chats: () => chats,
+    space: (chatId: string) => (chats.some((c) => c.id === chatId) ? { id: chatId, name: 'Sales', folders: [], checkouts: [] } : undefined),
+    wait: (chatId: string, wait: ExtensionWait) => void waits.set(chatId, wait),
+    endWait: (chatId: string) => void waits.delete(chatId),
+    processesChanged: () => {},
+    storage: { dir },
+  } as unknown as ExtensionHost
+  const space: ChatDetail = { id: 'sales', name: 'Sales', engine: 'fake', status: 'running', archived: false, folders: [], files: [], createdAt: '' } as ChatDetail
+  chats.push(space)
+  await extension.onStart!({ values, host })
+  cleanups.push(() => extension.onStop!({ values, host }))
+  const fake = fakeChrome()
+  const agent = createAgent({ chrome: fake.chrome, WebSocket: socketWith(ORIGIN), setTimer: () => 0 })
+  cleanups.push(() => agent.unpair())
+  const view = () => JSON.stringify(extension.settingsView!.render({ values, host }))
+  const endpoint = () => {
+    const { args } = extension.mcpServers!({ chat: { id: 'sales', name: 'Sales', engine: 'fake' }, workDir: dir, sandboxed: true, values })[0]!
+    return args![args!.indexOf('--cdp-endpoint') + 1]!
+  }
+  const tool = (name: string) => extension.tools!.find((t) => t.name === name) as ExtensionTool
+  return { extension, values, host, space, waits, fake, agent, view, endpoint, tool, launches }
+}
+
+it('Your Chrome: Settings shows the setup steps and code, and pairing turns it Connected', async () => {
+  const { view, agent } = await yourChrome()
+  expect(view()).toContain('Not connected')
+  expect(view()).toContain('Load unpacked')
+  expect(view()).toContain(EXTENSION_DIR.replaceAll('\\', '\\\\'))
+  const code = /KOTHAR:\d+:[\w-]+/.exec(view())![0]
+  await agent.pair(code)
+  await until(() => view().includes('"Connected"'))
+  expect(view()).not.toContain('Load unpacked')
+})
+
+it("Your Chrome: agents' Playwright gets the space's endpoint on the relay, and no browser is launched", async () => {
+  const { endpoint, agent, view, launches, fake } = await yourChrome()
+  await agent.pair(/KOTHAR:\d+:[\w-]+/.exec(view())![0])
+  await until(() => view().includes('"Connected"'))
+  const url = endpoint()
+  const port = /KOTHAR:(\d+):/.exec(view())![1]
+  expect(url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[\\w-]+/sales$`))
+  const version = await (await fetch(`${url}/json/version/`)).json()
+  const ws = new WebSocket(version.webSocketDebuggerUrl)
+  await new Promise((resolve) => ws.once('open', resolve))
+  const answer = new Promise<any>((resolve) => ws.once('message', (d) => resolve(JSON.parse(String(d)))))
+  ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url: 'https://example.com' } }))
+  expect((await answer).result.targetId).toMatch(/^T\d+$/)
+  ws.close()
+  expect([...fake.groups.values()][0]).toMatchObject({ title: 'Kothar · Sales', color: 'blue' })
+  expect(launches).toEqual([])
+})
+
+it("Your Chrome: show_browser focuses the space's group and waits for Done, which closes the bar at once", async () => {
+  const { agent, view, tool, space, host, values, waits, fake, extension, endpoint } = await yourChrome()
+  await agent.pair(/KOTHAR:\d+:[\w-]+/.exec(view())![0])
+  await until(() => view().includes('"Connected"'))
+  // No tabs yet: the agent hears to open the page first.
+  await expect(tool(SHOW_TOOL).run({ reason: 'Look' }, { caller: space, values, host })).rejects.toThrow(/no tabs/)
+  const version = await (await fetch(`${endpoint()}/json/version/`)).json()
+  const ws = new WebSocket(version.webSocketDebuggerUrl)
+  await new Promise((resolve) => ws.once('open', resolve))
+  const made = new Promise((resolve) => ws.once('message', resolve))
+  ws.send(JSON.stringify({ id: 1, method: 'Target.createTarget', params: { url: 'https://example.com' } }))
+  await made
+  ws.close()
+
+  let returned: string | undefined
+  void Promise.resolve(tool(SHOW_TOOL).run({ reason: 'The chart is empty' }, { caller: space, values, host })).then((t) => (returned = String(t)))
+  await until(() => waits.has('sales'))
+  const group = [...fake.groups.values()][0]!
+  expect(fake.focused).toEqual([group.windowId])
+  expect(waits.get('sales')!.buttons.find((b) => b.id === 'done')).toMatchObject({ closes: true })
+  await extension.onWaitAction!(space, { button: 'done' }, { values, host })
+  await until(() => returned !== undefined)
+  expect(returned).toContain('The user is done.')
+  expect(returned).toContain("Kothar tab group in the user's Chrome")
+  expect(returned).toContain('https://example.com')
+  expect(waits.has('sales')).toBe(false)
+})
+
+it("Your Chrome: with the extension disconnected, the agent's tools say so and nothing launches", async () => {
+  const { tool, space, values, host, launches, agent, view } = await yourChrome()
+  await expect(tool(HAND_OFF_TOOL).run({ reason: 'Log in' }, { caller: space, values, host })).rejects.toThrow(NOT_CONNECTED)
+  await agent.pair(/KOTHAR:\d+:[\w-]+/.exec(view())![0])
+  await until(() => view().includes('"Connected"'))
+  await agent.unpair()
+  await until(() => view().includes('Not connected'))
+  await expect(tool(SHOW_TOOL).run({ reason: 'Look' }, { caller: space, values, host })).rejects.toThrow(NOT_CONNECTED)
+  expect(launches).toEqual([])
+})
+
+it('Your Chrome: picking another profile closes the relay', async () => {
+  const { extension, host, values, view } = await yourChrome()
+  const port = Number(/KOTHAR:(\d+):/.exec(view())![1])
+  const own = { ...values, profile: 'kothar' }
+  await extension.onSettingsChanged!({ key: 'profile', value: 'kothar', previous: YOUR_CHROME }, { values: own, host })
+  await until(async () => (await fetch(`http://127.0.0.1:${port}/x`).then(() => false, () => true)))
+})

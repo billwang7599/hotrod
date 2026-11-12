@@ -16,6 +16,7 @@ import type {
 import { chromiumLauncher, type Launcher } from './chromium.ts'
 import { serveEndpoints, type Endpoints } from './endpoint.ts'
 import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
+import { EXTENSION_DIR, NOT_CONNECTED, type Relay, type RelayOptions, startRelay } from './relay.ts'
 import {
   type BrowserProfile,
   defaultPlaces,
@@ -107,16 +108,26 @@ export function profileSetting(found: BrowserProfile[]): ExtensionSetting {
   return {
     key: 'profile',
     label: 'Profile',
-    description: 'Kothar’s own profile per space, or a copy of one of yours, so agents are logged in where you are.',
+    description:
+      'Kothar’s own profile per space, your own Chrome through the Kothar extension, or a copy of one of your ' +
+      'profiles, so agents are logged in where you are.',
     type: 'select',
     options: [
       { value: KOTHAR_PROFILE, label: 'Kothar’s own' },
+      { value: YOUR_CHROME, label: 'Your Chrome (Kothar extension)' },
       ...found.map((profile) => ({ value: profile.key, label: profileLabel(profile) })),
       { value: FOLDER_PROFILE, label: 'Other folder…' },
     ],
     default: KOTHAR_PROFILE,
   }
 }
+
+// Agents in the user's own Chrome, in a tab group per space, through the Kothar Chrome extension (relay.ts).
+export const YOUR_CHROME = 'kothar-extension'
+
+export const YOUR_CHROME_INSTRUCTIONS =
+  "The browser is the user's own Chrome: your tabs are in this space's blue Kothar tab group there, with the user's " +
+  "logins, and you can't see or touch their other tabs. Close the tabs you opened when you're done."
 
 export const PROFILE_FOLDER_SETTING: ExtensionSetting = {
   key: 'profileFolder',
@@ -178,6 +189,8 @@ export type BrowserExtensionOptions = {
   pollMs?: number
   handOffMs?: number
   finishMs?: number
+  // Tests start the relay on a spare port, with the fake extension's Origin.
+  relay?: Partial<RelayOptions>
   // Where to look for the user's browsers, and the platform whose Chrome paths apply.
   places?: Places
   platform?: NodeJS.Platform
@@ -206,11 +219,13 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   // The profile the settings pick: Kothar's own, a copy of one of the user's, or why it can't be used.
   type Choice =
     | { kind: 'kothar' }
+    | { kind: 'extension' }
     | { kind: 'copy'; label: string; dir: string; executable: string }
     | { kind: 'error'; message: string }
   const choiceOf = (values: ExtensionValues): Choice => {
     const key = String(values.profile ?? KOTHAR_PROFILE)
     if (key === KOTHAR_PROFILE) return { kind: 'kothar' }
+    if (key === YOUR_CHROME) return { kind: 'extension' }
     if (key === FOLDER_PROFILE) {
       const found = folderProfile(String(values.profileFolder ?? ''), places)
       if (typeof found === 'string') return { kind: 'error', message: found }
@@ -241,6 +256,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     return async (given) => {
       const choice = choiceOf(current)
       if (choice.kind === 'error') throw new Error(`${choice.message}: pick a profile in Settings → Extensions → Browser`)
+      if (choice.kind === 'extension') throw new Error(NOT_CONNECTED)
       if (choice.kind === 'kothar') {
         const engine = engineOf(current)
         if (engine.kind === 'chromium') return launch(given)
@@ -261,6 +277,36 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   }
 
   const spaceIdOf = (chatId: string) => host?.space(chatId)?.id
+
+  // The relay to the Kothar Chrome extension, running only while the profile picks it.
+  let relay: Relay | undefined
+  let relayStarting: Promise<Relay | undefined> | undefined
+  const usesExtension = (values: ExtensionValues = current) => choiceOf(values).kind === 'extension'
+  const syncRelay = async () => {
+    if (!host) return
+    if (usesExtension()) {
+      relayStarting ??= startRelay({
+        stateFile: join(host.storage.dir, 'chrome-extension.json'),
+        nameOf: (spaceId) => host?.space(spaceId)?.name,
+        onChange: () => host?.refresh?.(),
+        ...options.relay,
+      })
+        .then((started) => {
+          relay = started
+          host?.refresh?.()
+          return started
+        })
+        .catch(() => (relayStarting = undefined))
+      await relayStarting
+    } else if (relayStarting) {
+      const closing = await relayStarting
+      relayStarting = undefined
+      relay = undefined
+      await closing?.close()
+    }
+  }
+  // Chats waiting on the user to finish in their own Chrome, and how each ended.
+  const chromeWaits = new Map<string, (how: HandOffResult['how']) => void>()
 
   const browserOf = (spaceId: string) => {
     let browser = browsers.get(spaceId)
@@ -435,6 +481,37 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     void browser.signIn('signing in')
   }
 
+  // In the user's own Chrome nothing moves: the space's group comes to the front, and the agent waits for Done.
+  const inYourChrome = async (spaceId: string, chatId: string, reason: string, tool: string) => {
+    if (!relay?.connected) throw new Error(NOT_CONNECTED)
+    if (chromeWaits.has(chatId)) throw new Error('This chat is already waiting on the user in Chrome')
+    if (!(await relay.focus(spaceId))) {
+      throw new Error("This space has no tabs in the user's Chrome yet; open the page first, then call this again")
+    }
+    const ended = new Promise<HandOffResult['how']>((resolve) => chromeWaits.set(chatId, resolve))
+    const title = tool === SHOW_TOOL ? 'An agent wants to show you something' : 'Chrome needs you'
+    try {
+      host?.notify?.({ chatId, title, body: reason })
+    } catch {}
+    host?.wait(chatId, {
+      text: `Chrome: ${reason}`,
+      buttons: [
+        { id: 'open', label: 'Show tabs', hint: 'Bring this space’s Kothar tab group to the front in Chrome' },
+        { id: 'done', label: 'Done', primary: true, closes: true, hint: 'The agent carries on' },
+      ],
+    })
+    const how = await ended
+    chromeWaits.delete(chatId)
+    try {
+      host?.endWait(chatId)
+    } catch {}
+    const tabs = await relay?.tabs(spaceId).catch(() => [])
+    return resultText({ how, tabs: tabs ?? [] }).replace(
+      / The browser (is back in the background|is closed)\./,
+      " Your tabs are still in this space's Kothar tab group in the user's Chrome.",
+    )
+  }
+
   // A tool that hands the browser to the user and waits for them: in a plain window (signIn) for what they must do,
   // in one Kothar still reads (handOff) for what they should look at.
   const handOffTool = (name: string, description: string, example: string, plain: boolean): ExtensionTool => ({
@@ -452,6 +529,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       const reason = typeof input.reason === 'string' && input.reason.trim() ? input.reason.trim() : 'Your turn'
       const spaceId = spaceIdOf(caller.id)
       if (!spaceId || !endpoints) throw new Error('This chat has no browser')
+      if (usesExtension()) return await inYourChrome(spaceId, caller.id, reason, name)
       const browser = browserOf(spaceId)
       if (browser.waitingChat && browser.waitingChat !== caller.id) {
         throw new Error('Another chat in this space is waiting on the user in the browser; try again after')
@@ -472,6 +550,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     const choice = choiceOf(values)
     const children: ExtensionView[] = [{ type: 'heading', text: 'Profile', hint: PROFILE_HINT }]
     if (choice.kind === 'error') children.push({ type: 'text', text: choice.message, tone: 'error' })
+    if (choice.kind === 'extension') children.push(...extensionView())
     if (choice.kind === 'kothar') {
       const engine = engineOf(values)
       const text =
@@ -542,6 +621,56 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     return { type: 'stack', gap: 'tight', children }
   }
 
+  // Setting up the Kothar extension in the user's Chrome, and whether it's connected.
+  const extensionView = (): ExtensionView[] => {
+    if (!relay) return [{ type: 'text', text: 'Starting…', tone: 'muted' }]
+    const connected = relay.connected
+    const view: ExtensionView[] = [
+      {
+        type: 'row',
+        children: [
+          { type: 'text', text: 'Your Chrome' },
+          { type: 'badge', text: connected ? 'Connected' : 'Not connected', tone: connected ? 'success' : 'warning' },
+        ],
+      },
+      {
+        type: 'text',
+        text:
+          'Agents work in a blue “Kothar · space” tab group per space, in a window of its own, with your logins. ' +
+          'They can’t see or touch your other tabs; drag a tab out of the group to take it back. While they work, ' +
+          'Chrome shows “Kothar started debugging this browser”.',
+        small: true,
+        tone: 'muted',
+      },
+    ]
+    if (!connected) {
+      view.push(
+        { type: 'text', text: '1. In Chrome, open chrome://extensions and turn on Developer mode.', small: true },
+        { type: 'text', text: '2. Click Load unpacked and pick this folder:', small: true },
+        { type: 'text', text: EXTENSION_DIR, mono: true, small: true, tone: 'muted', copy: true },
+        { type: 'text', text: '3. Click the Kothar extension’s icon and paste this code:', small: true },
+      )
+    } else {
+      view.push({ type: 'text', text: 'Pairing code', small: true, tone: 'faint' })
+    }
+    view.push(
+      { type: 'text', text: relay.code, mono: true, small: true, tone: 'muted', copy: true },
+      {
+        type: 'row',
+        children: [
+          {
+            type: 'button',
+            label: 'New code',
+            action: { name: 'repair' },
+            hint: 'Makes a new pairing code. The extension disconnects until you paste the new one into it.',
+            confirm: { text: 'Make a new pairing code?', body: 'Your Chrome disconnects until you paste the new code.', ok: 'New code' },
+          },
+        ],
+      },
+    )
+    return view
+  }
+
   // Closes the browsers running in the background, so the next browse starts on the profile the settings pick now.
   // Windows the user has stay until they're done.
   const restartBackground = () => {
@@ -558,7 +687,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     name: 'Browser',
     description:
       'Agents browse the web in the background: no window opens or takes focus. They use your installed Google Chrome ' +
-      'on a profile of Kothar’s own per space (Sign in… opens it for you to log in), or a copy of one of your Chrome, Brave, Edge or Arc profiles, so they’re logged in where you are. ' +
+      'on a profile of Kothar’s own per space (Sign in… opens it for you to log in), your own Chrome through the Kothar extension (a blue tab group per space), or a copy of one of your Chrome, Brave, Edge or Arc profiles, so they’re logged in where you are. ' +
       'When a page needs you (a login, CAPTCHA, payment) or the agent wants to show you something, the browser opens ' +
       'in a window, and the agent carries on when you click Done.',
     enabledByDefault: false,
@@ -578,6 +707,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       render: ({ values }) => settingsView(values),
       onAction(action) {
         if (action.name === 'refresh') restartBackground()
+        if (action.name === 'repair') relay?.repair()
       },
     },
 
@@ -587,12 +717,15 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       if (key === 'engine' || key === 'profile' || key === 'profileFolder') {
         restartBackground()
         for (const spaceId of browsers.keys()) host?.processesChanged(spaceId)
+        void syncRelay()
       }
     },
 
     setup: {
       description: (values) =>
-        choiceOf(values).kind === 'copy'
+        choiceOf(values).kind === 'extension'
+          ? 'Agents use your own Chrome through the Kothar extension: load it and pair it below.'
+          : choiceOf(values).kind === 'copy'
           ? 'Agents use your own browser’s app, on a copy of the profile you picked: nothing to install.'
           : engineOf(values).kind === 'chrome'
             ? 'Agents use your installed Google Chrome, on a profile of Kothar’s own per space: nothing to install.'
@@ -601,6 +734,9 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       async check(run, values) {
         // A copy of the user's profile runs on their own browser: nothing to install.
         const choice = choiceOf(values)
+        if (choice.kind === 'extension') {
+          return { ready: true, message: relay?.connected ? 'Your Chrome is connected' : 'Your Chrome isn’t connected yet' }
+        }
         if (choice.kind === 'copy') return { ready: true, message: `Uses ${choice.label}, in the background` }
         const engine = engineOf(values)
         if (engine.kind === 'chrome') return { ready: true, message: `Uses ${engine.name}, in the background` }
@@ -636,18 +772,25 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     // Sessions that take MCP servers get the browser, so they get this too.
-    instructions: ({ tools }) => (tools ? BROWSER_INSTRUCTIONS : undefined),
+    instructions: ({ tools }, { values }) =>
+      tools ? (usesExtension(values) ? `${BROWSER_INSTRUCTIONS} ${YOUR_CHROME_INSTRUCTIONS}` : BROWSER_INSTRUCTIONS) : undefined,
 
     async onStart({ host: given, values }) {
       host = given
       current = values
       idleMs = Number(values.idleMinutes ?? 15) * 60_000
       endpoints ??= await serveEndpoints((spaceId) => browserOf(spaceId).endpoint())
+      await syncRelay()
     },
 
     async onStop() {
       const closing = endpoints
       endpoints = undefined
+      for (const end of chromeWaits.values()) end('stopped')
+      const relayClosing = relayStarting
+      relayStarting = undefined
+      relay = undefined
+      await (await relayClosing)?.close()
       await Promise.all([...browsers.keys()].map(stopSpace))
       await closing?.close()
     },
@@ -666,7 +809,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         process.execPath,
         CLI,
         '--cdp-endpoint',
-        endpoints.url(spaceId),
+        usesExtension(values) && relay ? relay.cdpUrl(spaceId) : endpoints.url(spaceId),
         '--cdp-timeout',
         String(CDP_TIMEOUT_MS),
         '--output-dir',
@@ -695,9 +838,11 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         id: 'show-browser',
         label: 'Show browser',
         hint: 'Show the agents’ tabs in a window, to look or take over. Hide puts it back in the background.',
-        shown: (chat) => !!endpoints && browsers.get(spaceIdOf(chat.id) ?? '')?.mode !== 'window',
+        shown: (chat) =>
+          usesExtension() ? !!relay?.connected && !!spaceIdOf(chat.id) : !!endpoints && browsers.get(spaceIdOf(chat.id) ?? '')?.mode !== 'window',
         run: (chat) => {
           const spaceId = spaceIdOf(chat.id)
+          if (spaceId && usesExtension()) return void relay?.focus(spaceId).catch(() => {})
           if (spaceId) return peek(spaceId)
         },
       },
@@ -705,7 +850,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         id: 'sign-in-browser',
         label: 'Sign in…',
         hint: SIGN_IN_HINT,
-        shown: (chat) => !!endpoints && !!spaceIdOf(chat.id) && browsers.get(spaceIdOf(chat.id) ?? '')?.mode !== 'window',
+        shown: (chat) =>
+          !usesExtension() && !!endpoints && !!spaceIdOf(chat.id) && browsers.get(spaceIdOf(chat.id) ?? '')?.mode !== 'window',
         run: (chat) => {
           const spaceId = spaceIdOf(chat.id)
           if (spaceId) return signIn(spaceId)
@@ -721,6 +867,13 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     ],
 
     onWaitAction(chat, answer) {
+      const waiting = chromeWaits.get(chat.id)
+      if (waiting) {
+        if ('message' in answer) return waiting('message')
+        if (answer.button === 'open') return void relay?.focus(spaceIdOf(chat.id) ?? '').catch(() => {})
+        if (answer.button === 'done') return waiting('done')
+        return
+      }
       const browser = browsers.get(spaceIdOf(chat.id) ?? '')
       if (!browser || browser.waitingChat !== chat.id) return
       if ('message' in answer) return browser.finish('message')
@@ -741,6 +894,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     onStatusChanged(chat: ChatDetail, status) {
+      if (status === 'stopping' || status === 'idle') chromeWaits.get(chat.id)?.('stopped')
       const spaceId = spaceIdOf(chat.id)
       if (!spaceId) return
       const browser = browsers.get(spaceId)

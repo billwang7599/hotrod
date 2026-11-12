@@ -1,6 +1,7 @@
 // Types for agent.js, which runs untyped in Chrome, for the tests that run it with a fake chrome.
 export declare const PROTOCOL: number
 export declare function parseCode(code: unknown): { port: number; token: string } | undefined
+export declare function errorText(error: unknown): string
 export type Agent = {
   call(method: string, params: Record<string, unknown>): Promise<any>
   connect(): Promise<void>
