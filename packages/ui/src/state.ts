@@ -13,6 +13,7 @@ import type {
   ChatStatus,
   CommandInfo,
   MessageActionInfo,
+  ComposerToggleInfo,
   ContextItem,
   ContextSection,
   CoreMessage,
@@ -139,6 +140,7 @@ export type ExtensionUi = {
   panels: PanelTab[]
   commands: CommandInfo[]
   messageActions?: MessageActionInfo[]
+  toggles?: ComposerToggleInfo[]
   stale?: true
 }
 
@@ -497,8 +499,8 @@ function reduceAll(state: State, action: Action): State {
       return { ...state, contexts, ...(chatId === state.selectedId && { context: { chatId, items } }) }
     }
     case 'chat.extensions': {
-      const { chatId, panels, commands, messageActions } = action
-      const extensionUi = { chatId, panels, commands, ...(messageActions && { messageActions }) }
+      const { chatId, panels, commands, messageActions, toggles } = action
+      const extensionUi = { chatId, panels, commands, ...(messageActions && { messageActions }), ...(toggles && { toggles }) }
       const extensionUis = { ...state.extensionUis, [chatId]: extensionUi }
       return { ...state, extensionUis, ...(chatId === state.selectedId && { extensionUi }) }
     }

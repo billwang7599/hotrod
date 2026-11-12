@@ -151,6 +151,24 @@ export type ExtensionMessageAction = {
   run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// A switch in a chat's composer, beside the message box, such as "Deep research": a chip the user turns on and off for
+// that chat. Each chat keeps its own state (saved with the chat, so it outlives a restart), starting at `default` (off
+// without it). Several extensions can each add theirs. The extension reads a chat's state with host.toggled and sets
+// it with host.setToggle; onChange runs when the user flips it, after the new state is saved. While the extension is
+// off, or left out of the chat by its setup, the chip isn't shown and the saved state waits for it to come back.
+export type ExtensionComposerToggle = {
+  id: string
+  // Short, such as "Deep research"; shown on the chip.
+  label: string
+  icon?: 'search' | 'globe' | 'book' | 'sparkle' | 'bolt'
+  // Explanations on hover, while it's off and while it's on; both default to label.
+  hint?: string
+  activeHint?: string
+  default?: boolean
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  onChange?(on: boolean, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
+
 // A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
 export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
 
@@ -337,6 +355,12 @@ export type ExtensionHost = {
   processes(spaceId: string): (ExtensionProcessRow & { extension: string })[]
   processAction(spaceId: string, extension: string, key: string, action: string): Promise<void>
   processesChanged(spaceId: string): void
+  // Whether one of this extension's composerToggles is on for the chat (its default if the chat never set it). Throws
+  // for a toggle the extension doesn't have.
+  toggled(chatId: string, toggle: string): boolean
+  // Turns one of this extension's composerToggles on or off for the chat, as the user flipping it does, but without
+  // calling onChange; the chip redraws.
+  setToggle(chatId: string, toggle: string, on: boolean): void
 }
 
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
@@ -750,6 +774,7 @@ export type Extension = {
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
   messageActions?: ExtensionMessageAction[]
+  composerToggles?: ExtensionComposerToggle[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
   // that. For background work, such as summarizing chats.
@@ -830,7 +855,7 @@ export type ExtensionUse =
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
-  // commands, messageActions
+  // commands, messageActions, composerToggles, and host.toggled, setToggle
   | 'commands'
   // settings, spaceSettings, migrateSettings, settingsView, onSettingsChanged, and host.spaceValues, setSpaceValue
   | 'settings'

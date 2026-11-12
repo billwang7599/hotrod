@@ -69,6 +69,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['messageActions', 'commands'],
+  ['composerToggles', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
   ['migrateSettings', 'settings'],
@@ -134,6 +135,8 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   processes: 'panels',
   processAction: 'panels',
   processesChanged: 'panels',
+  toggled: 'commands',
+  setToggle: 'commands',
 }
 
 // Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,

@@ -1,11 +1,12 @@
 // The message box: typing (with its draft kept), attachments, model and thinking pickers, and Send, Queue or Stop.
 import { useEffect, useRef, useState } from 'react'
-import { THINKING_LABELS, type ThinkingLevel } from '@kothar/core/shared'
+import { THINKING_LABELS, type ClientMessage, type ComposerToggleInfo, type ThinkingLevel } from '@kothar/core/shared'
 import { Button, Hint, Select } from '../controls.tsx'
 import { draftOf, flushDrafts, saveDraft, saveDraftSoon } from '../drafts.ts'
 import { applyEdit, continueList, indentList } from '../lists.tsx'
 import { modelKey, type ChatView, type modelMenu } from '../state.ts'
 import { FILE_CHIP, FileLabel, PaperclipIcon, type Pending } from './attachments.tsx'
+import { ComposerToggles } from './composer-toggles.tsx'
 
 const SEND_HINT = 'Enter to send · Shift+Enter for a new line'
 const QUEUE_HINT = 'Enter to queue · ⌘Enter to interrupt and send'
@@ -32,6 +33,9 @@ type ComposerProps = {
   submit: (text: string, steer?: boolean) => boolean
   /** Offers to stop the turn, so what's queued sends now. */
   interrupt: () => void
+  /** Extensions' switches for this chat, beside Attach. */
+  toggles?: readonly ComposerToggleInfo[]
+  send?: (m: ClientMessage) => void
 }
 
 /**
@@ -165,6 +169,9 @@ export function Composer(props: ComposerProps) {
               e.target.value = ''
             }}
           />
+          {props.toggles && props.send && (
+            <ComposerToggles toggles={props.toggles} chatId={chat.id} disabled={!connected || archived} send={props.send} />
+          )}
         </span>
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-6">
           {menu.value && (

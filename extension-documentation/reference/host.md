@@ -415,6 +415,13 @@ The hold ends one of two ways:
 
 Hear about Stop from `onStatusChanged`: the chat leaves `waiting`. The built-in Reconnect extension works this way.
 
+## Composer toggles
+
+| Call | What it does |
+|---|---|
+| `toggled(chatId, id)` | Whether one of this extension's [composer toggles](panels.md#composer-toggles) is on in the chat (its `default` if the chat never set it). Throws for a toggle the extension doesn't have. |
+| `setToggle(chatId, id, on)` | Turns it on or off in the chat, as the user flipping it does, without calling `onChange`. The chip redraws. |
+
 ## Processes rows
 
 The Processes tab lists the commands agents start. An extension can add rows of its own for something it runs in a

@@ -330,3 +330,40 @@ scrolls the chat to it when clicked.
 
 List `commands` in the manifest's `uses` for `messageActions`.
 
+
+## Composer toggles
+
+`composerToggles` adds an on/off chip to a chat's composer, beside **Attach**, such as **Deep research** or **Web
+only**. The user flips it per chat: each chat keeps its own state, saved with the chat (so it outlives a restart) and
+never shared with another chat. Several extensions can each add theirs.
+
+Read a chat's state with `host.toggled(chatId, id)` wherever you need it: in `transformMessage` to change what the next
+message does, in a tool, in `onTurnStarted`. `onChange` runs after the user flips it and the new state is saved.
+
+```ts
+const shout: Extension = {
+  id: 'shout',
+  name: 'Shout',
+  description: 'Asks for replies in capitals while its chip is on.',
+  enabledByDefault: false,
+  composerToggles: [{ id: 'shout', label: 'Shout', icon: 'bolt', hint: 'Replies in capitals', activeHint: 'On: replies in capitals' }],
+  transformMessage: (text, chat, { host }) =>
+    host.toggled(chat.id, 'shout') ? `${text}\n\n(Reply in capital letters.)` : text,
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `label` | Short; shown on the chip. |
+| `icon?` | `search`, `globe`, `book`, `sparkle` or `bolt`. |
+| `hint?`, `activeHint?` | Shown on hover, while off and while on (both default to `label`). |
+| `default?` | Its state in a chat that never set it. Off without it. |
+| `shown(chat, context)` | Optional. Whether this chat gets the chip. |
+| `onChange(on, chat, context)` | Optional. Runs after the user flips it. A throw shows as an error; the new state stays. |
+
+`host.setToggle(chatId, id, on)` sets it from the extension (say, to turn a one-shot switch off once it's used); that
+doesn't call `onChange`. While the extension is off, or a chat's setup leaves it out, the chip isn't shown and the chat's
+saved state waits for it to come back.
+
+List `commands` in the manifest's `uses` for `composerToggles`, `host.toggled` and `host.setToggle`.

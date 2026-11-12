@@ -65,7 +65,7 @@ extension and before you turn it on, and holds the extension to it:
 | `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
 | `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
-| `commands` | Adds commands | `commands`, `messageActions` |
+| `commands` | Adds commands | `commands`, `messageActions`, `composerToggles`, `host.toggled`, `host.setToggle` |
 | `settings` | Has settings | `settings`, `spaceSettings`, `settingsVersion`/`migrateSettings`, `settingsView`, `onSettingsChanged`, `host.spaceValues`, `host.setSpaceValue` |
 
 `host.note`, `host.error`, `host.notify`, `host.storage` and `host.refresh` need nothing listed. Any other host call

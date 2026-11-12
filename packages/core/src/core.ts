@@ -594,6 +594,7 @@ function assembleCore(options: {
     checkWait: (wait) => checkWait(wait),
     spaceValuesOf,
     setSpaceValue,
+    updateChat: (chat, change) => updateChat(chat, change),
     commandPlaceOf: (chat) => commandPlaceOf(chat),
     addContextFile: (chat, path) => addContext(chat, 'files', path),
     accounts,
@@ -607,7 +608,7 @@ function assembleCore(options: {
   })
 
   // Extension panels and commands: which a chat gets, and the views of panels the UI has asked for.
-  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, runMessageAction, forgetChat } =
+  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, runMessageAction, flipToggle, forgetChat } =
     openPanels({
       extensions,
       extensionFor,
@@ -624,6 +625,7 @@ function assembleCore(options: {
       detailOf,
       broadcast,
       setWait,
+      updateChat: (chat, change) => updateChat(chat, change),
     })
 
   const { loadAll, createChat, createChild, renameChat, archiveChat, moveChat, removeChats, deleteChat } = openChatLifecycle({
@@ -865,6 +867,7 @@ function assembleCore(options: {
     setSpaceValue,
     runCommand,
     runMessageAction,
+    flipToggle,
     answerWait,
     setExtensionEnabled,
     setExtensionValue,

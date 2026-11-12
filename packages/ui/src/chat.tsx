@@ -508,6 +508,8 @@ export function Chat(props: ChatProps) {
               stop={stop}
               submit={submit}
               interrupt={interrupt}
+              toggles={props.extensionUi?.chatId === chat.id ? props.extensionUi.toggles : undefined}
+              send={send}
             />
           )}
           <Hint text="Chat width">

@@ -251,6 +251,8 @@ export type ChatInfo = PermissionSwitches & {
   readAt?: string
   // Spaces only: each extension's spaceSettings as saved, by extension id.
   extensionValues?: Record<string, Record<string, unknown>>
+  // Each extension's composer toggles as the user set them in this chat, by extension id, then toggle id.
+  toggles?: Record<string, Record<string, boolean>>
   // The id of the setup the chat uses (Settings → Setups). A worker uses one only when its spawn names it.
   setup?: string
 }
@@ -485,6 +487,16 @@ export type MessageActionInfo = {
   kinds: ('user' | 'work' | 'talk')[]
   marked: number[]
 }
+// An extension's switch in the chat's composer (ExtensionComposerToggle), and whether it's on in the chat.
+export type ComposerToggleInfo = {
+  extension: string
+  id: string
+  label: string
+  on: boolean
+  icon?: 'search' | 'globe' | 'book' | 'sparkle' | 'bolt'
+  hint?: string
+  activeHint?: string
+}
 
 export type ChatState = ChatInfo & {
   run?: Run
@@ -531,6 +543,8 @@ export type ClientMessage =
   | { type: 'extension.command'; chatId: string; extension: string; command: string }
   // One of an extension's message actions, on the message at entry in the chat's log.
   | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
+  // One of an extension's composer toggles, turned on or off in the chat.
+  | { type: 'extension.toggle'; chatId: string; extension: string; toggle: string; on: boolean }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
@@ -655,6 +669,8 @@ export type CoreMessage =
       commands: CommandInfo[]
       // Absent: none.
       messageActions?: MessageActionInfo[]
+      // Absent: none.
+      toggles?: ComposerToggleInfo[]
     }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }

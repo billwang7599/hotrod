@@ -1360,3 +1360,27 @@ test("extensions' message actions sit beside Copy on messages with a log entry, 
   act(() => unpin.click())
   expect(sent.at(-1)).toEqual({ type: 'extension.message.action', chatId: 'c1', extension: 'pins', action: 'pin', entry: 2 })
 })
+
+test("extensions' composer toggles show as chips beside Attach, pressed while on, and ask the core to flip", () => {
+  const sent: ClientMessage[] = []
+  const toggles = [
+    { extension: 'deep-research', id: 'research', label: 'Deep research', icon: 'search' as const, on: true, activeHint: 'On: researches your next message' },
+    { extension: 'other', id: 'web', label: 'Web', on: false },
+  ]
+  render({}, (m) => sent.push(m), { extensionUi: { chatId: 'c1', panels: [], commands: [], toggles } })
+  const chips = [...container.querySelectorAll<HTMLButtonElement>('[data-composer-toggle]')]
+  expect(chips.map((c) => [c.textContent, c.getAttribute('aria-pressed')])).toEqual([
+    ['Deep research', 'true'],
+    ['Web', 'false'],
+  ])
+  act(() => chips[0]!.click())
+  expect(sent.at(-1)).toEqual({ type: 'extension.toggle', chatId: 'c1', extension: 'deep-research', toggle: 'research', on: false })
+  act(() => chips[1]!.click())
+  expect(sent.at(-1)).toEqual({ type: 'extension.toggle', chatId: 'c1', extension: 'other', toggle: 'web', on: true })
+})
+
+test("another chat's composer toggles aren't shown", () => {
+  const toggles = [{ extension: 'deep-research', id: 'research', label: 'Deep research', on: true }]
+  render({}, () => {}, { extensionUi: { chatId: 'other', panels: [], commands: [], toggles } })
+  expect(container.querySelectorAll('[data-composer-toggle]')).toHaveLength(0)
+})

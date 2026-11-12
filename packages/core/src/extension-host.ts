@@ -19,6 +19,7 @@ import type {
   SpaceDetail,
 } from '@kothar/extension-api'
 import type { openAccounts } from './accounts.ts'
+import { isToggled, toggleOf, withToggle } from './composer-toggles.ts'
 import { guardHost } from './extensions.ts'
 import { messagesOf } from './memory.ts'
 import { messageAt } from './message-actions.ts'
@@ -108,6 +109,8 @@ export type HostDeps<C extends HostChat> = {
   checkWait: (wait: ExtensionWait) => ExtensionWait
   spaceValuesOf: (extension: Extension, chat: C) => ExtensionValues
   setSpaceValue: (extension: Extension, chat: C, key: string, value: unknown) => void
+  /** Saves a change to the chat's info (chat.json) and tells the UI. */
+  updateChat: (chat: C, change: Partial<ChatInfo>) => void
   /** Adds a file to the chat's own context (Context → Files), as the user adding it there does. */
   addContextFile: (chat: C, path: string) => void
   /** Where a command an extension starts for a chat runs, and its sandbox. */
@@ -315,6 +318,15 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       },
       reveal: (path) => deps.reveal(path),
       // A worker's goes to its space, which owns the context its workers see.
+      toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
+      setToggle(chatId, toggle, on) {
+        const chat = chatFor(String(chatId))
+        const found = toggleOf(extension, toggle)
+        if (typeof on !== 'boolean') throw new Error('A composer toggle is on or off')
+        if (isToggled(chat.info, extension, found) === on && chat.info.toggles?.[extension.id]?.[found.id] !== undefined) return
+        deps.updateChat(chat, { toggles: withToggle(chat.info, extension, found, on) })
+        if (deps.isOn(extension) && deps.shown(chat)) deps.refresh(extension, chat.info.id)
+      },
       addContextFile: (chatId, path) => deps.addContextFile(chatFor(deps.spaceOf(chatFor(String(chatId))).id), String(path)),
     }
     const uses = deps.usesOf(extension)
