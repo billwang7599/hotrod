@@ -66,6 +66,7 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
     spaceValuesOf: unused,
     setSpaceValue: unused,
     updateChat: unused,
+    isOnFor: () => true,
     commandPlaceOf: unused,
     addContextFile: unused,
     accounts: { list: () => [], use: unused },

@@ -21,6 +21,7 @@ import type {
 import type { openAccounts } from './accounts.ts'
 import { isToggled, toggleOf, withToggle } from './composer-toggles.ts'
 import { guardHost } from './extensions.ts'
+import { summaryOf } from './kothar-mcp.ts'
 import { messagesOf } from './memory.ts'
 import { messageAt } from './message-actions.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
@@ -111,6 +112,8 @@ export type HostDeps<C extends HostChat> = {
   setSpaceValue: (extension: Extension, chat: C, key: string, value: unknown) => void
   /** Saves a change to the chat's info (chat.json) and tells the UI. */
   updateChat: (chat: C, change: Partial<ChatInfo>) => void
+  /** Whether the extension shapes the chat's sessions: on, and not left out by the chat's setup. */
+  isOnFor: (extension: Extension, chat: C) => boolean
   /** Adds a file to the chat's own context (Context → Files), as the user adding it there does. */
   addContextFile: (chat: C, path: string) => void
   /** Where a command an extension starts for a chat runs, and its sandbox. */
@@ -319,6 +322,17 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       },
       reveal: (path) => deps.reveal(path),
       // A worker's goes to its space, which owns the context its workers see.
+      async callTool(chatId, name, input) {
+        const chat = chatFor(String(chatId))
+        const caller = summaryOf(chat.info)
+        const owner = deps.extensions.find(
+          (other) => deps.isOnFor(other, chat) && other.tools?.some((tool) => tool.name === name && tool.offered(caller)),
+        )
+        const tool = owner?.tools?.find((t) => t.name === name && t.offered(caller))
+        if (!owner || !tool) throw new Error(`No tool "${name}" is on for ${chat.info.name}`)
+        if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new Error('A tool takes an object as its input')
+        return await tool.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
+      },
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
       setToggle(chatId, toggle, on) {
         const chat = chatFor(String(chatId))

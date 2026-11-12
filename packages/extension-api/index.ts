@@ -360,6 +360,11 @@ export type ExtensionHost = {
   processes(spaceId: string): (ExtensionProcessRow & { extension: string })[]
   processAction(spaceId: string, extension: string, key: string, action: string): Promise<void>
   processesChanged(spaceId: string): void
+  // Runs another extension's agent tool (ExtensionTool) as if chatId's agent called it, such as the Artifacts
+  // extension's create_artifact, and returns what it returns. Only a tool that's on for that chat and offered to it
+  // (as its agent would see it); rejects otherwise, or with the tool's own error. For handing work to another
+  // extension through its public tools rather than its files.
+  callTool(chatId: string, name: string, input: Record<string, unknown>): Promise<unknown>
   // Whether one of this extension's composerToggles is on for the chat (its default if the chat never set it). Throws
   // for a toggle the extension doesn't have.
   toggled(chatId: string, toggle: string): boolean
@@ -846,7 +851,7 @@ export type ExtensionManifest = {
 }
 
 export type ExtensionUse =
-  // Extension fields.
+  // Extension fields: tools; and host.callTool
   | 'tools'
   | 'mcpServers'
   | 'instructions'

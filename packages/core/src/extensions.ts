@@ -135,6 +135,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   processes: 'panels',
   processAction: 'panels',
   processesChanged: 'panels',
+  callTool: 'tools',
   toggled: 'commands',
   setToggle: 'commands',
 }

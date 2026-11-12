@@ -61,7 +61,7 @@ extension and before you turn it on, and holds the extension to it:
 | `readChats` | Reads your chats | `host.chats`, `host.chat`, `host.read`, `host.space`, `host.messages`, `host.message`, `host.reaches`, `host.reachable` |
 | `transforms` | Rewrites your messages or agents' replies | `transformMessage`, `transformOutput` |
 | `instructions` | Adds to every agent's instructions | `instructions` |
-| `tools` | Gives agents tools | `tools` |
+| `tools` | Gives agents tools, and uses other extensions' tools | `tools`, `host.callTool` |
 | `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
 | `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |

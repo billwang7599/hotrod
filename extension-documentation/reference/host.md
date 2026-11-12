@@ -418,6 +418,22 @@ The hold ends one of two ways:
 
 Hear about Stop from `onStatusChanged`: the chat leaves `waiting`. The built-in Reconnect extension works this way.
 
+## Calling another extension's tool
+
+`callTool(chatId, name, input)` runs another extension's agent tool as if the chat's agent called it, and resolves to
+what the tool returns. Use it to hand work to another extension through its public tools, not its files: say, saving a
+report with the Artifacts extension's `create_artifact`. Only a tool that's on for that chat and offered to it counts;
+otherwise it rejects with `No tool "…" is on for …`, which also tells you the other extension is off, so you can fall
+back. The tool's own errors reject too. List `tools` in the manifest's `uses`.
+
+```ts
+try {
+  await host.callTool(chatId, 'create_artifact', { title, type: 'markdown', content })
+} catch {
+  host.chatStorage(chatId).write('report.md', content)
+}
+```
+
 ## Composer toggles
 
 | Call | What it does |

@@ -595,6 +595,7 @@ function assembleCore(options: {
     spaceValuesOf,
     setSpaceValue,
     updateChat: (chat, change) => updateChat(chat, change),
+    isOnFor: (extension, chat) => isOnFor(extension, chat),
     commandPlaceOf: (chat) => commandPlaceOf(chat),
     addContextFile: (chat, path) => addContext(chat, 'files', path),
     accounts,
