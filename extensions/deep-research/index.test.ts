@@ -224,6 +224,19 @@ describe('the deep_research tool', () => {
     expect(t.chat(space).status).toBe('idle')
   })
 
+  it('shows its workers as subagents in Home too', async () => {
+    const t = await core({ askFirst: false, depth: 'quick', showWorkers: true }, [home])
+    await until(() => t.chats().some((c) => c.extension === 'home'))
+    const main = t.chats().find((c) => c.extension === 'home')!.id
+    expect(await t.callTool(main, 'Greek letters?')).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === main))
+    const reports = t.chat(main).entries.filter((e) => e.type === 'worker.report')
+    expect(reports).toHaveLength(2)
+    expect(reports.every((e) => (e as { quiet?: true }).quiet === true)).toBe(true)
+    expect(t.chat(main).queue).toEqual([])
+    expect(t.chat(main).status).toBe('idle')
+  })
+
   it('keeps its workers quiet with the setting on while Workers is off, and greys the setting out', async () => {
     const t = await core({ askFirst: false, depth: 'quick', showWorkers: true })
     t.handle({ type: 'extension.setEnabled', extensionId: 'workers', enabled: false })
