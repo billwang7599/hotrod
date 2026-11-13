@@ -1,0 +1,13 @@
+{
+  "name": "@kothar/extension-mcp",
+  "private": true,
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
+  },
+  "devDependencies": {
+    "@kothar/core": "*",
+    "@kothar/extension-api": "*"
+  }
+}
