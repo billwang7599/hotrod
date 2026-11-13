@@ -23,7 +23,19 @@ const waiting: FakeStep[] = [
   { type: 'text.completed', text: 'Done' },
 ]
 
-function start(extra: Partial<Extension> = {}) {
+// A turn that waits on a question to the user. A read-only turn refuses the engine's touch x at once and carries on to
+// its end, so a test that asks more than once in one needs a turn that waits on something else.
+const questioning: FakeStep[] = [
+  { type: 'tool.started', toolId: 'q1', name: 'AskUserQuestion', kind: 'other', summary: 'ask', input: {} },
+  {
+    type: 'question',
+    toolId: 'q1',
+    questions: [{ header: 'Go', question: 'Go on?', options: [{ label: 'Yes', description: '' }], multiSelect: false }],
+  },
+  { type: 'text.completed', text: 'Done' },
+]
+
+function start(extra: Partial<Extension> = {}, script: FakeStep[] = waiting) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-ask-')))
   cleanups.push(() => rmSync(garage, { recursive: true, force: true }))
   let host: ExtensionHost | undefined
@@ -37,7 +49,7 @@ function start(extra: Partial<Extension> = {}) {
     onActivity: (event) => void events.push(event),
     ...extra,
   }
-  const core = openCore({ garage, adapters: [createFakeAdapter(waiting, 0)], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [relay] })
+  const core = openCore({ garage, adapters: [createFakeAdapter(script, 0)], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [relay] })
   cleanups.push(() => core.close(true))
   core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
   core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -47,7 +59,7 @@ function start(extra: Partial<Extension> = {}) {
   const asked = (name: string) => entries().findLast((e) => e.type === 'permission.requested' && e.name === name)
   const running = async () => {
     core.handle({ type: 'chat.send', chatId: id, text: 'go' }, () => {})
-    await waitUntil(() => asked('Bash') !== undefined)
+    await waitUntil(() => entries().some((e) => (e.type === 'permission.requested' && e.name === 'Bash') || e.type === 'question.asked'))
   }
   const respond = (requestId: string, allow: boolean) =>
     core.handle({ type: 'permission.respond', chatId: id, requestId, allow }, () => {})
@@ -85,7 +97,7 @@ describe('host.requestPermission', () => {
   })
 
   it('refuses something that changes things in a read-only turn, but asks for a read', async () => {
-    const t = start({ turnOptions: () => ({ readOnly: true, reason: 'Planning only' }) })
+    const t = start({ turnOptions: () => ({ readOnly: true, reason: 'Planning only' }) }, questioning)
     await t.running()
     expect(await t.host().requestPermission(t.id, request)).toEqual({ allow: false, message: 'Planning only', rule: 'Read-only turn' })
     expect(t.asked(request.name)).toBeUndefined()
