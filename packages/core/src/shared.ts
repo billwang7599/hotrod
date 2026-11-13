@@ -135,6 +135,27 @@ export type ToolGroup = 'core' | 'replaced' | 'outside'
 // engine itself leaves out unless named, or one Kothar has always kept off).
 export type EngineToolSpec = { name: string; capability?: ToolCapability; group: ToolGroup; on?: boolean }
 
+// One engine tool as Settings shows it (engine-tools.ts). defaultOn: what it is without the user's choice; saved: the
+// user chose (on is that choice). replacedBy: who stands in for it while it's off by default, such as Workers. isNew:
+// the engine reported it and its adapter doesn't know it.
+export type EngineToolRow = {
+  name: string
+  capability?: ToolCapability
+  group: ToolGroup
+  isNew?: true
+  defaultOn: boolean
+  on: boolean
+  saved?: true
+  replacedBy?: string
+}
+
+// Settings → Engines → Tools. enabled: the master switch for every engine. Per engine whose tools can be switched: its
+// own master switch and its tools; the per-tool choices stay as saved while a master is off.
+export type EngineToolsSettings = {
+  enabled: boolean
+  engines: { engine: string; name: string; enabled: boolean; tools: EngineToolRow[] }[]
+}
+
 export type ImageInput = { mimeType: string; base64: string }
 
 export type CompleteOptions = CompletionRequest & {
@@ -645,6 +666,11 @@ export type ClientMessage =
   | { type: 'extension.prompt.set'; extensionId: string; promptId: string; text?: string }
   // Settings → Workers. text undefined: the instructions go back to their default.
   | { type: 'workers.set'; start?: boolean; limit?: number }
+  // Settings → Engines → Tools: a master switch (every engine's without engine), one tool (on absent: back to its
+  // default), or every tool of an engine back to its default.
+  | { type: 'engineTools.setEnabled'; engine?: string; enabled: boolean }
+  | { type: 'engineTools.setTool'; engine: string; tool: string; on?: boolean }
+  | { type: 'engineTools.reset'; engine: string }
   | { type: 'workers.prompt.set'; text?: string }
   // Settings → Prompts: one of Kothar's own prompts (core-prompts.ts). text undefined: back to its default.
   | { type: 'corePrompt.set'; id: string; text?: string }
@@ -729,6 +755,8 @@ export type CoreMessage =
       setups: Setup[]
       memory: MemorySettings
       workers: WorkersSettings
+      // Absent from an older core.
+      engineTools?: EngineToolsSettings
       corePrompts: PromptInfo[]
       workFolder: WorkFolder
       themes: ThemeFile[]
@@ -781,6 +809,7 @@ export type CoreMessage =
   | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workers.updated'; workers: WorkersSettings }
+  | { type: 'engineTools.updated'; engineTools: EngineToolsSettings }
   | { type: 'corePrompts.updated'; prompts: PromptInfo[] }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).

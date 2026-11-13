@@ -9,6 +9,7 @@ import { engineProblem } from './state.ts'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { SetupsPage } from './setups-page.tsx'
 import { EngineAccountsSection } from './settings/accounts.tsx'
+import { EngineToolsMaster, EngineToolsSections } from './settings/engine-tools.tsx'
 import { AppearancePage } from './settings/appearance.tsx'
 import { CommunityExtensionsPage } from './settings/community.tsx'
 import { extensionPages, ExtensionsPage } from './settings/extensions.tsx'
@@ -23,32 +24,36 @@ const PAGES = [
     id: 'engines',
     group: 'Options',
     title: 'Engines',
-    intro: 'Kothar only starts the engines you turn on here.',
-    body: ({ engines, connected, send }: PageProps) => (
-      <div className={GROUP}>
-        {engines.map((engine) => {
-          const problem = engineProblem(engine)
-          return (
-            <SettingRow
-              key={engine.id}
-              name={<span className="font-mono">{engine.id}</span>}
-              description={
-                <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
-                  {problem ?? 'Ready'}
-                  {engine.detail && ` · ${engine.detail}`}
-                </span>
-              }
-            >
-              <Switch
-                label={`${engine.id} on`}
-                checked={engine.enabled}
-                disabled={!connected}
-                onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
-              />
-            </SettingRow>
-          )
-        })}
-      </div>
+    intro: 'Kothar only starts the engines you turn on here, and gives each the built-in tools you leave on.',
+    body: ({ engines, engineTools, connected, send }: PageProps) => (
+      <>
+        <EngineToolsMaster settings={engineTools} connected={connected} send={send} />
+        <div className={GROUP}>
+          {engines.map((engine) => {
+            const problem = engineProblem(engine)
+            return (
+              <SettingRow
+                key={engine.id}
+                name={<span className="font-mono">{engine.id}</span>}
+                description={
+                  <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
+                    {problem ?? 'Ready'}
+                    {engine.detail && ` · ${engine.detail}`}
+                  </span>
+                }
+              >
+                <Switch
+                  label={`${engine.id} on`}
+                  checked={engine.enabled}
+                  disabled={!connected}
+                  onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
+                />
+              </SettingRow>
+            )
+          })}
+        </div>
+        <EngineToolsSections settings={engineTools} engines={engines} connected={connected} send={send} />
+      </>
     ),
   },
   {

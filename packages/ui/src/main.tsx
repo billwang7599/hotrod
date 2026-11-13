@@ -372,6 +372,7 @@ function App() {
               setups={state.setups}
               setupSave={state.setupSave}
               workers={state.workers}
+              engineTools={state.engineTools}
               corePrompts={state.corePrompts}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}

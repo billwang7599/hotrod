@@ -280,10 +280,18 @@ function assembleCore(options: {
   // Settings → Workers: part of the core (workers.ts).
   const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
   // Settings → Engines → Tools: engines' own tools, switched from Kothar (engine-tools.ts).
-  const engineTools = openEngineTools({ garage, settings, saveSettings, adapterFor })
   // What Kothar has its own version of, for a chat: workers stand in for engines' subagents everywhere, since
   // extensions start workers even where agents may not.
   const providedFor = (_chat?: Chat): Provided => new Map([['subagents', 'Workers']])
+  const engineTools = openEngineTools({
+    garage,
+    settings,
+    saveSettings,
+    adapterFor,
+    adapters: () => adapters,
+    provided: () => providedFor(),
+    broadcast,
+  })
   const prompts = openPrompts({
     settings,
     saveSettings,
@@ -1016,6 +1024,7 @@ function assembleCore(options: {
     setTerminal,
     setMemory,
     workers,
+    engineTools,
     corePrompts,
     models,
     followModels,
@@ -1093,6 +1102,7 @@ function assembleCore(options: {
     setups: jobSetups.list,
     memory: () => settings.memory ?? {},
     workers: workers.info,
+    engineTools: engineTools.info,
     corePrompts: corePrompts.info,
     chats: () => shownChats().map(shownState),
     workFolder,

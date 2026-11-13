@@ -95,6 +95,46 @@ describe('openEngineTools', () => {
     expect(again.rowsOf('fake', WORKERS).at(-1)).toMatchObject({ name: 'Shiny', isNew: true })
   })
 
+  it('saves a tool choice, any tool core ones included, drops one back at its default, and resets an engine', () => {
+    const settings: { engineTools?: any } = {}
+    const messages: any[] = []
+    const tools = openEngineTools({
+      garage: tempDir(),
+      settings,
+      saveSettings: () => {},
+      adapterFor: (id) => (id === 'fake' ? adapter : undefined),
+      adapters: () => [adapter, createFakeAdapter([], 0)],
+      provided: () => WORKERS,
+      broadcast: (m) => messages.push(m),
+    })
+    tools.setTool('fake', 'Bash', false)
+    tools.setTool('fake', 'CronCreate', true)
+    expect(settings.engineTools).toEqual({ engines: { fake: { tools: { Bash: false, CronCreate: true } } } })
+    expect(messages.at(-1).engineTools.engines).toEqual([
+      expect.objectContaining({ engine: 'fake', enabled: true, tools: expect.arrayContaining([expect.objectContaining({ name: 'Bash', on: false, saved: true })]) }),
+    ])
+    tools.setTool('fake', 'Bash', undefined)
+    expect(settings.engineTools).toEqual({ engines: { fake: { tools: { CronCreate: true } } } })
+    expect(() => tools.setTool('fake', 'Nope', true)).toThrow('no tool "Nope"')
+    expect(() => tools.setTool('missing', 'Bash', true)).toThrow('No engine')
+    tools.reset('fake')
+    expect(settings.engineTools).toBeUndefined()
+  })
+
+  it('keeps the per-tool choices under either master switch, so turning it back on restores them', () => {
+    const settings: { engineTools?: any } = { engineTools: { engines: { fake: { tools: { Bash: false } } } } }
+    const tools = openEngineTools({ garage: tempDir(), settings, saveSettings: () => {}, adapterFor: () => adapter, adapters: () => [adapter] })
+    tools.setEnabled(undefined, false)
+    tools.setEnabled('fake', false)
+    expect(settings.engineTools).toEqual({ enabled: false, engines: { fake: { enabled: false, tools: { Bash: false } } } })
+    expect(tools.info()).toMatchObject({ enabled: false, engines: [{ engine: 'fake', enabled: false }] })
+    tools.setEnabled(undefined, true)
+    tools.setEnabled('fake', true)
+    expect(settings.engineTools).toEqual({ engines: { fake: { tools: { Bash: false } } } })
+    expect(tools.sessionFor('fake', WORKERS).tools?.off).toContain('Bash')
+    expect(() => tools.setEnabled(undefined, 'yes')).toThrow()
+  })
+
   it('reads a broken engine-tools.json as empty', () => {
     const garage = tempDir()
     writeFileSync(join(garage, 'engine-tools.json'), '{not json')
@@ -133,6 +173,34 @@ describe('engine tools in a turn', () => {
     t.send()
     await until(() => t.calls.length === 1)
     expect(t.calls[0]!.noTools).toBe(true)
+  })
+
+  it('changes tools over the protocol and labels what was off in What was sent', async () => {
+    const sentTurns: any[] = []
+    const inspector: Extension = {
+      id: 'inspector',
+      name: 'Inspector',
+      description: '',
+      enabledByDefault: true,
+      onTurnSent: (turn) => void sentTurns.push(turn),
+    }
+    const garage = tempDir()
+    const fake = { ...createFakeAdapter([{ type: 'text.completed', text: 'ok' }], 0), tools: TOOLS }
+    const core = openCore({ garage, adapters: [fake], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [mainExtension, inspector] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
+    expect(core.engineTools()).toMatchObject({ enabled: true, engines: [{ engine: 'fake', enabled: true }] })
+    core.handle({ type: 'engineTools.setTool', engine: 'fake', tool: 'Bash', on: false }, () => {})
+    core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
+    await until(() => sentTurns.length === 1 && core.chats().find((c) => c.id === 'main')?.status === 'idle')
+    const offSection = sentTurns[0].sections.find((s: any) => s.label === "Fake's own tools turned off")
+    expect(offSection.text).toContain('Bash, Grep, Agent, CronCreate')
+    core.handle({ type: 'engineTools.setEnabled', enabled: false }, () => {})
+    core.handle({ type: 'chat.send', chatId: 'main', text: 'again' }, () => {})
+    await until(() => sentTurns.length === 2)
+    const none = sentTurns[1].sections.find((s: any) => s.label === "Fake's own tools: all off")
+    expect(none.text).toContain("Only MCP tools were left")
   })
 
   it('records the tools a session reports', async () => {

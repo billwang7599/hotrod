@@ -25,6 +25,7 @@ import type {
   Run,
   Setup,
   WorkersSettings,
+  EngineToolsSettings,
   PromptInfo,
   ExtensionInfo,
   PanelTab,
@@ -117,6 +118,8 @@ export type State = {
   setups: Setup[]
   // Settings → Workers; absent until the core's snapshot arrives.
   workers?: WorkersSettings
+  // Settings → Engines → Tools; absent until the core's snapshot arrives.
+  engineTools?: EngineToolsSettings
   // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
   corePrompts?: PromptInfo[]
   workFolder: WorkFolder
@@ -470,6 +473,7 @@ function reduceAll(state: State, action: Action): State {
         modelLists: action.modelLists,
         setups: action.setups ?? [],
         workers: action.workers,
+        ...(action.engineTools && { engineTools: action.engineTools }),
         corePrompts: action.corePrompts,
         workFolder: action.workFolder,
         themes: action.themes,
@@ -601,6 +605,8 @@ function reduceAll(state: State, action: Action): State {
       return state
     case 'workers.updated':
       return { ...state, workers: action.workers }
+    case 'engineTools.updated':
+      return { ...state, engineTools: action.engineTools }
     case 'corePrompts.updated':
       return { ...state, corePrompts: action.prompts }
     case 'workFolder.updated':

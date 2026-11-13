@@ -13,25 +13,22 @@
 // Sessions start fresh each message, so a change counts from the next one.
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Adapter, EngineToolSpec, SessionOptions, ToolCapability, ToolGroup } from './shared.ts'
+import type {
+  Adapter,
+  CoreMessage,
+  EngineToolRow,
+  EngineToolSpec,
+  EngineToolsSettings,
+  SessionOptions,
+  ToolCapability,
+} from './shared.ts'
+
+export type { EngineToolRow }
 
 export type SavedEngineTools = {
   // The master switch for every engine; absent means on.
   enabled?: boolean
   engines?: Record<string, { enabled?: boolean; tools?: Record<string, boolean> }>
-}
-
-// One tool as Settings shows it. defaultOn: what it is without the user's choice; saved: the user chose (on is that
-// choice). replacedBy: who stands in for it while it's off by default, such as Workers.
-export type EngineToolRow = {
-  name: string
-  capability?: ToolCapability
-  group: ToolGroup
-  isNew?: true
-  defaultOn: boolean
-  on: boolean
-  saved?: true
-  replacedBy?: string
 }
 
 // What Kothar has its own version of, by capability, with who provides it ("Workers"). A chat's own (an extension on
@@ -59,7 +56,11 @@ export function toolRowsOf(
   const unknown = (reported ?? []).filter((name) => !names.has(name))
   const specs: (EngineToolSpec & { isNew?: true })[] = [
     ...known,
-    ...unknown.map((name) => ({ name, group: 'core' as const, isNew: true as const })),
+    ...unknown.map((name) => ({
+      name,
+      group: 'core' as const,
+      isNew: true as const,
+    })),
   ]
   return specs.map((spec) => {
     const byDefault = defaultOn(spec, provided)
@@ -83,11 +84,22 @@ export type EngineToolsDeps = {
   settings: { engineTools?: SavedEngineTools }
   saveSettings: () => void
   adapterFor: (engine: string) => Adapter | undefined
-  // A tool list changed (an engine reported new tools, or the user switched one).
-  changed?: (engine?: string) => void
+  // For Settings: every engine whose tools can be switched (the UI shows those that are on), and what Kothar has its
+  // own version of anywhere (Provided).
+  adapters?: () => readonly Adapter[]
+  provided?: () => Provided
+  broadcast?: (message: CoreMessage) => void
 }
 
-export function openEngineTools({ garage, settings, adapterFor, changed }: EngineToolsDeps) {
+export function openEngineTools({
+  garage,
+  settings,
+  saveSettings,
+  adapterFor,
+  adapters,
+  provided,
+  broadcast,
+}: EngineToolsDeps) {
   const file = join(garage, 'engine-tools.json')
   let reported: Record<string, string[]> = {}
   try {
@@ -113,13 +125,90 @@ export function openEngineTools({ garage, settings, adapterFor, changed }: Engin
     const adapter = adapterFor(engine)
     if (!adapter?.tools) return []
     const choices = savedOf(engine).tools
-    return toolRowsOf(adapter.tools, reported[engine], isRecord(choices) ? (choices as Record<string, boolean>) : undefined, provided)
+    return toolRowsOf(
+      adapter.tools,
+      reported[engine],
+      isRecord(choices) ? (choices as Record<string, boolean>) : undefined,
+      provided,
+    )
+  }
+
+  const info = (): EngineToolsSettings => ({
+    enabled: allEnabled(),
+    engines: (adapters?.() ?? [])
+      .filter((adapter) => adapter.tools)
+      .map((adapter) => ({
+        engine: adapter.id,
+        name: adapter.name ?? adapter.id,
+        enabled: engineEnabled(adapter.id),
+        tools: rowsOf(adapter.id, provided?.() ?? new Map()),
+      })),
+  })
+  const changed = () => broadcast?.({ type: 'engineTools.updated', engineTools: info() })
+  const switchable = (engine: unknown) => {
+    const adapter = typeof engine === 'string' ? adapterFor(engine) : undefined
+    if (!adapter) throw new Error(`No engine "${String(engine)}"`)
+    if (!adapter.tools) throw new Error(`Kothar can't switch ${adapter.name ?? adapter.id}'s tools`)
+    return adapter
+  }
+  // Writes one engine's saved choices, dropping what's back to its default so settings.json stays small.
+  const writeEngine = (engine: string, change: { enabled?: boolean | undefined; tools?: Record<string, boolean> }) => {
+    const next: { enabled?: boolean; tools?: Record<string, boolean> } = {
+      ...savedOf(engine),
+      ...change,
+    }
+    if (next.enabled !== false) delete next.enabled
+    if (!next.tools || !Object.keys(next.tools).length) delete next.tools
+    const { [engine]: _, ...others } = saved().engines ?? {}
+    const engines = Object.keys(next).length ? { ...others, [engine]: next } : others
+    const all: SavedEngineTools = { ...saved(), engines }
+    if (!Object.keys(engines).length) delete all.engines
+    if (Object.keys(all).length) settings.engineTools = all
+    else delete settings.engineTools
+    saveSettings()
+    changed()
   }
 
   return {
     allEnabled,
     engineEnabled,
     rowsOf,
+    info,
+    changed,
+
+    /** A master switch: every engine's without engine, else that engine's. Per-tool choices stay as they were. */
+    setEnabled(engine: unknown, enabled: unknown) {
+      if (typeof enabled !== 'boolean') throw new Error('Engine tools are on or off')
+      if (engine === undefined) {
+        const { enabled: _, ...rest } = saved()
+        const all = enabled ? rest : { ...rest, enabled: false }
+        if (Object.keys(all).length) settings.engineTools = all
+        else delete settings.engineTools
+        saveSettings()
+        return changed()
+      }
+      const { id } = switchable(engine)
+      writeEngine(id, { enabled: enabled ? undefined : false })
+    },
+
+    /** One tool on or off; on undefined puts it back to its default. Any tool the engine has, core ones included. */
+    setTool(engine: unknown, tool: unknown, on: unknown) {
+      const { id } = switchable(engine)
+      if (typeof tool !== 'string' || !rowsOf(id, new Map()).some((row) => row.name === tool)) {
+        throw new Error(`${id} has no tool "${String(tool)}"`)
+      }
+      if (on !== undefined && typeof on !== 'boolean') throw new Error('A tool is on or off')
+      const { [tool]: _, ...others } = savedOf(id).tools ?? {}
+      writeEngine(id, {
+        tools: on === undefined ? others : { ...others, [tool]: on },
+      })
+    },
+
+    /** Every tool of an engine back to its default; its master switch stays as it is. */
+    reset(engine: unknown) {
+      const { id } = switchable(engine)
+      writeEngine(id, { tools: {} })
+    },
     reported: (engine: string) => reported[engine],
 
     /** An engine reported the tools a session has: kept, so Settings can list ones its adapter doesn't know yet. */
@@ -131,7 +220,7 @@ export function openEngineTools({ garage, settings, adapterFor, changed }: Engin
       try {
         writeFileSync(file, JSON.stringify(reported, null, 2) + '\n')
       } catch {}
-      changed?.(engine)
+      changed()
     },
 
     /** The tool options a session of this engine starts with; nothing for an engine whose tools can't be switched. */
@@ -143,7 +232,10 @@ export function openEngineTools({ garage, settings, adapterFor, changed }: Engin
         off: rows.filter((row) => !row.on).map((row) => row.name),
         on: rows.filter((row) => row.on).map((row) => row.name),
       }
-      return { tools, ...(!(allEnabled() && engineEnabled(engine)) && { noTools: true }) }
+      return {
+        tools,
+        ...(!(allEnabled() && engineEnabled(engine)) && { noTools: true }),
+      }
     },
   }
 }

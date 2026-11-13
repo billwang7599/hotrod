@@ -86,12 +86,25 @@ export function sentTurnOf(chat: ChatSummary, at: string, id: string, input: Sen
     })
   }
   sections.push({ source: 'turn', part: 'other', label: 'How this turn runs', text: howItRuns(input, engine, nameOf) })
+  const { engineTools } = input
+  if (engineTools?.none || engineTools?.off.length) {
+    sections.push({
+      source: 'turn',
+      part: 'other',
+      label: engineTools.none ? `${engine}'s own tools: all off` : `${engine}'s own tools turned off`,
+      text: engineTools.none
+        ? `Engine tools were off (Settings → Engines), so ${engine} had none of its built-in tools: it couldn't run ` +
+          "commands, edit or read files itself. Only MCP tools were left: Kothar's and extensions'."
+        : `Turned off in Settings → Engines → Tools, or by default: ${engineTools.off.join(', ')}.`,
+      settings: 'engines',
+    })
+  }
   sections.push({
     source: 'engine',
     part: 'other',
     label: `Added by ${engine}, not visible to Kothar`,
     text:
-      `${engine} adds its own system prompt, its built-in tools and their descriptions on top of everything above, ` +
+      `${engine} adds its own system prompt, ${engineTools?.none ? '' : 'its built-in tools and their descriptions '}on top of everything above, ` +
       "and may add more as the turn goes (such as tool results and its own reminders). Kothar can't see that part.",
   })
   return { ...base, kind: 'turn', ...(input.model && { model: input.model }), ...(input.account && { account: input.account }), continued: input.continued, sections }

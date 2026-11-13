@@ -146,6 +146,9 @@ export type SentInput =
       kotharMcp: boolean
       mcpServers: string[]
       images: number
+      // The engine's own tools turned off for the turn (Settings → Engines → Tools), by its names; none: every one,
+      // by a master switch. Absent for an engine whose tools Kothar can't switch.
+      engineTools?: { off: string[]; none?: true }
     }
   | { kind: 'steer'; turn: string; text: string; engine: string }
 
@@ -811,6 +814,7 @@ export function openTurns(deps: TurnDeps) {
           kotharMcp: !!kotharMcp,
           mcpServers: mcpServers.map((server) => server.name),
           images: images?.length ?? 0,
+          ...(options.tools && { engineTools: { off: options.tools.off, ...(options.noTools && { none: true as const }) } }),
         })
       }
       if (sent && !sent.continued) recordTurnChanges(chat, sent, readOnly)

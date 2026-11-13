@@ -5,6 +5,7 @@ import type {
   ContextSection,
   EngineAccounts,
   EngineInfo,
+  EngineToolsSettings,
   ExtensionInfo,
   ModelLists,
   RestartState,
@@ -25,6 +26,8 @@ export type PageProps = {
   setupSave?: { count: number; id?: string; error?: string }
   // Settings → Workers; absent until the core's snapshot arrives.
   workers?: WorkersSettings
+  // Settings → Engines → Tools; absent until the core's snapshot arrives (or from an older core).
+  engineTools?: EngineToolsSettings
   // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
   corePrompts?: PromptInfo[]
   workFolder: WorkFolder

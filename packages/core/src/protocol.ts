@@ -28,6 +28,7 @@ import {
 import { checkSwitch } from './settings.ts'
 import { messageOf } from './util.ts'
 import type { Workers } from './workers.ts'
+import type { EngineTools } from './engine-tools.ts'
 import type { CorePrompts } from './core-prompts.ts'
 
 export type Reply = (message: CoreMessage) => void
@@ -81,6 +82,7 @@ export type ProtocolDeps = {
   setTerminal: (terminal: unknown) => void
   setMemory: (engine?: string, model?: string) => void
   workers: Pick<Workers, 'set' | 'setInstructions'>
+  engineTools: Pick<EngineTools, 'setEnabled' | 'setTool' | 'reset'>
   corePrompts: Pick<CorePrompts, 'set'>
   models: Pick<ReturnType<typeof openModels>, 'setList'>
   followModels: () => void
@@ -276,6 +278,9 @@ export function openProtocol(deps: ProtocolDeps) {
     'memory.set': (message) => deps.setMemory(optionalText(message.engine), optionalText(message.model)),
     'workers.set': (message) => deps.workers.set({ start: message.start, limit: message.limit }),
     'workers.prompt.set': (message) => deps.workers.setInstructions(typeof message.text === 'string' ? message.text : undefined),
+    'engineTools.setEnabled': (message) => deps.engineTools.setEnabled(message.engine, message.enabled),
+    'engineTools.setTool': (message) => deps.engineTools.setTool(message.engine, message.tool, message.on),
+    'engineTools.reset': (message) => deps.engineTools.reset(message.engine),
     'corePrompt.set': (message) => deps.corePrompts.set(String(message.id), typeof message.text === 'string' ? message.text : undefined),
     'models.setList': (message) => {
       deps.models.setList(message.role, message.models)
