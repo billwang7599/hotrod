@@ -6,6 +6,7 @@
 //   once without starting every server.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { oauthSecretValues } from './oauth.ts'
 
 export type Transport = 'stdio' | 'http' | 'sse'
 // Who may call a server's tools without asking: nobody (ask each time), its read-only tools, or all of them.
@@ -168,7 +169,7 @@ export function openStore(dir: string) {
       Object.values(allSecrets()).flatMap((saved) => [
         ...Object.values(strings(saved?.env) ?? {}),
         ...Object.values(strings(saved?.headers) ?? {}),
-        ...Object.values(isRecord(saved?.oauth) ? collectStrings(saved.oauth) : []),
+        ...oauthSecretValues(saved?.oauth),
       ]),
     tools(id: string): { at: string; tools: CachedTool[] } | undefined {
       const saved = readJson(toolsFile(id))
@@ -183,14 +184,6 @@ export type Store = ReturnType<typeof openStore>
 
 const isTool = (value: unknown): value is CachedTool =>
   isRecord(value) && typeof value.name === 'string' && isRecord(value.inputSchema) && value.inputSchema.type === 'object'
-
-// Every string in an OAuth record: tokens, client secrets.
-function collectStrings(value: unknown): string[] {
-  if (typeof value === 'string') return [value]
-  if (Array.isArray(value)) return value.flatMap(collectStrings)
-  if (isRecord(value)) return Object.values(value).flatMap(collectStrings)
-  return []
-}
 
 // Any secret in text, replaced by [secret]. Short values (under 4 characters) aren't secrets worth the false matches.
 export function masked(text: string, secrets: string[]) {

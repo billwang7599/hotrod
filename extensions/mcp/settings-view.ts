@@ -4,6 +4,7 @@
 import type { ExtensionAction, ExtensionHost, ExtensionListItem, ExtensionMenuItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
 import { searched, serverFromEntry, serverFromForm, type CatalogEntry } from './catalog.ts'
 import type { Clients, State } from './clients.ts'
+import type { OAuth } from './oauth.ts'
 import { hint, type Approval, type AuthKind, type ServerConfig, type Store } from './store.ts'
 
 // Past this many tools across the servers that are on, the page warns: each is sent to the model every message.
@@ -23,8 +24,8 @@ export type PageDeps = {
   clients: Clients
   catalog: () => CatalogEntry[]
   host: ExtensionHost
-  // Signs a remote server in with OAuth (oauth.ts), if Kothar can.
-  signIn?: (server: ServerConfig) => Promise<void>
+  // Sign-ins to remote servers (oauth.ts).
+  oauth?: Pick<OAuth, 'signIn' | 'signOut' | 'signingIn' | 'signedIn'>
 }
 
 const TONES: Record<State, ExtensionTone> = { connected: 'success', starting: 'accent', stopped: 'faint', failed: 'error', 'needs-sign-in': 'warning' }
@@ -88,7 +89,7 @@ export function renderPage(state: PageState, deps: PageDeps): ExtensionView {
   children.push({ type: 'heading', text: 'Add a server' })
   children.push({ type: 'search', key: 'catalog', value: state.query, placeholder: 'Search GitHub, Linear, Notion…', action: 'search', label: 'Search the catalog' })
   const adding = state.adding && deps.catalog().find((entry) => entry.id === state.adding!.entry)
-  if (adding) children.push(addCard(adding, state.adding!.auth, deps))
+  if (adding) children.push(addCard(adding, state.adding!.auth))
   children.push({
     type: 'list',
     label: 'Catalog',
@@ -135,8 +136,27 @@ function serverCard(server: ServerConfig, state: PageState, deps: PageDeps): Ext
     { type: 'code', text: what, maxLines: 4 },
   ]
   if (status.error) children.push({ type: 'text', text: status.error, tone: status.state === 'needs-sign-in' ? 'warning' : 'error', small: true })
-  if (status.state === 'needs-sign-in' && server.auth === 'oauth' && !deps.signIn) {
-    children.push({ type: 'text', small: true, tone: 'warning', text: 'Signing in to remote servers isn’t in Kothar yet. Use a token instead, if this server takes one.' })
+  const oauth = server.auth === 'oauth' && server.transport !== 'stdio' ? deps.oauth : undefined
+  const pending = oauth?.signingIn(server.id)
+  if (oauth) {
+    children.push(
+      pending
+        ? {
+            type: 'row',
+            children: [
+              { type: 'text', small: true, tone: 'accent', text: 'Finish signing in in your browser.' },
+              { type: 'link', text: 'Open the sign-in page', url: pending.url },
+            ],
+          }
+        : {
+            type: 'text',
+            small: true,
+            tone: oauth.signedIn(server.id) ? 'muted' : 'warning',
+            text: oauth.signedIn(server.id)
+              ? 'Signed in. Kothar keeps the sign-in in a file only you can read, refreshes it as needed, and never gives it to an engine.'
+              : 'Not signed in. Sign in to use it.',
+          },
+    )
   }
   const toggle: ExtensionView = server.enabled
     ? { type: 'button', label: 'Turn off', action: act('disable', server.id) }
@@ -158,7 +178,11 @@ function serverCard(server: ServerConfig, state: PageState, deps: PageDeps): Ext
     children: [
       toggle,
       { type: 'button', label: busy ? 'Testing…' : 'Test connection', disabled: busy, action: act('test', server.id) },
-      ...(server.auth === 'oauth' && deps.signIn ? [{ type: 'button' as const, label: secrets.oauth ? 'Sign in again' : 'Sign in', action: act('signin', server.id) }] : []),
+      ...(oauth && pending ? [{ type: 'button' as const, label: 'Cancel sign-in', variant: 'ghost' as const, action: act('cancelSignin', server.id) }] : []),
+      ...(oauth && !pending
+        ? [{ type: 'button' as const, label: oauth.signedIn(server.id) ? 'Sign in again' : 'Sign in', variant: oauth.signedIn(server.id) ? ('normal' as const) : ('primary' as const), action: act('signin', server.id) }]
+        : []),
+      ...(oauth && !pending && oauth.signedIn(server.id) ? [{ type: 'button' as const, label: 'Sign out', variant: 'ghost' as const, action: act('signout', server.id) }] : []),
       ...(clients.running(server.id) ? [{ type: 'button' as const, label: 'Stop', variant: 'ghost' as const, action: act('stop', server.id) }] : []),
       ...(status.crashes > 0 || status.state === 'failed' ? [{ type: 'button' as const, label: 'Restart', variant: 'ghost' as const, action: act('restart', server.id) }] : []),
       {
@@ -227,7 +251,7 @@ function serverCard(server: ServerConfig, state: PageState, deps: PageDeps): Ext
   return { type: 'card', title: server.name, open: true, children }
 }
 
-function addCard(entry: CatalogEntry, auth: AuthKind, deps: PageDeps): ExtensionView {
+function addCard(entry: CatalogEntry, auth: AuthKind): ExtensionView {
   const children: ExtensionView[] = [
     { type: 'row', children: [{ type: 'badge', text: `${entry.publisher} · ${entry.official ? 'official' : 'community'}`, tone: entry.official ? 'success' : 'warning' }] },
     { type: 'text', text: entry.description },
@@ -248,8 +272,8 @@ function addCard(entry: CatalogEntry, auth: AuthKind, deps: PageDeps): Extension
       })),
     })
   }
-  if (auth === 'oauth' && !deps.signIn) {
-    children.push({ type: 'text', tone: 'warning', small: true, text: 'Signing in to remote servers isn’t in Kothar yet, so this one will say it needs sign-in.' })
+  if (auth === 'oauth') {
+    children.push({ type: 'text', tone: 'muted', small: true, text: 'After adding it, press Sign in: your browser opens the server’s own sign-in page.' })
   }
   const fields = [
     ...(auth === 'token' && entry.auth.token
@@ -400,14 +424,35 @@ export async function pageAction(action: ExtensionAction, state: PageState, deps
       return
     case 'signin': {
       const server = named(id)
-      if (!server || !deps.signIn) return
+      if (!server || !deps.oauth) return
       try {
-        await deps.signIn(server)
-        await clients.reset(server.id)
-        await test(server)
+        // Returns once the browser is open; the rest happens when the user comes back.
+        const started = await deps.oauth.signIn(server)
+        state.message = { tone: 'accent', text: `Sign in to ${server.name} in your browser, then come back here.` }
+        void started.done
+          .then(async () => {
+            await clients.reset(server.id)
+            await test(server)
+            if (state.message?.tone === 'success') state.message = { tone: 'success', text: `Signed in to ${server.name}. ${state.message.text}` }
+          })
+          .catch((error) => {
+            state.message = { tone: 'error', text: `Signing in to ${server.name} failed: ${errorText(error)}` }
+          })
+          .finally(() => host.refresh())
       } catch (error) {
         state.message = { tone: 'error', text: `Signing in to ${server.name} failed: ${errorText(error)}` }
       }
+      return
+    }
+    case 'cancelSignin':
+      if (id) deps.oauth?.signingIn(id)?.cancel()
+      return
+    case 'signout': {
+      const server = named(id)
+      if (!server || !deps.oauth) return
+      deps.oauth.signOut(server)
+      await clients.reset(server.id)
+      state.message = { tone: 'normal', text: `Signed out of ${server.name}.` }
       return
     }
     case 'approval': {

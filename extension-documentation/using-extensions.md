@@ -241,6 +241,13 @@ or the address of a remote server (Streamable HTTP, or SSE for an address ending
 - **Keys** (API keys and tokens) are kept in `extensions/mcp/secrets.json` in your garage, readable by you only. They're
   never written to settings, never shown in full (only their last four characters) and never put in the Activity or the
   Inspector: anything that holds one shows `[secret]`.
+- **Signing in.** A remote server that uses sign-in (Notion, Sentry, Figma and Vercel, or Linear, Atlassian, Stripe and
+  Supabase when you pick **Sign in** over a token) has a **Sign in** button on its card. Your browser opens the server's
+  own sign-in page, and Kothar waits on `127.0.0.1` for the answer, once, for up to 5 minutes. It follows the MCP
+  authorization spec: it finds the sign-in server from the MCP server's own answer, registers itself as an app, and
+  uses PKCE, a resource indicator and a state check. The sign-in is kept with your keys in `secrets.json` and refreshed
+  before it expires. If the server refuses a refresh, the card says **Needs sign-in**. **Sign out** forgets it. A server
+  that doesn't let other apps register (as GitHub's and Slack's don't) says so: use a token for it instead.
 - **Permissions.** Each call to a server's tool shows Kothar's permission card in the chat. A server's **⋯** menu can
   let its read-only tools run without asking, or all its tools; the Activity records which rule answered. A read-only
   turn (Plan) refuses tools that aren't marked read-only.
@@ -251,7 +258,7 @@ or the address of a remote server (Streamable HTTP, or SSE for an address ending
   on the page). If it crashes, the next call starts it again after a short pause; after 5 crashes in a row it stays
   stopped until you press **Restart**. **Test connection** starts it, lists its tools and stops it.
 - **Activity.** The Inspector's Activity lists each server start, stop, crash and failure, and each tool call with its
-  server, input, result and time.
+  server, input, result and time, and each sign-in started, finished, failed, refreshed or signed out (never a token).
 - **Many tools cost tokens.** Every tool's description is sent with every message. Past 60 tools across your servers,
   the page warns you; switch off what a space doesn't need.
 - **A remote catalog.** **Catalog address** adds a list in the same JSON format as the built-in one, read from an https

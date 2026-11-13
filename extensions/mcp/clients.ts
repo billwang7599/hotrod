@@ -33,6 +33,8 @@ export type ClientsDeps = {
   sleep?: (ms: number) => Promise<void>
   // An OAuth sign-in for a remote server, if it has one (oauth.ts).
   authProvider?: (server: ServerConfig) => unknown
+  // Runs before each connection to a remote server: refreshes a sign-in that's expired or about to (oauth.ts).
+  beforeConnect?: (server: ServerConfig) => Promise<void>
   // A server's tool list changed (it said so, or Kothar listed it again).
   toolsChanged?: (serverId: string) => void
   // A server's status changed (running, stopped, failed, …), for the Settings page to draw again.
@@ -124,6 +126,7 @@ export function openClients(deps: ClientsDeps) {
 
   // A fresh client, connected and with its tools listed; stderr's tail goes into a failure's message.
   const connect = async (server: ServerConfig) => {
+    if (server.transport !== 'stdio') await deps.beforeConnect?.(server)
     const transport = transportOf(server)
     let stderr = ''
     const pipe = (transport as { stderr?: NodeJS.ReadableStream | null }).stderr
@@ -239,6 +242,8 @@ export function openClients(deps: ClientsDeps) {
   }
 
   return {
+    // Records an event with every secret masked (sign-ins use it too).
+    record,
     status: statusOf,
     running: (id: string) => live.has(id),
     tools: (id: string) => store.tools(id)?.tools ?? [],

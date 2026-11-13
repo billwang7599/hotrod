@@ -8,6 +8,7 @@
 import type { ChatDetail, ChatSummary, Extension, ExtensionContext, ExtensionHost, ExtensionTool, ExtensionView, McpToolResult } from '@kothar/extension-api'
 import { mergedCatalog, parseCatalog, type CatalogEntry } from './catalog.ts'
 import { openClients, type Clients } from './clients.ts'
+import { openInBrowser, openOAuth, type OAuth } from './oauth.ts'
 import { relayedName } from './names.ts'
 import { pageAction, renderPage, type PageState } from './settings-view.ts'
 import { openStore, type CachedTool, type ServerConfig, type Store } from './store.ts'
@@ -18,10 +19,17 @@ export const CHAT_OFF_FILE = 'servers-off.json'
 // What a permission request for a relayed tool is called, as the card shows it: MCP <server id>/<tool>.
 const REQUEST = /^MCP ([a-z0-9][a-z0-9_-]*)\/(.+)$/
 
-export type McpOptions = { shell?: string; sleep?: (ms: number) => Promise<void>; fetch?: typeof fetch }
+export type McpOptions = {
+  shell?: string
+  sleep?: (ms: number) => Promise<void>
+  fetch?: typeof fetch
+  // Opens a sign-in page in the user's browser; tests follow it themselves.
+  openUrl?: (url: string) => void | Promise<void>
+  signInTimeoutMs?: number
+}
 
 export type McpExtension = Extension & {
-  state(): { store?: Store; clients?: Clients }
+  state(): { store?: Store; clients?: Clients; oauth?: OAuth }
   // Switches servers off for one chat alone (the chat's MCP tab), from its next message.
   setChatOff(chatId: string, serverIds: string[]): void
 }
@@ -30,6 +38,7 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
   let host: ExtensionHost | undefined
   let store: Store | undefined
   let clients: Clients | undefined
+  let oauth: OAuth | undefined
   let values: ExtensionContext['values'] = {}
   // What the Settings page shows between renders, and the remote catalog's entries once read.
   const page: PageState = { query: '' }
@@ -44,7 +53,17 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
     void loadRemote(context.values)
     if (store) return
     store = openStore(context.host.storage.dir)
+    const signIns = openOAuth({
+      store,
+      now: () => context.host.now().getTime(),
+      record: (event) => clients?.record(event),
+      openUrl: options.openUrl ?? openInBrowser,
+      ...(options.signInTimeoutMs && { timeoutMs: options.signInTimeoutMs }),
+    })
+    oauth = signIns
     clients = openClients({
+      authProvider: (server) => (server.auth === 'oauth' ? signIns.provider(server) : undefined),
+      beforeConnect: (server) => (server.auth === 'oauth' ? signIns.refreshIfDue(server) : Promise.resolve()),
       store,
       now: () => context.host.now().getTime(),
       record: (event) => host?.activity(event),
@@ -72,7 +91,7 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
     host?.refresh()
   }
   const catalog = () => mergedCatalog(remote)
-  const pageDeps = () => ({ store: store!, clients: clients!, catalog, host: host! })
+  const pageDeps = () => ({ store: store!, clients: clients!, catalog, host: host!, oauth: oauth! })
 
   const spaceIdOf = (chatId: string) => {
     try {
@@ -213,7 +232,7 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
         },
       },
     ],
-    state: () => ({ store, clients }),
+    state: () => ({ store, clients, oauth }),
     setChatOff: (chatId, serverIds) => setOff(chatId, serverIds),
 
     onStart(context) {

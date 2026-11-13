@@ -6,7 +6,7 @@ import type { ExtensionHost } from '@kothar/extension-api'
 import { afterEach, describe, expect, it } from 'vitest'
 import { BUNDLED, checkedEntry, freeId, mergedCatalog, parseCatalog, searched, serverFromEntry, serverFromForm } from './catalog.ts'
 import { openClients } from './clients.ts'
-import { MANY_TOOLS, pageAction, renderPage, type PageState } from './settings-view.ts'
+import { MANY_TOOLS, pageAction, renderPage, type PageDeps, type PageState } from './settings-view.ts'
 import { openStore } from './store.ts'
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-server.mjs', import.meta.url))
@@ -69,7 +69,7 @@ describe('catalog', () => {
 })
 
 describe('Settings page', () => {
-  function page() {
+  function page(oauth?: PageDeps['oauth']) {
     const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-mcp-page-')))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
     const store = openStore(dir)
@@ -85,7 +85,7 @@ describe('Settings page', () => {
       ],
     } as unknown as ExtensionHost
     const state: PageState = { query: '' }
-    const deps = { store, clients, catalog: () => BUNDLED, host }
+    const deps = { store, clients, catalog: () => BUNDLED, host, ...(oauth && { oauth }) }
     const view = () => JSON.stringify(renderPage(state, deps))
     const act = (name: string, value?: unknown) => pageAction({ name, ...(value !== undefined && { value: value as never }) }, state, deps)
     return { store, clients, state, view, act, refreshed: () => refreshed }
@@ -140,9 +140,38 @@ describe('Settings page', () => {
     expect(p.view()).toContain('save tokens')
   })
 
-  it('says sign-in isn’t built yet for an OAuth server when Kothar can’t sign in', async () => {
-    const p = page()
+  it('signs an OAuth server in from its card: Sign in, a link while waiting, then Sign out', async () => {
+    let signedIn = false
+    let pending: { url: string; done: Promise<void>; cancel: () => void } | undefined
+    let finish = () => {}
+    const oauth: PageDeps['oauth'] = {
+      signIn: async () => {
+        pending = { url: 'https://auth.example/authorize?x=1', done: new Promise<void>((resolve) => (finish = resolve)), cancel: () => {} }
+        return pending
+      },
+      signingIn: () => pending,
+      signedIn: () => signedIn,
+      signOut: () => void (signedIn = false),
+    }
+    const p = page(oauth)
     await p.act('pick', 'notion')
-    expect(p.view()).toContain('isn’t in Kothar yet')
+    expect(p.view()).toContain('press Sign in')
+    await p.act('add', {})
+    const id = p.state.open!
+    expect(p.view()).toContain('Not signed in')
+    expect(p.view()).toContain('"label":"Sign in"')
+    await p.act('signin', id)
+    expect(p.view()).toContain('Open the sign-in page')
+    expect(p.view()).toContain('https://auth.example/authorize?x=1')
+    expect(p.view()).toContain('Cancel sign-in')
+    signedIn = true
+    pending = undefined
+    finish()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(p.view()).toContain('Sign in again')
+    expect(p.view()).toContain('Sign out')
+    await p.act('signout', id)
+    expect(p.state.message?.text).toContain('Signed out')
+    expect(p.view()).toContain('Not signed in')
   })
 })
