@@ -11,12 +11,15 @@ import type {
   ExtensionContext,
   ExtensionHost,
   ExtensionNoteCard,
+  ExtensionPermissionAnswer,
+  ExtensionTool,
   ExtensionRun,
   ExtensionStorage,
   ExtensionStoredFile,
   ExtensionUse,
   ExtensionValues,
   ExtensionWait,
+  PermissionRequest,
   SpaceDetail,
 } from '@kothar/extension-api'
 import type { openAccounts } from './accounts.ts'
@@ -117,6 +120,8 @@ export type HostDeps<C extends HostChat> = {
   isOnFor: (extension: Extension, chat: C) => boolean
   /** Adds a file to the chat's own context (Context → Files), as the user adding it there does. */
   addContextFile: (chat: C, path: string) => void
+  /** An extension's permission request (host.requestPermission), raised in the chat's running turn (turn.ts). */
+  requestPermission: (chat: C, request: Omit<PermissionRequest, 'type' | 'requestId'>, changes: boolean) => Promise<ExtensionPermissionAnswer>
   /** Where a command an extension starts for a chat runs, and its sandbox. */
   commandPlaceOf: (chat: C) => Promise<Place>
 
@@ -173,6 +178,21 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     }
 
   const contextOf = (extension: Extension): ExtensionContext => ({ values: deps.valuesOf(extension), host: hostFor(extension) })
+
+  // The extension's tools for a chat: its fixed ones, then those it makes for the chat (toolsFor). A toolsFor that
+  // throws shows its error and adds none.
+  const toolsOf = (extension: Extension, chat: C): ExtensionTool[] => {
+    const fixed = extension.tools ?? []
+    if (!extension.toolsFor) return fixed
+    try {
+      const made = extension.toolsFor(summaryOf(chat.info), contextOf(extension))
+      if (!Array.isArray(made)) throw new Error('toolsFor must return a list of tools')
+      return [...fixed, ...made]
+    } catch (error) {
+      extensionError(extension, error)
+      return fixed
+    }
+  }
   const hostFor = (extension: Extension): ExtensionHost => {
     const known = hosts.get(extension.id)
     if (known) return known
@@ -364,10 +384,12 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       async callTool(chatId, name, input) {
         const chat = chatFor(String(chatId))
         const caller = summaryOf(chat.info)
-        const owner = deps.extensions.find(
-          (other) => deps.isOnFor(other, chat) && other.tools?.some((tool) => tool.name === name && tool.offered(caller)),
-        )
-        const tool = owner?.tools?.find((t) => t.name === name && t.offered(caller))
+        let tool: ExtensionTool | undefined
+        const owner = deps.extensions.find((other) => {
+          if (!deps.isOnFor(other, chat)) return false
+          tool = toolsOf(other, chat).find((t) => t.name === name && t.offered(caller))
+          return tool !== undefined
+        })
         if (!owner || !tool) throw new Error(`No tool "${name}" is on for ${chat.info.name}`)
         if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new Error('A tool takes an object as its input')
         const record = (outcome: { result?: unknown; error?: unknown }) =>
@@ -379,14 +401,32 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
             ...('result' in outcome && { result: typeof outcome.result === 'string' ? outcome.result : JSON.stringify(outcome.result) ?? '' }),
             ...('error' in outcome && { error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error) }),
           }))
+        const found = tool
         try {
-          const result = await tool.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
+          const result = await found.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
           record({ result })
           return result
         } catch (error) {
           record({ error })
           throw error
         }
+      },
+      requestPermission(chatId, request, options = {}) {
+        const chat = chatFor(String(chatId))
+        if (typeof request !== 'object' || request === null) return Promise.reject(new Error('A permission request is an object'))
+        const { name, summary, kind = 'mcp', input, path, command } = request
+        if (typeof name !== 'string' || !name.trim() || typeof summary !== 'string') {
+          return Promise.reject(new Error('A permission request needs a name and a summary'))
+        }
+        const asked = {
+          name,
+          summary,
+          kind,
+          input: input ?? {},
+          ...(typeof path === 'string' && { path }),
+          ...(typeof command === 'string' && { command }),
+        }
+        return deps.requestPermission(chat, asked, options.changes !== false)
       },
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
       prompt: (id) => deps.promptText(extension, String(id)),
@@ -414,7 +454,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
   /** Drops an extension's host, for an uninstall; a reinstall gets a fresh one. */
   const forgetHost = (extensionId: string) => hosts.delete(extensionId)
 
-  return { hostFor, contextOf, forgetHost, stopSpawned }
+  return { hostFor, contextOf, forgetHost, stopSpawned, toolsOf }
 }
 
 // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.

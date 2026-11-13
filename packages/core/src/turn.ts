@@ -25,7 +25,7 @@ import { summaryOf } from './kothar-mcp.ts'
 import { instructionSections, type InstructionParts, type InstructionSection } from './instructions.ts'
 import { continuationParts, messagesOf, seededParts, withAttachments, type PromptPart, type Report } from './memory.ts'
 import type { openModels } from './models.ts'
-import { decide, type RuledVerdict, type verdictOf } from './permissions.ts'
+import { decide, READ_ONLY_REASON, type RuledVerdict, type verdictOf } from './permissions.ts'
 import type { Activity } from './activity.ts'
 import { isToggled } from './composer-toggles.ts'
 import {
@@ -314,6 +314,7 @@ export function openTurns(deps: TurnDeps) {
     stopSession(chat)
     unsteer(chat)
     chat.pendingRequests.clear()
+    dropAsks(chat, 'The turn ended before it was answered')
     setStatus(chat, 'idle')
     // Only spaces and Home show unread; a worker is removed once it reports, so it keeps no read state.
     if (!chat.info.worker) updateChat(chat, { doneAt: end.at })
@@ -364,6 +365,7 @@ export function openTurns(deps: TurnDeps) {
     if (!gone) return
     stopSession(chat)
     chat.pendingRequests.clear()
+    dropAsks(chat, 'The chat stopped before it was answered')
     chat.turn = undefined
     setStatus(chat, 'idle')
     if (allStopped()) allStoppedWaiters.splice(0).forEach((resolve) => resolve())
@@ -477,6 +479,24 @@ export function openTurns(deps: TurnDeps) {
 
   // Requests left to the user, by id, so their answer is recorded with what was asked.
   const asked = new Map<string, PermissionRequest>()
+  // Permission requests an extension raised (host.requestPermission), by id: answered here, not by the engine.
+  const extensionAsks = new Map<string, { chat: Chat; resolve: (verdict: RuledVerdict) => void }>()
+  // Each chat's live session events, for an extension's request to go through as an engine's does.
+  const liveEvents = new WeakMap<Chat, ReturnType<typeof sessionEvents>>()
+  const respondTo = (session: Session | undefined, requestId: string, verdict: RuledVerdict) => {
+    const own = extensionAsks.get(requestId)
+    if (!own) return session?.respond(requestId, verdict.allow, verdict.message)
+    extensionAsks.delete(requestId)
+    own.resolve(verdict)
+  }
+  // The turn ended or the chat stopped with an extension's request unanswered: it's denied.
+  const dropAsks = (chat: Chat, why: string) => {
+    for (const [requestId, own] of extensionAsks) {
+      if (own.chat !== chat) continue
+      extensionAsks.delete(requestId)
+      own.resolve({ allow: false, message: why, rule: why })
+    }
+  }
   const recordPermission = (chat: Chat, request: PermissionRequest, allow: boolean, rule: string, message?: string) =>
     deps.activity?.emit(chat.info.id, () => ({
       kind: 'permission',
@@ -723,6 +743,7 @@ export function openTurns(deps: TurnDeps) {
       ...(readOnly && { readOnly }),
     })
     const events = sessionEvents(chat, permissionsOf)
+    liveEvents.set(chat, events)
     try {
       chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
       const url = mcpUrl()
@@ -854,7 +875,7 @@ export function openTurns(deps: TurnDeps) {
         const resolvedAt = now().toISOString()
         append(chat, { at: resolvedAt, type: 'permission.resolved', requestId, allow: verdict.allow, auto: true })
         recordPermission(chat, event, verdict.allow, verdict.rule, verdict.message)
-        ref.session?.respond(requestId, verdict.allow, verdict.message)
+        respondTo(ref.session, requestId, verdict)
       }
       const own = decide(event, permissionsOf())
       // The core's denials stand; otherwise an extension's policy goes first.
@@ -868,7 +889,23 @@ export function openTurns(deps: TurnDeps) {
         guarded(() => settle(verdict ?? own))
       })
     }
-    return { ref, emit: (event: EngineEvent) => guarded(() => handleEvent(event)) }
+    const emit = (event: EngineEvent) => guarded(() => handleEvent(event))
+    // An extension's request (host.requestPermission), raised in this session as if the engine had: the core's rules,
+    // extensions' policies, else the user's card, and the Activity record. changes: what it does may change something,
+    // so a read-only turn refuses it.
+    const ask = (request: Omit<PermissionRequest, 'type' | 'requestId'>, changes: boolean) =>
+      new Promise<RuledVerdict>((resolve) => {
+        const event = { type: 'permission.requested' as const, requestId: `x-${randomBytes(6).toString('hex')}`, ...request }
+        const readOnly = permissionsOf().readOnly
+        if (readOnly && changes) {
+          const message = readOnly.reason?.trim() || READ_ONLY_REASON
+          recordPermission(chat, event, false, 'Read-only turn', message)
+          return resolve({ allow: false, message, rule: 'Read-only turn' })
+        }
+        extensionAsks.set(event.requestId, { chat, resolve })
+        emit(event)
+      })
+    return { ref, emit, ask }
   }
 
   const imagesFor = (adapter: Adapter, attachments: Attachment[]) =>
@@ -1018,7 +1055,7 @@ export function openTurns(deps: TurnDeps) {
 
   const respond = (chat: Chat, requestId: string, allow: boolean) => {
     const entry = { at: now().toISOString(), type: 'permission.resolved' as const, requestId, allow }
-    settle(chat, entry).respond(requestId, allow)
+    respondTo(settle(chat, entry), requestId, { allow, rule: 'You' })
     const request = asked.get(requestId)
     asked.delete(requestId)
     if (request) recordPermission(chat, request, allow, 'You')
@@ -1039,7 +1076,17 @@ export function openTurns(deps: TurnDeps) {
   const whenAllStopped = () =>
     allStopped() ? Promise.resolve() : new Promise<void>((resolve) => allStoppedWaiters.push(resolve))
 
+  // host.requestPermission: only while the chat has a session to ask in.
+  const requestPermission = (chat: Chat, request: Omit<PermissionRequest, 'type' | 'requestId'>, changes: boolean) => {
+    const events = liveEvents.get(chat)
+    if (!chat.session || !events || events.ref.session !== chat.session) {
+      return Promise.reject(new Error(`${chat.info.name} has no turn running to ask in`))
+    }
+    return events.ask(request, changes)
+  }
+
   return {
+    requestPermission,
     send,
     sendMessage,
     enqueue,

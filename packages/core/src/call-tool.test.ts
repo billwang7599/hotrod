@@ -37,6 +37,15 @@ function start(offered = true) {
       },
     ],
   }
+  maker.toolsFor = (caller) => [
+    {
+      name: 'made_for_chat',
+      description: 'Made for this chat',
+      inputSchema: { type: 'object', properties: { n: { type: 'number' } } },
+      offered: () => offered,
+      run: (input) => ({ chat: caller.name, n: input.n }),
+    },
+  ]
   let host: ExtensionHost | undefined
   const caller: Extension = { id: 'caller', name: 'Caller', description: '', enabledByDefault: true, onChatCreated: (_c, context) => void (host = context.host) }
   const core = openCore({ garage, adapters: [createFakeAdapter([], 0)], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [maker, caller] })
@@ -48,6 +57,11 @@ function start(offered = true) {
 }
 
 describe('host.callTool', () => {
+  it('reaches a tool an extension makes for the chat (toolsFor)', async () => {
+    const t = start()
+    expect(await t.host().callTool(t.id, 'made_for_chat', { n: 2 })).toEqual({ chat: 'Space', n: 2 })
+  })
+
   it('runs another extension’s tool as the chat’s agent would, with its own settings', async () => {
     const t = start()
     expect(await t.host().callTool(t.id, 'make_thing', { title: 'report' })).toEqual({ id: 'made-report' })

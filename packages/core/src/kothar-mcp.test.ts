@@ -273,6 +273,42 @@ describe('Kothar MCP server', () => {
     })
   })
 
+  describe('relayed tools (result: mcp)', () => {
+    const picture: ExtensionTool = {
+      name: 'github__get_avatar',
+      description: 'Relayed',
+      inputSchema: { type: 'object', properties: { user: { type: 'string' } }, additionalProperties: false },
+      offered: () => true,
+      result: 'mcp',
+      run: async (input) =>
+        input.user === 'bad'
+          ? { content: [{ type: 'text', text: 'Not found' }], isError: true }
+          : { content: [{ type: 'text', text: 'here' }, { type: 'image', data: 'AAAA', mimeType: 'image/png' }] },
+    }
+
+    it('passes content blocks through as they are, errors too', async () => {
+      const { extensionTools, rpc, grant } = await start()
+      extensionTools.push({ tool: picture, values: {} })
+      const ok = (await rpc(grant('main'), 'tools/call', { name: picture.name, arguments: { user: 'a' } })).body.result
+      expect(ok.content).toEqual([
+        { type: 'text', text: 'here' },
+        { type: 'image', data: 'AAAA', mimeType: 'image/png' },
+      ])
+      const bad = (await rpc(grant('main'), 'tools/call', { name: picture.name, arguments: { user: 'bad' } })).body.result
+      expect(bad).toMatchObject({ isError: true, content: [{ type: 'text', text: 'Not found' }] })
+    })
+
+    it('sends anything else as text, and leaves out a tool whose name is taken', async () => {
+      const { extensionTools, rpc, grant, names } = await start()
+      extensionTools.push({ tool: { ...picture, run: () => ({ odd: true }) }, values: {} })
+      extensionTools.push({ tool: { ...picture, description: 'Twin' }, values: {} })
+      extensionTools.push({ tool: { ...picture, name: 'list_chats' }, values: {} })
+      expect((await names('aaaa0001')).filter((name: string) => name === picture.name)).toHaveLength(1)
+      const odd = (await rpc(grant('main'), 'tools/call', { name: picture.name, arguments: {} })).body.result
+      expect(odd.content).toEqual([{ type: 'text', text: '{"odd":true}' }])
+    })
+  })
+
   describe('workers', () => {
     const on = (limit = 4) => start({ enabled: true, limit })
 

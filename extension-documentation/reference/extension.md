@@ -28,6 +28,7 @@ after it cover each group in detail.
 | `prompts` | Text sent to agents that the user can read and edit in Settings | [Settings and setup](settings.md#prompts) |
 | `setup` | A check and an install step for something the extension needs | [Settings and setup](settings.md#setup) |
 | `tools` | Tools agents can call | [Tools, MCP servers, instructions and memory](agents.md#tools) |
+| `toolsFor` | More tools, made for each chat as its session starts (such as tools relayed from another MCP server); `result: 'mcp'` on a tool passes its MCP content through as it is | [Tools, MCP servers, instructions and memory](agents.md#tools) |
 | `mcpServers` | MCP servers for each session | [Tools, MCP servers, instructions and memory](agents.md#mcp-servers) |
 | `instructions` | Text added to each session's instructions | [Tools, MCP servers, instructions and memory](agents.md#instructions) |
 | `panels` | Tabs in the right sidebar | [Panels and commands](panels.md#panels) |

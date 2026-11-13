@@ -36,6 +36,7 @@ const hostsWith = (chat: HostChat, overrides: Partial<HostDeps<HostChat>> = {}) 
     chatOwnFiles: ['chat.json', 'log.jsonl'],
     isQuitting: () => false,
     activity: { emit: () => {}, listening: () => false },
+    requestPermission: unused,
     extensions: [extension],
     extensionFor: () => extension,
     isOn: () => true,

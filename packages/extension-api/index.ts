@@ -382,6 +382,12 @@ export type ExtensionHost = {
   // with the extension's name. Kothar already lists the extension's model calls (complete), messages it sends
   // (send, continue, retry), chats it starts, account switches and tool calls (callTool), so don't repeat those.
   activity(event: ActivityInput): void
+  // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
+  // tool it relays: as an engine's tool asks, through Kothar's own rules, then extensions' policies
+  // (onPermissionRequested, this extension's too), else the permission card in the chat; recorded in the Activity with
+  // the rule that answered. changes: it may change something, so a read-only turn refuses it (default true). Rejects
+  // when the chat has no turn running; an unanswered request is denied when the turn ends.
+  requestPermission(chatId: string, request: ExtensionPermissionRequest, options?: { changes?: boolean }): Promise<ExtensionPermissionAnswer>
 }
 
 // Something Kothar or an extension did on its own, outside the agent's own tool calls (Extension.onActivity).
@@ -497,11 +503,26 @@ export type TurnOptions = { readOnly?: boolean; reason?: string; role?: ModelRol
 export type ExtensionTool = {
   name: string
   description: string
-  inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[] }
+  // A JSON Schema of an object. Kothar reads type, properties, required and the usual keywords; one it can't read
+  // leaves the tool out of the session, with the error shown.
+  inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[]; [keyword: string]: unknown }
   offered(caller: ChatSummary): boolean
   // caller: the chat whose agent called the tool. host.reaches(caller.id, …) says which chats it may act on.
   run(input: Record<string, unknown>, call: { caller: ChatSummary; values: ExtensionValues; host: ExtensionHost }): unknown
+  // 'mcp': run returns an McpToolResult, passed to the agent as it is (pictures and all) instead of as text. For an
+  // extension that relays another MCP server's tools.
+  result?: 'mcp'
 }
+
+// What an MCP tool call returns (the MCP spec's CallToolResult): content blocks such as { type: 'text', text } or
+// { type: 'image', data, mimeType }, and isError for a failure the agent should see.
+export type McpToolResult = { content: { type: string; [key: string]: unknown }[]; isError?: boolean; structuredContent?: Record<string, unknown> }
+
+// A permission an extension asks for (host.requestPermission), as an engine's tool asks for one: name and summary as
+// the card shows them, kind (default 'mcp') for the core's rules, input as the card's detail.
+export type ExtensionPermissionRequest = { name: string; summary: string; kind?: ToolKind; input?: unknown; path?: string; command?: string }
+// The answer, and the rule that gave it as the Activity names it ("You", "Read-only turn", an extension's name, …).
+export type ExtensionPermissionAnswer = { allow: boolean; rule: string; message?: string }
 
 export type McpServer = {
   name: string
@@ -880,6 +901,10 @@ export type Extension = {
   onSettingsChanged?(changed: { key: string; value: unknown; previous: unknown }, context: ExtensionContext): void | Promise<void>
   chats?: ExtensionChat[]
   tools?: ExtensionTool[]
+  // More tools, made for each chat as its session lists them (each turn's session asks once, as it starts), such as
+  // tools relayed from another MCP server. Keep it quick and synchronous; an error shows and offers none. offered still
+  // counts. host.callTool reaches them too.
+  toolsFor?(caller: ChatSummary, context: ExtensionContext): ExtensionTool[]
   mcpServers?(session: ExtensionSession): McpServer[]
   // Text for every session's instructions, after where the chat may write and before its memory. Return nothing to add
   // none. Extensions are joined in load order.
@@ -966,12 +991,12 @@ export type ExtensionManifest = {
 }
 
 export type ExtensionUse =
-  // Extension fields: tools; and host.callTool
+  // Extension fields: tools, toolsFor; and host.callTool
   | 'tools'
   | 'mcpServers'
   // instructions, prompts
   | 'instructions'
-  // onPermissionRequested, turnOptions
+  // onPermissionRequested, turnOptions, and host.requestPermission
   | 'permissions'
   // transformMessage, transformOutput
   | 'transforms'

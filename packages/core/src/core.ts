@@ -564,6 +564,7 @@ function assembleCore(options: {
     waitsOf,
     stopSession,
     whenAllStopped,
+    requestPermission,
   } = openTurns({
     garage,
     home,
@@ -612,7 +613,7 @@ function assembleCore(options: {
     activity,
   })
 
-  const { hostFor, contextOf, forgetHost, stopSpawned } = openExtensionHosts<Chat>({
+  const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf } = openExtensionHosts<Chat>({
     garage,
     home,
     now,
@@ -652,6 +653,7 @@ function assembleCore(options: {
     updateChat: (chat, change) => updateChat(chat, change),
     isOnFor: (extension, chat) => isOnFor(extension, chat),
     commandPlaceOf: (chat) => commandPlaceOf(chat),
+    requestPermission: (chat, request, changes) => requestPermission(chat, request, changes),
     addContextFile: (chat, path) => addContext(chat, 'files', path),
     accounts,
     run: () => runFor(),
@@ -874,7 +876,7 @@ function assembleCore(options: {
       extensions
         .filter((extension) => isOnFor(extension, chats.get(chatId)))
         .flatMap((extension) =>
-          (extension.tools ?? []).map((tool) => ({
+          toolsOf(extension, chatFor(chatId)).map((tool) => ({
             tool: prompts.toolAsSent(extension, tool),
             values: extensionValues(extension),
             host: hostFor(extension),

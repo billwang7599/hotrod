@@ -456,6 +456,30 @@ try {
 }
 ```
 
+## Asking the user's leave
+
+`requestPermission(chatId, request, options?)` asks for leave to do something for the chat's running turn, such as
+calling a tool your extension relays from another MCP server. It goes the way an engine's tool request goes: Kothar's
+own rules, then every extension's `onPermissionRequested` (yours too, so a per-server "allow" setting can live there),
+else the permission card in the chat. It resolves to `{ allow, rule, message? }`, where `rule` names what answered
+("You", "Read-only turn", an extension's name), and the Activity records it with that rule.
+
+- `request`: `{ name, summary, kind?, input?, path?, command? }`, as the card shows it. `kind` defaults to `'mcp'`.
+- `options.changes`: `false` for something that only reads. Otherwise a read-only turn (`turnOptions`) refuses it
+  without asking.
+- It rejects when the chat has no turn running. A request still open when the turn ends is denied.
+
+List `permissions` in the manifest's `uses`.
+
+```ts
+const { allow, message } = await host.requestPermission(chatId, {
+  name: 'mcp__github__create_issue',
+  summary: 'GitHub: create_issue',
+  input,
+})
+if (!allow) return { content: [{ type: 'text', text: message ?? 'The user said no' }], isError: true }
+```
+
 ## Composer toggles
 
 | Call | What it does |

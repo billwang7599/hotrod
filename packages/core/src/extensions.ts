@@ -51,6 +51,7 @@ export const valuesOf = (extension: Extension, saved: Record<string, unknown> = 
 // What each Extension field needs listed in a community extension's manifest.
 const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['tools', 'tools'],
+  ['toolsFor', 'tools'],
   ['mcpServers', 'mcpServers'],
   ['instructions', 'instructions'],
   ['prompts', 'instructions'],
@@ -140,6 +141,7 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   processAction: 'panels',
   processesChanged: 'panels',
   callTool: 'tools',
+  requestPermission: 'permissions',
   toggled: 'commands',
   setToggle: 'commands',
 }

@@ -53,7 +53,7 @@ extension and before you turn it on, and holds the extension to it:
 | `files` | Reads or writes your files | `host.home`, and Node's `node:fs` and `fs/promises`, for anything beyond `host.storage` |
 | `setup` | Installs software it needs | `setup` |
 | `mcpServers` | Starts MCP servers for agents | `mcpServers` |
-| `permissions` | Approves or denies agents' requests for you, and makes turns read only | `onPermissionRequested`, `turnOptions` |
+| `permissions` | Approves or denies agents' requests for you, makes turns read only, and asks your leave itself | `onPermissionRequested`, `turnOptions`, `host.requestPermission` |
 | `sendMessages` | Sends messages and starts chats as you | `host.send`, `host.createChat`, `host.retry`, `host.continue`, `host.interrupt`, `host.addContextFile` |
 | `accounts` | Sees and switches your engine accounts | `host.accounts`, `host.useAccount` |
 | `models` | Makes model calls on your accounts | `host.complete` |
@@ -61,7 +61,7 @@ extension and before you turn it on, and holds the extension to it:
 | `readChats` | Reads your chats | `host.chats`, `host.chat`, `host.read`, `host.space`, `host.messages`, `host.message`, `host.reaches`, `host.reachable`, `onTurnSent`, `onActivity` |
 | `transforms` | Rewrites your messages or agents' replies | `transformMessage`, `transformOutput` |
 | `instructions` | Adds to every agent's instructions | `instructions`, `prompts` |
-| `tools` | Gives agents tools, and uses other extensions' tools | `tools`, `host.callTool` |
+| `tools` | Gives agents tools, and uses other extensions' tools | `tools`, `toolsFor`, `host.callTool` |
 | `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
 | `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
