@@ -259,6 +259,27 @@ describe('claudeCode adapter', () => {
     })
   })
 
+  it("treats Monitor as a shell command, passing on its command so it's answered like Bash", () => {
+    const { fake, events } = startSession()
+    fake.stdout(fixture('monitor'))
+    const command = 'while ! gh pr checks 382 --watch; do sleep 30; done'
+    const input = { description: 'CI on PR #382', timeout_ms: 1800000, command }
+    const toolId = 'toolu_01MonitorFixture0000000001'
+    expect(events.slice(0, 2)).toEqual([
+      { type: 'tool.started', toolId, name: 'Monitor', kind: 'shell', summary: command, input },
+      {
+        type: 'permission.requested',
+        requestId: '3b1f0c55-6d0e-4f7c-9a51-2f5c0e7d9a10',
+        toolId,
+        name: 'Monitor',
+        kind: 'shell',
+        summary: command,
+        command,
+        input,
+      },
+    ])
+  })
+
   it('sends the exact deny response', () => {
     const { fake, events, session } = startSession()
     session.prompt('Run the shell command: echo hi > b.txt. Then say done.')

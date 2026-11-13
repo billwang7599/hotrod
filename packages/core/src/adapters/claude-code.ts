@@ -14,6 +14,9 @@ export const CLAUDE_ERRORS: EngineErrors = {
 
 const KINDS: Record<string, ToolKind> = {
   Bash: 'shell',
+  // Runs its `command` in the background and wakes the turn when it exits: a shell command all the same, so the
+  // permission answers read the command as they do Bash's.
+  Monitor: 'shell',
   Edit: 'edit',
   Write: 'edit',
   NotebookEdit: 'edit',
