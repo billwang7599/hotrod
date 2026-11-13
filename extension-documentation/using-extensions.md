@@ -29,7 +29,7 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
+| Browser | No | Agents browse the web in the background with Kothar's own browser tools, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
@@ -267,12 +267,11 @@ or the address of a remote server (Streamable HTTP, or SSE for an address ending
 
 ### Browser: your profile, in the background
 
-**Which browser.** Settings → Extensions → Browser → **Browser** picks what runs Kothar's own profile: **Google
-Chrome (installed)**, the default, or **Bundled Chromium** (Playwright's Chrome for Testing, installed from the same
-page). Chrome runs on a profile of Kothar's own per space (`<data folder>/extensions/browser/chrome-profiles/<space>/`),
-never your everyday Chrome profile, its cookies or its tabs. Without Chrome installed, the bundled Chromium runs, and
-the settings page says so. The two keep separate folders, since Chrome refuses a profile a newer version last opened,
-so switching starts the other one logged out (the old folder stays until you switch back or delete the space).
+**Which browser.** Kothar's own profile runs on the browser you have installed: Google Chrome first (then Chrome Beta
+or Canary), else Edge, Brave, Arc or Chromium. Kothar installs no browser of its own; with none of these, the settings
+page says to install Chrome. Chrome runs on a profile of Kothar's own per space
+(`<data folder>/extensions/browser/chrome-profiles/<space>/`; another browser's is `<browser>-profiles/`), never your
+everyday Chrome profile, its cookies or its tabs.
 
 **Signing in.** Google, and some other sites, refuse to sign you in on a browser that software controls. So signing
 in happens in a plain window: **Sign in…** in a chat's General tab or on the Browser row in Processes, and an agent's
@@ -334,9 +333,19 @@ browser** and **Done** (with a notification if you're away from Kothar), and Don
 where you left it. You can look at any time: **Show browser** in a chat's General tab,
 or **Show** on the Browser row in Processes; **Hide** puts it back.
 
-**What agents get.** Playwright's browser tools, less four they rarely need (`browser_run_code_unsafe`, which runs any
-code in Playwright's own process, `browser_emulate_media`, `browser_drop` and `browser_resize`): 21 tools, about 17,000
-characters (roughly 5,000 tokens) in each session that has the browser.
+**What agents get.** Seven tools of Kothar's own, about 2,900 characters (roughly 800 tokens) in each session that
+has the browser: `browser_open` (a URL, or back, forward, reload), `browser_snapshot` (the page as short lines with
+refs such as `e12`, in parts of about 12,000 characters, or only what changed), `browser_act` (click, hover, check,
+select, upload, press a key), `browser_type`, `browser_tabs`, `browser_screenshot`, and `browser_cdp`, which sends a raw
+Chrome DevTools Protocol command to the agent's own tab for what the others can't do. Each chat in a space keeps its
+own tab. Every call is listed in the chat's Activity, and **Ask before each browser action** asks before each one.
+
+`browser_cdp` reaches only the agent's own tab and its frames. Kothar refuses, whatever you say: reading or changing
+cookies (they hold your logins), clearing a site's data, site permissions, closing or crashing the browser, other tabs
+and browser contexts (the whole `Target` domain), anything about the computer (`SystemInfo`) and downloads to a folder
+of the agent's choosing. Reading the page and acting on it as you could (DOM, script in the page, input, navigation,
+screenshots, its own network traffic) runs without asking. Anything else, such as intercepting requests or ignoring
+certificate errors, asks you with a card showing the command. Uploading a file always asks.
 
 ## Community extensions
 

@@ -1,9 +1,10 @@
 # Browser: what agents read
 
-`node bench/browser/measure.ts` compares the text agents get from Playwright MCP (what the Browser extension ran
-until now) with Kothar's own snapshot of Chrome's accessibility tree (`extensions/browser/snapshot.ts`), on the saved
-pages in `fixtures/`. It needs an installed Google Chrome, skips without one, and isn't run in CI. `SHOW=1` prints
-both snapshots of every page.
+`node bench/browser/measure.ts` measures the text agents get from Kothar's own browser tools: their tool list and
+the snapshot of Chrome's accessibility tree (`extensions/browser/snapshot.ts`), on the saved pages in `fixtures/`. It
+needs an installed Chromium-family browser, skips without one, and isn't run in CI. `SHOW=1` prints every page's
+snapshot. Until the Browser extension dropped Playwright, it ran Playwright MCP beside them; the finding below is from
+then.
 
 Tokens are characters / 3.57, the ratio `mcp-filter.ts` measured for Playwright MCP's tool list.
 
@@ -15,6 +16,7 @@ The tool list every session with the browser pays for, before the agent does any
 |---|---|---|---|
 | Playwright MCP | 25 | 21,060 | 5,899 |
 | Playwright MCP behind `mcp-filter.ts` | 21 | 17,340 | 4,857 |
+| Kothar's browser tools (`tools.ts`), which replaced it | 7 | 2,901 | 813 |
 
 A page's snapshot, as the agent reads it:
 

@@ -1,7 +1,6 @@
-// Launches a Chromium (the user's installed Google Chrome, Playwright's Chrome for Testing, or the user's own browser on
-// a copy of their profile) on a profile of Kothar's own, headless or with a window, through the Machine (host.spawn),
-// and finds its DevTools endpoint. Playwright MCP never launches a browser in this extension: it attaches to this one
-// over CDP. A plain launch has no DevTools at all: a window for the user to sign in, which sites can't tell from an
+// Launches a Chromium (the user's installed Google Chrome or another Chromium-family browser, or the user's own browser
+// on a copy of their profile) on a profile of Kothar's own, headless or with a window, through the Machine (host.spawn),
+// and finds its DevTools endpoint, which the browser tools connect to. A plain launch has no DevTools at all: a window for the user to sign in, which sites can't tell from an
 // ordinary browser.
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'

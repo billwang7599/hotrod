@@ -11,8 +11,8 @@
 //   the extension. Browser-wide calls that would read, change or end the user's own browser (every cookie, closing it,
 //   new profiles) are refused.
 //
-// The model follows Playwright's own extension relay (playwright-core's cdpRelay and browserModel), with the tab group
-// per space and pairing of Kothar's own.
+// The model follows Playwright's extension relay (playwright-core's cdpRelay and browserModel), with the tab group per
+// space and pairing of Kothar's own.
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server } from 'node:http'

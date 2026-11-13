@@ -319,7 +319,7 @@ switches and `callTool` calls, so don't repeat those. Any extension may call it.
 import type { ExtensionHost } from '@kothar/extension-api'
 
 function launched(host: ExtensionHost, chatId: string) {
-  host.activity({ kind: 'browser', chatId, title: 'Launched the browser', detail: 'On Kothar’s Chromium' })
+  host.activity({ kind: 'browser', chatId, title: 'Launched the browser', detail: 'On Google Chrome' })
 }
 
 export { launched }

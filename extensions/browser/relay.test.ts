@@ -125,7 +125,7 @@ async function paired(options: { origin?: string } = {}) {
   return s
 }
 
-// Playwright's side: a DevTools client on the space's endpoint.
+// A DevTools client on the space's endpoint, as Kothar's browser tools connect.
 async function cdpClient(relay: Relay, space: string) {
   const version = await (await fetch(`${relay.cdpUrl(space)}/json/version/`)).json()
   const ws = new WebSocket(version.webSocketDebuggerUrl)

@@ -50,29 +50,51 @@ export function executableOf(app: BrowserApp, places: Places) {
   }
 }
 
-// The installed Google Chrome agents' browsers run on, when the setting picks it: on macOS the first of Chrome, Chrome
-// Beta and Chrome Canary found in the app folders; elsewhere the usual install paths. `places.bins` overrides those
-// paths, for tests.
-export type InstalledChrome = { name: string; executable: string }
-const CHROME_IDS = ['chrome', 'chrome-beta', 'chrome-canary']
-const CHROME_PATHS: Partial<Record<NodeJS.Platform, string[]>> = {
-  linux: ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome', '/usr/bin/google-chrome-beta'],
+// The installed browser agents' browsers run on, for Kothar's own profile: Google Chrome first (then its Beta and
+// Canary), else Edge, Brave, Arc or Chromium, whichever is found first. On macOS from the app folders; elsewhere the
+// usual install paths, Chrome's first. `places.bins` overrides those paths, for tests. id: the BROWSER_APPS id, which
+// names its profile folders, since a profile one browser last opened may not open in another.
+export type InstalledBrowser = { id: string; name: string; executable: string }
+export const BROWSER_ORDER = ['chrome', 'chrome-beta', 'chrome-canary', 'edge', 'brave', 'arc', 'chromium']
+const NAMES: Record<string, string> = { chrome: 'Google Chrome', 'chrome-beta': 'Google Chrome Beta', 'chrome-canary': 'Google Chrome Canary' }
+const PROGRAMS = process.env.PROGRAMFILES ?? 'C:\\Program Files'
+const PROGRAMS_X86 = process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)'
+const LOCAL = process.env.LOCALAPPDATA ?? ''
+const BROWSER_PATHS: Partial<Record<NodeJS.Platform, [string, string][]>> = {
+  linux: [
+    ['chrome', '/usr/bin/google-chrome'],
+    ['chrome', '/usr/bin/google-chrome-stable'],
+    ['chrome', '/opt/google/chrome/chrome'],
+    ['chrome-beta', '/usr/bin/google-chrome-beta'],
+    ['edge', '/usr/bin/microsoft-edge'],
+    ['brave', '/usr/bin/brave-browser'],
+    ['chromium', '/usr/bin/chromium'],
+    ['chromium', '/usr/bin/chromium-browser'],
+  ],
   win32: [
-    `${process.env.PROGRAMFILES ?? 'C:\\Program Files'}\\Google\\Chrome\\Application\\chrome.exe`,
-    `${process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)'}\\Google\\Chrome\\Application\\chrome.exe`,
-    `${process.env.LOCALAPPDATA ?? ''}\\Google\\Chrome\\Application\\chrome.exe`,
+    ['chrome', `${PROGRAMS}\\Google\\Chrome\\Application\\chrome.exe`],
+    ['chrome', `${PROGRAMS_X86}\\Google\\Chrome\\Application\\chrome.exe`],
+    ['chrome', `${LOCAL}\\Google\\Chrome\\Application\\chrome.exe`],
+    ['edge', `${PROGRAMS_X86}\\Microsoft\\Edge\\Application\\msedge.exe`],
+    ['edge', `${PROGRAMS}\\Microsoft\\Edge\\Application\\msedge.exe`],
+    ['brave', `${PROGRAMS}\\BraveSoftware\\Brave-Browser\\Application\\brave.exe`],
   ],
 }
-export function findChrome(places: Places = defaultPlaces(), platform: NodeJS.Platform = process.platform): InstalledChrome | undefined {
+export function findBrowser(places: Places = defaultPlaces(), platform: NodeJS.Platform = process.platform): InstalledBrowser | undefined {
+  const named = (id: string, executable: string) => ({ id, name: NAMES[id] ?? BROWSER_APPS.find((a) => a.id === id)!.name, executable })
   if (platform === 'darwin') {
-    for (const app of BROWSER_APPS.filter((a) => CHROME_IDS.includes(a.id))) {
-      const executable = executableOf(app, places)
-      if (executable) return { name: `Google ${app.name}`, executable }
+    for (const id of BROWSER_ORDER) {
+      const executable = executableOf(BROWSER_APPS.find((a) => a.id === id)!, places)
+      if (executable) return named(id, executable)
     }
     return undefined
   }
-  const executable = (places.bins ?? CHROME_PATHS[platform] ?? []).find((path) => existsSync(path))
-  return executable ? { name: 'Google Chrome', executable } : undefined
+  if (places.bins) {
+    const executable = places.bins.find((path) => existsSync(path))
+    return executable ? named('chrome', executable) : undefined
+  }
+  const found = (BROWSER_PATHS[platform] ?? []).find(([, path]) => existsSync(path))
+  return found ? named(found[0], found[1]) : undefined
 }
 
 // Every profile of every installed Chromium-family browser, from its Local State (profile.info_cache), in the

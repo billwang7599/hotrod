@@ -8,7 +8,7 @@
 //   ui/            packages/ui/dist
 //   extensions/<id>/  the built-in extensions as erasable TypeScript, without tests; the core imports each index.ts
 //                     at startup, as it does from the repo
-//   node_modules/     only what the built-in extensions import at runtime (the Browser extension's Playwright MCP),
+//   node_modules/     only what the built-in extensions import at runtime (such as the Browser extension's ws),
 //                     copied from the repo's node_modules at the locked versions
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'

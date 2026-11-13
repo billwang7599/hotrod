@@ -18,7 +18,7 @@ export function parseCode(code) {
   return port > 0 && port < 65536 ? { port, token: match[2] } : undefined
 }
 
-// chrome.debugger rejects with the DevTools error as JSON text; Playwright wants its message.
+// chrome.debugger rejects with the DevTools error as JSON text; Kothar's client wants its message.
 export function errorText(error) {
   const text = String(error?.message ?? error)
   try {

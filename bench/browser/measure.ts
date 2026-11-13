@@ -1,22 +1,22 @@
-// How much text agents get from the browser: Playwright MCP (what the Browser extension runs today) against Kothar's own
-// snapshot of Chrome's accessibility tree (extensions/browser/snapshot.ts), on the saved pages in fixtures/.
+// How much text agents get from the browser: Kothar's own tool list and its snapshot of Chrome's accessibility tree
+// (extensions/browser/snapshot.ts), on the saved pages in fixtures/. Playwright MCP's numbers, measured before it was
+// removed, are in README.md.
 //
 //   node bench/browser/measure.ts
 //
-// Not run in CI: it needs an installed Google Chrome (it skips without one) and launches it headless, with Chrome's
-// own sandbox off so it runs inside Kothar's sandbox too, on local pages only. Tokens are estimated as characters /
-// 3.57, the ratio mcp-filter.ts measured for Playwright MCP's tool list (21,060 characters, about 5,900 tokens).
-import { spawn, type ChildProcess } from 'node:child_process'
+// Not run in CI: it needs an installed Chromium-family browser (it skips without one) and launches it headless, with
+// its own sandbox off so it runs inside Kothar's sandbox too, on local pages only. Tokens are estimated as characters /
+// 3.57, the ratio measured for Playwright MCP's tool list (21,060 characters, about 5,900 tokens).
+import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { createRequire } from 'node:module'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { connect, type Cdp } from '../../extensions/browser/cdp.ts'
-import { HIDDEN_TOOLS } from '../../extensions/browser/mcp-filter.ts'
-import { findChrome } from '../../extensions/browser/profiles.ts'
+import { findBrowser } from '../../extensions/browser/profiles.ts'
 import { format, readFrames, Refs, render } from '../../extensions/browser/snapshot.ts'
+import { createBrowserTools } from '../../extensions/browser/tools.ts'
 
 const TOKENS = (chars: number) => Math.round(chars / 3.57)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -28,9 +28,9 @@ export const PAGES = [
   { file: 'iframe.html', what: 'page with a sign-in iframe' },
 ]
 
-const chrome = findChrome()
+const chrome = findBrowser()
 if (!chrome) {
-  console.log('No Google Chrome installed: skipped.')
+  console.log('No Chromium-family browser installed: skipped.')
   process.exit(0)
 }
 
@@ -57,47 +57,8 @@ for (let waited = 0; !endpoint && waited < 20_000; waited += 100) {
 }
 if (!endpoint) throw new Error("Chrome didn't start")
 
-// Playwright MCP over stdio, newline-delimited JSON-RPC.
-const require = createRequire(import.meta.url)
-const cli = join(dirname(require.resolve('@playwright/mcp/package.json')), 'cli.js')
-const mcp: ChildProcess = spawn(process.execPath, [cli, '--cdp-endpoint', endpoint, '--output-dir', join(profile, 'out')], {
-  stdio: ['pipe', 'pipe', 'ignore'],
-  // A socket path can't pass 104 bytes, and a sandboxed temp folder's can: relative to a working folder instead.
-  cwd: profile,
-  env: { ...process.env, TMPDIR: tmpdir(), PWTEST_SOCKETS_DIR: 's', PWTEST_SERVER_REGISTRY: join(profile, 'registry') },
-})
-let partial = ''
-let nextId = 0
-const waiting = new Map<number, (message: any) => void>()
-mcp.stdout!.setEncoding('utf8')
-mcp.stdout!.on('data', (chunk: string) => {
-  const lines = (partial + chunk).split('\n')
-  partial = lines.pop()!
-  for (const line of lines.filter(Boolean)) {
-    const message = JSON.parse(line)
-    waiting.get(message.id)?.(message)
-  }
-})
-const rpc = (method: string, params: object = {}) =>
-  new Promise<any>((resolve, reject) => {
-    const id = ++nextId
-    const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 60_000)
-    waiting.set(id, (message) => {
-      clearTimeout(timer)
-      if (message.error) reject(new Error(message.error.message))
-      else resolve(message.result)
-    })
-    mcp.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`)
-  })
-const textOf = (result: { content?: { type: string; text?: string }[] }) =>
-  (result.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')
-
-await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'measure', version: '0' } })
-mcp.stdin!.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`)
-const { tools } = await rpc('tools/list')
-const listChars = JSON.stringify(tools).length
-const shown = tools.filter((t: { name: string }) => !HIDDEN_TOOLS.includes(t.name))
-const shownChars = JSON.stringify(shown).length
+const { tools } = createBrowserTools({ host: () => undefined, spaceIdOf: () => 's', endpointOf: async () => '', activity: () => {}, ready: () => true })
+const listChars = JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))).length
 
 // Kothar's snapshot of a tab: the page's tree and each frame's.
 async function ourSnapshot(cdp: Cdp, session: string, refs: Refs) {
@@ -108,10 +69,6 @@ const rows: string[] = []
 const cdp = await connect(endpoint, 30_000)
 for (const page of PAGES) {
   const url = `${origin}/${page.file}`
-  // Playwright MCP: an action's answer (navigate here) links the snapshot it saved to a file, which the agent then
-  // reads; browser_snapshot gives the same snapshot in the answer.
-  const navigated = textOf(await rpc('tools/call', { name: 'browser_navigate', arguments: { url } }))
-  const snapshot = textOf(await rpc('tools/call', { name: 'browser_snapshot', arguments: {} }))
   // Ours, on a tab of its own.
   const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', { url })
   const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', { targetId, flatten: true })
@@ -121,25 +78,19 @@ for (const page of PAGES) {
   const ours = (await ourSnapshot(cdp, sessionId, refs)).join('\n')
   rows.push(
     `| ${page.what} | ${readFileSync(join(fixtures, page.file)).length.toLocaleString()} | ` +
-      `${navigated.length.toLocaleString()} | ${snapshot.length.toLocaleString()} (~${TOKENS(snapshot.length).toLocaleString()}) | ` +
-      `${ours.length.toLocaleString()} (~${TOKENS(ours.length).toLocaleString()}) | ` +
-      `${Math.round((100 * ours.length) / snapshot.length)}% |`,
+      `${ours.length.toLocaleString()} (~${TOKENS(ours.length).toLocaleString()}) |`,
   )
-  if (process.env.SHOW) console.log(`\n=== ${page.file} navigate\n${navigated}\n=== ${page.file} (Playwright)\n${snapshot}\n=== ${page.file} (Kothar)\n${ours}`)
+  if (process.env.SHOW) console.log(`\n=== ${page.file}\n${ours}`)
 }
 
-console.log(`Playwright MCP ${JSON.parse(readFileSync(join(dirname(cli), 'package.json'), 'utf8')).version}, ${chrome.name}`)
-console.log(
-  `tools/list: ${tools.length} tools, ${listChars.toLocaleString()} characters (~${TOKENS(listChars).toLocaleString()} tokens); ` +
-    `after mcp-filter.ts: ${shown.length} tools, ${shownChars.toLocaleString()} characters (~${TOKENS(shownChars).toLocaleString()} tokens)`,
-)
+console.log(chrome.name)
+console.log(`Kothar's browser tools: ${tools.length} tools, ${listChars.toLocaleString()} characters (~${TOKENS(listChars).toLocaleString()} tokens)`)
 console.log('')
-console.log('| Page | HTML bytes | Playwright navigate answer | Playwright snapshot (tokens) | Kothar snapshot (tokens) | Kothar / Playwright |')
-console.log('|---|---|---|---|---|---|')
+console.log('| Page | HTML bytes | Kothar snapshot (tokens) |')
+console.log('|---|---|---|')
 for (const row of rows) console.log(row)
 
 cdp.close()
-mcp.kill()
 browser.kill()
 server.close()
 await sleep(500)

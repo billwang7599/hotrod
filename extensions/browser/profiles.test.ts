@@ -1,10 +1,7 @@
-import { spawn } from 'node:child_process'
 import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { afterAll, expect, it } from 'vitest'
-import { until } from '@kothar/core/test-wait'
-import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
 import {
   chromiumMajor,
   detectProfiles,
@@ -152,52 +149,4 @@ it('copies a profile’s login state into a mirror of Kothar’s own, and leaves
   // Never into the source, or around it.
   expect(() => mirrorProfile(source, join(source, 'mirror'))).toThrow('outside its source')
   expect(() => mirrorProfile(source, join(source, '..'))).toThrow('outside its source')
-})
-
-// The filter in front of Playwright MCP, with a fake server: hidden tools are left out of tools/list and refused, the
-// rest passes both ways untouched.
-it('leaves the hidden Playwright tools out of the list and refuses calls to them', async () => {
-  const server = `
-    let partial = ''
-    process.stdin.setEncoding('utf8')
-    process.stdin.on('data', (chunk) => {
-      const lines = (partial + chunk).split('\\n')
-      partial = lines.pop()
-      for (const line of lines) {
-        const m = JSON.parse(line)
-        const reply = (result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: m.id, result }) + '\\n')
-        if (m.method === 'tools/list') reply({ tools: [{ name: 'browser_navigate' }, { name: 'browser_run_code_unsafe' }, { name: 'browser_resize' }] })
-        else if (m.method === 'tools/call') reply({ called: m.params.name, text: 'a\\u2028b' })
-        else reply({ echo: m.method })
-      }
-    })
-  `
-  const child = spawn(process.execPath, ['-e', FILTER_SCRIPT, HIDDEN_TOOLS.join(','), process.execPath, '-e', server], {
-    stdio: ['pipe', 'pipe', 'inherit'],
-  })
-  const replies = new Map<number, Record<string, any>>()
-  let partial = ''
-  child.stdout.setEncoding('utf8')
-  child.stdout.on('data', (chunk: string) => {
-    const lines = (partial + chunk).split('\n')
-    partial = lines.pop()!
-    for (const line of lines) {
-      const message = JSON.parse(line)
-      replies.set(message.id, message)
-    }
-  })
-  const call = async (id: number, method: string, params: object = {}) => {
-    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
-    await until(() => replies.has(id), { tries: 500, everyMs: 10, what: `a reply to ${method}` })
-    return replies.get(id)!
-  }
-  try {
-    expect((await call(1, 'initialize')).result).toEqual({ echo: 'initialize' })
-    expect((await call(2, 'tools/list')).result.tools).toEqual([{ name: 'browser_navigate' }])
-    expect((await call(3, 'tools/call', { name: 'browser_navigate' })).result).toEqual({ called: 'browser_navigate', text: 'a b' })
-    const refused = await call(4, 'tools/call', { name: 'browser_run_code_unsafe' })
-    expect(refused.error.message).toBe('Tool browser_run_code_unsafe is not available in Kothar')
-  } finally {
-    child.kill()
-  }
 })
