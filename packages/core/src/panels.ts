@@ -14,8 +14,8 @@ import type {
 import type { Chat } from './chat.ts'
 import { panelTabOf } from './extensions.ts'
 import { isToggled, toggleInfo, toggleOf, withToggle } from './composer-toggles.ts'
-import { messageActionInfo, messageAt } from './message-actions.ts'
-import type { ChatInfo, CommandInfo, ComposerToggleInfo, CoreMessage, MessageActionInfo, PanelTab } from './shared.ts'
+import { messageActionInfo, messageAt, messageDetailInfo } from './message-actions.ts'
+import type { ChatInfo, CommandInfo, ComposerToggleInfo, CoreMessage, MessageActionInfo, MessageDetailInfo, PanelTab } from './shared.ts'
 import { messageOf } from './util.ts'
 
 export type PanelDeps = {
@@ -93,6 +93,17 @@ export function openPanels(deps: PanelDeps) {
         }
       }),
     )
+    const messageDetails = on.flatMap((extension) =>
+      (extension.messageDetails ?? []).flatMap((d): MessageDetailInfo[] => {
+        if (!offeredBy(extension, d, chat)) return []
+        try {
+          return [messageDetailInfo(extension.id, d, d.entries?.(detailOf(chat), contextOf(extension)))]
+        } catch (error) {
+          extensionError(extension, error)
+          return []
+        }
+      }),
+    )
     const toggles = on.flatMap((extension) =>
       (extension.composerToggles ?? []).flatMap((t): ComposerToggleInfo[] => {
         if (!offeredBy(extension, t, chat)) return []
@@ -110,6 +121,7 @@ export function openPanels(deps: PanelDeps) {
       panels,
       commands,
       ...(messageActions.length && { messageActions }),
+      ...(messageDetails.length && { messageDetails }),
       ...(toggles.length && { toggles }),
     }
   }
@@ -236,6 +248,24 @@ export function openPanels(deps: PanelDeps) {
     }
     if (chats.has(chat.info.id)) refreshExtension(extension, chat.info.id)
   }
+  // Draws one of an extension's message details for a message the user unfolded, for the asking window only: nothing
+  // is drawn while it's folded.
+  const renderDetail = async (chat: Chat, extensionId: unknown, detailId: unknown, entry: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    const base = { type: 'extension.detail' as const, chatId: chat.info.id, extension: extension.id, detail: String(detailId), entry: Number(entry) }
+    try {
+      if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+      if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
+      const detail = extension.messageDetails?.find((d) => d.id === detailId)
+      if (!detail || !offeredBy(extension, detail, chat)) throw new Error(`${extension.name} has no message detail "${detailId}" here`)
+      const message = messageAt(chat.entries, Number(entry))
+      if (!message) throw new Error('That message isn’t in the chat')
+      if (detail.kinds && !detail.kinds.includes(message.kind)) throw new Error(`${detail.label} isn’t offered on that message`)
+      return { ...base, view: withControls(extension, chat, await detail.render(message, detailOf(chat), contextOf(extension))) }
+    } catch (error) {
+      return { ...base, error: messageOf(error) }
+    }
+  }
   // The user flipped one of an extension's composer toggles in the chat: saved, then onChange, then the chip redraws.
   const flipToggle = async (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => {
     const extension = extensionFor(String(extensionId))
@@ -256,6 +286,7 @@ export function openPanels(deps: PanelDeps) {
   return {
     extensionsOf,
     runMessageAction,
+    renderDetail,
     flipToggle,
     panelOf,
     openPanel,

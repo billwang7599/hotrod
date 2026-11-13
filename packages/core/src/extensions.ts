@@ -74,6 +74,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['messageActions', 'commands'],
+  ['messageDetails', 'panels'],
   ['composerToggles', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],

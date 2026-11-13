@@ -37,7 +37,7 @@ The built-in extensions today:
 | Plan | Yes | A **Plan first** chip beside the message box, for coding sessions. While it's on, the chat is read only: Kothar's sandbox and permission answers refuse edits and commands that change anything, on every engine, and it plans on your Planning models if you've set some. The agent hands in a plan (goal, files, steps, risks, tests) and the amber bar asks you to approve, edit or cancel it, as Deep Research does with its plan. Edit closes the bar and opens the plan in the Plan tab, where **Approve and start** saves and approves it. Approve turns the chip off and starts the work; the Plan tab ticks steps off as the agent goes. Its page in Settings hides the chip, and can stop requiring a tests step. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
-| Inspector | Yes | **See what was sent** on each of your messages, and a **Sent** tab: everything Kothar handed the engine for that turn, labelled. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
+| Inspector | Yes | A folded **What was sent** row under each of your messages: everything Kothar handed the engine for that turn, labelled. Its **Activity** tab lists what Kothar and extensions did on their own. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
 | Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
 | MCP servers | Yes | Connect MCP servers (GitHub, Linear, Notion, a filesystem server, …) to your chats, on every engine. Kothar connects to them itself and offers their tools as its own, so keys never reach an engine and every call is asked for and recorded. Pick from a catalog or add your own in its page in Settings; switch one off for a chat in its MCP tab. See [MCP servers](#mcp-servers). |
 
@@ -133,8 +133,9 @@ up the settings page") and the agent makes it with a tool instead of pasting it 
 
 The Inspector shows what Kothar actually sends the engine, so nothing it adds is hidden from you.
 
-- **See what was sent:** hover one of your messages and click the eye. What went out with it opens beside the chat;
-  **Older** and **Newer** step through the turns kept. The **Sent** tab in the right sidebar shows the latest turn.
+- **What was sent:** under each of your messages, a folded **What was sent** row. Click it to see what went out with
+  that message, in the chat itself; click again to fold it. It's drawn only when you open it, and a message older than
+  the turns kept has no row.
 - **Sections, in the order they were sent,** each labelled by who it's from: **Kothar core** (where agents may write,
   folder modes, checkouts), **Context** (your AGENTS.md files, files and the setup), each **extension** by name, the
   conversation so far (from Memory, or Kothar's own window), **You** (your message, noted if an extension rewrote it),

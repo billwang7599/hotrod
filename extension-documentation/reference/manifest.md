@@ -64,7 +64,7 @@ extension and before you turn it on, and holds the extension to it:
 | `tools` | Gives agents tools, and uses other extensions' tools | `tools`, `toolsFor`, `host.callTool` |
 | `events` | Watches chats as they run | `onEvent`, `onTurnStarted`, `onTurnCompleted`, `onStatusChanged`, `onSessionEnded`, `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onLimitReached`, `onStart`, `onStop` |
 | `chats` | Adds chats of its own | `chats` |
-| `panels` | Adds panels | `panels`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
+| `panels` | Adds panels | `panels`, `messageDetails`, `processes`, `onProcessAction`, `onProcessesChanged`, `onWaitAction`, `host.wait`, `host.endWait`, `host.processes`, `host.processAction`, `host.processesChanged` |
 | `commands` | Adds commands | `commands`, `messageActions`, `composerToggles`, `host.toggled`, `host.setToggle` |
 | `settings` | Has settings | `settings`, `spaceSettings`, `settingsVersion`/`migrateSettings`, `settingsView`, `onSettingsChanged`, `host.spaceValues`, `host.setSpaceValue` |
 

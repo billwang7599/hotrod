@@ -151,6 +151,23 @@ export type ExtensionMessageAction = {
   run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// A folded row under messages in the transcript, such as the Inspector's "What was sent": folded, it shows only its
+// label; render draws what's inside when the user unfolds it, so a folded row costs nothing. It's drawn again each
+// time it's unfolded, and while it's open, whenever the chat's extensions draw (host.refresh).
+export type ExtensionMessageDetail = {
+  id: string
+  // Short, such as "What was sent"; shown on the folded row.
+  label: string
+  hint?: string
+  // The kinds of message it's offered on; all three without it.
+  kinds?: ExtensionMessage['kind'][]
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  // The messages that get the row, by entry; every message of its kinds without it. Called when the chat's extensions
+  // draw, as marked is; keep it quick.
+  entries?(chat: ChatDetail, context: ExtensionContext): number[]
+  render(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
+}
+
 // A switch in a chat's composer, beside the message box, such as "Deep research": a chip the user turns on and off for
 // that chat. Each chat keeps its own state (saved with the chat, so it outlives a restart), starting at `default` (off
 // without it). Several extensions can each add theirs. The extension reads a chat's state with host.toggled and sets
@@ -913,6 +930,8 @@ export type Extension = {
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
   messageActions?: ExtensionMessageAction[]
+  // Folded rows under messages, drawn only when opened (see ExtensionMessageDetail).
+  messageDetails?: ExtensionMessageDetail[]
   composerToggles?: ExtensionComposerToggle[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after

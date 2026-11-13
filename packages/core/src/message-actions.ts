@@ -1,7 +1,7 @@
 // Extensions' buttons on transcript messages (Extension.messageActions): which log entries are messages, and what the
 // UI gets of an extension's buttons for a chat, with the messages each marks.
-import type { ExtensionMessage, ExtensionMessageAction } from '@kothar/extension-api'
-import type { ChatEntry, MessageActionInfo } from './shared.ts'
+import type { ExtensionMessage, ExtensionMessageAction, ExtensionMessageDetail } from '@kothar/extension-api'
+import type { ChatEntry, MessageActionInfo, MessageDetailInfo } from './shared.ts'
 
 const KINDS: readonly ExtensionMessage['kind'][] = ['user', 'work', 'talk']
 const ICONS: readonly ExtensionMessageAction['icon'][] = ['pin', 'bookmark', 'star', 'eye']
@@ -42,5 +42,24 @@ export function messageActionInfo(extension: string, action: ExtensionMessageAct
     ...(text(activeLabel) && { activeLabel: text(activeLabel) }),
     ...(text(hint) && { hint: text(hint) }),
     ...(text(activeHint) && { activeHint: text(activeHint) }),
+  }
+}
+
+/** What the UI gets of one message detail: its label and kinds checked, and the entries that get it (all when absent). */
+export function messageDetailInfo(extension: string, detail: ExtensionMessageDetail, entries: unknown): MessageDetailInfo {
+  const { id, label, hint, kinds } = detail
+  if (typeof id !== 'string' || !id || typeof label !== 'string' || !label) {
+    throw new Error('A message detail needs an id and a label')
+  }
+  if (typeof detail.render !== 'function') throw new Error('A message detail needs render')
+  const offered = Array.isArray(kinds) ? KINDS.filter((k) => kinds.includes(k)) : [...KINDS]
+  const listed = Array.isArray(entries) ? entries.filter((n): n is number => Number.isInteger(n) && n >= 0) : undefined
+  return {
+    extension,
+    id,
+    label,
+    kinds: offered,
+    ...(typeof hint === 'string' && hint && { hint }),
+    ...(listed && { entries: [...new Set(listed)].slice(0, MAX_MARKS) }),
   }
 }

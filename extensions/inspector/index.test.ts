@@ -8,7 +8,7 @@ import { createFakeAdapter } from '@kothar/core/fake'
 import type { ClientMessage, CoreMessage } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import { until } from '@kothar/core/test-wait'
-import { createInspectorExtension, parseTurns, SENT_FILE, TEXT_DIR, tokensOf, turnFor } from './index.ts'
+import { createInspectorExtension, parseTurns, SENT_FILE, TEXT_DIR, tokensOf, turnsByEntry } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
@@ -61,7 +61,18 @@ async function core() {
     const drawn = messages.findLast((m) => m.type === 'extension.panel' && m.chatId === chatId && m.panel === id)
     return drawn?.type === 'extension.panel' ? drawn.view : undefined
   }
-  return { garage, messages, handle, chat, create, send, turns, texts, text, panel }
+  // A message detail as the UI asks for it when the user unfolds the row.
+  const detail = async (chatId: string, entry: number) => {
+    await kothar.core.handle({ type: 'extension.detail.get', chatId, extension: 'inspector', detail: 'sent', entry }, (r) => messages.push(r))
+    const drawn = messages.findLast((m) => m.type === 'extension.detail' && m.chatId === chatId && m.entry === entry)
+    return drawn?.type === 'extension.detail' ? drawn : undefined
+  }
+  const listed = (chatId: string) => {
+    handle({ type: 'context.get', chatId })
+    const found = messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === chatId)
+    return found?.type === 'chat.extensions' ? found : undefined
+  }
+  return { garage, messages, handle, chat, create, send, turns, texts, text, panel, detail, listed }
 }
 
 const find = (view: ExtensionView | undefined, match: (v: ExtensionView) => boolean): ExtensionView[] => {
@@ -136,25 +147,23 @@ describe('the Inspector', () => {
     expect(t.turns(id)).toHaveLength(1)
   })
 
-  it('opens what a message was sent with beside the chat, labelled, with Edit links, Copy all and the engine part marked', async () => {
+  it('folds what each message was sent with under it, labelled, with Edit links, Copy all and the engine part marked', async () => {
     const t = await core()
     const id = t.create()
     await t.send(id, 'First')
     await t.send(id, 'Second')
-    const first = t.chat(id)!.entries.findIndex((e) => e.type === 'user.message')
-    t.handle({ type: 'context.get', chatId: id })
-    const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === id)
-    expect(listed).toMatchObject({
-      messageActions: expect.arrayContaining([expect.objectContaining({ extension: 'inspector', id: 'see-sent', icon: 'eye', kinds: ['user'] })]),
-      panels: expect.arrayContaining([
-        expect.objectContaining({ extension: 'inspector', id: 'sent', title: 'Sent' }),
-        expect.objectContaining({ extension: 'inspector', id: 'sent-beside', placement: 'dock' }),
-      ]),
-    })
-    await t.handle({ type: 'extension.message.action', chatId: id, extension: 'inspector', action: 'see-sent', entry: first })
-    await t.handle({ type: 'extension.panel.get', chatId: id, extension: 'inspector', panel: 'sent-beside' })
-    await until(() => t.panel(id, 'sent-beside')?.type === 'stack')
-    const view = t.panel(id, 'sent-beside')
+    const users = t.chat(id)!.entries.flatMap((e, i) => (e.type === 'user.message' ? [i] : []))
+    const listed = t.listed(id)!
+    // A folded row on each of the user's messages, and no Sent tab, beside-the-chat view or eye button.
+    expect(listed.messageDetails).toEqual([
+      { extension: 'inspector', id: 'sent', label: 'What was sent', hint: expect.any(String), kinds: ['user'], entries: users },
+    ])
+    expect(listed.panels.filter((p) => p.extension === 'inspector').map((p) => p.id)).toEqual(['activity'])
+    expect(listed.messageActions?.some((a) => a.extension === 'inspector')).toBeFalsy()
+    // Nothing is drawn until a row is opened.
+    expect(t.messages.some((m) => m.type === 'extension.detail')).toBe(false)
+
+    const view = (await t.detail(id, users[0]!))!.view
     const codes = find(view, (v) => v.type === 'code').map((v) => (v as { text: string }).text)
     expect(codes).toContain('First')
     expect(codes.some((code) => code.includes('Second'))).toBe(false)
@@ -167,24 +176,52 @@ describe('the Inspector', () => {
     const copy = find(view, (v) => v.type === 'copy')[0] as { text: string }
     expect(copy.text).toContain('### Prompted: instructions\n\nBe brief.')
 
-    // The Sent tab shows the latest turn.
-    await t.handle({ type: 'extension.panel.get', chatId: id, extension: 'inspector', panel: 'sent' })
-    await until(() => t.panel(id, 'sent')?.type === 'stack')
-    expect(find(t.panel(id, 'sent'), (v) => v.type === 'code').map((v) => (v as { text: string }).text)).toContain(
-      'New message from the user:\n\nSecond',
-    )
+    const second = (await t.detail(id, users[1]!))!.view
+    expect(find(second, (v) => v.type === 'code').map((v) => (v as { text: string }).text)).toContain('New message from the user:\n\nSecond')
+    // A reply isn't a message it offers the row on.
+    const reply = t.chat(id)!.entries.findIndex((e) => e.type === 'text.completed')
+    expect((await t.detail(id, reply))!.error).toContain('isn’t offered on that message')
   })
 
-  it('finds the turn a message went out in, a queued or a steered one too', () => {
+  it('gives no row to a message older than the turns it keeps', async () => {
+    const t = await core()
+    t.handle({ type: 'extension.setValue', extensionId: 'inspector', key: 'keep', value: 1 })
+    const id = t.create()
+    await t.send(id, 'Old')
+    await t.send(id, 'New')
+    const users = t.chat(id)!.entries.flatMap((e, i) => (e.type === 'user.message' ? [i] : []))
+    expect(t.listed(id)!.messageDetails![0]!.entries).toEqual([users[1]])
+    expect((await t.detail(id, users[0]!))!.view).toMatchObject({ type: 'empty' })
+  })
+
+  it('matches each message to the turn it went out in: a queued or a steered one too, and one message a turn', () => {
     const turns = [
-      { turn: 'a', at: '2026-01-01T00:00:01Z', continued: false, sections: [] },
-      { turn: 'b', at: '2026-01-01T00:00:05Z', continued: false, sections: [{ hash: 'h', at: '2026-01-01T00:00:06Z', source: 'you', part: 'prompt', label: '', chars: 3 }] },
-    ] as unknown as Parameters<typeof turnFor>[0]
-    const text = () => 'and this'
-    expect(turnFor(turns, { at: '2026-01-01T00:00:00Z', text: 'x' }, text)?.turn).toBe('a')
-    expect(turnFor(turns, { at: '2026-01-01T00:00:03Z', text: 'x' }, text)?.turn).toBe('b')
-    expect(turnFor(turns, { at: '2026-01-01T00:00:07Z', text: 'and this' }, text)?.turn).toBe('b')
-    expect(turnFor(turns, { at: '2026-01-01T00:00:09Z', text: 'x' }, text)).toBeUndefined()
+      { turn: 'a', at: '2026-01-01T00:00:01Z', continued: false, sections: [{ hash: 'first', source: 'you', part: 'prompt', label: '', chars: 1 }] },
+      {
+        turn: 'b',
+        at: '2026-01-01T00:00:05Z',
+        continued: false,
+        sections: [
+          { hash: 'queued', source: 'you', part: 'prompt', label: '', chars: 1 },
+          { hash: 'steer', at: '2026-01-01T00:00:06Z', source: 'you', part: 'prompt', label: '', chars: 3 },
+        ],
+      },
+      // A turn no message of the user's started (a worker's report, say).
+      { turn: 'c', at: '2026-01-01T00:00:10Z', continued: false, sections: [{ hash: 'report', source: 'core', part: 'prompt', label: '', chars: 1 }] },
+    ] as unknown as Parameters<typeof turnsByEntry>[0]
+    const texts: Record<string, string> = { first: 'one', queued: 'New message from the user:\n\ntwo', steer: 'and this', report: 'A report' }
+    const found = turnsByEntry(
+      turns,
+      [
+        { entry: 0, at: '2026-01-01T00:00:00Z', text: 'older, not kept' },
+        { entry: 1, at: '2026-01-01T00:00:00Z', text: 'one' },
+        // Queued while a ran: sent before b started.
+        { entry: 2, at: '2026-01-01T00:00:03Z', text: 'two' },
+        { entry: 3, at: '2026-01-01T00:00:07Z', text: 'and this' },
+      ],
+      (hash) => texts[hash] ?? '',
+    )
+    expect(Object.fromEntries([...found].map(([entry, turn]) => [entry, turn.turn]))).toEqual({ 1: 'a', 2: 'b', 3: 'b' })
     expect(tokensOf(9)).toBe(3)
   })
 })

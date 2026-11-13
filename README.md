@@ -89,7 +89,7 @@ What works today:
   `deep_research` tool). Plan adds a **Plan first** chip to the composer: the chat is read only (enforced by the
   sandbox and Kothar's permission answers, on every engine) until you approve the plan the agent hands in, and the
   Plan tab ticks its steps off as the work goes. Inspector shows what Kothar actually sent the engine for each message
-  (See what was sent, beside the chat, and a Sent tab), each part labelled by who it's from, with Edit links to the
+  (a folded What was sent row under each of your messages), each part labelled by who it's from, with Edit links to the
   extension prompts behind it; extensions' prompts and tool descriptions are editable on their Settings pages. Its
   Activity tab lists what Kothar and extensions do on their own: model calls, permission answers and the rule behind
   each, workers, retries and account switches.

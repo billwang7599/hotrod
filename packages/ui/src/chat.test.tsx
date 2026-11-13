@@ -102,6 +102,7 @@ type RenderOptions = {
   engines?: EngineInfo[]
   modelLists?: ModelLists
   extensionUi?: ComponentProps<typeof Chat>['extensionUi']
+  detailViews?: ComponentProps<typeof Chat>['detailViews']
 }
 
 const viewOf = (chat: Partial<ChatView>): ChatView => ({
@@ -138,6 +139,7 @@ function render(chat: Partial<ChatView>, send: (m: ClientMessage) => void = () =
               }
               modelLists={options.modelLists}
               extensionUi={options.extensionUi}
+              detailViews={options.detailViews}
               connected
               send={send}
               openSettings={() => {}}
@@ -1359,6 +1361,44 @@ test("extensions' message actions sit beside Copy on messages with a log entry, 
   expect(container.querySelectorAll('[data-message-action]')).toHaveLength(3)
   act(() => unpin.click())
   expect(sent.at(-1)).toEqual({ type: 'extension.message.action', chatId: 'c1', extension: 'pins', action: 'pin', entry: 2 })
+})
+
+test("extensions' message details fold under the messages they list, closed whatever the steps setting, drawn once opened", () => {
+  act(() => showStepsByDefault(true))
+  const sent: ClientMessage[] = []
+  const messageDetails = [{ extension: 'inspector', id: 'sent', label: 'What was sent', kinds: ['user' as const], entries: [0] }]
+  const chat = {
+    items: [
+      { kind: 'user', text: 'Hi', entry: 0 },
+      { kind: 'text', text: 'Hello', entry: 1 },
+      { kind: 'user', text: 'Not recorded', entry: 2 },
+    ] as Item[],
+  }
+  const extensionUi = { chatId: 'c1', panels: [], commands: [], messageDetails }
+  render(chat, (m) => sent.push(m), { extensionUi })
+  const rows = () => [...container.querySelectorAll<HTMLElement>('[data-message-detail="inspector:sent"]')]
+  // Only on the entry it lists, and not on the reply.
+  expect(rows()).toHaveLength(1)
+  expect(container.querySelector('[data-entry="0"] [data-message-detail]')).not.toBeNull()
+  const button = rows()[0]!.querySelector('button')!
+  expect(button.textContent).toBe('What was sent')
+  expect(button.getAttribute('aria-expanded')).toBe('false')
+  // Folded: nothing asked of the core.
+  expect(sent.some((m) => m.type === 'extension.detail.get')).toBe(false)
+  act(() => button.click())
+  expect(button.getAttribute('aria-expanded')).toBe('true')
+  expect(sent.filter((m) => m.type === 'extension.detail.get')).toEqual([
+    { type: 'extension.detail.get', chatId: 'c1', extension: 'inspector', detail: 'sent', entry: 0 },
+  ])
+  expect(rows()[0]!.textContent).toContain('Loading')
+  render(chat, (m) => sent.push(m), {
+    extensionUi,
+    detailViews: { 'c1/inspector/sent/0': { view: { type: 'text', text: 'Kothar core: where agents may write' } } },
+  })
+  expect(rows()[0]!.textContent).toContain('Kothar core: where agents may write')
+  act(() => button.click())
+  expect(button.getAttribute('aria-expanded')).toBe('false')
+  act(() => showStepsByDefault(false))
 })
 
 test("extensions' composer toggles show as chips beside Attach, pressed while on, and ask the core to flip", () => {

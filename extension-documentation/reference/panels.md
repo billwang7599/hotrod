@@ -330,6 +330,45 @@ scrolls the chat to it when clicked.
 
 List `commands` in the manifest's `uses` for `messageActions`.
 
+## Message details
+
+`messageDetails` adds a folded row under messages in the transcript, such as the Inspector's **What was sent**. Folded,
+it shows only its label, and the extension isn't asked for anything. When the user unfolds it, `render` draws what's
+inside as a [view](#views), the same kinds a panel uses; it's drawn again each time it's unfolded, and while it's
+open, on [`host.refresh`](host.md#refresh). It stays folded whatever the user's steps setting is, so a long chat
+doesn't draw them all.
+
+```ts
+const wordCount: Extension = {
+  id: 'word-count',
+  name: 'Word count',
+  description: 'Counts the words in each reply.',
+  enabledByDefault: false,
+  messageDetails: [
+    {
+      id: 'words',
+      label: 'Word count',
+      kinds: ['talk'],
+      render: (message) => ({ type: 'text', text: `${message.text.split(/\s+/).filter(Boolean).length} words` }),
+    },
+  ],
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `label` | Short; shown on the folded row. |
+| `hint?` | Shown on hover. |
+| `kinds?` | Which messages get it: `user`, `work`, `talk`. All three without it. |
+| `shown(chat, context)` | Optional. Whether this chat gets the row. |
+| `entries(chat, context)` | Optional. The entries of the messages that get it; every message of its `kinds` without it. Asked when the chat's extensions draw, as `marked` is. Keep it quick. |
+| `render(message, chat, context)` | Draws what's inside, when the user unfolds it. A throw shows as an error in the row. |
+
+Views in a message detail can't send actions back (it has no `onAction`); links, Copy and folding cards work.
+
+List `panels` in the manifest's `uses` for `messageDetails`.
+
 
 ## Composer toggles
 

@@ -2,16 +2,17 @@
 import type { ExtensionAction, ExtensionNoteCard } from '@kothar/extension-api'
 import { Fragment, useContext, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import type { ClientMessage, ContextItem, MessageActionInfo } from '@kothar/core/shared'
+import type { ClientMessage, ContextItem, MessageActionInfo, MessageDetailInfo } from '@kothar/core/shared'
 import { Chevron, CopyBlock, CopyButton, ErrorText, MOTION } from '../controls.tsx'
 import { LinkedText, NoFileLinks } from '../file-links.tsx'
 import { Markdown } from '../markdown.tsx'
 import { UserText } from '../lists.tsx'
 import { useReveal, type RevealFrom } from '../smooth.ts'
 import { openReportCard, reportCardKey, ReportsOpen, useReportCardChoice } from '../steps.ts'
-import type { ChatView, Item } from '../state.ts'
+import type { ChatView, Item, PanelView } from '../state.ts'
 import { SentAttachment } from './attachments.tsx'
 import { MessageActions } from './message-actions.tsx'
+import { detailsFor, MessageDetails } from './message-details.tsx'
 import { ASSISTANT, BODY, Dots, Row } from './parts.tsx'
 import { PermissionPrompt, PILL, Verdict, VERDICT_COLORS, VERDICTS } from './permission.tsx'
 import { QuestionCard } from './question.tsx'
@@ -54,6 +55,9 @@ type ItemProps = {
   at?: number
   // Extensions' buttons on messages, such as Pin.
   messageActions?: readonly MessageActionInfo[]
+  // Extensions' folded rows under messages, such as What was sent, and the views of those the user unfolded.
+  messageDetails?: readonly MessageDetailInfo[]
+  detailViews?: Record<string, PanelView>
 }
 
 /** An extension's note drawn as a card, such as an artifact an agent made: click to open it in the extension's panel. */
@@ -165,45 +169,60 @@ export function ItemView(props: ItemProps) {
         className={className}
       />
     ) : null
+  // The folded rows under a message, full width so an unfolded one has room.
+  const details = (kind: 'user' | 'work' | 'talk', entry?: number) => {
+    const offered = detailsFor(props.messageDetails, kind, entry)
+    return offered.length && entry !== undefined ? (
+      <div className="flex w-full flex-col">
+        <MessageDetails details={offered} chatId={chat.id} entry={entry} connected={connected} send={send} views={props.detailViews} />
+      </div>
+    ) : null
+  }
   switch (item.kind) {
     case 'report':
       return (
-        <ReportCard
-          item={item}
-          chatId={chat.id}
-          at={props.at}
-          open={openChat?.(item.chatId)}
-          actions={actions('work', item.entry)}
-        />
+        <>
+          <ReportCard
+            item={item}
+            chatId={chat.id}
+            at={props.at}
+            open={openChat?.(item.chatId)}
+            actions={actions('work', item.entry)}
+          />
+          {details('work', item.entry)}
+        </>
       )
     case 'user':
       return (
-        <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
-          {item.attachments && (
-            <div className="flex flex-wrap justify-end gap-6">
-              {item.attachments.map((a) => (
-                <SentAttachment
-                  key={a.path}
-                  chat={chat}
-                  attachment={a}
-                  contextItems={contextItems}
-                  connected={connected}
-                  send={send}
-                />
-              ))}
-            </div>
-          )}
-          {item.midTurn && <span className="text-xs text-faint">Sent mid-turn</span>}
-          {item.text && (
-            <div className="flex items-start gap-6">
-              {actions('user', item.entry, 'mt-6')}
-              <CopyButton label="Copy message" text={item.text} className="mt-6" />
-              <div className="min-w-0 rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
-                <UserText text={item.text} />
+        <>
+          <div className="flex max-w-[85%] flex-col items-end gap-6 self-end">
+            {item.attachments && (
+              <div className="flex flex-wrap justify-end gap-6">
+                {item.attachments.map((a) => (
+                  <SentAttachment
+                    key={a.path}
+                    chat={chat}
+                    attachment={a}
+                    contextItems={contextItems}
+                    connected={connected}
+                    send={send}
+                  />
+                ))}
               </div>
-            </div>
-          )}
-        </div>
+            )}
+            {item.midTurn && <span className="text-xs text-faint">Sent mid-turn</span>}
+            {item.text && (
+              <div className="flex items-start gap-6">
+                {actions('user', item.entry, 'mt-6')}
+                <CopyButton label="Copy message" text={item.text} className="mt-6" />
+                <div className="min-w-0 rounded-[12px_12px_4px_12px] bg-raised px-12 py-8 text-body shadow-raised leading-[1.5] whitespace-pre-wrap [word-break:break-word]">
+                  <UserText text={item.text} />
+                </div>
+              </div>
+            )}
+          </div>
+          {details('user', item.entry)}
+        </>
       )
     case 'text':
       return (
@@ -216,6 +235,7 @@ export function ItemView(props: ItemProps) {
           </div>
           <CopyButton label="Copy reply" text={item.text} />
           {actions('talk', item.entry)}
+          {details('talk', item.entry)}
         </div>
       )
     case 'error':

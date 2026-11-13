@@ -84,14 +84,46 @@ export function sentStore(storage: ExtensionStorage) {
   return { read, text, add }
 }
 
-// The turn a message of the user's went out in: the first one that started at or after it (a queued message waits),
-// or, for a message steered into a running turn, the turn it entered.
-export function turnFor(turns: StoredTurn[], message: Pick<ExtensionMessage, 'at' | 'text'>, text: (hash: string) => string) {
-  const steered = turns.find((turn) =>
-    turn.sections.some((section) => section.at !== undefined && section.at <= message.at && text(section.hash).includes(message.text)),
-  )
-  if (steered && message.text) return steered
-  return turns.find((turn) => !turn.continued && turn.at >= message.at)
+// One of the user's messages in a chat's log: where it is (its entry), when it was sent and what it said.
+export type UserMessage = Pick<ExtensionMessage, 'entry' | 'at' | 'text'>
+
+// How many of a turn's latest earlier messages are tried for it: a queue is rarely longer.
+const LOOK_BACK = 20
+
+// The kept turn each of the user's messages went out in, by entry. A message steered into a running turn gets the turn
+// whose steered part holds it. Any other gets the turn that started at or after it and whose message (the "You" part)
+// holds its text, the latest such message for each turn, so one turn has one message and a message older than the
+// turns kept gets none. A message with no text (only attachments) gets none.
+export function turnsByEntry(turns: StoredTurn[], messages: readonly UserMessage[], text: (hash: string) => string) {
+  const read = new Map<string, string>()
+  const textOf = (hash: string) => {
+    if (!read.has(hash)) read.set(hash, text(hash))
+    return read.get(hash)!
+  }
+  const found = new Map<number, StoredTurn>()
+  const left: UserMessage[] = []
+  for (const message of messages) {
+    if (!message.text) continue
+    const steered = turns.find((turn) =>
+      turn.sections.some((section) => section.at !== undefined && section.at <= message.at && textOf(section.hash).includes(message.text)),
+    )
+    if (steered) found.set(message.entry, steered)
+    else left.push(message)
+  }
+  for (const turn of turns) {
+    if (turn.continued) continue
+    const sent = turn.sections
+      .filter((section) => section.source === 'you' && section.at === undefined)
+      .map((section) => textOf(section.hash))
+      .join('\n')
+    if (!sent) continue
+    const before = left.filter((message) => message.at <= turn.at)
+    const match = before.slice(-LOOK_BACK).findLast((message) => sent.includes(message.text))
+    if (!match) continue
+    found.set(match.entry, turn)
+    left.splice(left.indexOf(match), 1)
+  }
+  return found
 }
 
 const SOURCES: Record<SentSource, { tag: string; tone: 'accent' | 'muted' | 'faint' | 'warning' | 'success' | 'normal' }> = {
@@ -154,7 +186,7 @@ function sectionView(section: StoredSection, text: (hash: string) => string, ope
 export function turnView(
   turn: StoredTurn,
   text: (hash: string) => string,
-  options: { position?: string; nav?: ExtensionView[] } = {},
+  options: { position?: string; nav?: ExtensionView[]; titled?: boolean } = {},
 ): ExtensionView {
   const visible = turn.sections.filter((section) => section.source !== 'engine')
   const total = visible.reduce((sum, section) => sum + section.chars, 0)
@@ -162,7 +194,9 @@ export function turnView(
     type: 'row',
     justify: 'between',
     children: [
-      { type: 'heading', text: 'What was sent', hint: 'Everything Kothar handed the engine for this turn, in order' },
+      options.titled === false
+        ? { type: 'text', text: 'Everything Kothar handed the engine for this turn, in order', small: true, tone: 'muted' }
+        : { type: 'heading', text: 'What was sent', hint: 'Everything Kothar handed the engine for this turn, in order' },
       {
         type: 'row',
         justify: 'end',
@@ -194,12 +228,22 @@ export function turnView(
 }
 
 export function createInspectorExtension(): Extension {
-  // The turn each chat's beside-the-chat view shows (by turn id); the newest without one.
-  const shown = new Map<string, string>()
   const storeOf = (host: ExtensionHost, chatId: string) => sentStore(host.chatStorage(chatId))
-  const empty: ExtensionView = {
-    type: 'empty',
-    text: 'Nothing recorded yet. Send a message and what Kothar sends the engine shows here.',
+  // The user's messages in a chat's log, the latest ones only: a turn's message is never far before it.
+  const userMessages = (host: ExtensionHost, chatId: string, kept: number): UserMessage[] => {
+    const messages: UserMessage[] = []
+    const entries = host.read(chatId)
+    for (let entry = entries.length - 1; entry >= 0 && messages.length < kept * 2 + LOOK_BACK; entry--) {
+      const found = entries[entry]
+      // Reports from before they had their own entry are logged as user messages in this form.
+      if (found?.type === 'user.message' && !found.text.startsWith('[subagent "')) messages.unshift({ entry, at: found.at, text: found.text })
+    }
+    return messages
+  }
+  const turnsOf = (host: ExtensionHost, chatId: string) => {
+    const store = storeOf(host, chatId)
+    const turns = store.read()
+    return { store, turns, byEntry: turns.length ? turnsByEntry(turns, userMessages(host, chatId, turns.length), store.text) : new Map<number, StoredTurn>() }
   }
   const keepOf = (values: Record<string, unknown>) => (typeof values.keep === 'number' ? values.keep : DEFAULT_KEEP)
   // Activity: each chat's tab filters (its scope and kind); the chats whose Activity tab drew since the last event, so
@@ -263,7 +307,7 @@ export function createInspectorExtension(): Extension {
     id: 'inspector',
     name: 'Inspector',
     description:
-      'Shows what Kothar actually sends the engine each turn, beside your message: Kothar’s own rules, each ' +
+      'Shows what Kothar actually sends the engine each turn, folded under your message: Kothar’s own rules, each ' +
       'extension’s prompts and tools, the chat’s context and memory, and how the turn ran, each labelled. Kept in the ' +
       'chat’s folder, so it goes with the chat. Its Activity tab lists what Kothar and extensions did on their own: model ' +
       'calls, permission answers and the rule behind each, workers, retries and more.',
@@ -296,22 +340,24 @@ export function createInspectorExtension(): Extension {
       storeOf(host, sent.chat.id).add(sent, keepOf(values))
       host.refresh(sent.chat.id)
     },
-    messageActions: [
+    // A folded row under each of the user's messages the Inspector has a turn for; drawn only when unfolded.
+    messageDetails: [
       {
-        id: 'see-sent',
-        label: 'See what was sent',
-        icon: 'eye',
-        hint: 'See everything Kothar sent the engine with this message',
+        id: 'sent',
+        label: 'What was sent',
+        hint: 'Everything Kothar sent the engine with this message',
         kinds: ['user'],
-        run(message, chat, { host }) {
-          const store = storeOf(host, chat.id)
-          const turn = turnFor(store.read(), message, store.text)
+        entries: (chat, { host }) => [...turnsOf(host, chat.id).byEntry.keys()],
+        render(message, chat, { host }) {
+          const { store, turns, byEntry } = turnsOf(host, chat.id)
+          const turn = byEntry.get(message.entry)
           if (!turn) {
-            host.note(chat.id, 'The Inspector has no record of that message: it was sent before the Inspector was on, or is older than the turns it keeps.')
-            return
+            return {
+              type: 'empty',
+              text: 'No record of this message: it was sent before the Inspector was on, or is older than the turns it keeps.',
+            }
           }
-          shown.set(chat.id, turn.turn)
-          host.showPanel(chat.id, 'sent-beside')
+          return turnView(turn, store.text, { position: `turn ${turns.indexOf(turn) + 1} of ${turns.length} kept`, titled: false })
         },
       },
     ],
@@ -334,52 +380,8 @@ export function createInspectorExtension(): Extension {
           }
         },
       },
-      {
-        id: 'sent',
-        title: 'Sent',
-        render(chat: ChatDetail, { host }) {
-          const store = storeOf(host, chat.id)
-          const turn = store.read().at(-1)
-          if (!turn) return empty
-          return {
-            type: 'stack',
-            gap: 'normal',
-            children: [
-              { type: 'button', label: 'Open beside the chat', variant: 'ghost', action: { name: 'open', value: turn.turn } },
-              turnView(turn, store.text, { position: 'latest turn' }),
-            ],
-          }
-        },
-        onAction(action, chat, { host }) {
-          if (action.name !== 'open' || typeof action.value !== 'string') return
-          shown.set(chat.id, action.value)
-          host.showPanel(chat.id, 'sent-beside')
-        },
-      },
-      {
-        id: 'sent-beside',
-        title: 'What was sent',
-        placement: 'dock',
-        render(chat: ChatDetail, { host }) {
-          const store = storeOf(host, chat.id)
-          const turns = store.read()
-          if (!turns.length) return empty
-          const at = Math.max(0, turns.findIndex((turn) => turn.turn === shown.get(chat.id)))
-          const index = shown.has(chat.id) && turns[at]?.turn === shown.get(chat.id) ? at : turns.length - 1
-          const turn = turns[index]!
-          const nav: ExtensionView[] = [
-            { type: 'button', label: 'Older', variant: 'ghost', disabled: index === 0, action: { name: 'show', value: turns[index - 1]?.turn ?? '' } },
-            { type: 'button', label: 'Newer', variant: 'ghost', disabled: index === turns.length - 1, action: { name: 'show', value: turns[index + 1]?.turn ?? '' } },
-          ]
-          return turnView(turn, store.text, { position: `turn ${index + 1} of ${turns.length} kept`, nav })
-        },
-        onAction(action, chat) {
-          if (action.name === 'show' && typeof action.value === 'string' && action.value) shown.set(chat.id, action.value)
-        },
-      },
     ],
     onChatRemoved(chat) {
-      shown.delete(chat.id)
       filters.delete(chat.id)
       watching.delete(chat.id)
       added.delete(chat.id)

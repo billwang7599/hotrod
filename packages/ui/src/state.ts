@@ -13,6 +13,7 @@ import type {
   ChatStatus,
   CommandInfo,
   MessageActionInfo,
+  MessageDetailInfo,
   ComposerToggleInfo,
   ContextItem,
   ContextSection,
@@ -129,6 +130,8 @@ export type State = {
   extensionUis: Record<string, ExtensionUi>
   // The views of the panels chats have opened (panelKey). Stale: borrowed from the last chat until this chat's arrives.
   panelViews: Record<string, PanelView>
+  // The views of message details the user unfolded (detailKey): chat, extension, detail and entry.
+  detailViews: Record<string, PanelView>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
@@ -140,6 +143,7 @@ export type ExtensionUi = {
   panels: PanelTab[]
   commands: CommandInfo[]
   messageActions?: MessageActionInfo[]
+  messageDetails?: MessageDetailInfo[]
   toggles?: ComposerToggleInfo[]
   stale?: true
 }
@@ -171,6 +175,7 @@ export const initialState: State = {
   contexts: {},
   extensionUis: {},
   panelViews: {},
+  detailViews: {},
   terminalErrors: {},
   toasts: [],
   nextToastId: 1,
@@ -412,8 +417,16 @@ function follow(before: State, state: State): State {
 function forget(state: State): State {
   const ids = new Set(state.chats.map((c) => c.id))
   const kept = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)))
-  const views = Object.entries(state.panelViews).filter(([key]) => ids.has(key.slice(0, key.indexOf('/'))))
-  return { ...state, contexts: kept(state.contexts), extensionUis: kept(state.extensionUis), panelViews: Object.fromEntries(views) }
+  const live = ([key]: [string, unknown]) => ids.has(key.slice(0, key.indexOf('/')))
+  const views = Object.entries(state.panelViews).filter(live)
+  const details = Object.entries(state.detailViews).filter(live)
+  return {
+    ...state,
+    contexts: kept(state.contexts),
+    extensionUis: kept(state.extensionUis),
+    panelViews: Object.fromEntries(views),
+    detailViews: Object.fromEntries(details),
+  }
 }
 
 function reduceAll(state: State, action: Action): State {
@@ -499,8 +512,15 @@ function reduceAll(state: State, action: Action): State {
       return { ...state, contexts, ...(chatId === state.selectedId && { context: { chatId, items } }) }
     }
     case 'chat.extensions': {
-      const { chatId, panels, commands, messageActions, toggles } = action
-      const extensionUi = { chatId, panels, commands, ...(messageActions && { messageActions }), ...(toggles && { toggles }) }
+      const { chatId, panels, commands, messageActions, messageDetails, toggles } = action
+      const extensionUi = {
+        chatId,
+        panels,
+        commands,
+        ...(messageActions && { messageActions }),
+        ...(messageDetails && { messageDetails }),
+        ...(toggles && { toggles }),
+      }
       const extensionUis = { ...state.extensionUis, [chatId]: extensionUi }
       return { ...state, extensionUis, ...(chatId === state.selectedId && { extensionUi }) }
     }
@@ -508,6 +528,11 @@ function reduceAll(state: State, action: Action): State {
       const { view, error } = action
       const key = panelKey(action.chatId, action.extension, action.panel)
       return { ...state, panelViews: { ...state.panelViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
+    }
+    case 'extension.detail': {
+      const { view, error } = action
+      const key = `${action.chatId}/${action.extension}/${action.detail}/${action.entry}`
+      return { ...state, detailViews: { ...state.detailViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
     }
     case 'context.file': {
       const withText = (items: ContextItem[]) => items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))

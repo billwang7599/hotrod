@@ -411,6 +411,7 @@ function App() {
                 extensionUi={state.extensionUi}
                 extensions={state.extensions}
                 panelViews={state.panelViews}
+                detailViews={state.detailViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists}
