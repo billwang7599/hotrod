@@ -80,6 +80,13 @@ What works today:
   keeps agents out. A folder holding Kothar's own data is always read only. Each session's instructions list every
   folder with its mode, and a refused edit names the setting that would allow it.
 - **Permissions:** switches decide what runs without asking.
+- **Engine tools:** Settings → Engines lists every built-in tool of Claude Code, pi and OpenCode, each with a switch,
+  core ones included. Tools Kothar has its own version of (subagents, background shells, skills, plan modes) and
+  tools that act out of Kothar's sight (schedules, notifications, publishing) are off by default; commands, edits,
+  reads and searches stay on. The **Engine tools** master switch, and one per engine, turn every built-in tool off,
+  leaving the agent only Kothar's tools; your per-tool choices come back when it's on again. What was sent says which
+  tools were off for each message. Processes' `start_process` can wake the agent when a command exits, in place of
+  Claude Code's Monitor.
 - **File links:** a path in a chat that exists in its folders, checkouts or work folder is a link. Click opens it in
   your editor at its line (Settings → Work folder → Open files with: the system's default app, VS Code, Cursor,
   Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in

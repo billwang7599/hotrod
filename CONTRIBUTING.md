@@ -152,6 +152,24 @@ Why some things are the way they are. Add one when you make a choice the next co
   5. **Depend on capabilities, not ids.** Name a shared API for what it does (`search`, `research`), so a community
      extension can provide it instead of a built-in one.
 
+- **Every engine tool can be switched from Kothar.** Kothar wants to see and control as much of what an agent does as
+  it can, so each engine's built-in tools are listed in Settings → Engines → Tools (`engine-tools.ts`), each with a
+  switch, core ones included, under two master switches (**Engine tools** for every engine, and one per engine). A
+  master off leaves the agent only MCP tools: Kothar's and extensions'. The per-tool choices stay saved underneath.
+- **Core tools stay on by default.** Commands, edits, reads and searches are what an engine is good at: its model was
+  trained on those exact tools, and Kothar's own MCP versions would make every engine worse and the same. Kothar
+  already sees every call (`tool.started`) and answers every permission request, so leaving them on costs no control.
+  Tools are grouped by what they do, not by engine: **core** (on), **replaced** (off while Kothar or an extension has
+  its own version: workers for subagents, Processes for background shells, Skills, Plan), and **outside** (off: they
+  act where Kothar can't see, stop or log them, such as schedules, notifications and publishing). A tool an engine
+  reports that its adapter doesn't know yet is on, marked new, and asks before each use.
+- **Extensions name capabilities, never engine tools.** An extension says what it stands in for with
+  `replaces: ['background-shell']`; each adapter maps its own tool names to those capabilities (`Adapter.tools`), so
+  engine names stay inside adapters and a community extension turns off the right tool on every engine.
+- **With every tool off, a few things stay.** Claude Code keeps `ToolSearch`, which it may need to load deferred MCP
+  tools (Kothar's among them); pi uses `--no-builtin-tools`, not `--no-tools`, which would drop MCP too; OpenCode turns
+  each built-in off by name, never `*`, which would match `kothar_*` as well.
+
 ## Pull requests
 
 - **Keep PRs small** and about one thing. Run the [checks](#checks) first.
@@ -172,6 +190,11 @@ An adapter is one file in `packages/core/src/adapters/`, implementing `Adapter` 
   `turn.completed` and so on. Every tool call carries a common kind (`shell`, `edit`, `read`, `search`, `fetch`,
   `mcp`, `other`).
 - Optional: `complete` (one-shot model calls, used by Memory) and `accounts` (sign in, sign out, API keys).
+- Optional but wanted: `tools`, the engine's built-in tools, each with a shared capability and a group (`core`,
+  `replaced`, `outside`; see [Decisions](#decisions)). With it, `start` gets `options.tools` (`off` and `on`, by the
+  engine's names) and `options.noTools` (every built-in off, MCP tools kept), and Settings → Engines → Tools lists the
+  engine. Emit `tools.listed` with the engine's own list when a session starts, if the engine says it, so tools the
+  adapter doesn't know show up as new. Without `tools`, the engine's tools can't be switched (Codex today).
 
 Rules and helpers:
 
