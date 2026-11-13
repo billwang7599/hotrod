@@ -346,6 +346,7 @@ export function openTurns(deps: TurnDeps) {
   const finishTurn = (chat: Chat, error?: string) => {
     const parent = chat.info.worker && !chat.info.quiet ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, error)))
+    showReport(chat, error)
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
     if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
@@ -372,6 +373,7 @@ export function openTurns(deps: TurnDeps) {
     if (!chat.info.worker || !chats.has(chat.info.id)) return
     const parent = chat.info.quiet ? undefined : parentOf(chat)
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, `its folder ${chat.dir} is gone`)))
+    showReport(chat, `its folder ${chat.dir} is gone`)
     removeChats(familyOf(chat))
   }
 
@@ -381,6 +383,16 @@ export function openTurns(deps: TurnDeps) {
     } catch (error) {
       broadcast({ type: 'error', message: messageOf(error) })
     }
+  }
+
+  // A quiet worker that shows its report (ChatInfo.showReport): logged in its parent's transcript for the user, as a
+  // quiet report that neither queues for the parent's agent nor wakes it.
+  const showReport = (chat: Chat, error?: string) => {
+    if (!chat.info.quiet || !chat.info.showReport) return
+    const parent = parentOf(chat)
+    if (!parent) return
+    const { text, report } = reportOf(chat, error)
+    reportErrors(() => append(parent, { at: now().toISOString(), type: 'worker.report', text, ...report, quiet: true }))
   }
 
   const reportOf = (chat: Chat, error?: string) => {
@@ -416,7 +428,7 @@ export function openTurns(deps: TurnDeps) {
   // A turn's input is the worker reports and the message it started with, logged together at its start.
   const retry = (chat: Chat) => {
     // A message steered into the turn isn't what started it.
-    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'worker.report'
+    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || (e.type === 'worker.report' && !e.quiet)
     const end = chat.entries.findLastIndex(isInput)
     if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
     const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at

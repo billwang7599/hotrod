@@ -5,7 +5,7 @@ import type { ChatEntry } from './shared.ts'
 export const PAGE_ENTRIES = 100
 export const PAGE_CHARS = 200_000
 
-const startsTurn = (entry: ChatEntry) => entry.type === 'user.message' || entry.type === 'worker.report'
+const startsTurn = (entry: ChatEntry) => entry.type === 'user.message' || (entry.type === 'worker.report' && entry.quiet !== true)
 
 // Where the page that ends just before `before` starts: back a page's worth, then on back to the start of that turn
 // so a turn isn't cut in two, unless its start is more than another page's worth back. `to`: start no later than this

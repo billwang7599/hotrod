@@ -209,6 +209,50 @@ describe('the deep_research tool', () => {
     expect(existsSync(join(t.garage, 'extensions', 'deep-research', 'runs', space))).toBe(true)
   })
 
+  it('shows its workers as subagents with the setting on: each report folds in the chat, without waking it', async () => {
+    const t = await core({ askFirst: false, depth: 'quick', showWorkers: true })
+    const space = t.create()
+    const outcome = await t.callTool(space, 'Greek letters?')
+    expect(outcome).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === space))
+    const reports = t.chat(space).entries.filter((e) => e.type === 'worker.report')
+    expect(reports).toHaveLength(2)
+    expect(reports[0]).toMatchObject({ quiet: true, text: expect.stringContaining('<findings>') })
+    // Logged for the user only: nothing queued, no turn of the space's agent.
+    expect(t.chat(space).queue).toEqual([])
+    expect(t.chat(space).entries.some((e) => e.type === 'turn.started')).toBe(false)
+    expect(t.chat(space).status).toBe('idle')
+  })
+
+  it('keeps its workers quiet with the setting on while Workers is off, and greys the setting out', async () => {
+    const t = await core({ askFirst: false, depth: 'quick', showWorkers: true })
+    t.handle({ type: 'extension.setEnabled', extensionId: 'workers', enabled: false })
+    const listed = t.messages.findLast((m) => m.type === 'extension.updated' && m.extension.id === 'deep-research')
+    expect(listed).toMatchObject({ extension: { blockedSettings: { showWorkers: 'Needs the Workers extension' }, values: { showWorkers: false } } })
+    const space = t.create()
+    expect(await t.callTool(space, 'Greek letters?')).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === space))
+    expect(t.chat(space).entries.some((e) => e.type === 'worker.report')).toBe(false)
+  })
+
+  it('carries on when Workers is turned off mid-run: workers already shown stay so, the rest are quiet', async () => {
+    const t = await core({ askFirst: false, depth: 'quick', showWorkers: true })
+    const space = t.create()
+    t.hold.workers = true
+    const done = t.callTool(space, 'Greek letters?')
+    await until(() => t.hold.releaseWorkers.length === 2)
+    t.handle({ type: 'extension.setEnabled', extensionId: 'workers', enabled: false })
+    for (const release of t.hold.releaseWorkers.splice(0)) release()
+    expect(await done).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === space))
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(2)
+    // The next run's workers are quiet.
+    t.hold.workers = false
+    expect(await t.callTool(space, 'Greek letters again?')).toMatchObject({ status: 'done' })
+    await until(() => !t.chats().some((c) => c.parentId === space))
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(2)
+  })
+
   it('shows the plan on the chat’s bar while its turn runs, and Start goes on', async () => {
     const t = await core({ depth: 'quick' })
     const space = t.create()

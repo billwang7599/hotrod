@@ -199,17 +199,20 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     const dir = join(deps.garage, 'extensions', extension.id)
     const chatStorageOf = (chat: C) => storageAt(chat.dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles)
     const host: ExtensionHost = {
-      createChat({ name, folders, files, engine, parentId, role, quiet }) {
+      createChat({ name, folders, files, engine, parentId, role, quiet, showReport }) {
         if (parentId === undefined) {
           if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
           if (quiet !== undefined) throw new Error('Only a child chat (with parentId) can be quiet')
+          if (showReport !== undefined) throw new Error('Only a quiet child chat can show its report')
           return deps.createChat({ name, folders, files, engine })
         }
-        const info = deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }) })
+        if (showReport === true && quiet !== true) throw new Error('Only a quiet child chat can show its report')
+        const shows = quiet === true && showReport === true
+        const info = deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }), ...(shows && { showReport }) })
         deps.activity.emit(String(parentId), () => ({
           kind: 'worker',
           by: extension,
-          title: `Started ${quiet === true ? 'a quiet worker' : 'a child chat'}: ${info.name}`,
+          title: `Started ${quiet === true ? (shows ? 'a quiet worker, shown in the chat' : 'a quiet worker') : 'a child chat'}: ${info.name}`,
           ...(role !== undefined && { detail: `On the ${role} model list` }),
         }))
         return info

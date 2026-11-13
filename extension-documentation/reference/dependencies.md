@@ -124,8 +124,8 @@ const research: Extension = {
       offered: () => true,
       run(input, { caller, values, host }) {
         // values.visible is already false while Workers is off.
-        const quiet = !(values.visible === true && host.extensionEnabled('workers'))
-        const { id } = host.createChat({ name: 'Look-up', parentId: caller.id, quiet })
+        const shown = values.visible === true && host.extensionEnabled('workers')
+        const { id } = host.createChat({ name: 'Look-up', parentId: caller.id, quiet: true, showReport: shown })
         host.send(id, String(input.question))
         return 'Started'
       },

@@ -82,7 +82,9 @@ export const readChat = (dir: string, fallback: ChatInfo, declared?: { name: str
 export const quitMidTurn = (entries: ChatEntry[]) => {
   const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
   const lastType = entries.at(-1)?.type
-  return lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'worker.report'
+  const last = entries.at(-1)
+  const lastReport = last?.type === 'worker.report' && last.quiet !== true
+  return lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastReport
 }
 
 export const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})

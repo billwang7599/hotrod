@@ -108,7 +108,8 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 export type ChatEntry = { at: string } & (
   // midTurn: sent while a turn ran, and taken in by it at this point (steering).
   | { type: 'user.message'; text: string; attachments?: Attachment[]; midTurn?: true }
-  | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string }
+  // quiet: a quiet child's report, logged for the user (NewChatSpec.showReport); it didn't start a turn.
+  | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string; quiet?: true }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
   // panel: clicking the note opens that panel of the extension's, then sends it action. card: drawn as a card.
@@ -259,6 +260,10 @@ export type NewChatSpec = {
   // extension reads it in onTurnCompleted (TurnSummary.text, for the child's chat), for children whose work it gathers
   // itself, such as research workers. It's still listed under its parent while it runs, and removed once it's done.
   quiet?: boolean
+  // Only with quiet: the child's final reply is also logged in its parent's transcript as a worker's report is (folded
+  // like any worker's, and in the parent's memory), so the user can read it, but it isn't queued for the parent's agent
+  // and doesn't wake it. For quiet workers the user may want to see, such as research workers.
+  showReport?: boolean
 }
 
 // Each extension gets a host of its own, so storage and notes know which extension they belong to.

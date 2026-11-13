@@ -430,6 +430,18 @@ describe('a wait as the turn ends', () => {
     expect(t.chat(space).status).toBe('idle')
     expect(t.chat(space).queue).toEqual([])
     expect(() => t.host().createChat({ name: 'Odd', quiet: true })).toThrow('Only a child chat (with parentId) can be quiet')
+    expect(() => t.host().createChat({ name: 'Odd', parentId: space, showReport: true })).toThrow('Only a quiet child chat can show its report')
+
+    // showReport: the reply is logged in the parent's transcript too, quietly, and still doesn't wake it.
+    const shown = t.host().createChat({ name: 'Shown', parentId: space, quiet: true, showReport: true })
+    t.host().send(shown.id, 'Task')
+    await until(() => !t.core.chats().some((c) => c.id === shown.id))
+    expect(replies).toEqual(['Quiet: Done', 'Shown: Done'])
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toEqual([
+      expect.objectContaining({ name: 'Shown', chatId: shown.id, text: 'Done', quiet: true }),
+    ])
+    expect(t.chat(space).status).toBe('idle')
+    expect(t.chat(space).queue).toEqual([])
   })
 })
 

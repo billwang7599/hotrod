@@ -107,4 +107,9 @@ describe('quitMidTurn', () => {
     expect(quitMidTurn([entry('user.message'), entry('turn.started'), entry('turn.completed')])).toBe(false)
     expect(quitMidTurn([entry('turn.started'), entry('session.ended')])).toBe(false)
   })
+
+  it('is false for a quiet worker’s report shown after the turn ended, which starts no turn', () => {
+    const shown = { at, type: 'worker.report', text: 'Found it', chatId: 'abc', name: 'Research', quiet: true } as ChatEntry
+    expect(quitMidTurn([entry('user.message'), entry('turn.started'), entry('turn.completed'), shown])).toBe(false)
+  })
 })

@@ -129,6 +129,10 @@ Here the review turn only sends again if it edited files.
 - With `quiet: true`, its final reply goes to your extension instead: read it in
   [`onTurnCompleted`](events.md) (`turn.text`, with `turn.chat` the child). The parent gets no report and isn't woken.
   Use it for children whose work you gather yourself, such as research workers. Use `quiet` only with `parentId`.
+- With `quiet: true` and `showReport: true`, the reply still goes to your extension, and is also logged in the parent's
+  transcript as a worker's report, folded like any other, so the user can read it. It's marked `quiet` in the log
+  (`worker.report` with `quiet: true`): it isn't queued for the parent's agent, doesn't wake it and starts no turn,
+  though the parent's memory includes it. Deep Research uses it for its "Show research workers as subagents" setting.
 - A child can't have children of its own, and its parent must not be archived.
 
 The host sets no limit on how many children run at once. Keep your own count.

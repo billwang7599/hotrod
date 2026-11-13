@@ -232,6 +232,9 @@ export type ChatInfo = PermissionSwitches & {
   parentMessages?: number
   // A child an extension made with quiet: its reply goes to the extension's onTurnCompleted, not its parent's queue.
   quiet?: true
+  // With quiet: its reply is also logged in its parent's transcript as a worker's report (quiet there too), for the
+  // user to read, without being queued for the parent's agent or waking it.
+  showReport?: true
   folders: string[]
   files: string[]
   // The engine the chat runs on. With `model` set, the two are the chat's own pick and stay put; without it, the core
