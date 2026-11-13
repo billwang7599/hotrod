@@ -35,6 +35,8 @@ export type ClientsDeps = {
   authProvider?: (server: ServerConfig) => unknown
   // A server's tool list changed (it said so, or Kothar listed it again).
   toolsChanged?: (serverId: string) => void
+  // A server's status changed (running, stopped, failed, …), for the Settings page to draw again.
+  statusChanged?: (serverId: string) => void
 }
 
 type Live = { client: Client; config: ServerConfig; closing: boolean; idle?: ReturnType<typeof setTimeout>; calls: number }
@@ -65,7 +67,10 @@ export function openClients(deps: ClientsDeps) {
   const lastCrash = new Map<string, number>()
 
   const statusOf = (id: string): Status => statuses.get(id) ?? { state: 'stopped', crashes: 0 }
-  const setStatus = (id: string, change: Partial<Status>) => statuses.set(id, { ...statusOf(id), ...change })
+  const setStatus = (id: string, change: Partial<Status>) => {
+    statuses.set(id, { ...statusOf(id), ...change })
+    deps.statusChanged?.(id)
+  }
   const hide = (text: string) => masked(text, store.secretValues())
   const record = (event: ActivityInput) =>
     deps.record({
@@ -78,8 +83,10 @@ export function openClients(deps: ClientsDeps) {
     })
 
   // What a server runs or reaches, as the user and the Activity see it (secrets masked by record).
+  // Words with spaces or quotes are quoted, as a shell would need them, so the command reads as it runs.
+  const quote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
   const describe = (server: ServerConfig) =>
-    server.transport === 'stdio' ? [server.command, ...(server.args ?? [])].join(' ') : `${server.transport.toUpperCase()} ${server.url}`
+    server.transport === 'stdio' ? [server.command!, ...(server.args ?? [])].map(quote).join(' ') : `${server.transport.toUpperCase()} ${server.url}`
 
   const transportOf = (server: ServerConfig) => {
     const secrets = store.secrets(server.id)

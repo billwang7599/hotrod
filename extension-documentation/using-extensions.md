@@ -39,6 +39,7 @@ The built-in extensions today:
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
 | Inspector | Yes | **See what was sent** on each of your messages, and a **Sent** tab: everything Kothar handed the engine for that turn, labelled. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
 | Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
+| MCP servers | Yes | Connect MCP servers (GitHub, Linear, Notion, a filesystem server, …) to your chats, on every engine. Kothar connects to them itself and offers their tools as its own, so keys never reach an engine and every call is asked for and recorded. Pick from a catalog or add your own in its page in Settings; switch one off for a chat in its MCP tab. See [MCP servers](#mcp-servers). |
 
 ### Where Memory keeps its summaries, and cleaning up
 
@@ -223,6 +224,38 @@ Engines retry short drops on their own. When a drop lasts longer, the turn ends 
   Kothar stops trying and the turn ends with its error, and you get a notification saying so.
 
 A Stop, a usage limit or any other error ends the turn as before.
+
+### MCP servers
+
+**Settings → Extensions → MCP servers** lists your servers and a catalog of popular ones: GitHub, Linear, Notion,
+Sentry, Atlassian, Figma, Stripe, Supabase, Vercel, Cloudflare Docs, Context7, Exa, Playwright, Filesystem, Fetch,
+Memory and Brave Search. Search it, pick one, and **Add**. **Add a custom server** takes a command to run on your Mac
+or the address of a remote server (Streamable HTTP, or SSE for an address ending in `/sse`).
+
+- **Kothar is the only MCP client.** Kothar starts or reaches each server itself, and offers its tools to the chat's
+  agent through Kothar's own MCP server, named `<server>__<tool>` (such as `github__create_issue`). Claude Code,
+  Codex, OpenCode and pi all get them the same way, and none of them is handed the server or its keys.
+- **Off until you turn it on.** A server runs nothing until you switch it on. A server that runs on your Mac shows the
+  exact command and who publishes it (**official**, or **community** for one its maker didn't publish) and asks before
+  it's turned on.
+- **Keys** (API keys and tokens) are kept in `extensions/mcp/secrets.json` in your garage, readable by you only. They're
+  never written to settings, never shown in full (only their last four characters) and never put in the Activity or the
+  Inspector: anything that holds one shows `[secret]`.
+- **Permissions.** Each call to a server's tool shows Kothar's permission card in the chat. A server's **⋯** menu can
+  let its read-only tools run without asking, or all its tools; the Activity records which rule answered. A read-only
+  turn (Plan) refuses tools that aren't marked read-only.
+- **Where it's on.** Each server is on for all spaces or the ones you tick in its **⋯** menu. A chat's **MCP** tab turns
+  one off for that chat alone. Changes count from the chat's next message, since the engine lists tools once per
+  message; a tool switched off is refused at once.
+- **Running.** A server starts the first time it's needed and stops after it's been idle a while (10 minutes; change it
+  on the page). If it crashes, the next call starts it again after a short pause; after 5 crashes in a row it stays
+  stopped until you press **Restart**. **Test connection** starts it, lists its tools and stops it.
+- **Activity.** The Inspector's Activity lists each server start, stop, crash and failure, and each tool call with its
+  server, input, result and time.
+- **Many tools cost tokens.** Every tool's description is sent with every message. Past 60 tools across your servers,
+  the page warns you; switch off what a space doesn't need.
+- **A remote catalog.** **Catalog address** adds a list in the same JSON format as the built-in one, read from an https
+  address.
 
 ### Browser: your profile, in the background
 

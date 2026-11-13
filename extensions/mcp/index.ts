@@ -5,9 +5,11 @@
 //
 // Which servers a chat gets: those switched on, on for its space (all spaces or chosen ones), and not switched off for
 // the chat. A change counts from the chat's next message, since each message's session lists its tools once.
-import type { ChatSummary, Extension, ExtensionContext, ExtensionHost, ExtensionTool, McpToolResult } from '@kothar/extension-api'
+import type { ChatDetail, ChatSummary, Extension, ExtensionContext, ExtensionHost, ExtensionTool, ExtensionView, McpToolResult } from '@kothar/extension-api'
+import { mergedCatalog, parseCatalog, type CatalogEntry } from './catalog.ts'
 import { openClients, type Clients } from './clients.ts'
 import { relayedName } from './names.ts'
+import { pageAction, renderPage, type PageState } from './settings-view.ts'
 import { openStore, type CachedTool, type ServerConfig, type Store } from './store.ts'
 
 export const EXTENSION_ID = 'mcp'
@@ -16,7 +18,7 @@ export const CHAT_OFF_FILE = 'servers-off.json'
 // What a permission request for a relayed tool is called, as the card shows it: MCP <server id>/<tool>.
 const REQUEST = /^MCP ([a-z0-9][a-z0-9_-]*)\/(.+)$/
 
-export type McpOptions = { shell?: string; sleep?: (ms: number) => Promise<void> }
+export type McpOptions = { shell?: string; sleep?: (ms: number) => Promise<void>; fetch?: typeof fetch }
 
 export type McpExtension = Extension & {
   state(): { store?: Store; clients?: Clients }
@@ -29,12 +31,17 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
   let store: Store | undefined
   let clients: Clients | undefined
   let values: ExtensionContext['values'] = {}
+  // What the Settings page shows between renders, and the remote catalog's entries once read.
+  const page: PageState = { query: '' }
+  let remote: CatalogEntry[] = []
+  let remoteFrom = ''
   // Servers being listed for the first time, so each starts once.
   const warming = new Set<string>()
 
   const open = (context: ExtensionContext) => {
     host = context.host
     values = context.values
+    void loadRemote(context.values)
     if (store) return
     store = openStore(context.host.storage.dir)
     clients = openClients({
@@ -45,8 +52,27 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
       shell: options.shell ?? process.env.SHELL ?? '/bin/zsh',
       ...(options.sleep && { sleep: options.sleep }),
       toolsChanged: () => host?.refresh(),
+      statusChanged: () => host?.refresh(),
     })
   }
+
+  // The remote catalog (the Catalog address setting), read once per address; a bad one adds nothing.
+  const loadRemote = async (settings: ExtensionContext['values']) => {
+    const address = String(settings.catalogUrl ?? '').trim()
+    if (address === remoteFrom) return
+    remoteFrom = address
+    remote = []
+    if (!/^https:\/\//.test(address)) return
+    try {
+      const response = await (options.fetch ?? fetch)(address, { signal: AbortSignal.timeout(15_000) })
+      if (response.ok) remote = parseCatalog(await response.text())
+    } catch {
+      // The bundled catalog still shows.
+    }
+    host?.refresh()
+  }
+  const catalog = () => mergedCatalog(remote)
+  const pageDeps = () => ({ store: store!, clients: clients!, catalog, host: host! })
 
   const spaceIdOf = (chatId: string) => {
     try {
@@ -72,6 +98,43 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
     const off = chatOff(chat)
     const spaceId = spaceIdOf(chat.id)
     return store.servers().filter((server) => server.enabled && onInSpace(server, spaceId) && !off.includes(server.id))
+  }
+
+  const setOff = (chatId: string, serverIds: string[]) =>
+    host?.chatStorage(chatId).write(CHAT_OFF_FILE, `${JSON.stringify([...new Set(serverIds)])}\n`)
+  // The servers on for the chat's space, whether or not the chat switched them off.
+  const serversInSpace = (chat: ChatSummary) => {
+    const spaceId = spaceIdOf(chat.id)
+    return store?.servers().filter((server) => server.enabled && onInSpace(server, spaceId)) ?? []
+  }
+  // The chat's MCP tab: each server on for its space, with a switch for this chat alone.
+  const chatTab = (chat: ChatDetail): ExtensionView => {
+    const off = chatOff(chat)
+    return {
+      type: 'stack',
+      children: [
+        {
+          type: 'list',
+          items: serversInSpace(chat).map((server) => {
+            const isOff = off.includes(server.id)
+            const status = clients!.status(server.id)
+            return {
+              key: server.id,
+              label: server.name,
+              dot: isOff ? ('faint' as const) : status.state === 'failed' ? ('error' as const) : status.state === 'needs-sign-in' ? ('warning' as const) : ('success' as const),
+              detail: isOff ? 'Off for this chat' : `${clients!.tools(server.id).length} tools${status.state === 'needs-sign-in' ? ' · needs sign-in' : status.state === 'failed' ? ' · failed' : ''}`,
+              button: isOff ? { label: 'Turn on here', action: { name: 'on', value: server.id } } : { label: 'Turn off here', action: { name: 'off', value: server.id } },
+            }
+          }),
+        },
+        {
+          type: 'text',
+          small: true,
+          tone: 'muted',
+          text: 'Counts from your next message; a tool switched off is refused at once. Add servers and keys in Settings → Extensions → MCP servers.',
+        },
+      ],
+    }
   }
 
   const deny = (text: string): McpToolResult => ({ content: [{ type: 'text', text }], isError: true })
@@ -115,17 +178,50 @@ export function createMcpExtension(options: McpOptions = {}): McpExtension {
         max: 240,
         integer: true,
       },
+      {
+        key: 'catalogUrl',
+        label: 'Catalog address',
+        description: 'An https address of a catalog in the same JSON format as the built-in one, added to it. Leave blank for the built-in catalog only.',
+        type: 'text',
+        default: '',
+      },
+    ],
+    settingsView: {
+      render(context) {
+        open(context)
+        return renderPage(page, pageDeps())
+      },
+      async onAction(action, context) {
+        open(context)
+        await pageAction(action, page, pageDeps())
+        context.host.refresh()
+      },
+    },
+    panels: [
+      {
+        id: 'servers',
+        title: 'MCP',
+        shown: (chat) => !!store && serversInSpace(chat).length > 0,
+        render: (chat) => chatTab(chat),
+        onAction(action, chat, context) {
+          open(context)
+          const id = String(action.value ?? '')
+          const off = offFor(chat.id)
+          if (action.name === 'off') setOff(chat.id, [...off, id])
+          if (action.name === 'on') setOff(chat.id, off.filter((other) => other !== id))
+          context.host.refresh(chat.id)
+        },
+      },
     ],
     state: () => ({ store, clients }),
-    setChatOff(chatId, serverIds) {
-      host?.chatStorage(chatId).write(CHAT_OFF_FILE, `${JSON.stringify([...new Set(serverIds)])}\n`)
-    },
+    setChatOff: (chatId, serverIds) => setOff(chatId, serverIds),
 
     onStart(context) {
       open(context)
     },
     onSettingsChanged(_changed, context) {
       values = context.values
+      void loadRemote(context.values)
     },
     async onStop() {
       await clients?.stopAll()
