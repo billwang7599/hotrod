@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,7 +11,7 @@ import { chromiumArgs, chromiumLauncher, freeProfile, type Launch, type Launcher
 import { CdpClient, Pages } from './client.ts'
 import { findBrowser } from './profiles.ts'
 import { serveEndpoints } from './endpoint.ts'
-import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL, NO_BROWSER, SHOW_TOOL } from './index.ts'
+import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL, NO_BROWSER, SHOW_TOOL, YOUR_CHROME } from './index.ts'
 import { BROWSER_TOOL_NAMES } from './tools.ts'
 import { type BrowserOps, SpaceBrowser } from './space-browser.ts'
 import { until as waitUntil } from '@kothar/core/test-wait'
@@ -170,13 +170,13 @@ it('has no browser before it starts, and drops the old picker settings when it m
   const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   expect(extension.tools!.find((t) => t.name === 'browser_open')!.offered(chat)).toBe(false)
   await expect(cdpUrl('a')).rejects.toThrow('isn’t running')
-  expect(extension.settings!.map((s) => s.key)).toEqual(['profile', 'profileFolder', 'askEachAction', 'idleMinutes'])
-  expect(extension.settingsVersion).toBe(2)
+  expect(extension.settings!.map((s) => s.key)).toEqual(['profile', 'askEachAction', 'idleMinutes'])
+  expect(extension.settingsVersion).toBe(3)
   const old = { browser: 'chrome', port: 9333, extensionToken: 'x', background: true, askEachAction: true }
   expect(extension.migrateSettings!(old, 0, {})).toEqual({ askEachAction: true })
   // The Browser picker (installed Chrome or the bundled Chromium) goes quietly.
   expect(extension.migrateSettings!({ engine: 'chromium', profile: 'kothar', idleMinutes: 5 }, 1, {})).toEqual({ profile: 'kothar', idleMinutes: 5 })
-  expect(extension.migrateSettings!({ profile: 'kothar' }, 2, {})).toEqual({ profile: 'kothar' })
+  expect(extension.migrateSettings!({ profile: 'kothar' }, 3, {})).toEqual({ profile: 'kothar' })
 })
 
 it('tells agents about snapshots, batching, closing tabs and handing the browser to the user', () => {
@@ -656,89 +656,33 @@ function fakeChrome() {
   return { places: { home, apps: [apps] }, executable, source: join(data, 'Default') }
 }
 
-it('runs a copy of the picked profile on that browser’s own app, copied again on each cold start only', async () => {
+it('runs no copies of the user’s profiles: a picked copy becomes Kothar’s own, and copies left from before go', async () => {
   const chrome = fakeChrome()
   const fakes = fakeBrowsers()
-  const { extension, cdpUrl, browsers } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, places: chrome.places, platform: 'darwin' })
+  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places, platform: 'darwin' })
+  // Only Kothar's own and the user's Chrome are offered, though the computer has a Chrome profile.
   const profile = extension.settings!.find((s) => s.key === 'profile')!
-  expect(profile.type === 'select' && profile.options).toEqual([
-    { value: 'kothar', label: 'Kothar’s own' },
-    { value: 'kothar-extension', label: 'Your Chrome (Kothar extension)' },
-    { value: 'chrome:Default', label: 'Chrome: Person 1 (me@example.com)' },
-    { value: 'folder', label: 'Other folder…' },
-  ])
+  expect(profile.type === 'select' && profile.options.map((o) => o.value)).toEqual(['kothar', YOUR_CHROME])
+  // A copy saved before is Kothar's own now, and the folder setting goes.
+  expect(extension.migrateSettings!({ profile: 'chrome:Default', profileFolder: '/x', idleMinutes: 5 }, 2, {})).toEqual({ profile: 'kothar', idleMinutes: 5 })
+  expect(extension.migrateSettings!({ profile: 'folder', engine: 'chromium' }, 1, {})).toEqual({ profile: 'kothar' })
+  expect(extension.migrateSettings!({ profile: YOUR_CHROME }, 2, {})).toEqual({ profile: YOUR_CHROME })
+  // Even unmigrated, a saved copy runs Kothar's own profile on the installed browser.
   const storage = tempDir('kothar-browser-extension-')
+  const copies = join(storage, 'mirrors', 'space', 'Default')
+  mkdirSync(copies, { recursive: true })
+  writeFileSync(join(copies, 'Cookies'), 'the user’s cookies')
   const h = fakeHost(storage)
   const values = { ...defaults, profile: 'chrome:Default' }
   await extension.onStart!({ values, host: h.host })
   cleanups.push(() => extension.onStop!({ values, host: h.host }))
-  // Nothing to install: it runs on the user's Chrome.
-  expect(await extension.setup!.check(run, values)).toEqual({ ready: true, message: 'Uses Chrome: Person 1 (me@example.com), in the background' })
-  const space = h.chat('space')
-  const endpoint = await cdpUrl(space.id)
-  await fetch(`${endpoint}/json/version/`)
-  const mirror = join(storage, 'mirrors', 'space')
-  expect(fakes.launched[0]!.launch).toEqual({ profile: mirror, headless: true, cold: true, executable: chrome.executable, keychain: 'real' })
-  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v1')
-
-  // A hand-off relaunches on the same copy, without copying again, so the agent's logins carry over.
-  writeFileSync(join(chrome.source, 'Cookies'), 'v2')
-  fakes.launched[0]!.cookies = [{ name: 'made', value: 'by-agent', domain: 'example.com', path: '/' }]
-  const show = extension.tools!.find((t) => t.name === SHOW_TOOL)!
-  const call = show.run({ reason: 'Look at the chart' }, { caller: space, values, host: h.host })
-  await until(() => h.waits.has('space'))
-  expect(h.waits.get('space')!.text).toBe('Browser: Look at the chart')
-  expect(h.notified).toEqual([{ chatId: 'space', title: 'An agent wants to show you something', body: 'Look at the chart' }])
-  expect(fakes.launched[1]!.launch).toMatchObject({ profile: mirror, headless: false, cold: false, keychain: 'real' })
-  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v1')
-  await extension.onWaitAction!(space, { button: 'done' }, { values, host: h.host })
-  expect(String(await call)).toContain('The user is done.')
-
-  // Closing for idleness keeps its cookies in memory; the next start copies the profile again, then adds back the
-  // cookies the copy doesn't have.
-  await browsers.get('space')!.stop(true)
-  await fetch(`${endpoint}/json/version/`)
-  const next = fakes.launched.at(-1)!
-  expect(next.launch).toMatchObject({ headless: true, cold: true })
-  expect(readFileSync(join(mirror, 'Default', 'Cookies'), 'utf8')).toBe('v2')
-  expect(next.cookies).toEqual([{ name: 'made', value: 'by-agent', domain: 'example.com', path: '/' }])
-
-  // Refresh logins now closes the background browser, with nothing carried, so the next browse starts on a new copy.
-  extension.settingsView!.onAction!({ name: 'refresh' }, { values, host: h.host })
-  await until(() => !next.alive)
-  await fetch(`${endpoint}/json/version/`)
-  expect(fakes.launched.at(-1)!.cookies).toEqual([])
-
-  // Picking Kothar's own profile again: the background browser closes, and the next starts on Kothar's profile.
-  const own = { ...values, profile: 'kothar' }
-  await extension.onSettingsChanged!({ key: 'profile', value: 'kothar', previous: 'chrome:Default' }, { values: own, host: h.host })
-  await until(() => !fakes.launched.at(-1)!.alive)
-  await fetch(`${endpoint}/json/version/`)
-  expect(fakes.launched.at(-1)!.launch).toEqual({ profile: join(storage, 'chrome-profiles', 'space'), headless: true, cold: true, executable: chrome.executable })
-
-  // The settings page says where logins come from, and that a missing folder can't be used.
+  expect(existsSync(join(storage, 'mirrors'))).toBe(false)
+  h.chat('space')
+  await fetch(`${await cdpUrl('space')}/json/version/`)
+  expect(fakes.launched[0]!.launch).toEqual({ profile: join(storage, 'chrome-profiles', 'space'), headless: true, cold: true, executable: chrome.executable })
   const view = JSON.stringify(extension.settingsView!.render({ values, host: h.host }))
-  expect(view).toContain('Logins from Chrome: Person 1 (me@example.com)')
-  expect(view).toContain('Google (Gmail, YouTube and the like) signs you out in a copy')
-  expect(view).toContain('Refresh logins now')
-  const broken = { ...values, profile: 'folder', profileFolder: join(chrome.places.home, 'nope') }
-  expect(JSON.stringify(extension.settingsView!.render({ values: broken, host: h.host }))).toContain('doesn\'t exist')
-})
-
-it('refuses to browse on a profile that can’t be used, and says where to fix it', async () => {
-  const chrome = fakeChrome()
-  const fakes = fakeBrowsers()
-  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places })
-  const h = fakeHost(tempDir('kothar-browser-extension-'))
-  const values = { ...defaults, profile: 'folder', profileFolder: '' }
-  await extension.onStart!({ values, host: h.host })
-  cleanups.push(() => extension.onStop!({ values, host: h.host }))
-  const space = h.chat('space')
-  const endpoint = await cdpUrl(space.id)
-  const answer = await fetch(`${endpoint}/json/version/`)
-  expect(answer.status).toBe(503)
-  expect(await answer.text()).toBe('No folder given: pick a profile in Settings → Extensions → Browser')
-  expect(fakes.launched).toEqual([])
+  expect(view).not.toContain('copy')
+  expect(view).not.toContain('Refresh logins')
 })
 
 it('shows and hides the space’s browser from the General tab and Processes, with no agent waiting', async () => {

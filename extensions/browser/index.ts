@@ -13,19 +13,7 @@ import type {
 import { chromiumLauncher, type Launcher } from './chromium.ts'
 import { serveEndpoints, type Endpoints } from './endpoint.ts'
 import { EXTENSION_DIR, NOT_CONNECTED, type Relay, type RelayOptions, startRelay } from './relay.ts'
-import {
-  type BrowserProfile,
-  defaultPlaces,
-  detectProfiles,
-  findBrowser,
-  FOLDER_PROFILE,
-  folderProfile,
-  KOTHAR_PROFILE,
-  mirrorProfile,
-  type Places,
-  profileLabel,
-  readMirror,
-} from './profiles.ts'
+import { defaultPlaces, findBrowser, KOTHAR_PROFILE, type Places } from './profiles.ts'
 import { type BrowserOps, type HandOffResult, SpaceBrowser } from './space-browser.ts'
 import { createBrowserTools } from './tools.ts'
 
@@ -33,8 +21,7 @@ import { createBrowserTools } from './tools.ts'
 // between messages, so its tabs and logins stay. By default it's the user's installed Google Chrome (else another
 // installed Chromium-family browser: Edge, Brave, Arc, Chromium) on a profile of Kothar's own per space, never the
 // user's own Chrome profile;
-// the user can pick one of their own browser profiles instead, which the agents' browser runs a copy of (profiles.ts),
-// never the profile itself or the user's running browser.
+// or, through the Kothar Chrome extension (relay.ts), the user's own Chrome, in a tab group per space.
 // Agents drive it with Kothar's own browser tools (tools.ts), over CDP through the extension's endpoint (endpoint.ts).
 // When a page needs the user, ask_user_in_browser hands the
 // browser over: the same profile opens in a window with the same tabs, the chat waits, and Done puts it back in the
@@ -75,51 +62,29 @@ export const SHOW_DESCRIPTION =
   `${HAND_OFF_TOOL} instead: this window is under automation, so Google and other sites may refuse to sign the user in ` +
   'there. Afterwards your earlier page references are gone: take a browser_snapshot first.'
 
-// Google ties a login to the profile it was made in, so a copied one comes up signed out.
-export const GOOGLE_COPY_NOTE =
-  'Google (Gmail, YouTube and the like) signs you out in a copy. For Google, pick Kothar’s own profile and use its ' +
-  'Sign in… button.'
-
-export const PROFILE_HINT =
-  'A copy of one of your profiles: its cookies, site storage and saved passwords, copied into a folder of Kothar’s ' +
-  'own each time a space’s browser starts, and run on that browser’s own app, which reads them with your Keychain. ' +
-  'Your browser and its profile are only ever read. Logins made in the agents’ browser last until the next copy; to ' +
-  'keep one, log in in your own browser. ' +
-  GOOGLE_COPY_NOTE
-
-export function profileSetting(found: BrowserProfile[]): ExtensionSetting {
-  return {
-    key: 'profile',
-    label: 'Profile',
-    description:
-      'Kothar’s own profile per space, your own Chrome through the Kothar extension, or a copy of one of your ' +
-      'profiles, so agents are logged in where you are.',
-    type: 'select',
-    options: [
-      { value: KOTHAR_PROFILE, label: 'Kothar’s own' },
-      { value: YOUR_CHROME, label: 'Your Chrome (Kothar extension)' },
-      ...found.map((profile) => ({ value: profile.key, label: profileLabel(profile) })),
-      { value: FOLDER_PROFILE, label: 'Other folder…' },
-    ],
-    default: KOTHAR_PROFILE,
-  }
-}
-
 // Agents in the user's own Chrome, in a tab group per space, through the Kothar Chrome extension (relay.ts).
 export const YOUR_CHROME = 'kothar-extension'
+
+export const PROFILE_HINT =
+  'Kothar’s own: a profile per space on your installed Chrome, apart from yours, that starts logged out; Sign in… ' +
+  'opens it in a plain window to log in, Google included. Your Chrome: agents work in your own Chrome, with your ' +
+  'logins, in a tab group per space, through the Kothar extension.'
+
+export const PROFILE_SETTING: ExtensionSetting = {
+  key: 'profile',
+  label: 'Profile',
+  description: 'Kothar’s own profile per space, or your own Chrome through the Kothar extension.',
+  type: 'select',
+  options: [
+    { value: KOTHAR_PROFILE, label: 'Kothar’s own' },
+    { value: YOUR_CHROME, label: 'Your Chrome (Kothar extension)' },
+  ],
+  default: KOTHAR_PROFILE,
+}
 
 export const YOUR_CHROME_INSTRUCTIONS =
   "The browser is the user's own Chrome: your tabs are in this space's blue Kothar tab group there, with the user's " +
   "logins, and you can't see or touch their other tabs. Close the tabs you opened when you're done."
-
-export const PROFILE_FOLDER_SETTING: ExtensionSetting = {
-  key: 'profileFolder',
-  label: 'Other profile folder',
-  description: 'Used when Profile is Other folder…, e.g. ~/Library/Application Support/Google/Chrome/Profile 2',
-  type: 'text',
-  default: '',
-  rows: 1,
-}
 
 export const NO_BROWSER =
   'No Chrome is installed. Install Google Chrome (google.com/chrome), or Edge, Brave, Arc or Chromium, and agents browse on it.'
@@ -167,8 +132,6 @@ export type BrowserExtensionOptions = {
   platform?: NodeJS.Platform
 }
 
-// Detected profiles are read again at most this often, when Settings asks for the picker's options.
-const DETECT_MS = 5000
 
 export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   let host: ExtensionHost | undefined
@@ -180,32 +143,12 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   let current: ExtensionValues = {}
   const places = options.places ?? defaultPlaces()
 
-  let detected: { at: number; profiles: BrowserProfile[] } | undefined
-  const profiles = () => {
-    if (!detected || Date.now() - detected.at > DETECT_MS) detected = { at: Date.now(), profiles: detectProfiles(places) }
-    return detected.profiles
-  }
-
-  // The profile the settings pick: Kothar's own, a copy of one of the user's, or why it can't be used.
-  type Choice =
-    | { kind: 'kothar' }
-    | { kind: 'extension' }
-    | { kind: 'copy'; label: string; dir: string; executable: string }
-    | { kind: 'error'; message: string }
-  const choiceOf = (values: ExtensionValues): Choice => {
-    const key = String(values.profile ?? KOTHAR_PROFILE)
-    if (key === KOTHAR_PROFILE) return { kind: 'kothar' }
-    if (key === YOUR_CHROME) return { kind: 'extension' }
-    if (key === FOLDER_PROFILE) {
-      const found = folderProfile(String(values.profileFolder ?? ''), places)
-      if (typeof found === 'string') return { kind: 'error', message: found }
-      return { kind: 'copy', label: `${found.app.name}: ${found.dir}`, dir: found.dir, executable: found.executable }
-    }
-    const found = profiles().find((p) => p.key === key)
-    if (!found) return { kind: 'error', message: 'That browser profile is gone' }
-    return { kind: 'copy', label: profileLabel(found), dir: found.dir, executable: found.executable }
-  }
-  const mirrorOf = (spaceId: string) => join(host!.storage.dir, 'mirrors', spaceId)
+  // The profile the settings pick: Kothar's own, or the user's Chrome through the extension. Anything else saved (a
+  // copy of one of the user's profiles, which Kothar no longer makes) is Kothar's own.
+  type Choice = { kind: 'kothar' } | { kind: 'extension' }
+  const choiceOf = (values: ExtensionValues): Choice => (values.profile === YOUR_CHROME ? { kind: 'extension' } : { kind: 'kothar' })
+  // Where copies of the user's profiles were kept, before; deleted when the extension starts.
+  const mirrors = () => join(host!.storage.dir, 'mirrors')
   // Each browser gets a folder of its own per space: a browser refuses a profile that a newer one (or another
   // browser) last opened. Chrome's, Beta's and Canary's are one, as Chrome's always was.
   const profileFolders = (spaceId: string) => [
@@ -220,26 +163,16 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   // What runs Kothar's own profile: the installed Chromium-family browser, Google Chrome first.
   const installed = () => findBrowser(places, options.platform)
 
-  // Launches a space's browser on the profile the settings pick now: Kothar's own, or a copy of the user's, made
-  // again from the source on each cold start, run on the source's own browser with the real Keychain.
+  // Launches a space's browser on Kothar's own profile for it, on the installed browser.
   const launcherOf = (spaceId: string): Launcher => {
     const launch = options.launch ? options.launch(host!) : chromiumLauncher(host!, findExecutable)
     return async (given) => {
       const choice = choiceOf(current)
-      const where =
-        choice.kind === 'kothar' ? `${installed()?.name ?? 'your browser'}, on Kothar’s profile for this space` : 'a copy of your browser profile'
-      activityOf(spaceId, `Launched the browser${given.cold ? '' : ' again'}`, `On ${where}`)
-      if (choice.kind === 'error') throw new Error(`${choice.message}: pick a profile in Settings → Extensions → Browser`)
+      activityOf(spaceId, `Launched the browser${given.cold ? '' : ' again'}`, `On ${installed()?.name ?? 'your browser'}, on Kothar’s profile for this space`)
       if (choice.kind === 'extension') throw new Error(NOT_CONNECTED)
-      if (choice.kind === 'kothar') {
-        const browser = installed()
-        if (!browser) throw new Error(NO_BROWSER)
-        return launch({ ...given, profile: profileOf(spaceId, browser.id), executable: browser.executable })
-      }
-      const mirror = mirrorOf(spaceId)
-      const copied = readMirror(mirror)
-      if (given.cold || !copied || copied.source !== choice.dir) mirrorProfile(choice.dir, mirror)
-      return launch({ ...given, profile: mirror, executable: choice.executable, keychain: 'real' })
+      const browser = installed()
+      if (!browser) throw new Error(NO_BROWSER)
+      return launch({ ...given, profile: profileOf(spaceId, browser.id), executable: browser.executable })
     }
   }
 
@@ -422,11 +355,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   }
 
   // Which browser and profile a space's browser runs, in words, for hints.
-  const runsOn = () => {
-    const choice = choiceOf(current)
-    if (choice.kind === 'copy') return `a copy of ${choice.label}`
-    return `${installed()?.name ?? 'your browser'}, on a profile of Kothar's own`
-  }
+  const runsOn = () => `${installed()?.name ?? 'your browser'}, on a profile of Kothar's own`
 
   const rowOf = (spaceId: string): ExtensionProcessRow[] => {
     const browser = browsers.get(spaceId)
@@ -548,11 +477,10 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
   })
 
-  // Settings → Extensions → Browser, below the settings: which profile agents get, and refreshing its copy.
+  // Settings → Extensions → Browser, below the settings: which profile agents get.
   const settingsView = (values: ExtensionValues): ExtensionView => {
     const choice = choiceOf(values)
     const children: ExtensionView[] = [{ type: 'heading', text: 'Profile', hint: PROFILE_HINT }]
-    if (choice.kind === 'error') children.push({ type: 'text', text: choice.message, tone: 'error' })
     if (choice.kind === 'extension') children.push(...extensionView())
     if (choice.kind === 'kothar') {
       const browser = installed()
@@ -561,57 +489,6 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
           ? { type: 'text', text: `${browser.name}, on a profile of Kothar’s own per space`, tone: 'muted' }
           : { type: 'text', text: NO_BROWSER, tone: 'warning' },
       )
-    }
-    if (choice.kind === 'copy') {
-      const copies = host ? join(host.storage.dir, 'mirrors') : undefined
-      const times = [...browsers.keys()].map((id) => readMirror(mirrorOf(id))?.copiedAt ?? 0).filter(Boolean)
-      const skipped = [...new Set([...browsers.keys()].flatMap((id) => readMirror(mirrorOf(id))?.skipped ?? []))]
-      children.push(
-        { type: 'text', text: `Logins from ${choice.label}` },
-        { type: 'text', text: GOOGLE_COPY_NOTE, small: true, tone: 'warning' },
-        { type: 'text', text: 'Read from', small: true, tone: 'faint' },
-        { type: 'text', text: choice.dir, mono: true, small: true, tone: 'muted', copy: true },
-      )
-      if (times.length) {
-        children.push({ type: 'text', text: `Last copied ${new Date(Math.max(...times)).toLocaleString()}`, small: true, tone: 'muted' })
-      }
-      if (skipped.length) {
-        children.push({
-          type: 'text',
-          text: `Left out of the copy (over 200 MB): ${skipped.join(', ')}`,
-          small: true,
-          tone: 'warning',
-        })
-      }
-      if (copies) {
-        children.push({ type: 'text', text: 'Copied into', small: true, tone: 'faint' })
-        children.push({
-          type: 'text',
-          text: copies,
-          mono: true,
-          small: true,
-          tone: 'faint',
-          copy: true,
-          hint: "Where each space's copy lives. It goes when the space is deleted.",
-        })
-      }
-      children.push({
-        type: 'row',
-        children: [
-          {
-            type: 'button',
-            label: 'Refresh logins now',
-            action: { name: 'refresh' },
-            hint:
-              'Closes the agents’ browsers that run in the background, so each copies your profile again when an ' +
-              'agent next browses. A window open for you is left until you’re done with it.',
-          },
-        ],
-      })
-    }
-    const others = profiles()
-    if (!others.length) {
-      children.push({ type: 'text', text: 'No Chrome, Brave, Edge, Arc or Chromium profiles found', small: true, tone: 'faint' })
     }
     return { type: 'stack', gap: 'tight', children }
   }
@@ -682,7 +559,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     name: 'Browser',
     description:
       'Agents browse the web in the background: no window opens or takes focus. They use your installed Google Chrome (or Edge, Brave, Arc or Chromium) ' +
-      'on a profile of Kothar’s own per space (Sign in… opens it for you to log in), your own Chrome through the Kothar extension (a blue tab group per space), or a copy of one of your Chrome, Brave, Edge or Arc profiles, so they’re logged in where you are. ' +
+      'on a profile of Kothar’s own per space (Sign in… opens it for you to log in), or your own Chrome through the Kothar extension (a blue tab group per space), with your logins. ' +
       'When a page needs you (a login, CAPTCHA, payment) or the agent wants to show you something, the browser opens ' +
       'in a window, and the agent carries on when you click Done.',
     enabledByDefault: false,
@@ -695,25 +572,27 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
         where: 'instructions',
       },
     ],
-    settingsVersion: 2,
+    settingsVersion: 3,
     // Version 0 had a picker of where the browser ran (your Chrome, a debugging port, the Playwright Extension, a
     // window, a copy of your Chrome's logins). There is one way now, so those settings go. Version 1 had a Browser
     // picker (installed Chrome or a bundled Chromium); Kothar now runs whatever Chromium-family browser is installed.
+    // Version 2 could run a copy of one of the user's profiles, or of a folder they named; Google signs out of a copy,
+    // so that choice goes, and saved copies become Kothar's own.
     migrateSettings(saved, from) {
-      if (from >= 2) return saved
-      const { engine: _engine, ...kept } = saved
-      if (from >= 1) return kept
+      if (from >= 3) return saved
+      const { engine: _engine, profileFolder: _folder, ...kept } = saved
+      const profile = kept.profile === YOUR_CHROME ? { profile: YOUR_CHROME } : kept.profile === undefined ? {} : { profile: KOTHAR_PROFILE }
+      if (from >= 1) return { ...kept, ...profile }
       const { browser: _browser, port: _port, extensionToken: _token, background: _background, ...rest } = kept
-      return rest
+      return { ...rest, ...profile }
     },
     get settings(): ExtensionSetting[] {
-      return [profileSetting(profiles()), PROFILE_FOLDER_SETTING, ...BASE_SETTINGS]
+      return [PROFILE_SETTING, ...BASE_SETTINGS]
     },
 
     settingsView: {
       render: ({ values }) => settingsView(values),
       onAction(action) {
-        if (action.name === 'refresh') restartBackground()
         if (action.name === 'repair') relay?.repair()
       },
     },
@@ -721,7 +600,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     onSettingsChanged({ key }, { values }) {
       current = values
       idleMs = Number(values.idleMinutes ?? 15) * 60_000
-      if (key === 'profile' || key === 'profileFolder') {
+      if (key === 'profile') {
         restartBackground()
         for (const spaceId of browsers.keys()) host?.processesChanged(spaceId)
         void syncRelay()
@@ -732,16 +611,13 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       description: (values) =>
         choiceOf(values).kind === 'extension'
           ? 'Agents use your own Chrome through the Kothar extension: load it and pair it below.'
-          : choiceOf(values).kind === 'copy'
-            ? 'Agents use your own browser’s app, on a copy of the profile you picked: nothing to install.'
-            : 'Agents use your installed Google Chrome (or Edge, Brave, Arc or Chromium), on a profile of Kothar’s own ' +
+          : 'Agents use your installed Google Chrome (or Edge, Brave, Arc or Chromium), on a profile of Kothar’s own ' +
               'per space: nothing to install.',
       async check(_run, values) {
         const choice = choiceOf(values)
         if (choice.kind === 'extension') {
           return { ready: true, message: relay?.connected ? 'Your Chrome is connected' : 'Your Chrome isn’t connected yet' }
         }
-        if (choice.kind === 'copy') return { ready: true, message: `Uses ${choice.label}, in the background` }
         const browser = installed()
         return browser ? { ready: true, message: `Uses ${browser.name}, in the background` } : { ready: false, message: NO_BROWSER }
       },
@@ -763,6 +639,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       current = values
       idleMs = Number(values.idleMinutes ?? 15) * 60_000
       endpoints ??= await serveEndpoints((spaceId) => browserOf(spaceId).endpoint())
+      // Copies of the user's profiles, cookies and all, that an older Kothar made: nothing uses them now.
+      rmSync(mirrors(), { recursive: true, force: true })
       await syncRelay()
     },
 
@@ -861,11 +739,11 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       if (archived && chat.parentId === undefined) void stopSpace(chat.id)
     },
 
-    // The space's profiles and its copy of the user's, logins with them, go with the space.
+    // The space's profiles, logins with them, go with the space, and a copy of the user's left from before.
     onChatRemoved(chat) {
       browserTools.forget(chat.id)
       if (chat.parentId !== undefined || !host) return
-      const folders = [...profileFolders(chat.id), mirrorOf(chat.id)]
+      const folders = [...profileFolders(chat.id), join(mirrors(), chat.id)]
       void Promise.resolve(stopSpace(chat.id)).finally(() => {
         for (const folder of folders) rmSync(folder, { recursive: true, force: true })
       })

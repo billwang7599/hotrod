@@ -134,7 +134,7 @@ Its manifest would list `events`, `accounts` and `sendMessages`.
 
 Browser gives agents a few browser tools of its own, which speak the Chrome DevTools Protocol to one headless browser
 per space that the extension itself runs: the user's installed Google Chrome (or Edge, Brave, Arc or Chromium) on a
-profile of its own, or a copy of one of the user's profiles on that browser's own app.
+profile of its own per space, or the user's own Chrome through a Chrome extension of Kothar's.
 Parts worth copying:
 
 - **Tools of its own instead of an MCP server.** `tools` lists `browser_open`, `browser_snapshot`, `browser_act`,
@@ -151,9 +151,10 @@ Parts worth copying:
   [`host.wait`](reference/host.md#waiting-for-the-user) with **Open browser** and **Done** buttons and waits.
   `onWaitAction` ends the hand-off, and the tool returns the tabs the browser reopens from the profile's saved session.
   `show_browser` relaunches in a window Kothar still reads over DevTools, for showing the user something.
-- **Settings that depend on the machine.** `settings` is a getter, so the Profile picker lists the browser profiles
-  installed now; `settingsView` adds a readout of where logins come from and a **Refresh logins now** button, and
-  `onSettingsChanged` closes the background browsers when the profile changes.
+- **Settings that depend on the machine.** `settingsView` says which installed browser runs Kothar's own profile (or
+  to install Chrome), or, for your own Chrome, the setup steps and pairing code; `onSettingsChanged` closes the
+  background browsers when the profile changes, and `migrateSettings` turns choices that no longer exist into ones
+  that do.
 - **Commands.** **Show browser**, **Sign in…** and **Hide browser** in the General tab, each `shown` only when it
   applies.
 - **A Processes row.** [`processes`](reference/host.md#processes-rows) lists the space's browser while it runs, with

@@ -1,24 +1,21 @@
-// Launches a Chromium (the user's installed Google Chrome or another Chromium-family browser, or the user's own browser
-// on a copy of their profile) on a profile of Kothar's own, headless or with a window, through the Machine (host.spawn),
-// and finds its DevTools endpoint, which the browser tools connect to. A plain launch has no DevTools at all: a window for the user to sign in, which sites can't tell from an
-// ordinary browser.
+// Launches a Chromium (the user's installed Google Chrome or another Chromium-family browser) on a profile of Kothar's
+// own, headless or with a window, through the Machine (host.spawn), and finds its DevTools endpoint, which the browser
+// tools connect to. A plain launch has no DevTools at all: a window for the user to sign in, which sites can't tell
+// from an ordinary browser.
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExtensionHost, ExtensionProcess } from '@kothar/extension-api'
 import { closeBrowser } from './cdp.ts'
 import { chromiumMajor, windowUserAgent } from './profiles.ts'
 
-// executable: the browser to run, if not the launcher's own (a copy of a user's profile runs on its browser's binary).
-// keychain 'real': cookies and passwords are encrypted with the browser's key in the macOS Keychain, as the user's own
-// browser does, so a copy of a user's profile reads; otherwise a mock keychain keeps macOS from asking. userAgent: sent
-// instead of headless Chrome's own. cold: a start from nothing, not a relaunch for a hand-off (a copied profile is
-// copied again then). plain: a window with no remote debugging, for signing in (headless is ignored); urls: the tabs
-// it opens on. restoreSession: opens the tabs the profile's last browser had, as a plain window leaves them.
+// executable: the browser to run, if not the launcher's own (the installed one Kothar found). userAgent: sent instead
+// of headless Chrome's own. cold: a start from nothing, not a relaunch for a hand-off. plain: a window with no remote
+// debugging, for signing in (headless is ignored); urls: the tabs it opens on. restoreSession: opens the tabs the
+// profile's last browser had, as a plain window leaves them.
 export type Launch = {
   profile: string
   headless: boolean
   executable?: string
-  keychain?: 'mock' | 'real'
   userAgent?: string
   cold?: boolean
   plain?: boolean
@@ -41,9 +38,8 @@ const QUIT_MS = 5_000
 export const PLAIN_QUIT_MS = 20_000
 const POLL_MS = 50
 
-// The flags Kothar's browser runs with. The keychain flags are the same in both modes, so cookies one mode saves the
-// other can read: on Kothar's own profile the mock keychain and basic password store keep macOS from asking for the
-// Keychain; a copy of a user's profile needs the real one. The disk cache stays in the profile (macOS Chromium
+// The flags Kothar's browser runs with. The keychain flags are the same in every mode, so cookies one mode saves the
+// others can read: the mock keychain and basic password store keep macOS from asking for the Keychain. The disk cache stays in the profile (macOS Chromium
 // otherwise puts it in ~/Library/Caches), so it goes with the profile. Never --enable-automation. Headless, also
 // AutomationControlled off, so pages don't see navigator.webdriver (headless Chrome sets it otherwise): sites such as
 // Google's sign-in refuse a browser that says it's automated. A window doesn't set navigator.webdriver without
@@ -52,7 +48,7 @@ const POLL_MS = 50
 // Chrome the user opens themselves: only the profile, its keychain (so the cookies it saves read in the other modes) and
 // no first-run pages. It keeps sync on, as Chrome's own sign-in (Sign in to Chrome) finishes through sync.
 export function chromiumArgs(launch: Launch): string[] {
-  const { profile, keychain, userAgent, plain } = launch
+  const { profile, userAgent, plain } = launch
   const headless = launch.headless && !plain
   return [
     `--user-data-dir=${profile}`,
@@ -61,7 +57,8 @@ export function chromiumArgs(launch: Launch): string[] {
     ...(headless ? ['--disable-blink-features=AutomationControlled'] : []),
     '--no-first-run',
     '--no-default-browser-check',
-    ...(keychain === 'real' ? [] : ['--use-mock-keychain', '--password-store=basic']),
+    '--use-mock-keychain',
+    '--password-store=basic',
     '--hide-crash-restore-bubble',
     ...(plain ? [] : ['--disable-sync', '--disable-features=Translate,MediaRouter']),
     ...(headless ? ['--headless', '--hide-scrollbars', '--mute-audio'] : []),

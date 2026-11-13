@@ -29,7 +29,7 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web in the background with Kothar's own browser tools, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
+| Browser | No | Agents browse the web in the background with Kothar's own browser tools, one browser per space, on a profile of Kothar's own or in your own Chrome through the Kothar extension. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
@@ -280,9 +280,10 @@ Kothar's attached, on the agent's tabs. Sign in, then click **Done** (or quit th
 browser goes on in the background on the same profile, signed in, with the tabs the window had. Kothar can't see into
 that window, so closing its last window doesn't end it on macOS; Done or quitting does.
 
-**Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
-space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
-have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
+**Which profile.** Settings → Extensions → Browser → **Profile** offers **Kothar's own** (the default: a profile per
+space that starts logged out; **Sign in…** logs it in) and **Your Chrome (Kothar extension)**. Kothar never copies
+your own browser profiles: Google signs you out in a copy. A copy picked in an older Kothar becomes Kothar's own, and
+the copies it made (`<data folder>/extensions/browser/mirrors/`) are deleted when the extension starts.
 
 **Your own Chrome.** Pick **Your Chrome (Kothar extension)** in **Profile** and agents browse in the Chrome you use
 every day, with your logins, Google included, and nothing copied. No browser of Kothar's starts. Setting it up once:
@@ -304,24 +305,6 @@ The extension talks only to Kothar on `127.0.0.1`. It has to present the pairing
 from the extension itself, so web pages can't connect. **New code** on the settings page makes a new code and
 disconnects the extension until you paste the new one. If Kothar isn't running, or the extension isn't paired, an
 agent's browser calls say so, and it asks you instead.
-
-**How your profile is used.** Never in place: your browser keeps running untouched, and its profile folder is only
-read. When a space's browser starts, Kothar copies the profile's login state into a folder of its own
-(`<data folder>/extensions/browser/mirrors/<space>/`) and runs that browser's own app on the copy:
-
-- Copied: cookies, site storage (Local Storage, IndexedDB, Session Storage) and saved passwords and autofill (Login
-  Data, Web Data). A single site's IndexedDB over 200 MB is left out, and the settings page says which.
-- Not copied: history, bookmarks, extensions, open tabs, and the browser's own settings and sign-in (Preferences), so
-  the agents' browser doesn't open your startup pages or sync.
-- On macOS your browser encrypts cookies and passwords with a key in your login Keychain ("Chrome Safe Storage" and
-  the like) that only its own app may read without asking. Running the copy on that same app reads it with no prompt.
-  A copy run on any other browser would see no cookies, so a folder must belong to an installed browser.
-- The copy is made again each time a space's browser starts from closed (on its first browse, after it closed for
-  being idle, or after **Refresh logins now**). A hand-off to you in a window keeps the copy it's on. Logins made only
-  in the agents' browser are kept in memory across an idle close, and go when Kothar quits; to keep one, log in in your
-  own browser.
-- Each space's copy goes when the space is deleted. **Refresh logins now** closes the browsers running in the
-  background, so the next browse takes a fresh copy.
 
 **In the background.** Agents' browsers run headless: no window, no Dock icon, and they never take focus, so you can
 keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away, and they
