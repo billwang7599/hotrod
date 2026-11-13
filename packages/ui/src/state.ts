@@ -24,6 +24,7 @@ import type {
   ModelLists,
   Run,
   Setup,
+  WorkersSettings,
   ExtensionInfo,
   PanelTab,
   QueuedMessage,
@@ -113,6 +114,8 @@ export type State = {
   extensions: ExtensionInfo[]
   modelLists: ModelLists
   setups: Setup[]
+  // Settings → Workers; absent until the core's snapshot arrives.
+  workers?: WorkersSettings
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
@@ -463,6 +466,7 @@ function reduceAll(state: State, action: Action): State {
         extensions: action.extensions,
         modelLists: action.modelLists,
         setups: action.setups ?? [],
+        workers: action.workers,
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
@@ -591,6 +595,8 @@ function reduceAll(state: State, action: Action): State {
     }
     case 'memory.updated':
       return state
+    case 'workers.updated':
+      return { ...state, workers: action.workers }
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
     case 'themes.updated':

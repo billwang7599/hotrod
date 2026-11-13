@@ -371,6 +371,7 @@ function App() {
               modelLists={state.modelLists}
               setups={state.setups}
               setupSave={state.setupSave}
+              workers={state.workers}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}

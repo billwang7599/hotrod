@@ -145,7 +145,7 @@ export function summaryOf(setup: Setup, engines: EngineInfo[], extensions: Exten
   const parts = [
     model ? `${model} · ${engineName(engine) || setup.engine}` : setup.engine && `${engineName(engine) || setup.engine}'s default model`,
     setup.thinking && `${THINKING_LABELS[setup.thinking]} thinking`,
-    off.length > 0 && `Without ${off.join(', ')}`,
+    (off.length > 0 || setup.workers === false) && `Without ${[...(setup.workers === false ? ['workers'] : []), ...off].join(', ')}`,
     setup.instructions && 'Instructions',
   ].filter(Boolean)
   return parts.length ? parts.join(' · ') : 'Follows Settings'
@@ -170,6 +170,7 @@ function SetupForm({ draft, taken, engines, extensions, connected, saving, refus
   const [model, setModel] = useState(draft.model)
   const [thinking, setThinking] = useState(draft.thinking)
   const [off, setOff] = useState(draft.extensionsOff ?? [])
+  const [workers, setWorkers] = useState(draft.workers !== false)
   const [instructions, setInstructions] = useState(draft.instructions ?? '')
   const choices = modelChoices(engines)
   const modelValue = model !== undefined && engine ? modelKey({ engine, model }) : engine ? `${MODELS_OWN}${engine}` : LISTS
@@ -207,6 +208,7 @@ function SetupForm({ draft, taken, engines, extensions, connected, saving, refus
       ...(engine && model !== undefined && { model }),
       ...(thinking && { thinking }),
       ...(off.length && { extensionsOff: off }),
+      ...(!workers && { workers: false as const }),
       ...(instructions.trim() && { instructions }),
     })
   }
@@ -254,6 +256,12 @@ function SetupForm({ draft, taken, engines, extensions, connected, saving, refus
             onChange={(value) => setThinking(value === LISTS ? undefined : (value as ThinkingLevel))}
           />
         </div>
+      </div>
+      <div className="flex items-center justify-between gap-8">
+        <Hint text="Off: this setup's chats can't start workers themselves (no spawn_worker). Extensions can still start workers for their own work.">
+          <span className={workers ? '' : 'text-muted'}>Agents start workers</span>
+        </Hint>
+        <Switch label="Agents start workers in this setup" checked={workers} disabled={!connected} onChange={setWorkers} />
       </div>
       {listed.length > 0 && (
         <fieldset className="flex flex-col gap-4">

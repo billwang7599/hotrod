@@ -12,6 +12,7 @@ import {
   type ModelLists,
   type ExtensionInfo,
   type SetupState,
+  type WorkersSettings,
   type WorkFolder,
 } from '@kothar/core/shared'
 import type { ExtensionSetting } from '@kothar/extension-api'
@@ -98,7 +99,7 @@ test('shows a refusal that arrives after choosing, and picks with the desktop pi
   expect(sent.at(-1)).toEqual({ type: 'workFolder.set', path: '/picked' })
 })
 
-function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
+function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = [], more: { page?: SettingsPage; workers?: WorkersSettings } = {}) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -106,7 +107,8 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
           <Tooltip.Provider>
             <SettingsDialog
               open
-              page="work"
+              page={more.page ?? 'work'}
+              workers={more.workers}
               openPage={() => {}}
               close={() => {}}
               engines={[]}
@@ -126,6 +128,27 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
   )
   return sent
 }
+
+test('Settings → Workers: agents’ switch, the limit for every child, and the instructions as an editable prompt', () => {
+  const workers: WorkersSettings = {
+    start: true,
+    limit: 4,
+    instructions: { id: 'instructions', label: 'When to start workers', where: 'instructions', default: 'Delegate.', text: 'Delegate.' },
+  }
+  const sent = renderSettings(workFolder, [], { page: 'workers', workers })
+  expect([...dialog().querySelectorAll('h2')].map((h) => h.textContent)).toContain('Workers')
+  expect(dialog().querySelector('#prompt-workers-instructions')).not.toBeNull()
+  act(() => dialog().querySelector<HTMLButtonElement>('button[aria-label="Let agents start workers"]')!.click())
+  const limit = dialog().querySelector<HTMLInputElement>('input[aria-label="Max running per chat"]')!
+  type(limit, '2')
+  act(() => limit.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(sent).toEqual([
+    { type: 'workers.set', start: false },
+    { type: 'workers.set', limit: 2 },
+  ])
+  // Not an extension any more: it isn't on the extensions page.
+  expect([...dialog().querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toContain('Workers')
+})
 
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
   expect(PERMISSION_SWITCHES).toContain('autoFetch')

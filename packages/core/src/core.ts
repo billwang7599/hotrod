@@ -8,7 +8,7 @@ import { openChatSetups, openSetups } from './setups.ts'
 import { openChatLifecycle } from './chat-lifecycle.ts'
 import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
-import { WORKERS_EXTENSION, workersFor } from './workers.ts'
+import { agentStartsWorkers, openWorkers, workerInstructionsFor } from './workers.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
@@ -133,7 +133,7 @@ function assembleCore(options: {
   }
   checkEngine(defaultEngine)
   const { extensions, extensionChats, builtInIds, community, imported, reinstalled } = gatherExtensions(
-    [...(options.extensions ?? []), WORKERS_EXTENSION],
+    options.extensions ?? [],
     options.community ?? [],
   )
   const marketplace = openMarketplace({
@@ -273,6 +273,8 @@ function assembleCore(options: {
       setEngine: (chat, engine) => updateChat(chat, { engine }),
       showRun: (chat) => broadcast({ type: 'chat.updated', chat: withRun(chat) }),
     })
+  // Settings → Workers: part of the core (workers.ts).
+  const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
   const prompts = openPrompts({
     settings,
     saveSettings,
@@ -566,8 +568,7 @@ function assembleCore(options: {
       }
     },
     roleOwnerOf: (chat) => extensionChatOf(chat)?.extension.id,
-    isOnFor,
-    valuesOf: extensionValues,
+    workerInstructions: (chat) => workerInstructionsFor(chat, workers, setupOf(chat)),
     detailOf: (chat) => detailOf(chat),
     memoryExtension,
     watchersOf: (hook, chat) => watchersOf(hook, chat),
@@ -591,6 +592,7 @@ function assembleCore(options: {
     stopSession,
     whenAllStopped,
     requestPermission,
+    startWaitingWorkers,
   } = openTurns({
     garage,
     home,
@@ -637,6 +639,7 @@ function assembleCore(options: {
     instructionPartsOf,
     turnSent: (chat, input) => turnSent(chat, input),
     activity,
+    workerLimit: () => workers.limit(),
   })
 
   const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf } = openExtensionHosts<Chat>({
@@ -900,7 +903,10 @@ function assembleCore(options: {
       return idle ? 'sent' : steers ? 'steered' : 'queued'
     },
     stop: (chatId) => interrupt(chatFor(chatId), false),
-    workers: (chatId?: string) => workersFor(chatId === undefined ? undefined : chats.get(chatId), { isOnFor, extensionInfo }),
+    workers: (chatId: string) => {
+      const chat = chats.get(chatId)
+      return { enabled: !!chat && agentStartsWorkers(chat, workers, setupOf(chat)), limit: workers.limit() }
+    },
     extensionTools: (chatId: string) =>
       extensions
         .filter((extension) => isOnFor(extension, chats.get(chatId)))
@@ -970,6 +976,7 @@ function assembleCore(options: {
     setPermissionDefault,
     setTerminal,
     setMemory,
+    workers,
     models,
     followModels,
     saveSetup,
@@ -1045,6 +1052,7 @@ function assembleCore(options: {
     modelLists: models.lists,
     setups: jobSetups.list,
     memory: () => settings.memory ?? {},
+    workers: workers.info,
     chats: () => shownChats().map(shownState),
     workFolder,
     setWorkFolder,

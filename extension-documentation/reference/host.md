@@ -118,7 +118,8 @@ Here the review turn only sends again if it edited files.
 
 ### Child chats
 
-`createChat` with `parentId` makes a child of that chat, exactly as the built-in Workers extension makes a worker:
+`createChat` with `parentId` makes a worker below that chat, exactly as `spawn_worker` does. Workers are part of Kothar,
+so this needs no other extension:
 
 - It's listed under its parent, and it's view only: you can watch it and stop it, not write to it.
 - It works in its space's work folder and checkouts, so it takes no `folders` or `files` of its own.
@@ -135,7 +136,11 @@ Here the review turn only sends again if it edited files.
   though the parent's memory includes it. Deep Research uses it for its "Show research workers as subagents" setting.
 - A child can't have children of its own, and its parent must not be archived.
 
-The host sets no limit on how many children run at once. Keep your own count.
+Every running child counts toward **Settings → Workers → Max running per chat**, the same limit `spawn_worker` keeps,
+whether it's quiet or not and whichever extension started it. A child started while its parent is at the limit isn't
+refused: the message you `send` it waits in its queue, and it starts as soon as one of the parent's workers is done (the
+parent's Activity says so). So start as many as your work needs; don't keep your own count. The user's **Let agents
+start workers** switch only concerns `spawn_worker`; your extension can start workers either way.
 
 ```ts
 import type { ExtensionHost } from '@kothar/extension-api'

@@ -34,7 +34,6 @@ export const CHIP_TEXT = [
   'normally instead.',
 ].join('\n')
 const TOGGLE = 'research'
-const WORKERS = 'workers'
 const PANEL = 'research'
 const REPORT = 'report'
 const NEW = 'new'
@@ -122,9 +121,9 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       const role = values.workerRole === 'workers' || values.workerRole === 'planning' || values.workerRole === 'chat' ? values.workerRole : 'searching'
       let chatId: string
       try {
-        // Shown as subagents only while the setting is on and Workers runs (the setting reads off without it). One
-        // turned off mid-run leaves the workers already started as they were and makes the rest quiet.
-        const shown = values.showWorkers === true && h.extensionEnabled(WORKERS)
+        // Workers are part of Kothar, so this needs nothing else: a child chat counts toward Settings → Workers' limit,
+        // and one over it waits for a slot. The setting is read as each worker starts, so a change applies mid-run.
+        const shown = values.showWorkers === true
         chatId = h.createChat({ name: label, parentId: run.spaceId, role, quiet: true, ...(shown && { showReport: true }) }).id
       } catch (error) {
         return resolve({ reply: '', error: error instanceof Error ? error.message : String(error) })
@@ -453,8 +452,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
     name: 'Deep Research',
     description: 'Long, multi-source research that ends in a cited report. Workers search and read the web; every claim in the report is backed by a quote Kothar found on its page.',
     enabledByDefault: true,
-    // Its workers can show as subagents while Workers is on (the showWorkers setting).
-    optionalDependencies: [WORKERS],
     prompts: [
       {
         id: 'chip',
@@ -536,7 +533,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         description: 'Each worker’s report shows in the chat, folded, like any worker’s. Off: they work quietly and only the report shows.',
         type: 'boolean',
         default: false,
-        requires: WORKERS,
       },
     ],
     composerToggles: [
@@ -597,10 +593,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       }
     },
     onSettingsChanged(_changed, context) {
-      values = context.values
-    },
-    // Workers turned off: showWorkers now reads off, so the rest of a run's workers are quiet.
-    onDependencyChanged(_change, context) {
       values = context.values
     },
     onStop() {

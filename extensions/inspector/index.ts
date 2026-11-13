@@ -160,6 +160,9 @@ function sectionView(section: StoredSection, text: (hash: string) => string, ope
   const children: ExtensionView[] = [
     body ? { type: 'code', text: body, maxLines: 40 } : { type: 'text', text: '(empty)', tone: 'faint', small: true },
   ]
+  if (!section.extension && section.settings) {
+    children.push({ type: 'row', children: [{ type: 'link', text: 'Edit in Settings', url: `kothar:settings/${section.settings}` }] })
+  }
   if (section.extension && section.editable) {
     const prompts = section.prompts ?? []
     children.push({

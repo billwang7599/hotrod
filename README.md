@@ -65,7 +65,9 @@ What works today:
 - **Spaces:** a folder becomes a space whose lead agent streams its replies, tool calls and permission requests. Chats
   survive a restart.
 - **Home:** a personal assistant that sees every space and can make new ones.
-- **Workers:** a lead can hand tasks to workers that run beside it.
+- **Workers:** a lead can hand tasks to workers that run beside it, and extensions start them for their own work. They're
+  part of Kothar, not an extension: Settings → Workers sets whether agents may start them, how many one chat runs at
+  once (every worker counts, an extension's too; more wait for a slot), and the instructions agents get about them.
 - **Memory:** every chat has its own.
 - **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
 - **Folder modes:** each attached folder that isn't a git repo has a mode, picked in the Context panel. **Edit in

@@ -33,7 +33,7 @@ export type ExtensionSettingsDeps = {
   updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
   /** The extension's prompts as its page shows them. */
   promptsOf: (extension: Extension) => PromptInfo[]
-  /** Why something that requires the extension with this id can't be used now ("Needs the Workers extension"), or
+  /** Why something that requires the extension with this id can't be used now ("Needs the Browser extension"), or
    * undefined while that extension runs. */
   needs: (id: string) => string | undefined
   /** An extension's own switch, apart from whether what it requires is on. */

@@ -92,13 +92,12 @@ describe('optionalDependencies', () => {
     expect(heard).toEqual([])
   })
 
-  it('knows the Workers extension as "workers", and an unknown id as off', async () => {
+  it('knows an unknown id as off; workers are the core’s, not an extension', async () => {
     let host: ExtensionHost | undefined
-    const t = await start([base('main', { onStart: (context) => void (host = context.host) })])
+    await start([base('main', { onStart: (context) => void (host = context.host) })])
     await until(() => host !== undefined)
-    expect(host!.extensionEnabled('workers')).toBe(true)
+    expect(host!.extensionEnabled('main')).toBe(true)
     expect(host!.extensionEnabled('no-such-extension')).toBe(false)
-    t.setEnabled('workers', false)
     expect(host!.extensionEnabled('workers')).toBe(false)
   })
 

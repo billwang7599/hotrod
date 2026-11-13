@@ -67,6 +67,8 @@ describe('sections of what is sent', () => {
     }
     const sections = instructionSections(parts)
     expect(sections.map((s) => s.text).join('\n\n')).toBe(buildInstructions(parts))
+    // The workers' instructions are the core's, edited in Settings → Workers.
+    expect(sections.find((s) => s.text === 'WORKERS')?.settings).toBe('workers#prompt-workers-instructions')
     expect(sections.map((s) => [s.source, s.label, s.extension])).toEqual([
       ['extension', 'Role of this chat', 'home'],
       ['core', 'Where you can write', undefined],
@@ -74,7 +76,7 @@ describe('sections of what is sent', () => {
       ['core', 'Folder modes', undefined],
       ['extension', 'Instructions', 'one'],
       ['extension', 'Instructions', 'two'],
-      ['extension', 'When to start workers', 'workers'],
+      ['core', 'Workers: when to start workers', undefined],
       ['extension', 'How to read the memory', 'memory'],
       ['core', "Parent chat's memory at launch", undefined],
       ['context', 'Setup "Review"', undefined],

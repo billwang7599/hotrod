@@ -254,6 +254,20 @@ describe('setups', () => {
     expect(await t.toolsIn(plain)).toContain('test_tool')
   })
 
+  it('keep their chats from starting workers with workers: false, and read an older setup that left Workers out', async () => {
+    const t = await start({ tools: true })
+    const plain = t.create('Plain')
+    const solo = t.create('Solo')
+    expect(t.save({ name: 'Solo', workers: false })).toMatchObject({ workers: false })
+    t.handle({ type: 'chat.setSetup', chatId: solo, setup: 'Solo' })
+    expect(await t.toolsIn(solo)).not.toContain('spawn_worker')
+    expect(t.sessions.at(-1)!.instructions).not.toContain('spawn_worker')
+    expect(await t.toolsIn(plain)).toContain('spawn_worker')
+    // Workers were an extension: a setup saved then with them in extensionsOff now says workers: false.
+    writeFileSync(join(t.garage, 'setups', 'old.json'), JSON.stringify({ name: 'Old', extensionsOff: ['workers', 'test'] }))
+    expect(t.core.setups().find((s) => s.id === 'old')).toEqual({ id: 'old', name: 'Old', extensionsOff: ['test'], workers: false })
+  })
+
   it("never leave an extension out of its own chat, whose role needs its tools", async () => {
     const t = await start({ tools: true })
     t.save({ name: 'Quiet', extensionsOff: ['test'] })

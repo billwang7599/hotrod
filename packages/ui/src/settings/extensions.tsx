@@ -282,7 +282,7 @@ function PromptsSection({ extension, connected, send }: SetupProps) {
 
 export const promptAnchor = (extension: string, prompt: string) => `prompt-${extension}-${prompt.replace(/[^a-z0-9-]/gi, '-')}`
 
-function PromptRow({ prompt, anchor, disabled, save }: { prompt: PromptInfo; anchor: string; disabled: boolean; save: (text?: string) => void }) {
+export function PromptRow({ prompt, anchor, disabled, save }: { prompt: PromptInfo; anchor: string; disabled: boolean; save: (text?: string) => void }) {
   const [draft, setDraft] = useState(prompt.text)
   const [was, setWas] = useState(prompt.text)
   if (prompt.text !== was) {
@@ -343,7 +343,7 @@ type ExtensionSettingProps = {
   save: (value: string | number | boolean) => void
 }
 
-// Why an extension, or one of its settings, can't be used now, such as "Needs the Workers extension".
+// Why an extension, or one of its settings, can't be used now, such as "Needs the Browser extension".
 function BlockedLine({ text }: { text: string }) {
   return (
     <span className="block text-faint" data-testid="extension-blocked">
@@ -352,7 +352,7 @@ function BlockedLine({ text }: { text: string }) {
   )
 }
 
-function ExtensionSettingRow({ setting, value, disabled, blocked, save }: ExtensionSettingProps) {
+export function ExtensionSettingRow({ setting, value, disabled, blocked, save }: ExtensionSettingProps) {
   const [draft, setDraft] = useState(String(value))
   const [was, setWas] = useState(value)
   if (value !== was) {

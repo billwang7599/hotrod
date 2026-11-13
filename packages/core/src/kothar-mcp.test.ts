@@ -378,7 +378,7 @@ describe('Kothar MCP server', () => {
       )
       expect(await tool(grant('aaaa0001'), 'spawn_worker', { task: 'One more' })).toEqual({
         isError: true,
-        text: `This chat already has ${limit} workers running; the limit is ${limit}`,
+        text: expect.stringContaining(`This chat already has ${limit} workers running (yours and any its extensions started); the limit is ${limit}.`),
       })
       expect(calls).toEqual([])
       chats.find((c) => c.id === 's3')!.status = 'idle'

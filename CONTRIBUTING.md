@@ -88,7 +88,7 @@ Use the names the code uses:
 | Session | One run of an engine. Each message starts a fresh one; nothing resumes. |
 | Chat | An endless conversation owned by Kothar, backed by a series of sessions. |
 | Space | A top-level chat with its own folders, files and `AGENTS.md`. Its agent is the **lead**. |
-| Worker | A chat a lead starts below its own with `spawn_worker`, for one task. Its final reply wakes the lead. |
+| Worker | A chat started below another for one task: by its agent with `spawn_worker`, or by an extension with `host.createChat({ parentId })`. Its final reply wakes the lead (or, quiet, goes to the extension). Part of the core, set in Settings → Workers. |
 | Home | The built-in Home extension's chat (id `main`): a personal assistant that sees every space. |
 | Extension | Adds features to Kothar through the public extension API. **Built-in** ones ship in `extensions/`; **community** ones install from the marketplace. |
 | Setup | A saved choice for a kind of job: engine, model, thinking level, extensions to leave out, instructions. |
@@ -99,7 +99,8 @@ A **tool** is something an agent calls (run a command, edit a file, an MCP tool)
 
 ## Design rules
 
-1. **Small core.** The core is machines, sessions, chats and an event stream. Everything else is an extension.
+1. **Small core.** The core is machines, sessions, chats (workers included) and an event stream. Everything else is an
+   extension.
 2. **Built-in extensions use only the public extension API** (`@kothar/extension-api`). If one needs something the
    API lacks, add a small, generic API change in its own PR first, never a private hook.
 3. **Extensions never import the core at runtime.** `@kothar/core` may only be a `devDependency` of an extension, for
@@ -113,6 +114,24 @@ A **tool** is something an agent calls (run a command, edit a file, an MCP tool)
 8. **State is plain files** in the garage, not a database.
 9. **Pass dependencies in.** Core modules take the home folder, environment, clock and machine as arguments rather
    than reading `os.homedir()`, `process.env` or `Date.now()` themselves. Only startup code reads them.
+
+## Decisions
+
+Why some things are the way they are. Add one when you make a choice the next contributor would otherwise undo.
+
+- **Workers are part of the core, not an extension.** They were the Workers extension, but it was only a switch and two
+  settings over things that were already core: child chats (`chat-lifecycle.ts`) and the `spawn_worker` tool
+  (`kothar-mcp.ts`). As an extension it invited other extensions to depend on it (Deep Research greyed out a setting
+  without it), though what they need, child chats, never depended on it. Every agent and every extension can now count
+  on workers, so no extension declares a dependency to start one. Settings → Workers (`workers.ts`) keeps what the
+  extension had: **Let agents start workers** (the old switch, so turning it off still takes `spawn_worker` and its
+  instructions away), **Max running per chat**, and the instructions as an editable prompt. A setup keeps its chats
+  from starting workers with `workers: false` (older setups' `extensionsOff: ['workers']` reads as that).
+- **One limit counts every worker.** Max running per chat counts every running child of a chat, `spawn_worker`'s and
+  extensions' (quiet ones too), so an extension can't run past the user's limit. Over it, `spawn_worker` fails, so the
+  agent knows and can wait or stop one; an extension's worker waits for a slot instead, because the extension's work
+  (a research run) should finish, not fail. That's also why the switch for agents is separate from the limit: a
+  limit of 0 would leave an extension's workers waiting forever.
 
 ## Pull requests
 
@@ -192,6 +211,7 @@ the old names. Don't remove these, and don't use the old names in new code:
 | `packages/ui/src/connection.ts` (`VITE_HOTROD_CORE_URL`), `packages/ui/vite.config.ts` (`HOTROD_UI_PORT`) | Old UI environment variables. |
 | `packages/ui/src/renamed-storage.ts` | UI preferences saved under `hotrod.*` keys move to `kothar.*`. |
 | `packages/ui/src/panel-tab.ts` | Panel tabs saved as `mod:<id>`. |
+| `packages/core/src/workers.ts` (`moveWorkersSettings`), `packages/core/src/setups.ts` (`extensionsOff: ['workers']`) | Settings and setups saved while workers were an extension. |
 
 ## Licence of contributions
 

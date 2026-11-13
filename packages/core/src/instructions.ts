@@ -2,6 +2,7 @@
 // (asking extensions, reading files) and this only orders and formats them, so it can be tested alone.
 import { folderLines, type FolderPlace } from './folder-modes.ts'
 import type { ContextItem } from './shared.ts'
+import { WORKERS_PROMPT } from './workers.ts'
 
 export const WRITE_RULES =
   'You can write files only in your work folder and in attached folders set to Edit in place. Every other folder ' +
@@ -25,7 +26,7 @@ export type InstructionParts = {
   folders: FolderPlace[]
   // What extensions add (Extension.instructions), already trimmed, in extension order.
   extensions: string[]
-  // The Workers extension's instructions, for a chat that may start workers.
+  // Settings → Workers' instructions, for a chat that may start workers.
   workers?: string
   // The memory extension's instructions, already trimmed.
   memory: string[]
@@ -55,6 +56,8 @@ export type InstructionSection = {
   label: string
   text: string
   extension?: string
+  // Where the user edits this core text: a Settings page, with #anchor (kothar:settings/<this>).
+  settings?: string
 }
 
 export const instructionSections = (parts: InstructionParts): InstructionSection[] => {
@@ -71,7 +74,9 @@ export const instructionSections = (parts: InstructionParts): InstructionSection
       : []),
     ...(folders.length ? [core('Folder modes', [FOLDER_RULES, ...folderLines(folders)].join('\n'))] : []),
     ...extensions.map((text, i) => from(ids[i], 'Instructions', text)),
-    ...(workers !== undefined ? [from('workers', 'When to start workers', workers)] : []),
+    ...(workers !== undefined
+      ? [{ ...core('Workers: when to start workers', workers), settings: `${WORKERS_PROMPT.page}#prompt-${WORKERS_PROMPT.page}-${WORKERS_PROMPT.id}` }]
+      : []),
     ...memory.map((text) => from(parts.sources?.memory, 'How to read the memory', text)),
     ...(parentView ? [core("Parent chat's memory at launch", `Your parent chat's memory when it started you:\n\n${parentView}`)] : []),
     // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.

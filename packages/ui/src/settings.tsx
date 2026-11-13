@@ -16,6 +16,7 @@ import { ModelListsSection } from './settings/models.tsx'
 import { SettingRow } from './settings/rows.tsx'
 import { NAV_GROUPS, type Page, type PageProps } from './settings/types.ts'
 import { WORK_FOLDER_INTRO, WorkFolderPage } from './settings/work-folder.tsx'
+import { WORKERS_INTRO, WorkersPage } from './settings/workers.tsx'
 
 const PAGES = [
   {
@@ -94,6 +95,13 @@ const PAGES = [
       if (!engines.some((e) => e.enabled)) return <p className="text-muted">Turn on an engine to pick models.</p>
       return <ModelListsSection engines={engines} lists={modelLists} connected={connected} send={send} />
     },
+  },
+  {
+    id: 'workers',
+    group: 'Options',
+    title: 'Workers',
+    intro: WORKERS_INTRO,
+    body: ({ workers, connected, send }: PageProps) => <WorkersPage workers={workers} connected={connected} send={send} />,
   },
   {
     id: 'setups',

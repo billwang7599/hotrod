@@ -1,5 +1,5 @@
-// requires: the id of another extension this setting needs, such as 'workers'. While that extension is off (or isn't
-// installed), Settings greys the setting out and says why ("Needs the Workers extension"), Kothar refuses to change it,
+// requires: the id of another extension this setting needs, such as 'browser'. While that extension is off (or isn't
+// installed), Settings greys the setting out and says why ("Needs the Browser extension"), Kothar refuses to change it,
 // and the extension reads its default instead of the saved value (context.values), so a run that had it on carries on
 // as if it were off. The saved value comes back when the other extension does.
 export type ExtensionSetting = { key: string; label: string; description?: string; requires?: string } & (
@@ -275,9 +275,10 @@ export type ExtensionHost = {
   // view only (the user can watch and stop it, not write to it), working in its space's work folder and checkouts,
   // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
   // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
-  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
-  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's. With quiet, its reply comes
-  // to the extension instead (NewChatSpec.quiet).
+  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. Every
+  // running child counts toward Settings → Workers' limit, spawn_worker's and extensions' alike; one started over it
+  // waits with its first message queued and starts when a slot frees. With quiet, its reply comes to the extension
+  // instead (NewChatSpec.quiet).
   createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
@@ -412,7 +413,7 @@ export type ExtensionHost = {
   activity(event: ActivityInput): void
   // Whether another extension, by id, runs now: installed, on in Settings (a community one only while community
   // extensions are on) and with everything it requires on. With chatId, also not left out of that chat by its setup.
-  // False for an id Kothar doesn't know. The Workers extension (spawn_worker) is 'workers'. For features that turn on
+  // False for an id Kothar doesn't know. Workers are part of Kothar, not an extension, so need no check. For features that turn on
   // when another extension is there (Extension.optionalDependencies); check it when the feature runs, not once at start.
   extensionEnabled(id: string, chatId?: string): boolean
   // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
@@ -909,6 +910,9 @@ export type SentSection = {
   // The extension's prompts in it, with whether the user edited each; editable: the user can change it in Settings.
   prompts?: { id: string; label: string; edited: boolean }[]
   editable?: boolean
+  // For Kothar's own text the user can change (the workers' instructions): the Settings page that changes it, with an
+  // #anchor, as a kothar:settings/<settings> link opens it.
+  settings?: string
 }
 // kind 'turn': a turn's session opened with these sections. 'steer': a message entered the running turn (turn is the
 // id of the turn it entered), with one section.

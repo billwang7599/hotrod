@@ -39,13 +39,14 @@ export function sentTurnOf(chat: ChatSummary, at: string, id: string, input: Sen
   const sections: SentSection[] = []
   for (const section of input.instructions) {
     if (section.source !== 'extension' || !section.extension) {
-      sections.push({ source: section.source, part: 'instructions', label: section.label, text: section.text })
+      // Core text the user can change (Settings → Workers) links to where.
+      const { settings } = section
+      sections.push({ source: section.source, part: 'instructions', label: section.label, text: section.text, ...(settings && { settings, editable: true }) })
       continue
     }
     const id = section.extension
     const prompts = promptsFor(id, 'instructions')
-    // The Workers extension's text is its own setting (Settings → Workers).
-    const editable = prompts.length > 0 || id === 'workers'
+    const editable = prompts.length > 0
     sections.push({
       source: 'extension',
       part: 'instructions',

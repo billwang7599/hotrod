@@ -9,6 +9,7 @@ import type {
   ModelLists,
   RestartState,
   Setup,
+  WorkersSettings,
   WorkFolder,
 } from '@kothar/core/shared'
 import type { Market } from '../marketplace.tsx'
@@ -21,6 +22,8 @@ export type PageProps = {
   modelLists: ModelLists
   setups?: Setup[]
   setupSave?: { count: number; id?: string; error?: string }
+  // Settings → Workers; absent until the core's snapshot arrives.
+  workers?: WorkersSettings
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean

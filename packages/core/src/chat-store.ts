@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { ModelSettings } from './models.ts'
 import type { ChatEntry, ChatInfo, ContextSection, PermissionSwitches } from './shared.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
+import { moveWorkersSettings, type SavedWorkers } from './workers.ts'
 
 export type Settings = PermissionSwitches &
   ModelSettings & {
@@ -24,6 +25,8 @@ export type Settings = PermissionSwitches &
     editorCommand?: string
     // The user's edits of extensions' prompts, by extension and prompt id (prompts.ts).
     prompts?: Record<string, Record<string, { text: string; base: string }>>
+    // Settings → Workers (workers.ts).
+    workers?: SavedWorkers
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */
@@ -31,7 +34,8 @@ export function openSettings(garage: string) {
   const file = join(garage, 'settings.json')
   const settings: Settings = { engines: {}, ...readJson(file) }
   const save = () => writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
-  if (renameSettings(settings)) save()
+  const renamed = renameSettings(settings)
+  if (moveWorkersSettings(settings) || renamed) save()
   return { settings, save }
 }
 

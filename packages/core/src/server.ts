@@ -110,6 +110,7 @@ export async function startServer(options: {
       modelLists: core.modelLists(),
       setups: core.setups(),
       memory: core.memory(),
+      workers: core.workers(),
       workFolder: core.workFolder(),
       themes: core.themes(),
       installed: core.installed(),

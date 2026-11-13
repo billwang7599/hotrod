@@ -6,8 +6,9 @@ description: optionalDependencies, requires, a setting's requires, host.extensio
 # Depending on other extensions
 
 An extension can work with another one: turn a feature on while the other extension is there, grey out a setting while
-it isn't, or refuse to run without it. Extensions are named by `id`. The Workers extension (the one behind
-`spawn_worker`) is `workers`, though Kothar declares it itself.
+it isn't, or refuse to run without it. Extensions are named by `id`, such as `browser` for the built-in Browser.
+Workers aren't an extension: they're part of Kothar, so any extension can start one with
+[`host.createChat`](host.md#child-chats) and needs no dependency for it.
 
 | You want | Use |
 |---|---|
@@ -21,7 +22,7 @@ Prefer the soft forms. `requires` on the extension stops it outright whenever th
 ## optionalDependencies
 
 ```ts
-optionalDependencies: ['workers']
+optionalDependencies: ['browser']
 ```
 
 The extensions this one works with when they're there. Listing them changes nothing about whether it runs. It tells
@@ -47,20 +48,20 @@ Any extension can call it; it needs nothing in `uses`.
 ```ts
 settings: [
   {
-    key: 'showWorkers',
-    label: 'Show research workers as subagents',
+    key: 'screenshots',
+    label: 'Add screenshots to the report',
     type: 'boolean',
     default: false,
-    requires: 'workers',
+    requires: 'browser',
   },
 ]
 ```
 
 While the extension named by `requires` is off, or isn't installed:
 
-- Settings greys the setting out and says why under it: "Needs the Workers extension". You write no UI for this.
+- Settings greys the setting out and says why under it: "Needs the Browser extension". You write no UI for this.
 - Kothar refuses to change it, with the same reason.
-- The extension reads the setting's **default** in `values`, not the saved value. Code that reads `values.showWorkers`
+- The extension reads the setting's **default** in `values`, not the saved value. Code that reads `values.screenshots`
   falls back on its own, with no check of its own.
 - The saved value is kept. It comes back when the other extension is turned on again.
 
@@ -86,52 +87,50 @@ It's called for the user's switch and for the community extensions switch alike.
 ## requires
 
 ```ts
-requires: ['workers']
+requires: ['browser']
 ```
 
 The extensions this one can't run without:
 
 - It can't be turned on while one is off. Settings greys its switch out and says which to turn on first, such as
-  "Needs the Workers extension". A `setEnabled` from code throws "Turn on Workers first: Research needs it".
+  "Needs the Browser extension". A `setEnabled` from code throws "Turn on Browser first: Web clipper needs it".
 - Turning one off stops this extension too (`onStop`, its panels go). Its own switch stays on, so it starts again
   (`onStart`) once everything it requires is back on. Chains work: an extension that requires this one stops with it.
 - `host.extensionEnabled` reports it as off meanwhile.
 
 A loop of `requires` (A requires B, B requires A) runs neither.
 
-## Example: a feature that turns on with Workers
+## Example: a feature that turns on with Browser
 
 ```ts
 import type { Extension } from '@kothar/extension-api'
 
-const research: Extension = {
-  id: 'research-lite',
-  name: 'Research lite',
-  description: 'Looks things up in the background.',
+const clipper: Extension = {
+  id: 'web-clipper',
+  name: 'Web clipper',
+  description: 'Saves pages the agent reads as notes.',
   enabledByDefault: false,
-  optionalDependencies: ['workers'],
+  optionalDependencies: ['browser'],
   settings: [
-    { key: 'visible', label: 'Show its workers as subagents', type: 'boolean', default: false, requires: 'workers' },
+    { key: 'screenshots', label: 'Add screenshots to clips', type: 'boolean', default: false, requires: 'browser' },
   ],
   onDependencyChanged({ id, enabled }, { host }) {
-    if (id === 'workers' && !enabled) host.activity({ kind: 'other', title: 'Workers went off: research runs quietly' })
+    if (id === 'browser' && !enabled) host.activity({ kind: 'other', title: 'Browser went off: clips are text only' })
   },
   tools: [
     {
-      name: 'look_up',
-      description: 'Looks up a question in the background.',
-      inputSchema: { type: 'object', properties: { question: { type: 'string' } }, required: ['question'] },
+      name: 'clip_page',
+      description: 'Saves a web page as a note, with a screenshot while the Browser extension is on.',
+      inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] },
       offered: () => true,
-      run(input, { caller, values, host }) {
-        // values.visible is already false while Workers is off.
-        const shown = values.visible === true && host.extensionEnabled('workers')
-        const { id } = host.createChat({ name: 'Look-up', parentId: caller.id, quiet: true, showReport: shown })
-        host.send(id, String(input.question))
-        return 'Started'
+      async run(input, { caller, values, host }) {
+        // values.screenshots is already false while Browser is off.
+        const shot = values.screenshots === true && host.extensionEnabled('browser', caller.id)
+        return shot ? `Clipped ${input.url} with a screenshot` : `Clipped ${input.url}`
       },
     },
   ],
 }
 
-export default research
+export default clipper
 ```

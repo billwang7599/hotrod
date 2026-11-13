@@ -280,6 +280,8 @@ export type Setup = {
   model?: string
   thinking?: ThinkingLevel
   extensionsOff?: string[]
+  // false: chats on this setup can't start workers themselves (no spawn_worker); absent: they follow Settings → Workers.
+  workers?: false
   instructions?: string
 }
 
@@ -361,6 +363,10 @@ export type PromptInfo = {
   updatedDefault?: true
 }
 
+// Settings → Workers: whether agents may start workers (spawn_worker), how many one chat runs at once (-1: no limit;
+// extensions' workers count too), and the instructions chats that may start them get.
+export type WorkersSettings = { start: boolean; limit: number; instructions: PromptInfo }
+
 export type ExtensionInfo = {
   id: string
   name: string
@@ -379,7 +385,7 @@ export type ExtensionInfo = {
   // It adds instructions the user can't edit: an instructions hook (or a memory's) with no 'instructions' prompt.
   fixedInstructions?: boolean
   // The extensions it can't run without (Extension.requires), and, while one of them is off, why it doesn't run
-  // ("Needs the Workers extension"): the switch shows greyed out with it.
+  // ("Needs the Browser extension"): the switch shows greyed out with it.
   requires?: string[]
   blocked?: string
   // Settings greyed out because an extension they need is off, by key, with why (ExtensionSetting.requires).
@@ -616,6 +622,9 @@ export type ClientMessage =
   | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
   // Saves the user's edit of one of an extension's prompts; without text (or with the default), back to the default.
   | { type: 'extension.prompt.set'; extensionId: string; promptId: string; text?: string }
+  // Settings → Workers. text undefined: the instructions go back to their default.
+  | { type: 'workers.set'; start?: boolean; limit?: number }
+  | { type: 'workers.prompt.set'; text?: string }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
   // Draws the extension's settings view again (the page opened), answered with extension.updated.
@@ -696,6 +705,7 @@ export type CoreMessage =
       modelLists: ModelLists
       setups: Setup[]
       memory: MemorySettings
+      workers: WorkersSettings
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
@@ -746,6 +756,7 @@ export type CoreMessage =
   | { type: 'setup.saved'; setup: Setup }
   | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
+  | { type: 'workers.updated'; workers: WorkersSettings }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).
   | { type: 'marketplace.catalog'; entries?: MarketEntry[]; error?: string }
