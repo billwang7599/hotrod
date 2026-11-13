@@ -457,3 +457,115 @@ test("Settings' scrolling nav and page keep their scrollbars inset, the page's b
   expect(page.classList).toContain('scroll-inset')
   expect(page.className).toContain('[--scroll-top:48px]')
 })
+
+test('an extension with nothing to set gets no page; one with settings gets the header, its switch and what it does', () => {
+  const plain: ExtensionInfo = { id: 'plain', name: 'Plain', description: 'Does one quiet thing.', enabled: true, settings: [], values: {}, uses: ['events'] }
+  renderExtensions([plain], 'extensions')
+  expect([...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).not.toContain('Plain')
+
+  const setting = { key: 'n', label: 'Count', type: 'number', default: 1 } satisfies ExtensionSetting
+  const sent = renderExtensions([{ ...plain, settings: [setting], values: { n: 1 }, uses: ['events', 'settings'] }], 'extension:plain')
+  expect([...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toContain('Plain')
+  const text = dialog().textContent
+  expect(text).toContain('Does one quiet thing.')
+  expect(text).toContain('Built-in extension')
+  expect(text).toContain('What it does')
+  expect(dialog().querySelector('input[aria-label="Count"]')).not.toBeNull()
+  const toggle = dialog().querySelector('[aria-label="Plain on"]') as HTMLButtonElement
+  expect(toggle.getAttribute('aria-checked')).toBe('true')
+  act(() => toggle.click())
+  expect(sent).toEqual([{ type: 'extension.setEnabled', extensionId: 'plain', enabled: false }])
+})
+
+test("an off extension with settings keeps its page, saying to turn it on, and its settings stay hidden", () => {
+  const setting = { key: 'n', label: 'Count', type: 'number', default: 1 } satisfies ExtensionSetting
+  renderExtensions([{ id: 'off', name: 'Offish', description: '', enabled: false, settings: [setting], values: { n: 1 } }], 'extension:off')
+  expect(dialog().textContent).toContain('Turn Offish on to change its settings.')
+  expect(dialog().querySelector('input[aria-label="Count"]')).toBeNull()
+})
+
+test('a community extension with settings gets a page too, with its version and author, while community extensions are on', () => {
+  const community: ExtensionInfo = {
+    id: 'counter',
+    name: 'Counter',
+    description: 'Counts words.',
+    enabled: true,
+    settings: [{ key: 'size', label: 'Size', type: 'number', default: 2 }],
+    values: { size: 2 },
+    community: { version: '1.2.0', author: 'Someone', uses: ['events'], source: 'marketplace' },
+  }
+  act(() =>
+    root.render(
+      <LazyMotion features={domAnimation} strict>
+        <MotionConfig transition={{ duration: 0 }}>
+          <Tooltip.Provider>
+            <SettingsDialog
+              open
+              page="extension:counter"
+              openPage={() => {}}
+              close={() => {}}
+              engines={[]}
+              accounts={[]}
+              contextDefaults={{ agents: true, folders: true, files: true }}
+              extensions={[community]}
+              communityExtensions
+              modelLists={{ chat: [], planning: [], searching: [], workers: [] }}
+              workFolder={workFolder}
+              chooseWorkFolder={() => {}}
+              connected
+              send={() => {}}
+            />
+          </Tooltip.Provider>
+        </MotionConfig>
+      </LazyMotion>,
+    ),
+  )
+  const text = dialog().textContent
+  expect(text).toContain('Community extension · 1.2.0 by Someone')
+  expect(text).toContain('Uses')
+  expect(dialog().querySelector('input[aria-label="Size"]')).not.toBeNull()
+})
+
+test('an extension with only prompts gets a page with its Prompts: edit, Reset to default, and the Edited and Updated default badges', () => {
+  const prompt = (text: string, more: object = {}) => ({
+    id: 'rule',
+    label: 'When to act',
+    where: 'instructions' as const,
+    default: 'Only when asked.',
+    text,
+    ...more,
+  })
+  const withPrompts = (text: string, more: object = {}): ExtensionInfo => ({
+    id: 'quiet',
+    name: 'Quiet',
+    description: '',
+    enabled: true,
+    settings: [],
+    values: {},
+    prompts: [prompt(text, more)],
+    fixedInstructions: true,
+  })
+  const area = () => dialog().querySelector('textarea[aria-label="When to act"]') as HTMLTextAreaElement
+  const sent = renderExtensions([withPrompts('Only when asked.')], 'extension:quiet')
+  expect([...dialog().querySelectorAll('[role="tab"]')].map((tab) => tab.textContent)).toContain('Quiet')
+  expect(dialog().querySelector('#prompt-quiet-rule')).not.toBeNull()
+  expect(dialog().textContent).toContain('In every session’s instructions')
+  expect(dialog().textContent).toContain('can’t be edited')
+  expect(area().value).toBe('Only when asked.')
+  expect(button('Reset to default')).toBeUndefined()
+
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(area(), 'Whenever useful.')
+    area().dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  act(() => area().dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(sent).toEqual([{ type: 'extension.prompt.set', extensionId: 'quiet', promptId: 'rule', text: 'Whenever useful.' }])
+
+  renderExtensions([withPrompts('Whenever useful.', { edited: true, updatedDefault: true })], 'extension:quiet', sent)
+  expect(dialog().textContent).toContain('Edited')
+  expect(dialog().textContent).toContain('Updated default')
+  act(() => button('Reset to default')!.click())
+  expect(sent.at(-1)).toEqual({ type: 'extension.prompt.set', extensionId: 'quiet', promptId: 'rule' })
+  expect(area().value).toBe('Only when asked.')
+})

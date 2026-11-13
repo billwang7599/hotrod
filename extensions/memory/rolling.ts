@@ -39,7 +39,7 @@ export const ROLLING_ZOOM_INSTRUCTIONS =
   'zoom(id, 1) gives message id whole, and date(id) its date and time. Before you act on something the summary ' +
   'mentions only briefly, find the message and zoom it.'
 
-const FOLD_INSTRUCTIONS = `You keep the memory of a long chat between a user and an AI agent, as one summary. You \
+export const FOLD_INSTRUCTIONS = `You keep the memory of a long chat between a user and an AI agent, as one summary. You \
 get the summary so far (empty at first) and the messages that come after it, oldest first. Write the new summary of \
 everything: the old summary with the new messages folded in.
 
@@ -138,6 +138,8 @@ type RollingChat = { messages: MemoryMessage[]; storage: Pick<ExtensionStorage, 
 export function openRollingCompactor(options: {
   chat(chatId: string): RollingChat | undefined
   complete(request: CompletionRequest): Promise<string>
+  // The summarizer's instructions as the user left them (the prompt "summarizer-rolling"), else FOLD_INSTRUCTIONS.
+  system?(): string
   onFailure?(reason: string): void
   debounceMs?: number
   retryBaseMs?: number
@@ -158,11 +160,11 @@ export function openRollingCompactor(options: {
       const fold = chat && foldOf(chat.messages, readRolling(chat.storage, chat.messages), options.minChars)
       return chat && fold ? { chat, fold } : undefined
     },
-    async work(_chatId, { chat, fold }) {
+    async work(chatId, { chat, fold }) {
       let reason = ''
       let text = ''
       try {
-        const reply = await options.complete({ system: FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS })
+        const reply = await options.complete({ system: options.system?.() ?? FOLD_INSTRUCTIONS, prompt: fold.prompt, timeoutMs: COMPLETE_TIMEOUT_MS, chatId })
         text = reply.trim()
         if (!text) reason = 'the reply was empty'
       } catch (error) {

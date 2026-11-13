@@ -23,7 +23,7 @@ type Hub = {
   // With a chat: whether that chat may start workers (its setup can leave the Workers extension out).
   workers(chatId?: string): { enabled: boolean; limit: number }
   // The tools of the extensions that shape this chat's sessions (its setup can leave some out).
-  extensionTools(chatId: string): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost }[]
+  extensionTools(chatId: string): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost; extension?: string }[]
 }
 
 const reachesFrom = (hub: Hub, caller: ChatState, chat: ChatState) => reaches(caller, chat, hub.seesAll(caller.id))
@@ -133,6 +133,24 @@ const TOOLS: Record<string, Tool> = {
 
 export const CORE_TOOL_NAMES = Object.keys(TOOLS)
 
+// A relayed tool's result (ExtensionTool.result 'mcp'), checked: content blocks pass as they are, anything else is
+// sent as text.
+const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
+
+export function mcpResultOf(result: unknown) {
+  const value = result as { content?: unknown; isError?: unknown; structuredContent?: unknown } | null
+  const blocks = value && typeof value === 'object' && Array.isArray(value.content) ? value.content : undefined
+  if (!blocks || !blocks.every((block) => block && typeof block === 'object' && typeof (block as any).type === 'string')) {
+    return { content: [{ type: 'text' as const, text: typeof result === 'string' ? result : JSON.stringify(result) ?? '' }] }
+  }
+  const structured = value!.structuredContent
+  return {
+    content: blocks,
+    ...(value!.isError === true && { isError: true }),
+    ...(isRecord(structured) && { structuredContent: structured }),
+  }
+}
+
 export function openKotharMcp(hub: Hub) {
   const callers = new Map<string, string>()
 
@@ -147,12 +165,13 @@ export function openKotharMcp(hub: Hub) {
     const server = new McpServer({ name: 'kothar', version: '0.0.0' })
     const caller = hub.chats().find((chat) => chat.id === callerId)
     if (!caller) return server
-    const answer = async (run: (caller: ChatState, chats: ChatState[]) => unknown) => {
+    const answer = async (run: (caller: ChatState, chats: ChatState[]) => unknown, raw = false): Promise<any> => {
       const chats = hub.chats()
       const current = chats.find((chat) => chat.id === callerId)
       try {
         if (!current) throw new Error('This chat no longer exists')
         const result = await run(current, chats)
+        if (raw) return mcpResultOf(result)
         const text = typeof result === 'string' ? result : JSON.stringify(result)
         return { content: [{ type: 'text' as const, text }] }
       } catch (error) {
@@ -173,11 +192,22 @@ export function openKotharMcp(hub: Hub) {
         }),
       )
     }
-    for (const { tool, values, host } of extensionToolsFor(caller)) {
-      const inputSchema = fromJsonSchema<Record<string, unknown>>(tool.inputSchema)
-      server.registerTool(tool.name, { description: tool.description, inputSchema }, (input) =>
-        answer((caller) => tool.run(input, { caller: summaryOf(caller), values, host })),
-      )
+    const taken = new Set(Object.keys(TOOLS))
+    for (const { tool, values, host, extension } of extensionToolsFor(caller)) {
+      // A name already offered, or a schema the SDK can't read, leaves the tool out rather than the whole server.
+      if (taken.has(tool.name)) {
+        console.error(`Kothar left out ${extension ?? 'an extension'}'s tool "${tool.name}": another tool has that name`)
+        continue
+      }
+      try {
+        const inputSchema = fromJsonSchema<Record<string, unknown>>(tool.inputSchema as any)
+        server.registerTool(tool.name, { description: tool.description, inputSchema }, (input) =>
+          answer((caller) => tool.run(input, { caller: summaryOf(caller), values, host }), tool.result === 'mcp'),
+        )
+        taken.add(tool.name)
+      } catch (error) {
+        console.error(`Kothar left out ${extension ?? 'an extension'}'s tool "${tool.name}":`, error)
+      }
     }
     return server
   }
@@ -192,6 +222,22 @@ export function openKotharMcp(hub: Hub) {
       return token
     },
     revoke: (token: string) => callers.delete(token),
+    // The tools the chat's session is offered, as it sees them, with the extension each is from (none: Kothar's own).
+    toolsFor(chatId: string) {
+      const chat = hub.chats().find((c) => c.id === chatId)
+      if (!chat) return []
+      return [
+        ...Object.entries(TOOLS)
+          .filter(([, tool]) => offers(chat, tool))
+          .map(([name, tool]) => ({ name, description: tool.description, schema: z.toJSONSchema(tool.input) })),
+        ...extensionToolsFor(chat).map(({ tool, extension }) => ({
+          name: tool.name,
+          description: tool.description,
+          schema: tool.inputSchema,
+          ...(extension && { extension }),
+        })),
+      ]
+    },
     async handle(request: IncomingMessage, response: ServerResponse) {
       const token = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1]
       const callerId = token === undefined ? undefined : callers.get(token)

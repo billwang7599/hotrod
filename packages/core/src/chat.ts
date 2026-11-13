@@ -26,6 +26,8 @@ export type Chat = {
   // The account and model the running turn started on, and the limit it ran into, if any.
   account?: string
   runModel?: string
+  // The id the Inspector knows the running turn's session by (SentTurn.turn), for messages steered into it.
+  sentTurn?: string
   limit?: { message: string; resetsAt?: string }
   // The engine wrote, thought or called a tool since the chat's last message; a continuation doesn't reset it.
   produced?: boolean

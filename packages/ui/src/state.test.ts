@@ -14,6 +14,7 @@ import {
   modelMenu,
   pinState,
   previewText,
+  panelKey,
   reduce,
   storedFlag,
   type Action,
@@ -534,7 +535,64 @@ describe('reduce', () => {
 
     const defaults = { ...contextDefaults, files: false }
     expect(reduce(written, { type: 'context.defaults', defaults }).contextDefaults).toEqual(defaults)
-    expect(reduce(written, { type: 'select', chatId: 'b' }).context).toBeUndefined()
+    expect(reduce(written, { type: 'select', chatId: 'b' }).context).toEqual({ chatId: 'b', items: [] })
+  })
+
+  describe('switching chats', () => {
+    const panels = [{ extension: 'notes', id: 'notes', title: 'Notes' }]
+    const view = (text: string) => ({ type: 'text', text }) as unknown as NonNullable<State['panelViews'][string]['view']>
+    const shown = (chatId: string, text: string): Action => ({ type: 'extension.panel', chatId, extension: 'notes', panel: 'notes', view: view(text) })
+    const opened = run(
+      snapshot([chat(MAIN_CHAT_ID), chat('a'), chat('b'), chat('c')]),
+      { type: 'select', chatId: 'a' },
+      { type: 'chat.context', chatId: 'a', items: [] },
+      { type: 'chat.extensions', chatId: 'a', panels, commands: [] },
+      shown('a', 'A notes'),
+    )
+
+    it("draws a chat seen before from what's cached, with nothing emptied in between", () => {
+      const back = run(
+        snapshot([chat(MAIN_CHAT_ID), chat('a'), chat('b')]),
+        { type: 'select', chatId: 'a' },
+        { type: 'chat.extensions', chatId: 'a', panels, commands: [] },
+        shown('a', 'A notes'),
+        { type: 'select', chatId: 'b' },
+        { type: 'chat.extensions', chatId: 'b', panels: [], commands: [] },
+        { type: 'select', chatId: 'a' },
+      )
+      expect(back.extensionUi).toEqual({ chatId: 'a', panels, commands: [] })
+      expect(back.panelViews[panelKey('a', 'notes', 'notes')]).toEqual({ view: view('A notes') })
+    })
+
+    it("lends a chat not seen yet the last chat's panels and views, marked stale, until its own arrive", () => {
+      const next = reduce(opened, { type: 'select', chatId: 'b' })
+      expect(next.extensionUi).toEqual({ chatId: 'b', panels, commands: [], stale: true })
+      expect(next.context).toEqual({ chatId: 'b', items: [], stale: true })
+      expect(next.panelViews[panelKey('b', 'notes', 'notes')]).toEqual({ view: view('A notes'), stale: true })
+      // The last chat's own view stays for coming back.
+      expect(next.panelViews[panelKey('a', 'notes', 'notes')]).toEqual({ view: view('A notes') })
+
+      const arrived = ([{ type: 'chat.extensions', chatId: 'b', panels, commands: [] }, shown('b', 'B notes')] as Action[]).reduce(reduce, next)
+      expect(arrived.extensionUi?.stale).toBeUndefined()
+      expect(arrived.panelViews[panelKey('b', 'notes', 'notes')]).toEqual({ view: view('B notes') })
+    })
+
+    it('drops a borrowed view once its chat is left, so coming back never shows another chat\'s', () => {
+      const passed = ([{ type: 'select', chatId: 'b' }, { type: 'select', chatId: 'c' }] as Action[]).reduce(reduce, opened)
+      expect(passed.panelViews[panelKey('b', 'notes', 'notes')]).toBeUndefined()
+      // The chat after it still borrows, from the view it was showing.
+      expect(passed.panelViews[panelKey('c', 'notes', 'notes')]).toEqual({ view: view('A notes'), stale: true })
+    })
+
+    it('keeps what arrives for a chat that is not open, and forgets chats that are gone', () => {
+      const kept = ([{ type: 'chat.context', chatId: 'b', items: [] }, shown('b', 'B notes')] as Action[]).reduce(reduce, opened)
+      expect(kept.contexts.b).toEqual([])
+      expect(kept.context?.chatId).toBe('a')
+      const gone = reduce(kept, { type: 'chat.removed', chatId: 'b' })
+      expect(gone.contexts.b).toBeUndefined()
+      expect(gone.panelViews[panelKey('b', 'notes', 'notes')]).toBeUndefined()
+      expect(gone.panelViews[panelKey('a', 'notes', 'notes')]).toBeDefined()
+    })
   })
 
   it('loads the extensions from the snapshot and replaces only the one that changed', () => {

@@ -5,8 +5,8 @@ import type { Extension, ExtensionAction, ExtensionContext, ExtensionRun } from 
 import type { Approval } from './approvals.ts'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
-import { type CommunityEntry, valuesOf } from './extensions.ts'
-import { settingProblem, type ChatInfo, type CoreMessage, type ExtensionInfo, type Machine, type SetupState } from './shared.ts'
+import { type CommunityEntry, usesOf, valuesOf } from './extensions.ts'
+import { settingProblem, type ChatInfo, type CoreMessage, type ExtensionInfo, type Machine, type PromptInfo, type SetupState } from './shared.ts'
 import { messageOf } from './util.ts'
 
 export type ExtensionSettingsDeps = {
@@ -31,6 +31,8 @@ export type ExtensionSettingsDeps = {
   refreshExtension: (extension: Extension, chatId?: string) => void
   chainOf: (chat: Chat) => Chat[]
   updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
+  /** The extension's prompts as its page shows them. */
+  promptsOf: (extension: Extension) => PromptInfo[]
 }
 
 export function openExtensionSettings(deps: ExtensionSettingsDeps) {
@@ -67,6 +69,9 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
     const enabled = community.has(id) ? ownSwitch(extension) : isOn(extension)
     const settingsError = settingsErrors.get(id)
     const view = settingsViewOf(extension)
+    const prompts = deps.promptsOf(extension)
+    const fixedInstructions =
+      !!(extension.instructions || extension.memory?.instructions) && !prompts.some((prompt) => prompt.where === 'instructions')
     const info = {
       id,
       name,
@@ -77,6 +82,10 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
       ...(view && { settingsView: view }),
       ...(settingsError && { loadError: settingsError }),
       ...(extension.chats?.length && { ownsChat: true }),
+      ...(prompts.length && { prompts }),
+      ...(fixedInstructions && { fixedInstructions }),
+      // A community extension's are its manifest's (community.uses).
+      ...(!community.has(id) && { uses: usesOf(extension) }),
     }
     const from = community.get(id)
     const { version, author, uses } = from?.manifest ?? {}

@@ -1,7 +1,8 @@
 import type { ChatSummary, MemoryMessage, Extension, ExtensionContext, ExtensionHost, ExtensionValues } from '@kothar/extension-api'
-import { openRollingCompactor, readRolling, ROLLING_INSTRUCTIONS, ROLLING_ZOOM_INSTRUCTIONS, rollingView } from './rolling.ts'
+import { FOLD_INSTRUCTIONS, openRollingCompactor, readRolling, ROLLING_INSTRUCTIONS, ROLLING_ZOOM_INSTRUCTIONS, rollingView } from './rolling.ts'
 import { deleteSummaries, storageView } from './storage.ts'
 import {
+  COMPACTOR_INSTRUCTIONS,
   dateOf,
   MEMORY_INSTRUCTIONS,
   memoryView,
@@ -16,6 +17,35 @@ import {
 export type MemoryMode = 'tree' | 'rolling'
 
 export const PARENT_ZOOM_INSTRUCTIONS = "zoom and date read your parent chat's memory, as it was when it started you, with parent: true."
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
+// Its prompts (Settings → Extensions → Memory → Prompts).
+export const PROMPTS = [
+  { id: 'rolling', label: 'How to read the memory (Rolling summary)', text: ROLLING_INSTRUCTIONS, where: 'instructions' },
+  { id: 'rolling-zoom', label: 'How to zoom (Rolling summary)', text: ROLLING_ZOOM_INSTRUCTIONS, where: 'instructions' },
+  { id: 'tree', label: 'How to read the memory (Summary tree)', text: MEMORY_INSTRUCTIONS, where: 'instructions' },
+  { id: 'tree-zoom', label: 'How to zoom (Summary tree)', text: ZOOM_INSTRUCTIONS, where: 'instructions' },
+  { id: 'parent-zoom', label: 'Reading the lead’s memory (workers)', text: PARENT_ZOOM_INSTRUCTIONS, where: 'instructions' },
+  {
+    id: 'summarizer-rolling',
+    label: 'The summarizer’s instructions (Rolling summary)',
+    text: FOLD_INSTRUCTIONS,
+    where: 'background',
+    description: 'Sent to the model that folds new messages into the summary, outside the chat’s turn.',
+  },
+  {
+    id: 'summarizer-tree',
+    label: 'The summarizer’s instructions (Summary tree)',
+    text: COMPACTOR_INSTRUCTIONS,
+    where: 'background',
+    description: 'Sent to the model that writes the summary lines, outside the chat’s turn.',
+  },
+] as const satisfies Extension['prompts']
+const defaultOf = (id: (typeof PROMPTS)[number]['id']) => PROMPTS.find((prompt) => prompt.id === id)!.text
 
 const modeOf = (values: ExtensionValues): MemoryMode => (values.mode === 'tree' ? 'tree' : 'rolling')
 
@@ -58,6 +88,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
   const compactorFor = <M extends MemoryMode>(host: ExtensionHost, mode: M): NonNullable<typeof compactors>[M] => {
     const shared = {
       complete: (request: Parameters<ExtensionHost['complete']>[0]) => host.complete(request),
+      system: () => (mode === 'tree' ? promptOf(host, 'summarizer-tree', COMPACTOR_INSTRUCTIONS) : promptOf(host, 'summarizer-rolling', FOLD_INSTRUCTIONS)),
       onFailure: failing,
       now: () => host.now().getTime(),
       ...(options.debounceMs !== undefined && { debounceMs: options.debounceMs }),
@@ -136,6 +167,7 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
       'Every chat remembers its whole conversation: older messages as short summaries an agent can zoom back into. ' +
       'Off, a fresh session sees only the latest messages that fit.',
     enabledByDefault: true,
+    prompts: [...PROMPTS],
     settings: [
       {
         key: 'mode',
@@ -197,10 +229,11 @@ export function createMemoryExtension(options: MemoryExtensionOptions = {}): Ext
       instructions({ chat, tools }, context) {
         remember(context)
         const rolling = modeOf(context.values) === 'rolling'
+        const text = (id: (typeof PROMPTS)[number]['id']) => promptOf(context.host, id, defaultOf(id))
         return [
-          rolling ? ROLLING_INSTRUCTIONS : MEMORY_INSTRUCTIONS,
-          ...(tools ? [rolling ? ROLLING_ZOOM_INSTRUCTIONS : ZOOM_INSTRUCTIONS] : []),
-          ...(tools && chat.worker ? [PARENT_ZOOM_INSTRUCTIONS] : []),
+          text(rolling ? 'rolling' : 'tree'),
+          ...(tools ? [text(rolling ? 'rolling-zoom' : 'tree-zoom')] : []),
+          ...(tools && chat.worker ? [text('parent-zoom')] : []),
         ].join('\n\n')
       },
     },

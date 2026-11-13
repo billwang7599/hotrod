@@ -223,7 +223,9 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
   // query: what a search typed, to highlight in the name, and in snippet (the line of text it matched), shown under it.
   const row = (note: Note, open: string | undefined, sort: NoteSort, snippet?: string, query = ''): ExtensionListItem => {
     const time = sort === 'created' ? note.created : note.edited
-    const detail = [note.folder, sort !== 'title' && time ? shortTime(time, now()) : undefined].filter(Boolean).join(' · ')
+    // Just a short time on the row; the folder a note sits in shows on hover, with its description.
+    const detail = sort !== 'title' && time ? shortTime(time, now()) : undefined
+    const hint = [note.description, note.folder && `In ${note.folder}`].filter(Boolean).join('\n')
     const words = wordRanges(note.name, query)
     // A name that holds the words gets them marked; one found by its letters in order, those letters.
     const marks = query.trim() ? (words.length ? words : fuzzyRanges(note.name, query)) : []
@@ -233,7 +235,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
       selected: note.key === open,
       action: { name: 'open', value: note.key },
       ...(detail && { detail }),
-      ...(note.description && { hint: note.description }),
+      ...(hint && { hint }),
       ...(marks.length && { marks }),
       ...(snippet && { excerpt: { text: snippet, marks: wordRanges(snippet, query) } }),
     }
@@ -273,25 +275,13 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
       return snippetOf(bodies.get(note.key)!, state.query)
     }
     const filtered = searching || !!state.tag
-    const sortButton: ExtensionView = {
-      type: 'button',
-      label: `Sort: ${SORT_LABELS[sort]}`,
-      variant: 'ghost',
-      action: { name: 'sort', value: SORTS[(SORTS.indexOf(sort) + 1) % SORTS.length] },
-      hint: 'Change the order: last edited, made, or by title',
-    }
-    let sortShown = false
-    // The first section heading carries the sort button.
-    const heading = (title: string, hint: string): ExtensionView => {
-      if (sortShown || searching) return { type: 'heading', text: title, hint }
-      sortShown = true
-      return { type: 'row', justify: 'between', children: [{ type: 'heading', text: title, hint }, sortButton] }
-    }
     const pinned = filtered ? [] : shown.filter((note) => note.pinned)
     const section = (title: string, hint: string, scope: NoteScope, empty: string): ExtensionView[] => {
       const listed = shown.filter((note) => note.scope === scope && !pinned.includes(note))
+      // While a search or a tag finds notes, a section with none of them is left out rather than saying so.
+      if (!listed.length && filtered && shown.length) return []
       return [
-        heading(title, hint),
+        { type: 'heading', text: title, hint },
         { type: 'list', label: title, items: listed.map((note) => row(note, state.open, sort, snippet(note), state.query)), empty: filtered ? 'Nothing matches' : empty },
       ]
     }
@@ -299,21 +289,41 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
     // Typing a name no note has offers to make it, as a quick switcher does.
     const offerNew = query && query.length <= MAX_NAME && !notes.some((note) => note.name.toLowerCase() === query.toLowerCase())
     const scopeFor: NoteScope = spaceNotes ? 'space' : 'global'
+    const into = spaceNotes ? 'this space' : 'global notes'
+    // The list's rarer actions, out of sight until asked for.
+    const more: ExtensionView = {
+      type: 'menu',
+      label: 'More note actions',
+      items: [
+        ...(spaceNotes ? [{ label: 'New global note', action: { name: 'new', value: 'global' }, hint: 'A note for every space' }, { type: 'divider' as const }] : []),
+        ...SORTS.map((s) => ({ label: `Sort by ${SORT_LABELS[s].toLowerCase()}`, action: { name: 'sort', value: s }, checked: s === sort })),
+        { type: 'divider' as const },
+        {
+          label: 'Import folder…',
+          action: { name: 'import' },
+          pick: { kind: 'folder' as const, title: `Import a folder of Markdown notes into ${into}` },
+          hint: `Copies a folder of .md files (an Obsidian vault, a Bear export) into ${into}, sub-folders and pictures too`,
+        },
+        { label: 'Import from path…', action: { name: 'importing' } },
+        { label: 'Show folder', action: { name: 'folder', value: spaceNotes ? 'space' : 'global' } },
+      ],
+    }
     return {
       type: 'stack',
       gap: 'normal',
       children: [
         {
           type: 'row',
+          justify: 'between',
           children: [
-            ...(spaceNotes ? [{ type: 'button' as const, label: 'New note', variant: 'primary' as const, action: { name: 'new', value: 'space' } }] : []),
             {
               type: 'button',
-              label: spaceNotes ? 'New global' : 'New note',
-              variant: spaceNotes ? 'normal' : 'primary',
-              action: { name: 'new', value: 'global' },
-              ...(spaceNotes && { hint: 'A note for every space' }),
+              label: 'New note',
+              variant: 'primary',
+              action: { name: 'new', value: scopeFor },
+              ...(spaceNotes && { hint: 'In this space. A global note, for every space, is in ⋯' }),
             },
+            more,
           ],
         },
         {
@@ -326,6 +336,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
           // Opening the popup goes to the search box, unless a note was opened for typing (a link, a new note).
           autofocus: !state.open || !!state.quiet,
         },
+        ...importForm(state, into),
         ...(offerNew
           ? [
               {
@@ -356,57 +367,38 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
                 children: tags.map(
                   (tag): ExtensionView => ({
                     type: 'button',
-                    label: `#${tag} ${counts.get(tag)}`,
+                    label: `#${tag}`,
                     variant: tag === state.tag ? 'primary' : 'ghost',
                     action: { name: 'tag', value: tag === state.tag ? '' : tag },
+                    hint: `${counts.get(tag)} ${counts.get(tag) === 1 ? 'note' : 'notes'}`,
                   }),
                 ),
               },
             ]
           : []),
         ...(pinned.length
-          ? [heading('Pinned', 'Pinned notes stay on top'), { type: 'list' as const, label: 'Pinned', items: pinned.map((note) => row(note, state.open, sort)) }]
+          ? [{ type: 'heading' as const, text: 'Pinned', hint: 'Pinned notes stay on top' }, { type: 'list' as const, label: 'Pinned', items: pinned.map((note) => row(note, state.open, sort)) }]
           : []),
         ...(spaceNotes ? section('This space', 'Kept in the space’s folder; gone when the space is', 'space', 'No notes here yet') : []),
         ...section('Global', 'Kept in Kothar’s own folder, for every space', 'global', 'No global notes yet'),
-        { type: 'divider' },
-        ...importView(state, spaceNotes),
       ],
     }
   }
 
-  // Import from a folder of Markdown files: the system's folder picker in the desktop app, a typed path anywhere.
-  const importView = (state: PopupState, spaceNotes: boolean): ExtensionView[] => {
-    const into = spaceNotes ? 'this space' : 'global notes'
-    if (!state.importing) {
-      return [
-        {
-          type: 'row',
-          children: [
-            {
-              type: 'button',
-              label: 'Import…',
-              variant: 'ghost',
-              action: { name: 'import' },
-              pick: { kind: 'folder', title: `Import a folder of Markdown notes into ${into}` },
-              hint: `Copies a folder of .md files (an Obsidian vault, a Bear export) into ${into}, sub-folders and pictures too`,
-            },
-            { type: 'button', label: 'Import from path…', variant: 'ghost', action: { name: 'importing' } },
-            { type: 'button', label: 'Show folder', variant: 'ghost', action: { name: 'folder', value: spaceNotes ? 'space' : 'global' } },
-          ],
-        },
-      ]
-    }
-    return [
-      {
-        type: 'form',
-        key: 'import',
-        fields: [{ name: 'path', label: `Folder to import into ${into}`, placeholder: '~/Notes', mono: true }],
-        submit: { label: 'Import', action: 'import' },
-        cancel: { label: 'Cancel', action: { name: 'cancel-import' } },
-      },
-    ]
-  }
+  // Import from a typed path (the ⋯ menu's Import from path…); the menu's Import folder… uses the system's picker,
+  // which only the desktop app has.
+  const importForm = (state: PopupState, into: string): ExtensionView[] =>
+    state.importing
+      ? [
+          {
+            type: 'form',
+            key: 'import',
+            fields: [{ name: 'path', label: `Folder to import into ${into}`, placeholder: '~/Notes', mono: true }],
+            submit: { label: 'Import', action: 'import' },
+            cancel: { label: 'Cancel', action: { name: 'cancel-import' } },
+          },
+        ]
+      : []
 
   // Whether the note is one of the space's context files already, or undefined where there's no context to add it to
   // (Home keeps no files).
@@ -425,7 +417,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
 
   const main = (host: ExtensionHost, chat: ChatDetail, note: Note | undefined, state: PopupState, notes: Note[]): ExtensionView => {
     if (!note) {
-      return { type: 'empty', text: notes.length ? 'Pick a note, or make a new one' : 'No notes yet. Make one with New note, or import a folder of Markdown files' }
+      return { type: 'empty', text: notes.length ? 'Pick a note, or make a new one' : 'No notes yet' }
     }
     const context = inContext(host, chat, note)
     const spaceNotes = hasSpaceNotes(chainOf(host, chat.id)[0])
@@ -434,30 +426,29 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
     const words = wordCount(body)
     const edited = note.edited ? `Edited ${shortTime(note.edited, now())}${/^\d/.test(shortTime(note.edited, now())) ? ' ago' : ''}` : ''
     const meta = [edited, `${words} ${words === 1 ? 'word' : 'words'}`].filter(Boolean).join(' · ')
+    // Only the name and one ⋯ menu stay in view; where the note is kept, when it was edited and how long it is show on
+    // hovering the name.
+    const about = [
+      note.description,
+      [note.scope === 'global' ? 'Global' : 'This space', note.folder, note.pinned && 'Pinned'].filter(Boolean).join(' · '),
+      meta,
+    ]
+      .filter(Boolean)
+      .join('\n')
     const header: ExtensionView = {
-      type: 'stack',
-      gap: 'tight',
+      type: 'row',
+      justify: 'between',
       children: [
+        { type: 'heading', text: note.name, hint: about },
         {
-          type: 'row',
-          children: [
-            { type: 'heading', text: note.name, ...(note.description && { hint: note.description }) },
-            { type: 'badge', text: note.scope === 'global' ? 'Global' : 'This space', tone: 'muted' },
-            ...(note.folder ? [{ type: 'badge' as const, text: note.folder, tone: 'muted' as const }] : []),
-            ...(note.pinned ? [{ type: 'badge' as const, text: 'Pinned', tone: 'accent' as const }] : []),
-            { type: 'text', text: meta, tone: 'faint', small: true },
-          ],
-        },
-        {
-          type: 'row',
-          children: [
+          type: 'menu',
+          label: `More for ${note.name}`,
+          items: [
             ...(context === undefined
               ? []
               : [
                   {
-                    type: 'button' as const,
                     label: context ? 'In context' : 'Add to context',
-                    variant: 'ghost' as const,
                     disabled: context,
                     action: { name: 'context', value: note.key },
                     hint: context
@@ -465,21 +456,20 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
                       : 'Add it to this space’s Context → Files, so its agents get it in full from the next message',
                   },
                 ]),
-            { type: 'button', label: note.pinned ? 'Unpin' : 'Pin', variant: 'ghost', action: { name: 'pin', value: note.key } },
-            { type: 'button', label: 'Rename', variant: 'ghost', action: { name: 'rename' } },
+            { label: note.pinned ? 'Unpin' : 'Pin', action: { name: 'pin', value: note.key } },
+            { label: 'Rename', action: { name: 'rename' } },
             ...(spaceNotes
               ? [
                   {
-                    type: 'button' as const,
                     label: note.scope === 'global' ? 'Move to this space' : 'Move to global',
-                    variant: 'ghost' as const,
                     action: { name: 'move', value: note.key },
                     hint: note.scope === 'global' ? 'Only this space sees it then' : 'Every space sees it then',
                   },
                 ]
               : []),
-            { type: 'button', label: 'Show in Finder', variant: 'ghost', action: { name: 'reveal', value: note.key }, hint: note.path },
-            { type: 'button', label: 'Delete', variant: 'ghost', action: { name: 'delete', value: note.key } },
+            { label: 'Show in Finder', action: { name: 'reveal', value: note.key }, hint: note.path },
+            { type: 'divider' as const },
+            { label: 'Delete', action: { name: 'delete', value: note.key }, danger: true },
           ],
         },
       ],
@@ -510,7 +500,6 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
               title: 'Outline',
               // Folded, so the note's text comes first; one click shows its headings.
               open: false,
-              badges: [{ text: String(headings.length), tone: 'muted' }],
               children: [
                 {
                   type: 'list',
@@ -550,24 +539,35 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
           paste: 'picture',
           ...(state.jump && { jump: state.jump }),
         },
+        // Links to the note, folded under the text so it comes first, and only when there are any.
         ...(backlinks.length
           ? [
-              { type: 'divider' as const },
-              { type: 'heading' as const, text: 'Linked from', hint: 'Notes with a [[link]] to this one' },
-              { type: 'list' as const, label: 'Linked from', items: backlinks.map((n) => row(n, undefined, 'title')) },
+              {
+                type: 'card' as const,
+                title: 'Linked from',
+                open: false,
+                badges: [{ text: String(backlinks.length), tone: 'muted' as const, hint: 'Notes with a [[link]] to this one' }],
+                children: [{ type: 'list' as const, label: 'Linked from', items: backlinks.map((n) => row(n, undefined, 'title')) }],
+              },
             ]
           : []),
         ...(mentions.length
           ? [
-              ...(backlinks.length ? [] : [{ type: 'divider' as const }]),
-              { type: 'heading' as const, text: 'Mentioned in', hint: `Notes that name “${note.name}” without a [[link]]` },
               {
-                type: 'list' as const,
-                label: 'Mentioned in',
-                items: mentions.map((n) => ({
-                  ...row(n, undefined, 'title', snippetOf(safeBody(n), note.name), note.name),
-                  button: { label: 'Link', action: { name: 'link-mention', value: n.key }, hint: `Make its first mention a [[link]] to “${note.name}”` },
-                })),
+                type: 'card' as const,
+                title: 'Mentioned in',
+                open: false,
+                badges: [{ text: String(mentions.length), tone: 'muted' as const, hint: `Notes that name “${note.name}” without a [[link]]` }],
+                children: [
+                  {
+                    type: 'list' as const,
+                    label: 'Mentioned in',
+                    items: mentions.map((n) => ({
+                      ...row(n, undefined, 'title', snippetOf(safeBody(n), note.name), note.name),
+                      button: { label: 'Link', action: { name: 'link-mention', value: n.key }, hint: `Make its first mention a [[link]] to “${note.name}”` },
+                    })),
+                  },
+                ],
               },
             ]
           : []),
@@ -692,7 +692,7 @@ export function createNotesExtension({ pollMs = 2000, now = () => Date.now() }: 
         title: 'Notes',
         placement: 'popup',
         shortcut: 'Mod+Shift+N',
-        sidebar: true,
+        launcher: true,
         render(chat, { host }) {
           watchFor(host, chat)
           const notes = notesFor(host, chat.id)

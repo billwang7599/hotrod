@@ -1,0 +1,10 @@
+{
+  "name": "@kothar/extension-deep-research",
+  "private": true,
+  "license": "FSL-1.1-ALv2",
+  "type": "module",
+  "devDependencies": {
+    "@kothar/core": "*",
+    "@kothar/extension-api": "*"
+  }
+}

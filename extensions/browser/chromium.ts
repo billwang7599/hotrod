@@ -37,14 +37,21 @@ export type Launcher = (launch: Launch) => Promise<Running>
 
 const STARTUP_MS = 20_000
 const QUIT_MS = 5_000
+// The longest a plain window gets to quit by itself: after a sign-in Chrome writes its cookies, session and account
+// before it goes, and a kill partway loses the login.
+export const PLAIN_QUIT_MS = 20_000
 const POLL_MS = 50
 
 // The flags Kothar's browser runs with. The keychain flags are the same in both modes, so cookies one mode saves the
 // other can read: on Kothar's own profile the mock keychain and basic password store keep macOS from asking for the
 // Keychain; a copy of a user's profile needs the real one. The disk cache stays in the profile (macOS Chromium
-// otherwise puts it in ~/Library/Caches), so it goes with the profile. Never --enable-automation, and
+// otherwise puts it in ~/Library/Caches), so it goes with the profile. Never --enable-automation. Headless, also
 // AutomationControlled off, so pages don't see navigator.webdriver (headless Chrome sets it otherwise): sites such as
-// Google's sign-in refuse a browser that says it's automated. A plain window has no remote debugging at all.
+// Google's sign-in refuse a browser that says it's automated. A window doesn't set navigator.webdriver without
+// --enable-automation, and that flag would only put Chrome's "unsupported command-line flag" bar on it, so a window
+// goes without it. A plain window, for signing in, has no remote debugging at all and is as close as it can be to the
+// Chrome the user opens themselves: only the profile, its keychain (so the cookies it saves read in the other modes) and
+// no first-run pages. It keeps sync on, as Chrome's own sign-in (Sign in to Chrome) finishes through sync.
 export function chromiumArgs(launch: Launch): string[] {
   const { profile, keychain, userAgent, plain } = launch
   const headless = launch.headless && !plain
@@ -52,13 +59,12 @@ export function chromiumArgs(launch: Launch): string[] {
     `--user-data-dir=${profile}`,
     `--disk-cache-dir=${profile}/Cache`,
     ...(plain ? [] : ['--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1']),
-    '--disable-blink-features=AutomationControlled',
+    ...(headless ? ['--disable-blink-features=AutomationControlled'] : []),
     '--no-first-run',
     '--no-default-browser-check',
     ...(keychain === 'real' ? [] : ['--use-mock-keychain', '--password-store=basic']),
     '--hide-crash-restore-bubble',
-    '--disable-sync',
-    '--disable-features=Translate,MediaRouter',
+    ...(plain ? [] : ['--disable-sync', '--disable-features=Translate,MediaRouter']),
     ...(headless ? ['--headless', '--hide-scrollbars', '--mute-audio'] : []),
     ...(headless && userAgent ? [`--user-agent=${userAgent}`] : []),
     ...(launch.restoreSession ? ['--restore-last-session'] : []),
@@ -121,11 +127,13 @@ export async function freeProfile(host: Pick<ExtensionHost, 'run'>, profile: str
   for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) rmSync(join(profile, name), { force: true })
 }
 
-// The launcher for a Chromium at `executable`. extraArgs: for tests that run inside a sandbox.
+// The launcher for a Chromium at `executable`. extraArgs: for tests that run inside a sandbox. plainQuitMs: how long a
+// plain window gets to quit by itself (PLAIN_QUIT_MS), shorter in tests.
 export function chromiumLauncher(
   host: Pick<ExtensionHost, 'run' | 'spawn'>,
   executable: () => Promise<string>,
   extraArgs: string[] = [],
+  plainQuitMs = PLAIN_QUIT_MS,
 ): Launcher {
   return async (launch) => {
     const path = launch.executable ?? (await executable())
@@ -137,7 +145,7 @@ export function chromiumLauncher(
     const major = launch.headless && !launch.plain && !launch.userAgent ? chromiumMajor(path) : undefined
     const args = chromiumArgs({ ...launch, ...(major && { userAgent: windowUserAgent(major) }) })
     const proc: ExtensionProcess = await host.spawn(path, [...extraArgs, ...args])
-    if (launch.plain) return plainRunning(host, proc, launch)
+    if (launch.plain) return plainRunning(host, proc, launch, plainQuitMs)
     let gone = false
     let stderr = ''
     const exited = new Promise<void>((resolve) =>
@@ -178,9 +186,17 @@ export function chromiumLauncher(
   }
 }
 
-// A plain window: no DevTools to ask, so it's up once it has locked its profile, and it stops on SIGTERM, which Chrome
-// takes as a request to quit cleanly (its cookies and session saved), with SIGKILL after a grace period.
-async function plainRunning(host: Pick<ExtensionHost, 'run'>, proc: ExtensionProcess, launch: Launch): Promise<Running> {
+// A plain window: no DevTools to ask, so it's up once it has locked its profile. It stops on a SIGTERM to the browser
+// process alone, which Chrome takes as a request to quit cleanly: it closes its windows and its helpers itself, with the
+// network service, which holds the cookies, flushing them first. Signalling the whole process group at once (what the
+// process's own stop does) would take the helpers down under it and can lose the cookies of a login just made; that's
+// only the fallback, for a browser that's still there after PLAIN_QUIT_MS or whose pid isn't known.
+async function plainRunning(
+  host: Pick<ExtensionHost, 'run'>,
+  proc: ExtensionProcess,
+  launch: Launch,
+  quitMs: number,
+): Promise<Running> {
   let gone = false
   let stderr = ''
   const exited = new Promise<void>((resolve) =>
@@ -206,7 +222,11 @@ async function plainRunning(host: Pick<ExtensionHost, 'run'>, proc: ExtensionPro
     },
     async stop() {
       if (gone) return
-      proc.stop()
+      if (pid) {
+        await host.run('/bin/kill', ['-TERM', String(pid)], { timeoutMs: 5000 }).catch(() => {})
+        await Promise.race([exited, sleep(quitMs)])
+      }
+      if (!gone) proc.stop()
       await exited
     },
   }

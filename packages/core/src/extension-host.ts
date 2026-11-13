@@ -1,6 +1,7 @@
 // What each extension gets from Kothar: its host (ExtensionHost) and context, made once per extension and kept, plus
 // the commands it starts with host.spawn. The core passes in everything a host reaches as plain functions; nothing here
 // keeps chats or settings.
+import { checkedActivity, type Activity } from './activity.ts'
 import { appendFileSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type {
@@ -10,16 +11,21 @@ import type {
   ExtensionContext,
   ExtensionHost,
   ExtensionNoteCard,
+  ExtensionPermissionAnswer,
+  ExtensionTool,
   ExtensionRun,
   ExtensionStorage,
   ExtensionStoredFile,
   ExtensionUse,
   ExtensionValues,
   ExtensionWait,
+  PermissionRequest,
   SpaceDetail,
 } from '@kothar/extension-api'
 import type { openAccounts } from './accounts.ts'
+import { isToggled, toggleOf, withToggle } from './composer-toggles.ts'
 import { guardHost } from './extensions.ts'
+import { summaryOf } from './kothar-mcp.ts'
 import { messagesOf } from './memory.ts'
 import { messageAt } from './message-actions.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
@@ -108,15 +114,26 @@ export type HostDeps<C extends HostChat> = {
   checkWait: (wait: ExtensionWait) => ExtensionWait
   spaceValuesOf: (extension: Extension, chat: C) => ExtensionValues
   setSpaceValue: (extension: Extension, chat: C, key: string, value: unknown) => void
+  /** Saves a change to the chat's info (chat.json) and tells the UI. */
+  updateChat: (chat: C, change: Partial<ChatInfo>) => void
+  /** Whether the extension shapes the chat's sessions: on, and not left out by the chat's setup. */
+  isOnFor: (extension: Extension, chat: C) => boolean
   /** Adds a file to the chat's own context (Context → Files), as the user adding it there does. */
   addContextFile: (chat: C, path: string) => void
+  /** An extension's permission request (host.requestPermission), raised in the chat's running turn (turn.ts). */
+  requestPermission: (chat: C, request: Omit<PermissionRequest, 'type' | 'requestId'>, changes: boolean) => Promise<ExtensionPermissionAnswer>
   /** Where a command an extension starts for a chat runs, and its sandbox. */
   commandPlaceOf: (chat: C) => Promise<Place>
 
   // The rest of Kothar
   accounts: Pick<Accounts, 'list' | 'use'>
   run: () => ExtensionRun
-  complete: (request: CompletionRequest) => Promise<string>
+  /** A model call for an extension (host.complete); from: the extension, for the Activity record. */
+  complete: (request: CompletionRequest, from: Extension) => Promise<string>
+  /** Kothar's activity stream (activity.ts): what extensions do through the host is emitted to it. */
+  activity: Activity
+  /** One of the extension's prompts as it's sent: the user's edit, else its default. */
+  promptText: (extension: Extension, id: string) => string
   broadcast: (message: CoreMessage) => void
   /** Every folder the chat's Open in Terminal may open. */
   terminalRoots: (chat: C) => string[]
@@ -161,20 +178,53 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     }
 
   const contextOf = (extension: Extension): ExtensionContext => ({ values: deps.valuesOf(extension), host: hostFor(extension) })
+
+  // The extension's tools for a chat: its fixed ones, then those it makes for the chat (toolsFor). A toolsFor that
+  // throws shows its error and adds none.
+  const toolsOf = (extension: Extension, chat: C): ExtensionTool[] => {
+    const fixed = extension.tools ?? []
+    if (!extension.toolsFor) return fixed
+    try {
+      const made = extension.toolsFor(summaryOf(chat.info), contextOf(extension))
+      if (!Array.isArray(made)) throw new Error('toolsFor must return a list of tools')
+      return [...fixed, ...made]
+    } catch (error) {
+      extensionError(extension, error)
+      return fixed
+    }
+  }
   const hostFor = (extension: Extension): ExtensionHost => {
     const known = hosts.get(extension.id)
     if (known) return known
     const dir = join(deps.garage, 'extensions', extension.id)
     const chatStorageOf = (chat: C) => storageAt(chat.dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles)
     const host: ExtensionHost = {
-      createChat({ name, folders, files, engine, parentId, role }) {
+      createChat({ name, folders, files, engine, parentId, role, quiet }) {
         if (parentId === undefined) {
           if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
+          if (quiet !== undefined) throw new Error('Only a child chat (with parentId) can be quiet')
           return deps.createChat({ name, folders, files, engine })
         }
-        return deps.createChild(String(parentId), { name, engine, role, folders, files })
+        const info = deps.createChild(String(parentId), { name, engine, role, folders, files, ...(quiet === true && { quiet }) })
+        deps.activity.emit(String(parentId), () => ({
+          kind: 'worker',
+          by: extension,
+          title: `Started ${quiet === true ? 'a quiet worker' : 'a child chat'}: ${info.name}`,
+          ...(role !== undefined && { detail: `On the ${role} model list` }),
+        }))
+        return info
       },
-      send: (chatId, text) => deps.enqueue(chatFor(chatId), { text }),
+      send(chatId, text) {
+        const chat = chatFor(chatId)
+        deps.enqueue(chat, { text })
+        // A worker's goes under its parent too: a finished worker's chat (and its folder) is removed.
+        deps.activity.emit(chat.info.parentId ?? chat.info.id, () => ({
+          kind: 'worker',
+          by: extension,
+          title: `Sent ${chat.info.name} a message`,
+          sections: [{ label: 'The message', text: String(text) }],
+        }))
+      },
       chats: () => deps.shownChats().map(deps.detailOf),
       chat(chatId) {
         const chat = deps.chat(chatId)
@@ -212,9 +262,25 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         }))
         return { engine, active: found.active, accounts: list }
       },
-      useAccount: (engine, accountId) => deps.accounts.use(engine, accountId, true),
-      retry: (chatId) => deps.retry(chatFor(chatId)),
-      continue: (chatId, text) => deps.continueTurn(chatFor(chatId), text),
+      useAccount(engine, accountId) {
+        deps.accounts.use(engine, accountId, true)
+        deps.activity.emit(undefined, () => ({ kind: 'account', by: extension, title: `Switched ${engine} to the account ${accountId}` }))
+      },
+      retry(chatId) {
+        const chat = chatFor(chatId)
+        deps.retry(chat)
+        deps.activity.emit(chat.info.id, () => ({ kind: 'retry', by: extension, title: 'Ran the turn again' }))
+      },
+      continue(chatId, text) {
+        const chat = chatFor(chatId)
+        deps.continueTurn(chat, text)
+        deps.activity.emit(chat.info.id, () => ({
+          kind: 'retry',
+          by: extension,
+          title: 'Carried the turn on',
+          sections: [{ label: 'Sent to carry it on', text: String(text) }],
+        }))
+      },
       note(chatId, text, options) {
         const panel = options?.panel
         if (panel !== undefined && !extension.panels?.some((p) => p.id === panel)) {
@@ -255,7 +321,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       now: () => deps.now(),
       messages: (chatId) => messagesOf(chatFor(chatId).entries),
       message: (chatId, entry) => messageAt(chatFor(chatId).entries, Number(entry)),
-      complete: (request) => deps.complete(request),
+      complete: (request) => deps.complete(request, extension),
       refresh: (chatId) => deps.refresh(extension, chatId),
       showPanel(chatId, panel) {
         const chat = chatFor(String(chatId))
@@ -270,6 +336,14 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
           panel: found.id,
           placement: found.placement === 'dock' ? 'dock' : 'tab',
         })
+      },
+      closePanel(chatId, panel) {
+        const chat = chatFor(String(chatId))
+        const found = extension.panels?.find((p) => p.id === panel)
+        if (!found) throw new Error(`${extension.name} has no panel "${panel}"`)
+        // A tab has nothing to close: it stays among the right sidebar's tabs.
+        if (found.placement !== 'popup' && found.placement !== 'dock') return
+        deps.broadcast({ type: 'extension.panel.close', chatId: chat.info.id, extension: extension.id, panel: found.id, placement: found.placement })
       },
       wait(chatId, wait) {
         const chat = chatFor(chatId)
@@ -307,6 +381,68 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
       },
       reveal: (path) => deps.reveal(path),
       // A worker's goes to its space, which owns the context its workers see.
+      async callTool(chatId, name, input) {
+        const chat = chatFor(String(chatId))
+        const caller = summaryOf(chat.info)
+        let tool: ExtensionTool | undefined
+        const owner = deps.extensions.find((other) => {
+          if (!deps.isOnFor(other, chat)) return false
+          tool = toolsOf(other, chat).find((t) => t.name === name && t.offered(caller))
+          return tool !== undefined
+        })
+        if (!owner || !tool) throw new Error(`No tool "${name}" is on for ${chat.info.name}`)
+        if (typeof input !== 'object' || input === null || Array.isArray(input)) throw new Error('A tool takes an object as its input')
+        const record = (outcome: { result?: unknown; error?: unknown }) =>
+          deps.activity.emit(chat.info.id, () => ({
+            kind: 'tool',
+            by: extension,
+            title: `Called ${owner === extension ? 'its own' : `${owner.name}’s`} tool ${name}`,
+            sections: [{ label: 'Input', text: JSON.stringify(input, null, 2) }],
+            ...('result' in outcome && { result: typeof outcome.result === 'string' ? outcome.result : JSON.stringify(outcome.result) ?? '' }),
+            ...('error' in outcome && { error: outcome.error instanceof Error ? outcome.error.message : String(outcome.error) }),
+          }))
+        const found = tool
+        try {
+          const result = await found.run(input, { caller, values: deps.valuesOf(owner), host: hostFor(owner) })
+          record({ result })
+          return result
+        } catch (error) {
+          record({ error })
+          throw error
+        }
+      },
+      requestPermission(chatId, request, options = {}) {
+        const chat = chatFor(String(chatId))
+        if (typeof request !== 'object' || request === null) return Promise.reject(new Error('A permission request is an object'))
+        const { name, summary, kind = 'mcp', input, path, command } = request
+        if (typeof name !== 'string' || !name.trim() || typeof summary !== 'string') {
+          return Promise.reject(new Error('A permission request needs a name and a summary'))
+        }
+        const asked = {
+          name,
+          summary,
+          kind,
+          input: input ?? {},
+          ...(typeof path === 'string' && { path }),
+          ...(typeof command === 'string' && { command }),
+        }
+        return deps.requestPermission(chat, asked, options.changes !== false)
+      },
+      toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
+      prompt: (id) => deps.promptText(extension, String(id)),
+      activity(input) {
+        const checked = checkedActivity(input)
+        const chatId = checked.chatId === undefined ? undefined : chatFor(String(checked.chatId)).info.id
+        deps.activity.emit(chatId, () => ({ ...checked, by: extension }))
+      },
+      setToggle(chatId, toggle, on) {
+        const chat = chatFor(String(chatId))
+        const found = toggleOf(extension, toggle)
+        if (typeof on !== 'boolean') throw new Error('A composer toggle is on or off')
+        if (isToggled(chat.info, extension, found) === on && chat.info.toggles?.[extension.id]?.[found.id] !== undefined) return
+        deps.updateChat(chat, { toggles: withToggle(chat.info, extension, found, on) })
+        if (deps.isOn(extension) && deps.shown(chat)) deps.refresh(extension, chat.info.id)
+      },
       addContextFile: (chatId, path) => deps.addContextFile(chatFor(deps.spaceOf(chatFor(String(chatId))).id), String(path)),
     }
     const uses = deps.usesOf(extension)
@@ -318,7 +454,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
   /** Drops an extension's host, for an uninstall; a reinstall gets a fresh one. */
   const forgetHost = (extensionId: string) => hosts.delete(extensionId)
 
-  return { hostFor, contextOf, forgetHost, stopSpawned }
+  return { hostFor, contextOf, forgetHost, stopSpawned, toolsOf }
 }
 
 // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.

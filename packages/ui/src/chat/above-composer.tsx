@@ -1,5 +1,6 @@
 // What shows between the transcript and the message box: the archived and engine notes, the queue, workers'
 // permission requests, extensions waiting on the user, and a worker's view-only bar.
+import { useState } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { ROLE_NAMES, type ClientMessage, type ModelLists } from '@kothar/core/shared'
 import { Button, CHAT_NOUN, Hint, MOTION } from '../controls.tsx'
@@ -125,37 +126,50 @@ type Wait = { chat: ChatView; wait: NonNullable<ChatView['waits']>[number] }
 
 /** Extensions waiting on the user, in this chat or a worker below it. */
 export function Waits({ chat, waits, connected, send }: { chat: ChatView; waits: Wait[]; connected: boolean; send: Send }) {
+  // Waits answered with a closing button (such as Done): hidden from the click on, before the core says they ended,
+  // so the bar goes at once and can't be clicked twice. Forgotten once the core drops the wait.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(() => new Set())
+  const keyOf = ({ chat: of, wait }: Wait) => `${of.id}\u0000${wait.extension}\u0000${wait.text}`
+  const keys = new Set(waits.map(keyOf))
+  // Dropped during render, as React allows for state that follows props.
+  if ([...answered].some((key) => !keys.has(key))) setAnswered(new Set([...answered].filter((key) => keys.has(key))))
+  const shown = waits.filter((w) => !answered.has(keyOf(w)))
+  if (!shown.length) return null
   return (
     <ul className="mx-auto mb-8 flex max-w-column flex-col gap-8" aria-label="Waiting for you">
-      {waits.map(({ chat: of, wait }) => (
-        <li
-          key={`${of.id}-${wait.extension}`}
-          className="flex flex-wrap items-center gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-10 shadow-raised"
-        >
-          <span className="min-w-0 flex-1 text-body">
-            {of.id !== chat.id && (
-              <>
-                Worker <strong>{of.name}</strong>:{' '}
-              </>
-            )}
-            {wait.text}
-          </span>
-          {wait.buttons.map((button) => (
-            <Hint key={button.id} text={button.hint}>
-              <Button
-                size="small"
-                variant={button.primary ? 'primary' : 'default'}
-                disabled={!connected}
-                onClick={() =>
-                  send({ type: 'extension.wait.answer', chatId: of.id, extension: wait.extension, button: button.id })
-                }
-              >
-                {button.label}
-              </Button>
-            </Hint>
-          ))}
-        </li>
-      ))}
+      {shown.map((item) => {
+        const { chat: of, wait } = item
+        return (
+          <li
+            key={`${of.id}-${wait.extension}`}
+            className="flex flex-wrap items-center gap-8 rounded-lg border border-l-3 border-permission-border border-l-amber bg-permission-bg px-14 py-10 shadow-raised"
+          >
+            <span className="min-w-0 flex-1 text-body">
+              {of.id !== chat.id && (
+                <>
+                  Worker <strong>{of.name}</strong>:{' '}
+                </>
+              )}
+              {wait.text}
+            </span>
+            {wait.buttons.map((button) => (
+              <Hint key={button.id} text={button.hint}>
+                <Button
+                  size="small"
+                  variant={button.primary ? 'primary' : 'default'}
+                  disabled={!connected}
+                  onClick={() => {
+                    if (button.closes) setAnswered((before) => new Set(before).add(keyOf(item)))
+                    send({ type: 'extension.wait.answer', chatId: of.id, extension: wait.extension, button: button.id })
+                  }}
+                >
+                  {button.label}
+                </Button>
+              </Hint>
+            ))}
+          </li>
+        )
+      })}
     </ul>
   )
 }

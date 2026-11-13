@@ -4,10 +4,12 @@
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "dependencies": {
-    "@playwright/mcp": "0.0.84"
+    "@playwright/mcp": "0.0.84",
+    "ws": "^8.22.1"
   },
   "devDependencies": {
     "@kothar/core": "*",
-    "@kothar/extension-api": "*"
+    "@kothar/extension-api": "*",
+    "@types/ws": "^8.18.2"
   }
 }

@@ -9,7 +9,7 @@ import type { ClientMessage, PanelTab } from '@kothar/core/shared'
 import { ContextPanel } from './context-panel.tsx'
 import { ExtensionViewer, SEARCH_VIEW_MS } from './extension-view.tsx'
 import { ConfirmDialog } from './controls.tsx'
-import { ExtensionPopup, panelDefaultKeys, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { ExtensionPopup, launcherEntries, panelDefaultKeys, usePanelShortcuts } from './extension-popups.tsx'
 import { currentPopup, openPopup, usePanelTab } from './panel-tab.ts'
 import { reloadPopupSizes } from './popup-size.ts'
 import { reloadShortcuts, setBinding, shortcutActions } from './shortcuts.ts'
@@ -17,7 +17,7 @@ import { panelKey, type ChatView, type State } from './state.ts'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-const notes: PanelTab = { extension: 'notes', id: 'notes', title: 'Notes', placement: 'popup', shortcut: 'Mod+Shift+N', sidebar: true }
+const notes: PanelTab = { extension: 'notes', id: 'notes', title: 'Notes', placement: 'popup', shortcut: 'Mod+Shift+N', launcher: true }
 const changes: PanelTab = { extension: 'git', id: 'changes', title: 'Changes' }
 
 let root: Root
@@ -146,8 +146,8 @@ test("a panel never takes keys another shortcut has, or keys that aren't a short
   expect(panelDefaultKeys('extension:x/a', 'Mod+Shift+J')).toBeNull()
 })
 
-test('panels that ask for a sidebar entry get one, with their keys', () => {
-  const entries = sidebarEntries([notes, changes], { 'extension:notes/notes': 'Mod+Shift+N' }, () => {})
+test('panels that ask for a launcher get one, with their keys', () => {
+  const entries = launcherEntries([notes, changes], { 'extension:notes/notes': 'Mod+Shift+N' }, () => {})
   expect(entries.map(({ label, keys }) => [label, keys])).toEqual([['Notes', 'Mod+Shift+N']])
   act(() => entries[0]!.open())
   expect(currentPopup()).toBe('extension:notes/notes')

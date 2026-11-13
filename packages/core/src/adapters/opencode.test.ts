@@ -93,6 +93,11 @@ describe('OpenCode adapter', () => {
     expect(config.instructions).toBeUndefined()
   })
 
+  it('has OpenCode refuse edits itself in a read-only turn; commands still ask', () => {
+    const permission = configOf(startSession({ readOnly: true }).fake.spawned[0]?.env).permission
+    expect(permission).toMatchObject({ edit: 'deny', bash: 'ask' })
+  })
+
   it('passes the instructions as the global AGENTS.md of its own config folder, with the extra folders allowed', () => {
     const { fake } = startSession({ extraDirs: ['/other/repo'] })
     const env = fake.spawned[0]?.env

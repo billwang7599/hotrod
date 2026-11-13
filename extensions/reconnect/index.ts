@@ -5,6 +5,11 @@ export const CONTINUE_PROMPT =
   'The connection dropped during your last turn. Continue where you left off: check what you already finished ' +
   '(files, commands, replies above) and don’t redo it.'
 
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
 // Why a turn ended early: the network was down, or the engine's service was (overloaded, 502/503/504/529).
 export type Reason = 'network' | 'service'
 
@@ -99,7 +104,7 @@ export function createReconnect(options: ReconnectOptions = {}): Extension {
     if (!wait) return
     tries.set(chatId, (tries.get(chatId) ?? 0) + 1)
     wait.host.note(chatId, wait.reason === 'network' ? 'Connection back, continued' : 'Trying again, continued')
-    wait.host.continue(chatId, CONTINUE_PROMPT)
+    wait.host.continue(chatId, promptOf(wait.host, 'continue', CONTINUE_PROMPT))
   }
 
   // alone: Kothar gave up by itself, not at the user's word, so they hear of it even if they're away.
@@ -144,6 +149,7 @@ export function createReconnect(options: ReconnectOptions = {}): Extension {
       'When a turn ends because the connection dropped or the engine’s service was unavailable, wait for it to come ' +
       'back and continue the turn where it stopped. Works for spaces, workers and Home.',
     enabledByDefault: true,
+    prompts: [{ id: 'continue', label: 'Sent to carry on once the connection is back', text: CONTINUE_PROMPT, where: 'message' }],
     settings: [
       {
         key: 'maxWait',

@@ -8,7 +8,7 @@ description: React to chats and turns, answer permission requests, and rewrite m
 Hooks let an extension react as chats run. They all run in Kothar's core. Each gets the extension's
 [context](../anatomy.md#the-context), `{ values, host }`, as its last argument.
 
-Every hook on this page except `onPermissionRequested` and the transforms needs `events` in the manifest's `uses`.
+Every hook on this page except `onPermissionRequested`, `turnOptions` and the transforms needs `events` in the manifest's `uses`.
 
 ## Background work
 
@@ -186,6 +186,88 @@ export default noForcePush
 - pi never asks before running a tool, so pi sessions have no permission requests.
 
 List `permissions` in the manifest's `uses`.
+
+## turnOptions
+
+`turnOptions(chat, context)` says how the chat's next turn runs. Kothar asks it as each turn starts (continuations
+too), before the turn's session opens. It can only make a turn stricter, or pick which model list it runs on: nothing
+it returns gives a turn more than the chat's own settings.
+
+```ts
+import type { Extension } from '@kothar/extension-api'
+
+const lookOnly: Extension = {
+  id: 'look-only',
+  name: 'Look only',
+  description: 'A switch in the composer that makes the chat read only.',
+  enabledByDefault: false,
+  composerToggles: [{ id: 'look', label: 'Look only' }],
+  turnOptions(chat, { host }) {
+    if (!host.toggled(chat.id, 'look')) return undefined
+    return { readOnly: true, reason: 'Look only is on: read and explain, change nothing.', role: 'planning' }
+  },
+}
+
+export default lookOnly
+```
+
+- `readOnly: true` makes the turn read only, and Kothar enforces it rather than asking the agent:
+  - **Sandboxed chats** (the usual case on macOS): the sandbox has nothing writable but the session's scratch `.tmp`
+    folder and the engine's own state, so nothing in the work folder, checkouts or folders can change, whatever runs.
+  - **Every chat:** edit requests are refused, and so is any command Kothar can't tell only reads (`git log`, `git
+    diff`, `ls`, `grep`, `cat` and the like pass). Reads, searches and fetches are answered as the chat's switches say.
+    These refusals are Kothar's own, so no extension's `onPermissionRequested` can allow them.
+  - **Engines** start in their own read-only mode where they have one: Codex in its `read-only` sandbox (when Kothar
+    isn't sandboxing it), OpenCode with edits denied, Claude Code without its Edit, Write, MultiEdit and NotebookEdit
+    tools. pi never asks before using a tool, so outside the sandbox (Edits anywhere on) nothing stops it writing.
+- `reason` is what the agent is told when a request is refused for being read only.
+- `role` runs the turn on that model list (Settings → Models) when the user has put models in it, and on the chat's own
+  model otherwise. The chat's saved engine and model don't change.
+- Every extension that's on for the chat is asked. The turn is read only if any of them says so, with the first one's
+  `reason`, and runs on the first `role` given.
+- Keep it quick and synchronous. If it throws, its error shows and the turn runs as if it had returned nothing.
+
+List `permissions` in the manifest's `uses`.
+
+## onTurnSent
+
+`onTurnSent(sent, context)` gets everything a turn's session was sent, as the session opens, in labelled sections in
+the order they were sent (`SentTurn`). It's what the Inspector shows. Kothar only builds it when an extension that's on
+has this hook.
+
+- `sent.kind` is `turn` when a session opens, and `steer` when the user's message enters the running turn (its `turn`
+  is the id of the turn it entered).
+- Each section has a `source`: `you`, `core` (Kothar's own rules), `context` (context items and the setup), `extension`
+  (with `extension`, its id, and the `prompts` it carries with whether the user `edited` each), `tools`, `turn` (engine,
+  model, account, sandbox, read only and who set it) or `engine`.
+- `part` says where it went. Joined with a blank line, the `instructions` sections are exactly the session's
+  instructions and the `prompt` sections exactly the prompt.
+- The engine adds its own system prompt and tools, which Kothar can't see; the last section says so. So does a section
+  for each MCP server an extension starts, whose tools the engine asks for itself.
+
+List `readChats` in the manifest's `uses`: the sections hold the chat's messages and context files.
+
+## onActivity
+
+`onActivity(event, context)` gets each thing Kothar or an extension does on its own, outside the agent's own tool calls
+(`ActivityEvent`), as it happens. It's what the Inspector's **Activity** tab lists. Like `onTurnSent`, Kothar builds
+nothing unless an extension that's on has this hook.
+
+| `kind` | What it is | Emitted by |
+|---|---|---|
+| `model` | A model call outside the chat's turn: `model`, the `sections` sent (instructions and prompt), the `result` or `error` | `host.complete` (under `chatId` if the call gave one) |
+| `permission` | A permission request answered: `decision` (`allowed` or `denied`) and the `rule` that answered it: a switch, a folder mode, the sandbox, a read-only turn, an extension (`Extension: <name>`) or `You` | Kothar |
+| `turn` | How an extension changed a turn: read only (with the reason), another model list, a composer toggle that was on, a message rewritten by `transformMessage` (before and after) | Kothar |
+| `worker` | A child chat an extension started (quiet or not), or a message it sent a chat (`host.send`; a worker's is listed under its parent too) | `host.createChat`, `host.send` |
+| `tool` | An extension called a tool (`host.callTool`): the input and the result or error | `host.callTool` |
+| `retry` | A turn carried on (`host.continue`, with what was sent) or run again (`host.retry`) | `host.continue`, `host.retry` |
+| `account` | An account switch, not tied to a chat | `host.useAccount` |
+| `browser`, `other` | What an extension reports itself | `host.activity` |
+
+`by` is who did it: `{ name: 'Kothar' }`, or the extension's `id` and `name`. `turn` is the id of the chat's turn
+running then, if any (as in `SentTurn`). Long texts are cut at 100,000 characters (a section) or 20,000 (a result).
+
+List `readChats` in the manifest's `uses`.
 
 ## Transforms
 

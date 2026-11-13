@@ -20,8 +20,9 @@ export type SavedTab = { url: string; title: string; active: boolean }
 // How a hand-off ended: the user clicked Done, sent a message, closed the window or quit the browser, the chat was
 // stopped or the browser turned off, or nobody answered in time.
 export type HandOffEnd = 'done' | 'message' | 'closed' | 'stopped' | 'timeout'
-// error: why the window couldn't open, when it couldn't.
-export type HandOffResult = { how: HandOffEnd; tabs: SavedTab[]; error?: string }
+// error: why the window couldn't open or go back, when it couldn't. late: the browser was still going back to the
+// background when the result went (see finishMs); the next browse waits for it.
+export type HandOffResult = { how: HandOffEnd; tabs: SavedTab[]; error?: string; late?: true }
 
 export type Mode = 'off' | 'headless' | 'window'
 
@@ -35,7 +36,12 @@ export type SpaceBrowserOptions = {
   pollMs?: number
   // The longest a hand-off waits for the user.
   handOffMs?: number
+  // The longest a waiting agent waits, once the hand-off ends, for the browser to be back in the background, before it
+  // hears the result anyway.
+  finishMs?: number
 }
+
+const FINISH_MS = 30_000
 
 const KEEP = (url: string) =>
   !!url && url !== 'about:blank' && !url.startsWith('devtools://') && !url.startsWith('chrome://new-tab-page') && !url.startsWith('chrome://newtab')
@@ -49,6 +55,10 @@ export class SpaceBrowser {
   waitingChat?: string
   // The window is plain (no DevTools), opened for signing in.
   plain = false
+  // The hand-off is ending, and how: the user is done with the window, which closes and goes back to the background.
+  // Set the moment finish is called, before any of that work, so whatever waits on the user stops waiting now.
+  ending?: HandOffEnd
+  private ended?: Promise<void>
   private running?: Running
   // The cookies the browser had before a plain window, set again afterwards where the profile lacks them (session
   // cookies, which a plain window's start doesn't get).
@@ -292,33 +302,57 @@ export class SpaceBrowser {
     if (this.mode === 'window' && running) await this.front(running)
   }
 
-  // Ends a hand-off: the window closes and the browser goes on headless, on the same tabs and logins.
+  // Ends a hand-off: the window closes and the browser goes on headless, on the same tabs and logins. The user's part
+  // ends at once (ending, then onChange), however long Chrome takes to quit and start again; a second call while it
+  // runs is the same call. A waiting agent hears the result when the browser is back, or after finishMs if that's slow.
   finish(how: HandOffEnd): Promise<void> {
-    return this.serial(async () => {
-      if (this.mode !== 'window' && !this.waiters.length) return
-      let from: { tabs: SavedTab[]; cookies: cdp.Cookie[] } = { tabs: this.tabs, cookies: [] }
-      // A plain window can't be read; it saves its tabs to the profile as it quits, for the next start to reopen.
-      // One the user quit themselves did the same.
-      const plain = this.afterPlain
-      this.afterPlain = false
-      if (this.mode === 'window') {
-        from = await this.snapshot()
-        await this.halt()
-      }
-      // Back in the background where the window left off. Stopped means stopped: the next agent that browses starts
-      // it again, on the same profile.
-      let error: string | undefined
-      if (how !== 'stopped' && this.mode === 'off') {
-        const started = plain ? this.start(true, { tabs: [], cookies: [] }, false, { afterPlain: true }) : this.start(true, from)
-        await started.catch((e: unknown) => (error = e instanceof Error ? e.message : String(e)))
-        if (plain && !error) from = await this.snapshot()
-      }
-      this.beforePlain = []
-      this.reason = undefined
-      this.waitingChat = undefined
-      this.changed()
-      for (const resolve of this.waiters.splice(0)) resolve({ how, tabs: from.tabs, ...(error && { error }) })
+    if (this.ended) return this.ended
+    this.ending = how
+    this.changed()
+    const limit = this.options.finishMs ?? FINISH_MS
+    const late = setTimeout(() => {
+      const error = `the browser was still going back to the background after ${Math.round(limit / 1000)}s`
+      for (const resolve of this.waiters.splice(0)) resolve({ how, tabs: this.tabs, error, late: true })
+    }, limit)
+    const ended: Promise<void> = this.serial(() => this.close(how)).finally(() => {
+      clearTimeout(late)
+      if (this.ended !== ended) return
+      this.ended = undefined
+      this.ending = undefined
     })
+    this.ended = ended
+    return ended
+  }
+
+  private async close(how: HandOffEnd) {
+    if (this.mode !== 'window' && !this.waiters.length) {
+      this.ending = undefined
+      return this.changed()
+    }
+    let from: { tabs: SavedTab[]; cookies: cdp.Cookie[] } = { tabs: this.tabs, cookies: [] }
+    // A plain window can't be read; it saves its tabs to the profile as it quits, for the next start to reopen.
+    // One the user quit themselves did the same.
+    const plain = this.afterPlain
+    this.afterPlain = false
+    let error: string | undefined
+    const failed = (e: unknown) => void (error = e instanceof Error ? e.message : String(e))
+    if (this.mode === 'window') {
+      from = await this.snapshot()
+      await this.halt().catch(failed)
+    }
+    // Back in the background where the window left off. Stopped means stopped: the next agent that browses starts
+    // it again, on the same profile.
+    if (how !== 'stopped' && this.mode === 'off' && !error) {
+      const started = plain ? this.start(true, { tabs: [], cookies: [] }, false, { afterPlain: true }) : this.start(true, from)
+      await started.catch(failed)
+      if (plain && !error) from = await this.snapshot()
+    }
+    this.beforePlain = []
+    this.reason = undefined
+    this.waitingChat = undefined
+    this.ending = undefined
+    this.changed()
+    for (const resolve of this.waiters.splice(0)) resolve({ how, tabs: from.tabs, ...(error && { error }) })
   }
 
   // Closes the browser, whatever mode it's in; a waiting agent hears it was stopped. keepCookies: it closes for

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { ExtensionView } from '@kothar/extension-api'
 import { Tooltip } from 'radix-ui'
-import { ExtensionViewer } from './extension-view.tsx'
+import { ExtensionViewer, SettingsLinkContext } from './extension-view.tsx'
 import { ConfirmDialog } from './controls.tsx'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -145,4 +145,26 @@ test('a form keeps what is typed and sends every field on submit; cancel sends i
   act(() => buttons.find((b) => b.textContent === 'Save')!.click())
   act(() => buttons.find((b) => b.textContent === 'Cancel')!.click())
   expect(acted).toEqual([{ name: 'save', value: { name: 'Tests', body: 'npm test' } }, { name: 'cancel' }])
+})
+
+test('a kothar:settings link opens that Settings page at its anchor, and is plain text where nothing opens Settings', () => {
+  const opened: unknown[][] = []
+  const view: ExtensionView = { type: 'link', text: 'Edit it', url: 'kothar:settings/extension:notes#prompt-notes-tone' }
+  act(() =>
+    root.render(
+      <SettingsLinkContext.Provider value={(page, anchor) => opened.push([page, anchor])}>
+        <Tooltip.Provider>
+          <ExtensionViewer view={view} act={() => {}} />
+        </Tooltip.Provider>
+      </SettingsLinkContext.Provider>,
+    ),
+  )
+  expect(host.querySelector('a')).toBeNull()
+  act(() => (host.querySelector('button') as HTMLButtonElement).click())
+  expect(opened).toEqual([['extension:notes', 'prompt-notes-tone']])
+  show(view)
+  expect(host.querySelector('button')).toBeNull()
+  expect(host.textContent).toBe('Edit it')
+  show({ type: 'link', text: 'Site', url: 'https://example.com' })
+  expect(host.querySelector('a')?.getAttribute('href')).toBe('https://example.com')
 })

@@ -103,6 +103,48 @@ it('lets an extension put a running chat in waiting with buttons, answered by a 
   )
 })
 
+it('ends a wait the moment a closing button is clicked, before the extension acts, so a second click finds nothing', async () => {
+  let host!: ExtensionHost
+  const seen: { answer: ExtensionWaitAnswer; waiting: boolean }[] = []
+  let t!: ReturnType<typeof start>
+  const extension: Extension = {
+    id: 'waiter',
+    name: 'Waiter',
+    description: '',
+    enabledByDefault: true,
+    onStart: ({ host: given }) => void (host = given),
+    // Never ends the wait itself, as one whose cleanup hangs wouldn't.
+    onWaitAction: (_chat, answer) =>
+      void seen.push({ answer, waiting: !!t.core.chats().find((c) => c.id === t.chatId)!.waits }),
+  }
+  t = start([extension])
+  await t.core.refreshEngines()
+  await until(() => !!host)
+  t.handle({ type: 'chat.send', chatId: t.chatId, text: 'Go' })
+  const wait = {
+    text: 'Look, then click Done',
+    buttons: [
+      { id: 'open', label: 'Open' },
+      { id: 'done', label: 'Done', primary: true, closes: true },
+    ],
+  }
+  host.wait(t.chatId, wait)
+  expect(t.messages).toContainEqual({ type: 'chat.waits', chatId: t.chatId, waits: [{ extension: 'waiter', ...wait }] })
+  t.handle({ type: 'extension.wait.answer', chatId: t.chatId, extension: 'waiter', button: 'open' })
+  expect(t.status()).toBe('waiting')
+  t.handle({ type: 'extension.wait.answer', chatId: t.chatId, extension: 'waiter', button: 'done' })
+  expect(seen).toEqual([
+    { answer: { button: 'open' }, waiting: true },
+    { answer: { button: 'done' }, waiting: false },
+  ])
+  expect(t.messages.at(-2)).toEqual({ type: 'chat.waits', chatId: t.chatId, waits: [] })
+  expect(t.status()).toBe('running')
+  expect(() => t.handle({ type: 'extension.wait.answer', chatId: t.chatId, extension: 'waiter', button: 'done' })).toThrow(
+    'Nothing is waiting',
+  )
+  expect(seen).toHaveLength(2)
+})
+
 it("lists other extensions' Processes rows, runs their actions in the extension that owns them, and tells the others of changes", async () => {
   let ownerHost!: ExtensionHost
   let drawerHost!: ExtensionHost

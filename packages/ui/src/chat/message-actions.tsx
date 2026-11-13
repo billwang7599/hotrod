@@ -9,6 +9,7 @@ const ICONS: Record<MessageActionInfo['icon'], string> = {
   pin: 'M6 2.5h4M6.5 2.5v4L4.5 9h7l-2-2.5v-4M8 9v4.5',
   bookmark: 'M4.5 2.5h7v11L8 10.5l-3.5 3z',
   star: 'M8 2.2l1.7 3.6 3.9.5-2.9 2.7.8 3.9L8 11l-3.5 1.9.8-3.9-2.9-2.7 3.9-.5z',
+  eye: 'M1.8 8S4 3.8 8 3.8 14.2 8 14.2 8 12 12.2 8 12.2 1.8 8 1.8 8zM8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z',
 }
 
 export function ActionIcon({ icon, filled }: { icon: MessageActionInfo['icon']; filled?: boolean }) {

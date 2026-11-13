@@ -126,6 +126,9 @@ Here the review turn only sends again if it edited files.
 - It runs on the model list named by `role`: `chat`, `planning`, `searching` or `workers` (the default). Use `role`
   only with `parentId`.
 - Its final reply joins the parent's queue as a report and wakes the parent. Then the child is removed.
+- With `quiet: true`, its final reply goes to your extension instead: read it in
+  [`onTurnCompleted`](events.md) (`turn.text`, with `turn.chat` the child). The parent gets no report and isn't woken.
+  Use it for children whose work you gather yourself, such as research workers. Use `quiet` only with `parentId`.
 - A child can't have children of its own, and its parent must not be archived.
 
 The host sets no limit on how many children run at once. Keep your own count.
@@ -285,6 +288,28 @@ export { titleFor }
 
 List `models` in the manifest's `uses`: each call runs on your account.
 
+Each call is listed in the Inspector's **Activity**, with your extension's name, the model, what was sent and the reply.
+Pass `chatId` (the chat the call is for, such as the chat a summary is of) to list it under that chat; without it, it's
+listed as not tied to a chat.
+
+## Activity
+
+`activity({ kind, title, chatId?, detail?, sections?, result?, error? })` lists something your extension did on its own
+in the chat's **Activity** (the Inspector), labelled with your extension's name: it launched a browser, handed one to the
+user, checked a source. `kind` is one of the [`ActivityKind`s](events.md#onactivity), usually `browser` or `other`.
+Kothar already lists your model calls, the messages you send (`send`, `continue`, `retry`), the chats you start, account
+switches and `callTool` calls, so don't repeat those. Any extension may call it.
+
+```ts
+import type { ExtensionHost } from '@kothar/extension-api'
+
+function launched(host: ExtensionHost, chatId: string) {
+  host.activity({ kind: 'browser', chatId, title: 'Launched the browser', detail: 'On Kothar’s Chromium' })
+}
+
+export { launched }
+```
+
 ## Settings per space
 
 | Call | What it does |
@@ -357,7 +382,11 @@ Without a chat, it does so for every chat. Call it when what your panels show ha
 
 `wait(chatId, { text, buttons })` puts a running chat in **waiting**, as an unanswered permission request does: it
 turns amber in the sidebar, and a bar above the composer shows `text` and the buttons. A worker's bar shows in its
-space too, where the user is. Each button is `{ id, label, primary?, hint? }`.
+space too, where the user is. Each button is `{ id, label, primary?, hint?, closes? }`.
+
+`closes: true` marks a button that answers the wait for good, such as Done. Clicking it ends the wait at once, in the
+bar and in the core, before `onWaitAction` runs. The bar goes on the click even if the extension then does slow work
+(closing a window, say), and a second click finds nothing to answer. Without it, the wait stays until `endWait`.
 
 When the user clicks a button, Kothar calls the extension's `onWaitAction(chat, { button }, context)`. When they send
 the chat a message instead, it calls `onWaitAction(chat, { message }, context)`, and the message still goes to the
@@ -379,7 +408,7 @@ const extension: Extension = {
       inputSchema: { type: 'object', properties: { why: { type: 'string' } } },
       offered: () => true,
       async run(input, { caller, host }) {
-        host.wait(caller.id, { text: String(input.why), buttons: [{ id: 'done', label: 'Done', primary: true }] })
+        host.wait(caller.id, { text: String(input.why), buttons: [{ id: 'done', label: 'Done', primary: true, closes: true }] })
         await new Promise<void>((resolve) => (answered = resolve))
         host.endWait(caller.id)
         return 'The user is done.'
@@ -410,6 +439,54 @@ The hold ends one of two ways:
   worker reports once.
 
 Hear about Stop from `onStatusChanged`: the chat leaves `waiting`. The built-in Reconnect extension works this way.
+
+## Calling another extension's tool
+
+`callTool(chatId, name, input)` runs another extension's agent tool as if the chat's agent called it, and resolves to
+what the tool returns. Use it to hand work to another extension through its public tools, not its files: say, saving a
+report with the Artifacts extension's `create_artifact`. Only a tool that's on for that chat and offered to it counts;
+otherwise it rejects with `No tool "…" is on for …`, which also tells you the other extension is off, so you can fall
+back. The tool's own errors reject too. List `tools` in the manifest's `uses`.
+
+```ts
+try {
+  await host.callTool(chatId, 'create_artifact', { title, type: 'markdown', content })
+} catch {
+  host.chatStorage(chatId).write('report.md', content)
+}
+```
+
+## Asking the user's leave
+
+`requestPermission(chatId, request, options?)` asks for leave to do something for the chat's running turn, such as
+calling a tool your extension relays from another MCP server. It goes the way an engine's tool request goes: Kothar's
+own rules, then every extension's `onPermissionRequested` (yours too, so a per-server "allow" setting can live there),
+else the permission card in the chat. It resolves to `{ allow, rule, message? }`, where `rule` names what answered
+("You", "Read-only turn", an extension's name), and the Activity records it with that rule.
+
+- `request`: `{ name, summary, kind?, input?, path?, command? }`, as the card shows it. `kind` defaults to `'mcp'`.
+- `options.changes`: `false` for something that only reads. Otherwise a read-only turn (`turnOptions`) refuses it
+  without asking.
+- It rejects when the chat has no turn running. A request still open when the turn ends is denied.
+
+List `permissions` in the manifest's `uses`.
+
+```ts
+const { allow, message } = await host.requestPermission(chatId, {
+  name: 'mcp__github__create_issue',
+  summary: 'GitHub: create_issue',
+  input,
+})
+if (!allow) return { content: [{ type: 'text', text: message ?? 'The user said no' }], isError: true }
+```
+
+## Composer toggles
+
+| Call | What it does |
+|---|---|
+| `prompt(id)` | One of this extension's [prompts](settings.md#prompts) as it's sent now: the user's edit from Settings, else its default. Throws for a prompt the extension doesn't declare. Needs nothing in `uses`. |
+| `toggled(chatId, id)` | Whether one of this extension's [composer toggles](panels.md#composer-toggles) is on in the chat (its `default` if the chat never set it). Throws for a toggle the extension doesn't have. |
+| `setToggle(chatId, id, on)` | Turns it on or off in the chat, as the user flipping it does, without calling `onChange`. The chip redraws. |
 
 ## Processes rows
 

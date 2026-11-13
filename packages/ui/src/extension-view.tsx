@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactElement, type ReactNode } from 'react'
-import type { ExtensionAction, ExtensionListItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
-import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, Select, Switch } from './controls.tsx'
+import type { ExtensionAction, ExtensionListItem, ExtensionMenuItem, ExtensionTone, ExtensionView } from '@kothar/extension-api'
+import { m } from 'motion/react'
+import { DropdownMenu } from 'radix-ui'
+import { Button, Chevron, confirm, COPIED_MS, CopyButton, Hint, MOTION, Select, Switch } from './controls.tsx'
 import { useElapsed } from './elapsed.ts'
 import { highlightLines } from './highlight.ts'
 import { HtmlFrame } from './html-frame.tsx'
@@ -46,6 +48,31 @@ const SetValueContext = createContext<SetValue | undefined>(undefined)
 // Show in Finder for a text with reveal; the core checks the path (host.reveal's rule).
 type Reveal = (path: string) => void
 const RevealContext = createContext<Reveal | undefined>(undefined)
+
+// Opens a page of Kothar's Settings, and scrolls to the element with id anchor on it: what a link to
+// kothar:settings/<page>#<anchor> does (such as the Inspector's Edit, to an extension's prompt). Without it (in tests,
+// say) such a link is plain text.
+export type OpenSettingsLink = (page: string, anchor?: string) => void
+export const SettingsLinkContext = createContext<OpenSettingsLink | undefined>(undefined)
+const SETTINGS_LINK = /^kothar:settings\/([^#]+)(?:#(.+))?$/
+
+function Link({ text, url }: { text: string; url: string }) {
+  const open = useContext(SettingsLinkContext)
+  const settings = url.match(SETTINGS_LINK)
+  if (settings) {
+    if (!open) return <span className="w-fit text-muted">{text}</span>
+    return (
+      <button type="button" className="w-fit text-left text-accent hover:underline" onClick={() => open(settings[1]!, settings[2])}>
+        {text}
+      </button>
+    )
+  }
+  return (
+    <a className="w-fit text-accent hover:underline" href={url} target="_blank" rel="noreferrer">
+      {text}
+    </a>
+  )
+}
 // The extension whose view this is, so its pictures can be read from its own folders (an editor's files).
 const ExtensionIdContext = createContext<string | undefined>(undefined)
 // Scrolls the panel's chat to the message at an entry of its log, for a quoted message.
@@ -460,6 +487,66 @@ function Search({ node, act }: { node: SearchNode; act: Act }) {
   )
 }
 
+// A ⋯ button and its menu: each entry acts as a button does, asking first or picking a path where it says to.
+function ViewMenu({ node, act }: { node: Extract<ExtensionView, { type: 'menu' }>; act: Act }) {
+  // An entry that picks a path where there's no picker (a browser tab) isn't drawn, as such a button isn't.
+  const items = node.items.filter((item) => 'type' in item || !item.pick || pickerFor(item.pick.kind))
+  // No divider at either end or twice in a row, once entries are gone.
+  const shown = items.filter(
+    (item, i) => !('type' in item) || (i > 0 && i < items.length - 1 && !('type' in items[i - 1]!)),
+  )
+  if (!shown.some((item) => !('type' in item))) return null
+  const run = async (item: Exclude<ExtensionMenuItem, { type: 'divider' }>) => {
+    if (item.confirm && !(await confirm(item.confirm))) return
+    if (!item.pick) return act(item.action)
+    const path = await pickerFor(item.pick.kind)!(item.pick.title)
+    if (path) act({ name: item.action.name, value: path })
+  }
+  return (
+    <DropdownMenu.Root modal={false}>
+      <Hint text={node.label}>
+        <DropdownMenu.Trigger asChild>
+          <Button variant="ghost" size="icon" className="shrink-0" aria-label={node.label}>
+            ⋯
+          </Button>
+        </DropdownMenu.Trigger>
+      </Hint>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content asChild align="end" sideOffset={4}>
+          <m.div
+            className="z-30 flex min-w-160 flex-col rounded-lg border bg-panel p-4 shadow-floating outline-none"
+            initial={MOTION.menu.initial}
+            animate={MOTION.menu.animate}
+            transition={MOTION.menu.transition}
+          >
+            {shown.map((item, i) =>
+              'type' in item ? (
+                <DropdownMenu.Separator key={`divider:${i}`} className="my-4 border-t border-border" />
+              ) : (
+                <Hinted key={`${i}:${item.label}`} hint={item.hint}>
+                  <DropdownMenu.Item
+                    disabled={item.disabled}
+                    onSelect={() => void run(item)}
+                    className={`flex h-26 items-center gap-6 rounded-sm px-12 text-sm whitespace-nowrap outline-none data-disabled:text-faint ${item.danger ? 'text-red data-highlighted:bg-red/10' : 'data-highlighted:bg-raised'}`}
+                  >
+                    {node.items.some((x) => !('type' in x) && x.checked !== undefined) && (
+                      <span aria-hidden="true" className="w-12 shrink-0">
+                        {item.checked ? '✓' : ''}
+                      </span>
+                    )}
+                    {item.checked && <span className="sr-only">(selected) </span>}
+                    {item.label}
+                  </DropdownMenu.Item>
+                </Hinted>
+              ),
+            )}
+          </m.div>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
 // A labelled button that copies text, saying for a moment whether it worked.
 function CopyText({ node }: { node: Extract<ExtensionView, { type: 'copy' }> }) {
   const [result, setResult] = useState<'Copied' | 'Couldn’t copy'>()
@@ -581,11 +668,7 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       return node.hint ? <Hint text={node.hint}>{button}</Hint> : button
     }
     case 'link':
-      return (
-        <a className="w-fit text-accent hover:underline" href={node.url} target="_blank" rel="noreferrer">
-          {node.text}
-        </a>
-      )
+      return <Link text={node.text} url={node.url} />
     case 'list':
       return <List node={node} act={act} />
     case 'code':
@@ -645,6 +728,8 @@ function Node({ node, act }: { node: ExtensionView; act: Act }): ReactNode {
       )
     case 'message':
       return <QuotedMessage node={node} act={act} />
+    case 'menu':
+      return <ViewMenu node={node} act={act} />
     case 'copy':
       return <CopyText node={node} />
     case 'download': {
@@ -765,6 +850,12 @@ type ViewerProps = {
   extension?: string
   showMessage?: ShowMessage
 }
+
+/**
+ * Spread on what holds a view or panel drawn from another chat while this chat's own is on its way (state.ts follow):
+ * it shows, so nothing blinks, but can't be clicked or typed in, and reads as busy.
+ */
+export const whileStale = (stale: boolean | undefined) => (stale ? { inert: true, 'aria-busy': true } : {})
 
 export function ExtensionViewer({ view, error, act, set, reveal, extension, showMessage }: ViewerProps) {
   if (error) return <p className="text-sm text-red">{error}</p>

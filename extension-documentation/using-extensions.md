@@ -16,8 +16,9 @@ Kothar has two kinds of extensions:
 Open **Settings → Built-in extensions** and flip an extension's switch. A built-in extension switches on or off without
 a restart. Chats pick up the change at their next message.
 
-An extension with settings, or with a setup step, gets a page of its own under **Extensions** in Settings while it's on.
-A setup step installs something the extension needs, such as a browser. Its page shows whether the extension is ready,
+An extension with settings, a setup step or prompts gets a page of its own under **Extensions** in Settings, as in
+Obsidian; one with none of those has no page. Each page starts with what the extension is (built-in, or a community
+extension's version and author), its switch, and what it does through the extension API. A setup step installs something the extension needs, such as a browser. Its page shows whether the extension is ready,
 with an **Install** button when it isn't.
 
 The built-in extensions today:
@@ -28,13 +29,17 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own or a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
+| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
-| Artifacts | Yes | HTML that agents make for you, such as pages, mockups, small apps, charts and diagrams, kept per space with every version and shown sandboxed in a popup over the chat (⌘⇧A). |
+| Artifacts | Yes | What agents make for you, such as pages, small apps, diagrams, documents and code files, kept per space with every version, shown sandboxed beside the chat, and all in a library popup (⌘⇧A). |
+| Plan | Yes | A **Plan first** chip beside the message box, for coding sessions. While it's on, the chat is read only: Kothar's sandbox and permission answers refuse edits and commands that change anything, on every engine, and it plans on your Planning models if you've set some. The agent hands in a plan (goal, files, steps, risks, tests) and the amber bar asks you to approve, edit or cancel it, as Deep Research does with its plan. Edit closes the bar and opens the plan in the Plan tab, where **Approve and start** saves and approves it. Approve turns the chip off and starts the work; the Plan tab ticks steps off as the agent goes. Its page in Settings hides the chip, and can stop requiring a tests step. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
+| Inspector | Yes | **See what was sent** on each of your messages, and a **Sent** tab: everything Kothar handed the engine for that turn, labelled. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
+| Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
+| MCP servers | Yes | Connect MCP servers (GitHub, Linear, Notion, a filesystem server, …) to your chats, on every engine. Kothar connects to them itself and offers their tools as its own, so keys never reach an engine and every call is asked for and recorded. Pick from a catalog or add your own in its page in Settings; switch one off for a chat in its MCP tab. See [MCP servers](#mcp-servers). |
 
 ### Where Memory keeps its summaries, and cleaning up
 
@@ -91,28 +96,118 @@ of seconds.
 
 ### Artifacts
 
-Notes are your documents; artifacts are what agents build for you to look at or try: a page, a mockup, a small
-interactive app, a chart or a diagram, as one self-contained HTML page. Ask for one ("make me a chart of this", "mock up
-the settings page") and the agent makes it with a tool instead of pasting HTML into its reply.
+Notes are your documents; artifacts are what agents build for you to look at, use or keep: a page or small app, a React
+component, an SVG, a Mermaid diagram, a Markdown document or a code file. Ask for one ("make me a chart of this", "mock
+up the settings page") and the agent makes it with a tool instead of pasting it into its reply.
 
-- **Opening:** **⌘⇧A** (Ctrl+Shift+A elsewhere; change it in **Settings → Shortcuts**) or **Artifacts** in the sidebar
-  opens a popup over the chat, and Esc closes it. When an agent makes or updates an artifact, a line in the chat says
-  so: click it to open the popup on that artifact.
-- **The popup** lists this space's artifacts on the left, the latest changed first. The open one is on the right, drawn
-  live. **Source** shows its HTML, **Copy HTML** and **Download** take it out, and **Delete** deletes every version
-  after asking.
-- **Versions:** an agent changing an artifact saves a new version and keeps the old ones. Pick one under the title to
-  see it; hover a version for what changed and when.
-- **Sandboxed:** an artifact's scripts run, but in a frame of its own. It can't reach Kothar, your token, your files or
-  the network: no fetch, no WebSockets, and no scripts, styles, images or fonts from the web. **Load from the web**,
-  under the list, lets this space's artifacts load those from `https:` sites, such as a chart library; they still can't
-  send or fetch data.
+- **Beside the chat:** when an agent makes or updates an artifact, it opens in a panel beside the chat, and a card in
+  the chat opens it again. The panel is also the **Artifacts** tab in the right sidebar. It shows only this space's
+  artifacts (a worker's are its space's); **‹** goes to their list, searchable.
+- **The library:** **Artifacts** in the left sidebar, or **⌘⇧A** (Ctrl+Shift+A elsewhere; change it in **Settings →
+  Shortcuts**), opens every space's artifacts in a popup over the chat, from any chat, Home too. **⋯** beside the
+  heading picks one space; search finds one by title, description or type. Click one to see it there, and its **⋯ →
+  Open beside chat** moves it into the panel beside the chat you're in.
+- **One artifact:** **Preview** draws it, **Code** shows its source, **Changes** what its latest version changed.
+  **Copy** and **Download** take it out. Its **⋯** has **Open in browser**, **Rename** and **Delete** (every version,
+  after asking).
+- **Versions:** an agent changing an artifact saves a new version and keeps the old ones. **‹ ›** step through them;
+  hover the version for what changed and when. **Restore this version** saves an old one as the newest.
+- **Sandboxed:** an artifact's scripts run, but in a frame of its own. It can't reach Kothar, your token or your
+  files, and it can't load anything from the internet. **Load files from the internet**, under this space's list, lets
+  this space's artifacts load scripts, styles, fonts, images and media from `https:` sites, such as a chart library from
+  a CDN. They still can't fetch data or open WebSockets, but each site they load from sees the request, and a page's
+  script could put data in the addresses it loads.
 - **Open in browser** opens the file in your default browser, outside Kothar's sandbox, where it can reach the web as any
   local page can.
 - **Files:** a space's artifacts are in `<data folder>/chats/<space id>/artifacts/<name>/`: `v1.html`, `v2.html`…
-  and `artifact.json` (title, kind, description, versions). They go when the space is deleted. Home keeps none.
-- **Agents** get nothing about artifacts in their prompts. They use `create_artifact`, `update_artifact`,
-  `list_artifacts` and `read_artifact`; a worker shares its space's artifacts.
+  (each type with its own extension) and `artifact.json` (title, type, description, versions). They go when the space
+  is deleted. Home keeps none.
+- **Agents** make one only when you ask for it ("make an artifact", "make me a page I can open"), and change one only
+  when you ask them to. Otherwise they answer in the chat, and code for a coding task goes in files. **Make artifacts** in
+  Settings → Extensions → Artifacts switches this to **When useful**, where agents make one whenever you'd want something
+  to look at, run or keep. Extensions that save into Artifacts for you, such as Deep Research's reports, aren't affected.
+  Agents use `create_artifact`, `update_artifact`, `list_artifacts` and `read_artifact`, which see only their own
+  space's; a worker shares its space's artifacts.
+
+### Inspector
+
+The Inspector shows what Kothar actually sends the engine, so nothing it adds is hidden from you.
+
+- **See what was sent:** hover one of your messages and click the eye. What went out with it opens beside the chat;
+  **Older** and **Newer** step through the turns kept. The **Sent** tab in the right sidebar shows the latest turn.
+- **Sections, in the order they were sent,** each labelled by who it's from: **Kothar core** (where agents may write,
+  folder modes, checkouts), **Context** (your AGENTS.md files, files and the setup), each **extension** by name, the
+  conversation so far (from Memory, or Kothar's own window), **You** (your message, noted if an extension rewrote it),
+  every **tool** Kothar offers with its description, and **how the turn ran** (engine, model, account, sandbox, read only
+  and which extension set it). Each shows a rough token count (about 4 characters a token), with a total and **Copy
+  all**.
+- **What it can't show:** the engine adds its own system prompt and built-in tools on top (Claude Code's, Codex's, and so
+  on), plus tool results and reminders as the turn goes. The last section, **Added by <engine>, not visible to
+  Kothar**, says so. So does a section for each MCP server an extension starts (such as Browser's), whose tools the
+  engine asks the server for itself.
+- **Editing:** a section from an extension's prompt has an **Edit** link to that prompt on the extension's Settings
+  page, under **Prompts**. Change it there; **Reset to default** brings back the extension's own. A prompt you edited
+  shows **Edited**, and **Updated default** if the extension changed its default since. Tool descriptions are editable
+  the same way. Kothar core's own text is shown but can't be edited, since it carries the safety rules (such as where
+  agents may write). An extension's text it doesn't name as a prompt shows **(not editable)**. Every built-in
+  extension names all of its hidden text as prompts, including what it sends models outside your turn (Memory's
+  summarizer, Deep Research's planner, workers and writer), so its page lists all of it.
+- **Where it's kept:** in each chat's folder, so it goes when the chat is deleted. Each chat keeps its latest 30 turns
+  (Settings → Inspector → Turns to keep), and text that repeats from turn to turn, such as the instructions, is stored
+  once.
+- **Activity:** the **Activity** tab lists what Kothar and its extensions did on their own, outside the agent's tool
+  calls, newest first, each labelled with who did it and when:
+  - **Model calls** outside your turn, such as Memory's summaries and Deep Research's planner, reviewer and writer: the
+    model, what it was sent and its reply (folded; open a card to read it).
+  - **Permission answers**, allowed or denied, and **which rule decided**: a switch (such as Read anywhere without
+    asking), a folder mode, the sandbox, a read-only turn, an extension's policy, or you.
+  - **How extensions changed a turn**: made it read only (with the reason the agent is told), ran it on another model
+    list, a composer toggle that was on, or rewrote your message (before and after).
+  - **Workers and tools**: chats an extension started (such as Deep Research's quiet workers), messages it sent them,
+    and tools it called.
+  - **Carrying on**: Reconnect and Account rotation carrying a turn on (with what was sent), account switches, and
+    Browser launches and hand-offs.
+
+  **This chat**, **Whole space** (with its workers, labelled with where each happened) and **Not tied to a chat** (model
+  calls and account switches no chat asked for) pick what's listed; the kind buttons filter it. It's kept the same way
+  as what was sent: in the chat's folder, for the same number of turns, each long text stored once. The tab draws only
+  while it's open.
+- **What Activity can't show yet:** engine restarts, and what an engine does inside its own session (its own
+  sub-agents, retries and tools), which Kothar sees only as the tool calls the engine reports.
+- **Off:** nothing is recorded while the Inspector is off, and Kothar doesn't build the record at all, so turns sent
+  then can't be looked at later. Turn it back on to record from the next message.
+
+### Deep Research
+
+Deep Research answers a question from many web sources and writes a report with numbered citations.
+
+- **Starting one:** turn on the **Deep research** chip beside Attach in a chat's composer. It's off in each chat until you
+  turn it on, and stays on until you turn it off: each message you send then goes to research (a plain "thanks" is just
+  answered). Or open **New research** (left sidebar, or **⌘⇧D**) and type a question, or ask the agent to research
+  something in depth; agents have a `deep_research` tool.
+- **The plan:** first it drafts 3 to 8 sub-questions and the kinds of sources to check, and waits: **Start**, **Edit**
+  (change the sub-questions in the **Research** tab) or **Cancel**. Nothing is searched until you start. Turn off **Ask
+  before starting research** in **Settings → Extensions → Deep Research** to skip this.
+- **The research:** each sub-question goes to a worker, listed under the space while it runs, on your **Searching**
+  models (Settings → Models) unless you pick another list. Workers use web search and fetch first, and a browser only
+  when a page needs one. Each returns findings: a claim, the exact quote that supports it, and the page. Kothar then
+  fetches each page itself and keeps a finding only if the quote is on it. A review step then looks for gaps and
+  contradictions and runs one or two more rounds (Standard and Thorough).
+- **The report:** an executive summary, sections, notes where sources disagree, a confidence and open questions
+  section, and a numbered source list with each page's title, link and the date it was read. Every statement cites a
+  kept finding; anything the writer says without one is left out, and the report says how much was. It's saved as an
+  artifact if Artifacts is on, else as a note if Notes is on, else as a file in the space's folder, and a card in the chat
+  opens it.
+- **The Research tab** lists each space's research, newest first, with its phase ("Researching 2 of 5"), sources read
+  and time so far. **Stop** ends one early, and you still get a report from what was found, marked partial. A finished
+  one opens its report beside the chat in one click; **⋯** shows the evidence (every finding, kept or dropped, with its
+  quote) or deletes it.
+- **Limits:** depth sets how far it goes: Quick (about 3 sub-questions, up to 4 workers and 12 sources), Standard (4 to 6,
+  10 and 30, one follow-up round) and Thorough (6 to 8, 20 and 60, two). **Most workers** and **Most sources** in its
+  settings cap any run. Reaching a cap ends the research with a partial report.
+- **Files:** each run's plan, findings and sources are in `<data folder>/extensions/deep-research/runs/<space id>/`, so
+  you can check where a claim came from later. They go when the space is deleted.
+- **What it can't check:** some sites refuse plain page fetches, and their findings are dropped. PDFs aren't read.
 
 ### When the connection drops
 
@@ -129,6 +224,45 @@ Engines retry short drops on their own. When a drop lasts longer, the turn ends 
   Kothar stops trying and the turn ends with its error, and you get a notification saying so.
 
 A Stop, a usage limit or any other error ends the turn as before.
+
+### MCP servers
+
+**Settings → Extensions → MCP servers** lists your servers and a catalog of popular ones: GitHub, Linear, Notion,
+Sentry, Atlassian, Figma, Stripe, Supabase, Vercel, Cloudflare Docs, Context7, Exa, Playwright, Filesystem, Fetch,
+Memory and Brave Search. Search it, pick one, and **Add**. **Add a custom server** takes a command to run on your Mac
+or the address of a remote server (Streamable HTTP, or SSE for an address ending in `/sse`).
+
+- **Kothar is the only MCP client.** Kothar starts or reaches each server itself, and offers its tools to the chat's
+  agent through Kothar's own MCP server, named `<server>__<tool>` (such as `github__create_issue`). Claude Code,
+  Codex, OpenCode and pi all get them the same way, and none of them is handed the server or its keys.
+- **Off until you turn it on.** A server runs nothing until you switch it on. A server that runs on your Mac shows the
+  exact command and who publishes it (**official**, or **community** for one its maker didn't publish) and asks before
+  it's turned on.
+- **Keys** (API keys and tokens) are kept in `extensions/mcp/secrets.json` in your garage, readable by you only. They're
+  never written to settings, never shown in full (only their last four characters) and never put in the Activity or the
+  Inspector: anything that holds one shows `[secret]`.
+- **Signing in.** A remote server that uses sign-in (Notion, Sentry, Figma and Vercel, or Linear, Atlassian, Stripe and
+  Supabase when you pick **Sign in** over a token) has a **Sign in** button on its card. Your browser opens the server's
+  own sign-in page, and Kothar waits on `127.0.0.1` for the answer, once, for up to 5 minutes. It follows the MCP
+  authorization spec: it finds the sign-in server from the MCP server's own answer, registers itself as an app, and
+  uses PKCE, a resource indicator and a state check. The sign-in is kept with your keys in `secrets.json` and refreshed
+  before it expires. If the server refuses a refresh, the card says **Needs sign-in**. **Sign out** forgets it. A server
+  that doesn't let other apps register (as GitHub's and Slack's don't) says so: use a token for it instead.
+- **Permissions.** Each call to a server's tool shows Kothar's permission card in the chat. A server's **⋯** menu can
+  let its read-only tools run without asking, or all its tools; the Activity records which rule answered. A read-only
+  turn (Plan) refuses tools that aren't marked read-only.
+- **Where it's on.** Each server is on for all spaces or the ones you tick in its **⋯** menu. A chat's **MCP** tab turns
+  one off for that chat alone. Changes count from the chat's next message, since the engine lists tools once per
+  message; a tool switched off is refused at once.
+- **Running.** A server starts the first time it's needed and stops after it's been idle a while (10 minutes; change it
+  on the page). If it crashes, the next call starts it again after a short pause; after 5 crashes in a row it stays
+  stopped until you press **Restart**. **Test connection** starts it, lists its tools and stops it.
+- **Activity.** The Inspector's Activity lists each server start, stop, crash and failure, and each tool call with its
+  server, input, result and time, and each sign-in started, finished, failed, refreshed or signed out (never a token).
+- **Many tools cost tokens.** Every tool's description is sent with every message. Past 60 tools across your servers,
+  the page warns you; switch off what a space doesn't need.
+- **A remote catalog.** **Catalog address** adds a list in the same JSON format as the built-in one, read from an https
+  address.
 
 ### Browser: your profile, in the background
 
@@ -149,6 +283,27 @@ that window, so closing its last window doesn't end it on macOS; Done or quittin
 **Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
 space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
 have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
+
+**Your own Chrome.** Pick **Your Chrome (Kothar extension)** in **Profile** and agents browse in the Chrome you use
+every day, with your logins, Google included, and nothing copied. No browser of Kothar's starts. Setting it up once:
+
+1. In Chrome, open `chrome://extensions` and turn on **Developer mode**.
+2. Click **Load unpacked** and pick the folder Settings → Extensions → Browser shows
+   (`extensions/browser/chrome-extension/` in Kothar).
+3. Click the Kothar extension's icon and paste the pairing code from the same settings page. It turns **Connected**.
+
+Each space gets a blue **Kothar · *space*** tab group, which opens in a window of its own behind yours. Agents open,
+read, click, type and close tabs only in their space's group. The extension refuses any other tab, and Kothar refuses
+calls that read every cookie, change permissions or close Chrome. Drag a tab out of the group to take it back: agents
+lose it at once. Popups from an agent's tab join its group. While agents work, Chrome shows its own "Kothar started
+debugging this browser" bar. Clicking its Cancel detaches them until they next browse. `show_browser` and
+`ask_user_in_browser` bring the space's group to the front, and **Done** carries on, as above. **Show browser** in a
+chat's General tab does the same.
+
+The extension talks only to Kothar on `127.0.0.1`. It has to present the pairing code, and its connection must come
+from the extension itself, so web pages can't connect. **New code** on the settings page makes a new code and
+disconnects the extension until you paste the new one. If Kothar isn't running, or the extension isn't paired, an
+agent's browser calls say so, and it asks you instead.
 
 **How your profile is used.** Never in place: your browser keeps running untouched, and its profile folder is only
 read. When a space's browser starts, Kothar copies the profile's login state into a folder of its own

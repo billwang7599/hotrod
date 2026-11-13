@@ -237,7 +237,7 @@ it('opens as a popup with a sidebar entry and keys, not a tab, in every chat', a
     title: 'Notes',
     placement: 'popup',
     shortcut: 'Mod+Shift+N',
-    sidebar: true,
+    launcher: true,
   })
 })
 
@@ -530,13 +530,14 @@ it('filters the list by tag, from the tag row or a #tag clicked in the editor', 
   await tool(app, 'write_note', { name: 'Deploys', body: 'Ship #ops #todo' })
   await tool(app, 'write_note', { name: 'Style', body: 'Short #writing', scope: 'global' })
   const all = JSON.stringify(await panel(app))
-  // Each tag says how many notes have it.
-  for (const tag of ['#ops 1', '#todo 1', '#writing 1']) expect(all).toContain(`"label":"${tag}"`)
+  // Each tag is just its name; how many notes have it shows on hover.
+  for (const tag of ['#ops', '#todo', '#writing']) expect(all).toContain(`"label":"${tag}"`)
+  expect(all).toContain('"label":"#ops","variant":"ghost","action":{"name":"tag","value":"ops"},"hint":"1 note"')
   await panel(app, { name: 'open', value: `${app}:deploys.md` })
   const ops = JSON.stringify(await panel(app, { name: 'tag', value: 'ops' }))
   expect(ops).toContain('"label":"Deploys"')
   expect(ops).not.toContain('"label":"Style"')
-  expect(ops).toMatch(/"label":"#ops 1","variant":"primary"/)
+  expect(ops).toMatch(/"label":"#ops","variant":"primary"/)
   // Clicking the tag again (an empty value) clears it.
   expect(JSON.stringify(await panel(app, { name: 'tag', value: '' }))).toContain('"label":"Style"')
   // A tag no note has any more stops filtering.
@@ -555,7 +556,7 @@ it("adds a note to the space's context from the popup, pasted into its next prom
   expect(session(app).instructions).not.toContain('Ship on Fridays')
 
   const after = JSON.stringify(await panel(app, { name: 'context', value: `${app}:deploys.md` }))
-  expect(after).toMatch(/"label":"In context","variant":"ghost","disabled":true/)
+  expect(after).toMatch(/"label":"In context","disabled":true/)
   handle({ type: 'context.get', chatId: app })
   const context = messages.findLast((m) => m.type === 'chat.context' && m.chatId === app)
   expect(context?.type === 'chat.context' && context.items.map((i) => i.path)).toContain(realpathSync(file))
@@ -589,9 +590,10 @@ it('reads notes in sub-folders, and saves a note in its own file and folder', as
   writeFileSync(join(dir, 'Projects', 'tagged.md'), '---\ntags: [ops]\n---\n\nRun it\n')
   const all = JSON.stringify(await panel(app))
   expect(all).toContain(`"key":"${app}:Projects/Kothar Plan.md","label":"Kothar Plan"`)
-  expect(all).toMatch(/"detail":"Projects · /)
+  // The row shows only a time; its folder shows on hover.
+  expect(all).toMatch(/"label":"Kothar Plan",[^{]*"action":\{[^}]*\},"detail":"[^"·]*","hint":"In Projects"/)
   // Front matter tags count as tags.
-  expect(all).toContain('"label":"#ops 1"')
+  expect(all).toContain('"label":"#ops"')
   await panel(app, { name: 'open', value: `${app}:Projects/Kothar Plan.md` })
   await panel(app, { name: 'write', value: 'Ship notes today\n' })
   // Same file, still no front matter.
@@ -894,6 +896,51 @@ it('shows an outline for a note with headings, which jumps the editor, and links
   const linked = JSON.stringify(await panel(app, { name: 'link-mention', value: `${app}:plan.md` }))
   expect(readFileSync(join(garage, 'chats', app, 'notes', 'plan.md'), 'utf8')).toContain('Check [[Deploys|deploys]] first')
   // It's a backlink now, no longer a mention.
-  expect(linked).toContain('"text":"Linked from"')
-  expect(linked).not.toContain('"text":"Mentioned in"')
+  expect(linked).toContain('"title":"Linked from"')
+  expect(linked).not.toContain('"title":"Mentioned in"')
+})
+
+// Every view in a tree, depth first.
+const viewsIn = (view: ExtensionView): ExtensionView[] => {
+  const kids =
+    view.type === 'stack' || view.type === 'row'
+      ? view.children
+      : view.type === 'card'
+        ? view.children
+        : view.type === 'split'
+          ? [view.side, view.main]
+          : []
+  return [view, ...kids.flatMap(viewsIn)]
+}
+
+it('keeps the popup quiet: one New note button and a ⋯ menu for the rest, a note headed by its name and a ⋯ menu', async () => {
+  const { create, tool, panel } = await start()
+  const app = create('App')
+  await tool(app, 'write_note', { name: 'Deploys', description: 'How we ship', body: 'Ship on Fridays #ops' })
+  const list = viewsIn((await panel(app)) as ExtensionView)
+  const side = list.find((v) => v.type === 'split')
+  const sideViews = side?.type === 'split' ? viewsIn(side.side) : []
+  const buttons = sideViews.filter((v) => v.type === 'button').map((v) => v.type === 'button' && v.label)
+  // Besides the tag row's #ops, New note is the only button in the list.
+  expect(buttons).toEqual(['New note', '#ops'])
+  const menus = sideViews.filter((v) => v.type === 'menu')
+  expect(menus).toHaveLength(1)
+  const labels = menus[0]!.type === 'menu' ? menus[0]!.items.map((i) => ('label' in i ? i.label : '—')) : []
+  expect(labels).toEqual(['New global note', '—', 'Sort by edited', 'Sort by created', 'Sort by title', '—', 'Import folder…', 'Import from path…', 'Show folder'])
+
+  const open = viewsIn((await panel(app, { name: 'open', value: `${app}:deploys.md` })) as ExtensionView)
+  // No badges or always-on metadata: where it's kept, when edited and how long show on hovering the name.
+  expect(open.some((v) => v.type === 'badge')).toBe(false)
+  const name = open.find((v) => v.type === 'heading' && v.text === 'Deploys')
+  expect(name?.type === 'heading' && name.hint).toMatch(/^How we ship\nThis space\nEdited .* · 4 words$/)
+  const noteMenu = open.find((v) => v.type === 'menu' && v.label === 'More for Deploys')
+  expect(noteMenu?.type === 'menu' && noteMenu.items.map((i) => ('label' in i ? i.label : '—'))).toEqual([
+    'Add to context',
+    'Pin',
+    'Rename',
+    'Move to global',
+    'Show in Finder',
+    '—',
+    'Delete',
+  ])
 })

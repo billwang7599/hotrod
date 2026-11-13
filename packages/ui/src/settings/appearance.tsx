@@ -1,6 +1,7 @@
 // The display preferences on the Appearance page, below the theme picker. They live in this window, not the garage.
 import { useState } from 'react'
-import { Button, CHAT_NOUN, GROUP, Hint, Switch } from '../controls.tsx'
+import { Button, CHAT_NOUN, GROUP, Hint, Select, Switch } from '../controls.tsx'
+import { LAUNCHER_PLACES, placeLaunchers, useLauncherPlace, type LauncherPlace } from '../launchers.ts'
 import { showPaths, usePathsShown } from '../paths.ts'
 import {
   askNotificationLeave,
@@ -24,6 +25,34 @@ function ShownPaths() {
         </SettingRow>
         <SettingRow name="In the Context panel">
           <Switch label="Show paths in the Context panel" checked={paths.context} onChange={(on) => showPaths('context', on)} />
+        </SettingRow>
+      </div>
+    </>
+  )
+}
+
+const LAUNCHER_HINT =
+  'Buttons that open extensions such as Notes and Artifacts. Top puts them under Home, Bottom above Settings. Hidden or not, each still opens from its tab in the right panel and its shortcut.'
+
+function Sidebar() {
+  const place = useLauncherPlace()
+  return (
+    <>
+      <div className="pt-24 pb-8 font-semibold">Sidebar</div>
+      <div className={GROUP}>
+        <SettingRow
+          name={
+            <Hint text={LAUNCHER_HINT}>
+              <span className="self-start">Extension launchers</span>
+            </Hint>
+          }
+        >
+          <Select
+            label="Extension launchers"
+            value={place}
+            options={LAUNCHER_PLACES}
+            onChange={(picked) => placeLaunchers(picked as LauncherPlace)}
+          />
         </SettingRow>
       </div>
     </>
@@ -120,6 +149,7 @@ export function AppearancePage({ openMarketplace }: { openMarketplace?: () => vo
   return (
     <>
       <Appearance browse={openMarketplace} />
+      <Sidebar />
       <ShownPaths />
       <ShownSteps />
       <ShownReports />

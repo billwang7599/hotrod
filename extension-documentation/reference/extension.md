@@ -25,18 +25,23 @@ after it cover each group in detail.
 | `spaceSettings` | Settings kept per space, shown in the extension's panels | [Settings and setup](settings.md#settings-per-space) |
 | `settingsVersion`, `migrateSettings` | Updating saved settings once when their shape changes | [Settings and setup](settings.md#migrating-saved-settings) |
 | `settingsView`, `onSettingsChanged` | A readout and buttons of the extension's own on its Settings page, and a hook for a changed setting | [Settings and setup](settings.md#a-view-of-its-own) |
+| `prompts` | Text sent to agents that the user can read and edit in Settings | [Settings and setup](settings.md#prompts) |
 | `setup` | A check and an install step for something the extension needs | [Settings and setup](settings.md#setup) |
 | `tools` | Tools agents can call | [Tools, MCP servers, instructions and memory](agents.md#tools) |
+| `toolsFor` | More tools, made for each chat as its session starts (such as tools relayed from another MCP server); `result: 'mcp'` on a tool passes its MCP content through as it is | [Tools, MCP servers, instructions and memory](agents.md#tools) |
 | `mcpServers` | MCP servers for each session | [Tools, MCP servers, instructions and memory](agents.md#mcp-servers) |
 | `instructions` | Text added to each session's instructions | [Tools, MCP servers, instructions and memory](agents.md#instructions) |
 | `panels` | Tabs in the right sidebar | [Panels and commands](panels.md#panels) |
 | `commands` | Actions in a chat's General tab | [Panels and commands](panels.md#commands) |
 | `messageActions` | Buttons on each message in the transcript, such as Pin | [Panels and commands](panels.md#message-actions) |
+| `composerToggles` | On/off chips in a chat's composer, kept per chat, such as Deep research | [Panels and commands](panels.md#composer-toggles) |
 | `chats` | Chats of the extension's own | [Chats](#chats), below |
 | `memory` | What each session sees of its chat's history | [Tools, MCP servers, instructions and memory](agents.md#memory) |
 | `onStart`, `onStop` | Start and stop background work | [Events and hooks](events.md#background-work) |
 | `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
 | `onPermissionRequested` | A policy that answers permission requests | [Events and hooks](events.md#onpermissionrequested) |
+| `onTurnSent` | Everything a turn's session was sent, labelled, as it opens | [Events and hooks](events.md#onturnsent) |
+| `turnOptions` | Makes a turn read only, or runs it on another model list | [Events and hooks](events.md#turnoptions) |
 | `transformMessage`, `transformOutput` | Rewrites of messages and replies | [Events and hooks](events.md#transforms) |
 | `onWaitAction` | The user's answer to the extension's wait on a chat | [The host](host.md#waiting-for-the-user) |
 | `processes`, `onProcessAction`, `onProcessesChanged` | Rows of the extension's own in the Processes tab | [The host](host.md#processes-rows) |
@@ -73,6 +78,7 @@ A `ExtensionChat` has:
 | `id` | `string` | The chat's id. No other extension's chat may have it. |
 | `name` | `string` | Shown in the sidebar. |
 | `instructions` | `string` | The chat's role, given first in every session's instructions. |
+| `prompt` | `string`, optional | The id of one of the extension's [prompts](settings.md#prompts) (`where: 'instructions'`, its `text` the same as `instructions`) that holds the role, so the user can edit it in Settings. Kothar then sends the user's edit. Home's is `role`. |
 | `seesAll` | `boolean`, optional | The chat can list, read and message every chat through Kothar's own tools, as Home does. |
 
 An extension's chat is pinned. It can't be renamed, archived or deleted, and it keeps no folders, files or `AGENTS.md`

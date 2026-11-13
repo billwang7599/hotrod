@@ -63,9 +63,9 @@ A `ExtensionPanel` has:
 | `shown(chat, context)` | Optional. Whether this chat gets the tab. Without it, every chat does. |
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
-| `placement` | Optional. `'tab'` (the default) or `'popup'`: a large window over the chat, for work that wants room, such as notes. Esc closes it. It draws for the chat that's open, as a tab does. |
+| `placement` | Optional. `'tab'` (the default), `'popup'`: a large window over the chat, for work that wants room, such as notes (Esc closes it), or `'dock'`: a column beside the chat, for something to look at while the chat goes on, such as an artifact. Only one right-hand column shows at a time: while a dock is open, the right sidebar hides, and the right sidebar's toggle swaps the two (the dock keeps its scroll and drafts). Closing the dock brings the right sidebar back as the user left it. A dock is kept per chat. Whichever, it draws for the chat that's open, as a tab does. |
 | `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
-| `sidebar` | Optional. `true` adds an entry to the left sidebar, above **Settings**, that opens the panel. |
+| `launcher` | Optional. `true` also shows a launcher for the panel in the left sidebar; the panel is always a tab in the right panel. Launchers sit at the top, under Home, unless the user moves them to the bottom or hides them in **Settings → Appearance**. |
 
 When the panel redraws:
 
@@ -330,3 +330,40 @@ scrolls the chat to it when clicked.
 
 List `commands` in the manifest's `uses` for `messageActions`.
 
+
+## Composer toggles
+
+`composerToggles` adds an on/off chip to a chat's composer, beside **Attach**, such as **Deep research** or **Web
+only**. The user flips it per chat: each chat keeps its own state, saved with the chat (so it outlives a restart) and
+never shared with another chat. Several extensions can each add theirs.
+
+Read a chat's state with `host.toggled(chatId, id)` wherever you need it: in `transformMessage` to change what the next
+message does, in a tool, in `onTurnStarted`. `onChange` runs after the user flips it and the new state is saved.
+
+```ts
+const shout: Extension = {
+  id: 'shout',
+  name: 'Shout',
+  description: 'Asks for replies in capitals while its chip is on.',
+  enabledByDefault: false,
+  composerToggles: [{ id: 'shout', label: 'Shout', icon: 'bolt', hint: 'Replies in capitals', activeHint: 'On: replies in capitals' }],
+  transformMessage: (text, chat, { host }) =>
+    host.toggled(chat.id, 'shout') ? `${text}\n\n(Reply in capital letters.)` : text,
+}
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `label` | Short; shown on the chip. |
+| `icon?` | `search`, `globe`, `book`, `sparkle` or `bolt`. |
+| `hint?`, `activeHint?` | Shown on hover, while off and while on (both default to `label`). |
+| `default?` | Its state in a chat that never set it. Off without it. |
+| `shown(chat, context)` | Optional. Whether this chat gets the chip. |
+| `onChange(on, chat, context)` | Optional. Runs after the user flips it. A throw shows as an error; the new state stays. |
+
+`host.setToggle(chatId, id, on)` sets it from the extension (say, to turn a one-shot switch off once it's used); that
+doesn't call `onChange`. While the extension is off, or a chat's setup leaves it out, the chip isn't shown and the chat's
+saved state waits for it to come back.
+
+List `commands` in the manifest's `uses` for `composerToggles`, `host.toggled` and `host.setToggle`.

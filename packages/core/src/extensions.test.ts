@@ -71,17 +71,17 @@ it('finds no extensions in a missing folder', async () => {
 })
 
 describe('panelTabOf', () => {
-  it("passes on a panel's placement, keys and sidebar entry, and nothing of the wrong kind", () => {
+  it("passes on a panel's placement, keys and launcher, and nothing of the wrong kind", () => {
     const render = () => ({ type: 'empty' as const, text: '' })
-    expect(panelTabOf('notes', { id: 'n', title: 'Notes', placement: 'popup', shortcut: ' Mod+Shift+N ', sidebar: true, render })).toEqual({
+    expect(panelTabOf('notes', { id: 'n', title: 'Notes', placement: 'popup', shortcut: ' Mod+Shift+N ', launcher: true, render })).toEqual({
       extension: 'notes',
       id: 'n',
       title: 'Notes',
       placement: 'popup',
       shortcut: 'Mod+Shift+N',
-      sidebar: true,
+      launcher: true,
     })
-    const odd = { id: 'g', title: 'Git', placement: 'window', shortcut: 4, sidebar: 'yes', render } as unknown as ExtensionPanel
+    const odd = { id: 'g', title: 'Git', placement: 'window', shortcut: 4, launcher: 'yes', render } as unknown as ExtensionPanel
     expect(panelTabOf('git', odd)).toEqual({ extension: 'git', id: 'g', title: 'Git' })
   })
 })

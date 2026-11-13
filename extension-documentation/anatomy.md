@@ -68,7 +68,7 @@ The optional fields fall into groups:
 | What agents get | `tools`, `mcpServers`, `instructions`, `memory` | [Tools, MCP servers, instructions and memory](reference/agents.md) |
 | What you see | `panels`, `commands`, `chats` | [Panels and commands](reference/panels.md), [The extension object](reference/extension.md#chats) |
 | Reacting to chats | `onChatCreated`, `onTurnCompleted`, `onEvent`, `onStart` and the other hooks | [Events and hooks](reference/events.md) |
-| Steering agents | `onPermissionRequested`, `transformMessage`, `transformOutput` | [Events and hooks](reference/events.md) |
+| Steering agents | `onPermissionRequested`, `turnOptions`, `transformMessage`, `transformOutput` | [Events and hooks](reference/events.md) |
 
 ## The context
 

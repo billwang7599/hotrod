@@ -413,6 +413,24 @@ describe('a wait as the turn ends', () => {
     await until(() => t.chat(space).status === 'idle')
     expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(1)
   })
+
+  it('gives a quiet child’s reply to the extension, not its parent, and still removes it', async () => {
+    const replies: string[] = []
+    const t = withHost({
+      onTurnCompleted({ chat, text }) {
+        if (chat.worker) replies.push(`${chat.name}: ${text}`)
+      },
+    })
+    const space = t.create()
+    const quiet = t.host().createChat({ name: 'Quiet', parentId: space, quiet: true })
+    t.host().send(quiet.id, 'Task')
+    await until(() => !t.core.chats().some((c) => c.id === quiet.id))
+    expect(replies).toEqual(['Quiet: Done'])
+    expect(t.chat(space).entries.some((e) => e.type === 'worker.report')).toBe(false)
+    expect(t.chat(space).status).toBe('idle')
+    expect(t.chat(space).queue).toEqual([])
+    expect(() => t.host().createChat({ name: 'Odd', quiet: true })).toThrow('Only a child chat (with parentId) can be quiet')
+  })
 })
 
 describe('the host', () => {
@@ -646,6 +664,20 @@ describe('showPanel', () => {
     ])
     expect(() => t.host().showPanel(id, 'nope')).toThrow('Test extension has no panel "nope"')
     expect(() => t.host().showPanel('nope', 'side')).toThrow('Unknown chat "nope"')
+  })
+
+  it('asks the UI to close a popup or a dock for a chat; a tab stays', () => {
+    const t = withHost({ panels })
+    const id = t.create()
+    t.host().closePanel(id, 'pop')
+    t.host().closePanel(id, 'side')
+    t.host().closePanel(id, 'tab')
+    expect(t.messages.filter((m) => m.type === 'extension.panel.close')).toEqual([
+      { type: 'extension.panel.close', chatId: id, extension: 'test', panel: 'pop', placement: 'popup' },
+      { type: 'extension.panel.close', chatId: id, extension: 'test', panel: 'side', placement: 'dock' },
+    ])
+    expect(() => t.host().closePanel(id, 'nope')).toThrow('Test extension has no panel "nope"')
+    expect(() => t.host().closePanel('nope', 'pop')).toThrow('Unknown chat "nope"')
   })
 
   it('keeps a dock placement for the UI', () => {

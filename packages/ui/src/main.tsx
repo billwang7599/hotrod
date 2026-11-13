@@ -2,6 +2,7 @@
 import './renamed-storage.ts'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { SettingsLinkContext } from './extension-view.tsx'
 import { AnimatePresence, domAnimation, LazyMotion, m, MotionConfig, useReducedMotion } from 'motion/react'
 import { Tooltip } from 'radix-ui'
 import { Chat } from './chat.tsx'
@@ -15,8 +16,11 @@ import { ResizeHandle, usePanelWidths } from './panel-width.tsx'
 import { ChatNav, NameDialog, SidebarFooter, type NameRequest } from './sidebar.tsx'
 import { nthSpace, stepSpace } from './nav.ts'
 import { SearchPalette } from './search.tsx'
-import { ExtensionPopup, sidebarEntries, usePanelShortcuts } from './extension-popups.tsx'
-import { choosePanelTab, extensionTabId, openDock, showsFor } from './panel-tab.ts'
+import { ExtensionPopup, launcherEntries, usePanelShortcuts } from './extension-popups.tsx'
+import { placedLaunchers, useLauncherPlace } from './launchers.ts'
+import { choosePanelTab, currentDock, currentPopup, extensionTabId, openDock, openPopup, panelOverDock, rightColumn, selectDockChat, showsFor, useDock } from './panel-tab.ts'
+import { useOpenDock } from './extension-dock.tsx'
+import type { PanelTab } from '@kothar/core/shared'
 import { changesText, RestartButton } from './restart.tsx'
 import { panelShortcuts, useBindings, useShortcuts, type ShortcutHandlers } from './shortcuts.ts'
 import { setInstalledThemes, startAppearance } from './themes.tsx'
@@ -30,6 +34,7 @@ import './styles.css'
 
 const SELECTED_KEY = 'kothar.selectedChat'
 const CONTEXT_OPEN_KEY = 'kothar.contextOpen'
+const NO_PANELS: PanelTab[] = []
 const SIDEBAR_OPEN_KEY = 'kothar.sidebarOpen'
 const COLUMN_KEY = 'kothar.columnWidth'
 const HINT_DELAY_MS = 400
@@ -101,11 +106,19 @@ function App() {
         const { chats, selectedId } = seenRef.current
         if (!showsFor(chats, selectedId, action.chatId)) return
         const id = extensionTabId(action.extension, action.panel)
-        if (action.placement === 'dock') openDock(id)
+        if (action.placement === 'dock') openDock(id, selectedId)
         else {
           choosePanelTab(id)
           showTabRef.current()
         }
+        return
+      }
+      if (action.type === 'extension.panel.close') {
+        const { chats, selectedId } = seenRef.current
+        if (!showsFor(chats, selectedId, action.chatId)) return
+        const id = extensionTabId(action.extension, action.panel)
+        if (action.placement === 'popup' && currentPopup() === id) openPopup(null)
+        if (action.placement === 'dock' && currentDock(selectedId).open === id) openDock(null, selectedId)
         return
       }
       dispatch(action)
@@ -135,6 +148,22 @@ function App() {
     if (page) setSettingsPage(page)
     setSettingsOpen(true)
   }, [])
+  // A kothar:settings/<page>#<anchor> link in an extension's view: the page, then its anchor scrolled into view once
+  // it's drawn.
+  const openSettingsLink = useCallback(
+    (page: string, anchor?: string) => {
+      openSettings(page as SettingsPage)
+      if (!anchor) return
+      let tries = 30
+      const find = () => {
+        const target = document.getElementById(anchor)
+        if (target) return target.scrollIntoView({ block: 'start' })
+        if (--tries > 0) requestAnimationFrame(find)
+      }
+      requestAnimationFrame(find)
+    },
+    [openSettings],
+  )
   const [contextOpen, setContextOpen] = useState(() => storedFlag(localStorage.getItem(CONTEXT_OPEN_KEY), false))
   useEffect(() => localStorage.setItem(CONTEXT_OPEN_KEY, String(contextOpen)), [contextOpen])
   const [sidebarOpen, setSidebarOpen] = useState(() => storedFlag(localStorage.getItem(SIDEBAR_OPEN_KEY), true))
@@ -155,10 +184,22 @@ function App() {
     () => (sidebarDocks ? setSidebarOpen((open) => !open) : flipOverlay('sidebar')),
     [sidebarDocks],
   )
-  const toggleContext = useCallback(
-    () => (contextDocks ? setContextOpen((open) => !open) : flipOverlay('context')),
-    [contextDocks],
-  )
+  // The open chat's dock panel, beside the chat. Only one right-hand column shows at a time: while a dock is open, the
+  // right sidebar hides (contextOpen is left as it was, and its width is its own, so closing the dock brings it back
+  // as the user left it), and toggling the sidebar swaps the two. In a window too narrow to dock the sidebar, it opens
+  // over everything instead, as before.
+  const selectedId = state.selectedId
+  useLayoutEffect(() => selectDockChat(selectedId), [selectedId])
+  const openPanels = (state.extensionUi?.chatId === selectedId && state.extensionUi.panels) || NO_PANELS
+  const hasDock = useOpenDock(openPanels, selectedId) !== undefined
+  const panelInFront = useDock(selectedId).panel
+  const swaps = contextDocks && hasDock
+  const contextShown = contextDocks ? rightColumn(contextOpen, { open: hasDock, panel: panelInFront }).sidebar : overlay === 'context'
+  const toggleContext = useCallback(() => {
+    if (!contextDocks) return flipOverlay('context')
+    if (hasDock) return panelOverDock(!currentDock(selectedId).panel, selectedId)
+    setContextOpen((open) => !open)
+  }, [contextDocks, hasDock, selectedId])
   useEffect(() => {
     if (!overlay) return
     const onKeyDown = (e: KeyboardEvent) => {
@@ -208,12 +249,13 @@ function App() {
   const [marketplace, setMarketplace] = useState(false)
   const openMarketplace = useCallback(() => setMarketplace(true), [])
   const goTo = (chatId: string | undefined) => chatId && select(chatId)
-  // The open chat's extension panels: popups, their keys and sidebar entries.
+  // The open chat's extension panels: popups, their keys and left-sidebar launchers.
   const panels = (selected && state.extensionUi?.chatId === selected.id && state.extensionUi.panels) || []
   const showContext = useCallback(() => {
-    if (contextDocks) setContextOpen(true)
-    else setOverlay('context')
-  }, [contextDocks])
+    if (!contextDocks) setOverlay('context')
+    else if (swaps) panelOverDock(true, selectedId)
+    else setContextOpen(true)
+  }, [contextDocks, swaps, selectedId])
   useLayoutEffect(() => {
     showTabRef.current = showContext
   })
@@ -234,11 +276,13 @@ function App() {
   }
   useShortcuts(shortcuts)
   const keys = useBindings()
+  const launchers = placedLaunchers(useLauncherPlace(), launcherEntries(panels, keys, showContext))
   const [quitting, setQuitting] = useState(false)
   useEffect(() => window.kothar?.onQuitting(() => setQuitting(true)), [])
   const reduceMotion = useReducedMotion()
 
   return (
+    <SettingsLinkContext.Provider value={openSettingsLink}>
     <LazyMotion features={domAnimation} strict>
       <MotionConfig reducedMotion="user" transition={reduceMotion ? { duration: 0 } : TRANSITION}>
         <div
@@ -269,11 +313,12 @@ function App() {
                     select={select}
                     askName={setNameRequest}
                     newSpaceKeys={keys.newSpace}
+                    launchers={launchers.top}
                   />
                   <SidebarFooter
                     settingsKeys={keys.settings}
                     openSettings={() => openSettings()}
-                    entries={sidebarEntries(panels, keys, showContext)}
+                    launchers={launchers.bottom}
                   />
                 </aside>
               </SidePanel>
@@ -355,13 +400,14 @@ function App() {
                 openSettings={openSettings}
                 sidebarOpen={sidebarShown}
                 toggleSidebar={toggleSidebar}
-                contextOpen={contextDocks ? contextOpen : overlay === 'context'}
+                contextOpen={contextShown}
                 contextOverlay={!contextDocks}
                 toggleContext={toggleContext}
                 columnPx={columnPx}
                 setColumnPx={setColumnPx}
                 notify={notify}
                 contextItems={state.context?.chatId === selected.id ? state.context.items : undefined}
+                contextStale={state.context?.stale}
                 extensionUi={state.extensionUi}
                 extensions={state.extensions}
                 panelViews={state.panelViews}
@@ -453,6 +499,7 @@ function App() {
         </div>
       </MotionConfig>
     </LazyMotion>
+    </SettingsLinkContext.Provider>
   )
 }
 

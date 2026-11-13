@@ -51,9 +51,14 @@ export const valuesOf = (extension: Extension, saved: Record<string, unknown> = 
 // What each Extension field needs listed in a community extension's manifest.
 const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['tools', 'tools'],
+  ['toolsFor', 'tools'],
   ['mcpServers', 'mcpServers'],
   ['instructions', 'instructions'],
+  ['prompts', 'instructions'],
+  ['onTurnSent', 'readChats'],
+  ['onActivity', 'readChats'],
   ['onPermissionRequested', 'permissions'],
+  ['turnOptions', 'permissions'],
   ['transformMessage', 'transforms'],
   ['transformOutput', 'transforms'],
   ['onEvent', 'events'],
@@ -69,6 +74,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['messageActions', 'commands'],
+  ['composerToggles', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
   ['migrateSettings', 'settings'],
@@ -85,17 +91,17 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['onProcessesChanged', 'panels'],
 ]
 
-// What the UI gets of a panel: where it shows, its keys and whether the left sidebar lists it. Anything else an
-// extension put there is dropped, and a placement, shortcut or sidebar of the wrong kind is left out.
+// What the UI gets of a panel: where it shows, its keys and whether it has a launcher in the left sidebar. Anything else an
+// extension put there is dropped, and a placement, shortcut or launcher of the wrong kind is left out.
 export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
-  const { id, title, placement, shortcut, sidebar } = panel
+  const { id, title, placement, shortcut, launcher } = panel
   return {
     extension,
     id,
     title,
     ...((placement === 'popup' || placement === 'dock') && { placement }),
     ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
-    ...(sidebar === true && { sidebar }),
+    ...(launcher === true && { launcher }),
   }
 }
 
@@ -129,15 +135,20 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
   addContextFile: 'sendMessages',
   wait: 'panels',
   showPanel: 'panels',
+  closePanel: 'panels',
   endWait: 'panels',
   processes: 'panels',
   processAction: 'panels',
   processesChanged: 'panels',
+  callTool: 'tools',
+  requestPermission: 'permissions',
+  toggled: 'commands',
+  setToggle: 'commands',
 }
 
 // Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
 // the clock.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now']
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now', 'prompt', 'activity']
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check

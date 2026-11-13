@@ -1,0 +1,232 @@
+{
+  "version": 1,
+  "checked": "2026-11-12",
+  "servers": [
+    {
+      "id": "github",
+      "name": "GitHub",
+      "description": "Issues, pull requests, code search and Actions in your repositories.",
+      "publisher": "GitHub",
+      "official": true,
+      "docs": "https://github.com/github/github-mcp-server",
+      "transport": "http",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "auth": {
+        "kinds": ["token"],
+        "token": { "label": "Personal access token", "header": "Authorization", "prefix": "Bearer ", "help": "Make one at github.com → Settings → Developer settings → Personal access tokens. GitHub signs in other apps with OAuth only for apps it has registered." }
+      }
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "description": "Find, create and update Linear issues, projects and comments.",
+      "publisher": "Linear",
+      "official": true,
+      "docs": "https://linear.app/docs/mcp",
+      "transport": "http",
+      "url": "https://mcp.linear.app/mcp",
+      "auth": {
+        "kinds": ["oauth", "token"],
+        "token": { "label": "API key", "header": "Authorization", "prefix": "Bearer ", "help": "Linear → Settings → Account → Security & access → API keys." }
+      }
+    },
+    {
+      "id": "notion",
+      "name": "Notion",
+      "description": "Search, read and edit pages and databases in your Notion workspace.",
+      "publisher": "Notion",
+      "official": true,
+      "docs": "https://developers.notion.com/docs/mcp",
+      "transport": "http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": { "kinds": ["oauth"] }
+    },
+    {
+      "id": "sentry",
+      "name": "Sentry",
+      "description": "Look up errors, issues and releases in Sentry.",
+      "publisher": "Sentry",
+      "official": true,
+      "docs": "https://mcp.sentry.dev",
+      "transport": "http",
+      "url": "https://mcp.sentry.dev/mcp",
+      "auth": { "kinds": ["oauth"] }
+    },
+    {
+      "id": "atlassian",
+      "name": "Atlassian",
+      "description": "Jira issues and Confluence pages, through Atlassian's Rovo MCP server.",
+      "publisher": "Atlassian",
+      "official": true,
+      "docs": "https://support.atlassian.com/atlassian-rovo-mcp-server/",
+      "transport": "http",
+      "url": "https://mcp.atlassian.com/v2/mcp",
+      "auth": {
+        "kinds": ["oauth", "token"],
+        "token": { "label": "Service account API key", "header": "Authorization", "prefix": "Bearer ", "help": "A service account's API key. A personal API token needs Basic auth instead: add it as a custom server." }
+      }
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "description": "Read designs, frames and variables from Figma files.",
+      "publisher": "Figma",
+      "official": true,
+      "docs": "https://developers.figma.com/docs/figma-mcp-server/",
+      "transport": "http",
+      "url": "https://mcp.figma.com/mcp",
+      "auth": { "kinds": ["oauth"] }
+    },
+    {
+      "id": "figma-desktop",
+      "name": "Figma (desktop app)",
+      "description": "The MCP server inside the Figma desktop app, while it's open. Needs a Dev or Full seat.",
+      "publisher": "Figma",
+      "official": true,
+      "docs": "https://developers.figma.com/docs/figma-mcp-server/local-server-installation",
+      "transport": "http",
+      "url": "http://127.0.0.1:3845/mcp",
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "stripe",
+      "name": "Stripe",
+      "description": "Customers, payments, invoices and Stripe's docs.",
+      "publisher": "Stripe",
+      "official": true,
+      "docs": "https://docs.stripe.com/mcp",
+      "transport": "http",
+      "url": "https://mcp.stripe.com",
+      "auth": {
+        "kinds": ["oauth", "token"],
+        "token": { "label": "Restricted API key (agent)", "header": "Authorization", "prefix": "Bearer ", "help": "A restricted key made for agent access, with only the access you want to give." }
+      }
+    },
+    {
+      "id": "supabase",
+      "name": "Supabase",
+      "description": "Manage Supabase projects: tables, SQL, migrations, logs. For development projects, not production data.",
+      "publisher": "Supabase",
+      "official": true,
+      "docs": "https://supabase.com/docs/guides/ai-tools/mcp",
+      "transport": "http",
+      "url": "https://mcp.supabase.com/mcp",
+      "auth": {
+        "kinds": ["oauth", "token"],
+        "token": { "label": "Personal access token", "header": "Authorization", "prefix": "Bearer ", "help": "Supabase → Account → Access tokens. Add ?project_ref=…&read_only=true to the address to narrow it." }
+      }
+    },
+    {
+      "id": "vercel",
+      "name": "Vercel",
+      "description": "Projects, deployments and logs on Vercel.",
+      "publisher": "Vercel",
+      "official": true,
+      "docs": "https://vercel.com/docs/ai-resources/vercel-mcp",
+      "transport": "http",
+      "url": "https://mcp.vercel.com",
+      "auth": { "kinds": ["oauth"] }
+    },
+    {
+      "id": "cloudflare-docs",
+      "name": "Cloudflare Docs",
+      "description": "Search Cloudflare's developer documentation.",
+      "publisher": "Cloudflare",
+      "official": true,
+      "docs": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+      "transport": "http",
+      "url": "https://docs.mcp.cloudflare.com/mcp",
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "context7",
+      "name": "Context7",
+      "description": "Up-to-date documentation and code examples for libraries and frameworks.",
+      "publisher": "Upstash",
+      "official": true,
+      "docs": "https://context7.com/docs",
+      "transport": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "auth": {
+        "kinds": ["none", "token"],
+        "token": { "label": "API key (optional, for higher limits)", "header": "CONTEXT7_API_KEY", "prefix": "", "help": "From your Context7 dashboard." }
+      }
+    },
+    {
+      "id": "exa",
+      "name": "Exa",
+      "description": "Web search and code context from Exa.",
+      "publisher": "Exa",
+      "official": true,
+      "docs": "https://docs.exa.ai/reference/exa-mcp",
+      "transport": "http",
+      "url": "https://mcp.exa.ai/mcp",
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "playwright",
+      "name": "Playwright",
+      "description": "Drive a browser from accessibility snapshots. Kothar's own Browser extension does this too.",
+      "publisher": "Microsoft",
+      "official": true,
+      "docs": "https://github.com/microsoft/playwright-mcp",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "description": "Read and write files in the folders you pick, and nowhere else.",
+      "publisher": "Model Context Protocol",
+      "official": true,
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "folders": true,
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch",
+      "description": "Fetch web pages and turn them into Markdown. Needs uv (uvx).",
+      "publisher": "Model Context Protocol",
+      "official": true,
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "description": "A knowledge graph agents keep across chats, in a local file.",
+      "publisher": "Model Context Protocol",
+      "official": true,
+      "docs": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "auth": { "kinds": ["none"] }
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "description": "Web, news, image and local search from Brave's API.",
+      "publisher": "Brave",
+      "official": true,
+      "docs": "https://github.com/brave/brave-search-mcp-server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@brave/brave-search-mcp-server"],
+      "env": { "BRAVE_MCP_TRANSPORT": "stdio" },
+      "auth": {
+        "kinds": ["token"],
+        "token": { "label": "Brave Search API key", "env": "BRAVE_API_KEY", "prefix": "", "help": "From your Brave Search API dashboard." }
+      }
+    }
+  ]
+}

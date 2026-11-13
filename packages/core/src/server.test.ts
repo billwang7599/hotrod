@@ -10,7 +10,7 @@ import {
 import { createServer, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import type { Extension } from '@kothar/extension-api'
+import type { Extension, SentTurn } from '@kothar/extension-api'
 import { afterEach, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
@@ -881,4 +881,139 @@ it("gives a worker its parent's latest messages frozen at launch when no memory 
   expect(first.options.kotharMcp).toBeUndefined()
   first.end('Checked')
   expect(core.chats().some((c) => c.id === chatId)).toBe(false)
+})
+
+it('sends named prompts and tool descriptions as the user edited them, and says so in what each turn was sent', async () => {
+  const sent: SentTurn[] = []
+  const prompted: Extension = {
+    id: 'prompted',
+    name: 'Prompted',
+    description: '',
+    enabledByDefault: true,
+    prompts: [{ id: 'tone', label: 'How to sound', text: 'Be brief.', where: 'instructions' }],
+    instructions: (_session, { host }) => host.prompt('tone'),
+    tools: [
+      {
+        name: 'echo_back',
+        description: 'Echoes.',
+        inputSchema: { type: 'object', properties: { text: { type: 'string' } } },
+        offered: () => true,
+        run: ({ text }) => String(text),
+      },
+    ],
+  }
+  const old: Extension = { id: 'old', name: 'Old', description: '', enabledByDefault: true, instructions: () => 'OLD TEXT' }
+  const watcher: Extension = {
+    id: 'watcher',
+    name: 'Watcher',
+    description: '',
+    enabledByDefault: true,
+    onTurnSent: (turn) => void sent.push(turn),
+  }
+  const { core, mcpUrl, send } = await startHeld({ extensions: [mainExtension, prompted, old, watcher] })
+  const handle = handleOn(core)
+  const listed = async (bearer: string) => {
+    const response = await fetch(mcpUrl, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    })
+    const { result } = await response.json()
+    return Object.fromEntries(result.tools.map((t: { name: string; description: string }) => [t.name, t.description]))
+  }
+  const info = () => core.extensions().find((e) => e.id === 'prompted')!
+
+  expect(info().prompts).toEqual([
+    { id: 'tone', label: 'How to sound', where: 'instructions', default: 'Be brief.', text: 'Be brief.' },
+    { id: 'tool:echo_back', label: 'Tool description: echo_back', where: 'tool', tool: 'echo_back', default: 'Echoes.', text: 'Echoes.' },
+  ])
+  expect(info().fixedInstructions).toBeUndefined()
+  expect(core.extensions().find((e) => e.id === 'old')!.fixedInstructions).toBe(true)
+
+  let session = send('main', 'hi')
+  expect(session.options.instructions).toContain('Be brief.')
+  expect((await listed(session.options.kotharMcp!.token))['echo_back']).toBe('Echoes.')
+  let turn = sent.at(-1)!
+  expect(turn).toMatchObject({ kind: 'turn', engine: 'held', chat: { id: 'main' } })
+  // Joined, the sections are exactly what the session got.
+  const joined = (part: string) => turn.sections.filter((s) => s.part === part).map((s) => s.text).join('\n\n')
+  expect(joined('instructions')).toBe(session.options.instructions)
+  expect(joined('prompt')).toBe(session.prompt)
+  expect(turn.sections.find((s) => s.extension === 'prompted' && s.part === 'instructions')).toMatchObject({
+    source: 'extension',
+    label: 'Prompted: instructions',
+    text: 'Be brief.',
+    prompts: [{ id: 'tone', label: 'How to sound', edited: false }],
+    editable: true,
+  })
+  expect(turn.sections.find((s) => s.extension === 'old')).toMatchObject({ label: 'Old: instructions (not editable)', editable: false })
+  expect(turn.sections.find((s) => s.source === 'you')).toMatchObject({ label: 'You', text: 'hi' })
+  expect(turn.sections.find((s) => s.label === 'Prompted tool: echo_back')!.text).toContain('Echoes.')
+  expect(turn.sections.at(-1)).toMatchObject({ source: 'engine', label: 'Added by held, not visible to Kothar' })
+  const order = turn.sections.map((s) => s.source)
+  expect(order.indexOf('you')).toBeLessThan(order.indexOf('tools'))
+  session.end('ok')
+
+  handle({ type: 'extension.prompt.set', extensionId: 'prompted', promptId: 'tone', text: 'Be thorough.' })
+  handle({ type: 'extension.prompt.set', extensionId: 'prompted', promptId: 'tool:echo_back', text: 'Echoes it back.' })
+  expect(info().prompts).toMatchObject([
+    { id: 'tone', text: 'Be thorough.', default: 'Be brief.', edited: true },
+    { id: 'tool:echo_back', text: 'Echoes it back.', edited: true },
+  ])
+  session = send('main', 'again')
+  expect(session.options.instructions).toContain('Be thorough.')
+  expect(session.options.instructions).not.toContain('Be brief.')
+  expect((await listed(session.options.kotharMcp!.token))['echo_back']).toBe('Echoes it back.')
+  turn = sent.at(-1)!
+  expect(turn.sections.find((s) => s.extension === 'prompted' && s.part === 'instructions')!.prompts).toEqual([
+    { id: 'tone', label: 'How to sound', edited: true },
+  ])
+  expect(turn.sections.find((s) => s.label === 'Prompted tool: echo_back')).toMatchObject({ editable: true, prompts: [{ edited: true }] })
+  session.end('ok')
+
+  // Reset: back to the default, and nothing kept in settings.json.
+  handle({ type: 'extension.prompt.set', extensionId: 'prompted', promptId: 'tone' })
+  handle({ type: 'extension.prompt.set', extensionId: 'prompted', promptId: 'tool:echo_back', text: 'Echoes.' })
+  expect(info().prompts!.every((p) => !p.edited)).toBe(true)
+  session = send('main', 'once more')
+  expect(session.options.instructions).toContain('Be brief.')
+  session.end('ok')
+})
+
+it('sends an extension chat’s role from its prompt, as the user edited it', async () => {
+  const sent: SentTurn[] = []
+  const roled: Extension = {
+    ...mainExtension,
+    prompts: [{ id: 'role', label: 'Main’s role', text: 'MAIN ROLE', where: 'instructions' }],
+    chats: [{ id: 'main', name: 'Main', instructions: 'MAIN ROLE', prompt: 'role', seesAll: true }],
+  }
+  const watcher: Extension = { id: 'watcher', name: 'Watcher', description: '', enabledByDefault: true, onTurnSent: (turn) => void sent.push(turn) }
+  const { core, send } = await startHeld({ extensions: [roled, watcher] })
+  const handle = handleOn(core)
+  let session = send('main', 'hi')
+  expect(session.options.instructions.startsWith('MAIN ROLE')).toBe(true)
+  session.end('ok')
+  handle({ type: 'extension.prompt.set', extensionId: 'main-extension', promptId: 'role', text: 'MY ROLE' })
+  session = send('main', 'again')
+  expect(session.options.instructions.startsWith('MY ROLE')).toBe(true)
+  expect(session.options.instructions).not.toContain('MAIN ROLE')
+  await waitUntil(() => sent.length === 2)
+  expect(sent[1]!.sections[0]).toMatchObject({
+    source: 'extension',
+    text: 'MY ROLE',
+    prompts: [{ id: 'role', edited: true }],
+    editable: true,
+  })
+  session.end('ok')
+})
+
+it('records a message steered into a running turn against that turn', async () => {
+  const sent: SentTurn[] = []
+  const watcher: Extension = { id: 'watcher', name: 'Watcher', description: '', enabledByDefault: true, onTurnSent: (turn) => void sent.push(turn) }
+  const { core, send } = await startHeld({ extensions: [mainExtension, watcher], steering: true })
+  const session = send('main', 'start')
+  core.handle({ type: 'chat.send', chatId: 'main', text: 'and this', steer: true }, () => {})
+  await waitUntil(() => sent.length === 2)
+  expect(sent[1]).toMatchObject({ kind: 'steer', turn: sent[0]!.turn, sections: [{ source: 'you', text: 'and this' }] })
+  session.end('ok')
 })

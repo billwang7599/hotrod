@@ -40,7 +40,7 @@ export const ZOOM_INSTRUCTIONS =
   'date and time of message id. Before you act, guess or ask about something, find its latest mention and zoom ' +
   'until you have it whole.'
 
-const COMPACTOR_INSTRUCTIONS = `You write the memory of a long chat between a user and an AI agent. Each <item> is \
+export const COMPACTOR_INSTRUCTIONS = `You write the memory of a long chat between a user and an AI agent. Each <item> is \
 either one message to summarize, or two adjacent summaries (key|text lines, oldest first) to merge into one. Write \
 one summary per item, as a single line of plain text.
 
@@ -329,6 +329,8 @@ type CompactorChat = { messages: MemoryMessage[]; summaries: Summaries }
 export function openCompactor(options: {
   chat(chatId: string): CompactorChat | undefined
   complete(request: CompletionRequest): Promise<string>
+  // The summarizer's instructions as the user left them (the prompt "summarizer-tree"), else COMPACTOR_INSTRUCTIONS.
+  system?(): string
   onFailure?(reason: string): void
   debounceMs?: number
   retryBaseMs?: number
@@ -374,10 +376,11 @@ export function openCompactor(options: {
       try {
         const prompt = batch.map((item) => item.input).join('\n\n')
         const reply = await options.complete({
-          system: COMPACTOR_INSTRUCTIONS,
+          system: options.system?.() ?? COMPACTOR_INSTRUCTIONS,
           prompt,
           schema: SUMMARIES_SCHEMA,
           timeoutMs: COMPLETE_TIMEOUT_MS,
+          chatId,
         })
         lines = parseReply(reply)
         if (!lines) reason = `the reply wasn't JSON (${clip(oneLine(reply), 200) || 'empty'})`

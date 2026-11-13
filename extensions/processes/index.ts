@@ -9,6 +9,20 @@ import type { ChatSummary, Extension, ExtensionHost, ExtensionListItem, Extensio
 // own commands are, with its output in a plain log file in the extension's storage. The Processes tab shows them to the
 // user, once a space has one.
 
+// What every session with Kothar's tools is told (the prompt "instructions").
+export const PROCESSES_INSTRUCTIONS =
+  'Start anything long-running (a dev server, a watcher, anything that doesn’t exit on its own) with the ' +
+  'start_process tool, never in your shell’s background (`&`, nohup, run_in_background): your session ends ' +
+  'with your turn and takes those with it. A process from start_process belongs to the space, keeps running ' +
+  'between messages, and the lead, its workers and the user all see it. Call list_processes before ' +
+  'starting one and use what is already running instead of starting it twice. read_output shows what it ' +
+  'printed (and its address, once it opens a port); stop_process stops it when it’s no longer needed.'
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
 export const PANEL = 'processes'
 // A tab that's open is drawn again at most this often while output streams in; starts and ends draw it at once.
 export const REFRESH_MS = 500
@@ -564,15 +578,8 @@ export function createProcessesExtension(
       'They belong to the space, not the chat that started them, and stop when you or an agent stops them, the ' +
       'space is deleted or archived, or Kothar quits.',
     enabledByDefault: true,
-    instructions: ({ tools }) =>
-      tools
-        ? 'Start anything long-running (a dev server, a watcher, anything that doesn’t exit on its own) with the ' +
-          'start_process tool, never in your shell’s background (`&`, nohup, run_in_background): your session ends ' +
-          'with your turn and takes those with it. A process from start_process belongs to the space, keeps running ' +
-          'between messages, and the lead, its workers and the user all see it. Call list_processes before ' +
-          'starting one and use what is already running instead of starting it twice. read_output shows what it ' +
-          'printed (and its address, once it opens a port); stop_process stops it when it’s no longer needed.'
-        : undefined,
+    prompts: [{ id: 'instructions', label: 'When to start a process', text: PROCESSES_INSTRUCTIONS, where: 'instructions' }],
+    instructions: ({ tools }, { host }) => (tools ? promptOf(host, 'instructions', PROCESSES_INSTRUCTIONS) : undefined),
     tools: [
       {
         name: 'start_process',

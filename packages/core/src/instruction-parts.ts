@@ -18,6 +18,8 @@ export type InstructionPartsDeps = {
   setupOf: (chat: Chat) => Setup | undefined
   // The role instructions of the extension that owns this chat (Home's), if one does.
   roleOf: (chat: Chat) => string | undefined
+  // The id of the extension that owns this chat, if one does.
+  roleOwnerOf?: (chat: Chat) => string | undefined
   isOnFor: (extension: Extension, chat: Chat | undefined) => boolean
   valuesOf: (extension: Extension) => ExtensionContext['values']
   detailOf: (chat: Chat) => ChatDetail
@@ -58,10 +60,16 @@ export function openInstructionParts(deps: InstructionPartsDeps) {
     const forSession = { chat: deps.detailOf(chat), tools: zoomable }
     const workers = zoomable ? workerInstructionsFor(chat, deps) : undefined
     const memory = memoryInstructions(forSession, chat)
-    const extensions = deps.watchersOf('instructions', chat).flatMap((extension) =>
-      textFrom(extension, 'instructions', () => extension.instructions!(forSession, deps.contextOf(extension)), deps.extensionError),
-    )
-    return { role, extensions, workers, memory, parentView, setup, items }
+    const ids: string[] = []
+    const extensions = deps.watchersOf('instructions', chat).flatMap((extension) => {
+      const text = textFrom(extension, 'instructions', () => extension.instructions!(forSession, deps.contextOf(extension)), deps.extensionError)
+      for (const _ of text) ids.push(extension.id)
+      return text
+    })
+    const memoryId = memory.length ? deps.memoryExtension(chat)?.id : undefined
+    const roleId = role ? deps.roleOwnerOf?.(chat) : undefined
+    const sources = { extensions: ids, ...(memoryId && { memory: memoryId }), ...(roleId && { role: roleId }) }
+    return { role, extensions, workers, memory, parentView, setup, items, sources }
   }
 
   return { instructionPartsOf }

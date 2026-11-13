@@ -34,9 +34,9 @@ import {
 
 // What agents make for the user to look at, use or keep, as Claude's artifacts are: web pages and small apps, React
 // components, SVGs, Mermaid diagrams, Markdown documents and code files. Notes are the user's own documents; artifacts
-// are what agents build. Every change is a new version, the old ones kept. They show in a panel docked beside the chat
-// (⌘⇧A, or Artifacts in the sidebar), which opens by itself when an agent makes or changes one, and as a card in the
-// transcript. Pages draw in Kothar's sandboxed frame: scripts run, but nothing reaches Kothar, its token or the network.
+// are what agents build. Every change is a new version, the old ones kept. A space's show in a panel docked beside the
+// chat (and as a tab in the right sidebar), which opens by itself when an agent makes or changes one, and as a card in
+// the transcript; every space's are in the library, a popup (⌘⇧A, or Artifacts in the sidebar). Pages draw in Kothar's sandboxed frame: scripts run, but nothing reaches Kothar, its token or the network.
 // Everything is local: no links to share.
 
 export { applyEdits, MAX_CONTENT_BYTES, slugOf } from './store.ts'
@@ -51,20 +51,23 @@ export const openerFor = (platform: string, path: string): [string, string[]] =>
 
 type Tab = 'preview' | 'code' | 'changes'
 
-// What the panel shows per chat: an artifact (by space and name) at a version (the latest when absent) and a tab, or
-// the list of them, searched, in this space or in all.
-type PanelState = {
+// What a view of artifacts shows: an artifact (by space and name) at a version (the latest when absent) and a tab, the
+// search, and whether its title is being edited. The dock beside a chat keeps one per chat, with list: showing the
+// space's list rather than an artifact. The library popup keeps one for every chat, with space: the space it's showing
+// (all of them when absent).
+type ViewState = {
   open?: { space: string; slug: string }
   version?: number
   tab: Tab
-  list: boolean
-  all: boolean
   query: string
   renaming: boolean
 }
+type DockState = ViewState & { list: boolean }
+type LibraryState = ViewState & { space?: string }
 
 const keyOf = (artifact: Pick<Artifact, 'spaceId' | 'slug'>) => `${artifact.spaceId}/${artifact.slug}`
 const errorKey = (artifact: Artifact, n: number) => `${keyOf(artifact)}@${n}`
+const isOpen = (state: ViewState, artifact: Artifact) => state.open !== undefined && keyOf(artifact) === `${state.open.space}/${state.open.slug}`
 
 /** How long ago, briefly: just now, 5m, 3h, 2d, or the date. */
 export function ago(at: string, now = Date.now()) {
@@ -76,37 +79,74 @@ export function ago(at: string, now = Date.now()) {
   return new Date(at).toLocaleDateString()
 }
 
-const toolDescription = {
+// Read when a session starts, so they can't follow the Make artifacts setting; they say only when asked, and the
+// instructions for When useful widen that (see INSTRUCTIONS).
+export const toolDescription = {
   create:
-    'Shows the user something to look at, use or keep in Kothar’s Artifacts panel beside the chat. Make one for ' +
-    'self-contained content of more than about 15 lines that the user will view, change or reuse: a web page or small ' +
-    'app, a React component, an SVG, a diagram, a document, or a whole code file. Reply inline instead for short ' +
-    'answers, explanations and snippets. One artifact per thing; change it later with update_artifact (old versions are ' +
-    'kept). type: html (a whole page; inline all CSS and JS), react (one component file whose default export is the ' +
+    'Shows the user something in Kothar’s Artifacts panel beside the chat: a web page or small app, a React ' +
+    'component, an SVG, a diagram or a document. Use it only when the user asks for an artifact (or for a page, app or ' +
+    'diagram they can open), unless your instructions say Artifacts may be made when useful. Otherwise answer in the ' +
+    'chat, and put code for a coding task in files. One artifact per thing; change it later with update_artifact (old ' +
+    'versions are kept). type: html (a whole page; inline all CSS and JS), react (one component file whose default export is the ' +
     'app; only react can be imported; Tailwind classes work), svg, mermaid (the diagram source alone), markdown, or ' +
     'code (with language). It runs offline in a sandbox: no fetch or other network, and no external scripts, styles, ' +
     'images or fonts (use inline SVG or data: URLs). Returns its name.',
   update:
     'Saves a new version of an artifact in this space, by name (or title); the earlier ones stay. For a small change ' +
     'send edits: exact replacements { old, new }, each old text appearing once in the latest version. Otherwise send ' +
-    'the whole new content. change: one short line on what changed. Same rules as create_artifact.',
+    'the whole new content. change: one short line on what changed. Use it only when the user asks to change an ' +
+    'artifact, or for one you were asked to make.',
   list: 'Lists this space’s artifacts: name, title, type, description, latest version and its file.',
   read: 'Reads an artifact’s content, by name (or title): the latest version, or version.',
 }
 
-const INSTRUCTIONS =
-  'Artifacts: when the user wants something to look at, run or keep (a page, app, component, diagram, document or ' +
-  'file of more than about 15 lines), make it with create_artifact rather than pasting it into your reply, then say ' +
-  'in a line or two what you made. Change it with update_artifact, using edits for small changes. Short answers and ' +
-  'snippets stay in the reply.'
+// The Make artifacts setting: only when the user asks (the default), or whenever one would be useful (as before).
+export const MAKE = { asked: 'asked', useful: 'useful' } as const
+
+export const INSTRUCTIONS = {
+  asked:
+    'Artifacts: make one with create_artifact only when the user asks for it, such as "make an artifact" or "make me a ' +
+    'page I can open", and change one with update_artifact only when they ask you to. Otherwise answer in the chat, and ' +
+    'put code for a coding task in files, never in an artifact.',
+  useful:
+    'Artifacts may be made when useful: when the user wants something to look at, run or keep (a page, app, ' +
+    'component, diagram, document or file of more than about 15 lines), make it with create_artifact rather than ' +
+    'pasting it into your reply, then say in a line or two what you made. Change it with update_artifact, using edits ' +
+    'for small changes. Short answers and snippets stay in the reply.',
+}
+
+// Its prompts (Settings → Extensions → Artifacts → Prompts): the instructions for each Make artifacts choice.
+export const PROMPTS = {
+  asked: 'only-when-asked',
+  useful: 'when-useful',
+} as const
+
+// One of this extension's prompts as the user left it in Settings (host.prompt), else its default, as with a host
+// that has no prompts (a test's).
+const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: string, fallback: string) =>
+  typeof host?.prompt === 'function' ? host.prompt(id) : fallback
+
+export const instructionsFor = (make: unknown, host?: { prompt?: (id: string) => string }) =>
+  make === MAKE.useful ? promptOf(host, PROMPTS.useful, INSTRUCTIONS.useful) : promptOf(host, PROMPTS.asked, INSTRUCTIONS.asked)
+
+// What the space's web switch allows, as html-frame.tsx's frameCsp does: https: joins the sources a page may load
+// scripts, styles, images, fonts and media from; connect-src stays 'none'.
+const WEB_HINT =
+  'Lets artifact previews load scripts, styles, fonts, images and media from https: sites, such as a library from a ' +
+  'CDN. They still can’t fetch data or open WebSockets, but each site they load from sees the request, and a page’s ' +
+  'script could put data in the addresses it loads.'
+
+const fresh = (): ViewState => ({ tab: 'preview', query: '', renaming: false })
 
 export function createArtifactsExtension({ platform = process.platform }: { platform?: string } = {}): Extension {
-  const states = new Map<string, PanelState>()
-  const stateOf = (chatId: string) => {
-    let state = states.get(chatId)
-    if (!state) states.set(chatId, (state = { tab: 'preview', list: false, all: false, query: '', renaming: false }))
+  const docks = new Map<string, DockState>()
+  const dockOf = (chatId: string) => {
+    let state = docks.get(chatId)
+    if (!state) docks.set(chatId, (state = { ...fresh(), list: false }))
     return state
   }
+  // One library for every chat: it opens where the user left it, whichever chat they're in.
+  const library: LibraryState = fresh()
   // Errors pages reported, by artifact and version, and the ones sent back to an agent to fix.
   const errors = new Map<string, string>()
   const sent = new Set<string>()
@@ -118,14 +158,14 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
     return true
   }
 
-  // Every space that can hold artifacts, for the All spaces list.
+  // Every space that can hold artifacts, for the library. Home keeps none, so it isn't one.
   const spaces = (host: ExtensionHost) => host.chats().filter((c) => c.parentId === undefined && !c.extension && !c.archived)
 
-  // A made or updated artifact is what the panel opens to, in the chat whose agent made it and in its space, and the
-  // panel slides in beside those chats, if the user is looking.
+  // A made or updated artifact is what the dock opens to, in the chat whose agent made it and in its space, and the
+  // dock slides in beside those chats, if the user is looking.
   const showNext = (host: ExtensionHost, chatId: string, artifact: Artifact) => {
     for (const id of new Set([chatId, artifact.spaceId])) {
-      const state = stateOf(id)
+      const state = dockOf(id)
       Object.assign(state, { open: { space: artifact.spaceId, slug: artifact.slug }, tab: 'preview', list: false, renaming: false })
       delete state.version
     }
@@ -146,32 +186,32 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
 
   const badgeOf = (artifact: Artifact) => (artifact.type === 'code' && artifact.language ? artifact.language : TYPE_LABEL[artifact.type])
 
-  // The list: this space's artifacts, or every space's, matching the search.
-  const listView = (host: ExtensionHost, chat: ChatDetail, state: PanelState): ExtensionView => {
-    const space = spaceOf(host, chat.id)!
-    const where = state.all ? spaces(host) : [space]
-    const names = new Map(where.map((s) => [s.id, s.name]))
-    const words = state.query.toLowerCase().split(/\s+/).filter(Boolean)
-    const found = where
+  // Artifacts in these spaces matching the search, the latest changed first.
+  const matching = (host: ExtensionHost, where: { id: string }[], query: string) => {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean)
+    return where
       .flatMap((s) => artifactsIn(host, s.id))
       .filter((a) => words.every((w) => `${a.title} ${a.description} ${a.type} ${a.language ?? ''}`.toLowerCase().includes(w)))
       .sort((a, b) => latest(b).at.localeCompare(latest(a).at))
-    const items = found.map(
-      (a): ExtensionListItem => ({
-        key: keyOf(a),
-        label: a.title,
-        detail: `${state.all && a.spaceId !== space.id ? `${names.get(a.spaceId)} · ` : ''}v${latest(a).n} · ${ago(latest(a).at)}`,
-        badges: [{ text: badgeOf(a), tone: 'muted' }],
-        selected: state.open !== undefined && keyOf(a) === `${state.open.space}/${state.open.slug}`,
-        action: { name: 'open', value: { space: a.spaceId, slug: a.slug } },
-        ...(a.description && { hint: a.description }),
-      }),
-    )
-    const empty = words.length
+  }
+
+  // badge: its type, where the list has room for it (the library's narrow column hasn't; the open one's header says).
+  const itemOf = (artifact: Artifact, state: ViewState, detail: string, badge = true): ExtensionListItem => ({
+    key: keyOf(artifact),
+    label: artifact.title,
+    detail,
+    ...(badge && { badges: [{ text: badgeOf(artifact), tone: 'muted' as const }] }),
+    selected: isOpen(state, artifact),
+    action: { name: 'open', value: { space: artifact.spaceId, slug: artifact.slug } },
+    ...(artifact.description && { hint: artifact.description }),
+  })
+
+  // The dock's list: this space's artifacts, searched. Every space's are in the library.
+  const spaceList = (host: ExtensionHost, space: ChatDetail, state: DockState): ExtensionView => {
+    const found = matching(host, [space], state.query)
+    const empty = state.query.trim()
       ? 'Nothing matches.'
-      : state.all
-        ? 'No artifacts in any space yet.'
-        : 'No artifacts in this space yet. Ask an agent for a page, app, chart, diagram or document, and it opens here.'
+      : 'No artifacts in this space yet. Ask an agent for a page, app, chart, diagram or document, and it opens here.'
     return {
       type: 'stack',
       gap: 'normal',
@@ -180,44 +220,74 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
           type: 'row',
           justify: 'between',
           children: [
-            {
-              type: 'row',
-              children: [
-                { type: 'button', label: 'This space', variant: state.all ? 'ghost' : 'primary', action: { name: 'scope', value: 'space' } },
-                { type: 'button', label: 'All spaces', variant: state.all ? 'primary' : 'ghost', action: { name: 'scope', value: 'all' } },
-              ],
-            },
-            ...(state.open
-              ? [{ type: 'button', label: 'Back', variant: 'ghost', action: { name: 'list', value: false } } as ExtensionView]
-              : []),
+            { type: 'heading', text: 'This space', hint: 'Every space’s artifacts are in the Artifacts library, in the sidebar' },
+            ...(state.open ? [{ type: 'button', label: 'Back', variant: 'ghost', action: { name: 'list', value: false } } as ExtensionView] : []),
           ],
         },
-        { type: 'search', key: state.all ? 'all' : 'space', value: state.query, placeholder: 'Search artifacts', action: 'search' },
-        { type: 'list', label: 'Artifacts', items, empty },
+        { type: 'search', key: space.id, value: state.query, placeholder: 'Search this space', action: 'search' },
+        { type: 'list', label: 'Artifacts', items: found.map((a) => itemOf(a, state, `v${latest(a).n} · ${ago(latest(a).at)}`)), empty },
         { type: 'divider' },
         {
           type: 'switch',
           setting: 'web',
-          hint: 'Lets this space’s pages load scripts, styles, images and fonts from https: sites, such as a chart library. They still can’t fetch or send data.',
+          hint: WEB_HINT,
         },
       ],
     }
   }
 
-  // One artifact: its title and version, the tabs and actions, then the preview, its source or what changed.
-  const artifactView = (host: ExtensionHost, chat: ChatDetail, artifact: Artifact, state: PanelState): ExtensionView => {
+  // One artifact: its title and version, the tabs and a ⋯ menu, then the preview, its source or what changed. back: the
+  // button before the title, if the view has a list to go back to. beside: offer to open it in the dock beside chat.
+  const artifactView = (
+    host: ExtensionHost,
+    artifact: Artifact,
+    state: ViewState,
+    { back, beside }: { back?: ExtensionView; beside?: boolean },
+  ): ExtensionView => {
     const newest = latest(artifact)
     const shown = artifact.versions.find((v) => v.n === state.version) ?? newest
     const index = artifact.versions.indexOf(shown)
     const content = contentOf(artifact, shown.n)
     const before = artifact.versions[index - 1]
     const tab: Tab = state.tab === 'changes' && !before ? 'preview' : artifact.type === 'code' && state.tab === 'code' ? 'preview' : state.tab
-    const web = host.spaceValues(chat.id).web === true
+    // The artifact's own space says whether its pages may load from the web, wherever it's shown.
+    const web = host.spaceValues(artifact.spaceId).web === true
     const ext = extensionOf(artifact)
     const errorAt = errorKey(artifact, shown.n)
     const error = errors.get(errorAt)
     const versionHint = (v: ArtifactVersion) =>
       [v.restored !== undefined ? `Restored from v${v.restored}` : v.change, new Date(v.at).toLocaleString()].filter(Boolean).join(' · ')
+
+    // The rarer actions, out of sight until asked for.
+    const more: ExtensionView = {
+      type: 'menu',
+      label: `More for ${artifact.title}`,
+      items: [
+        ...(beside ? [{ label: 'Open beside chat', action: { name: 'beside', value: { space: artifact.spaceId, slug: artifact.slug } } }] : []),
+        ...(opensInBrowser(artifact)
+          ? [
+              {
+                label: 'Open in browser',
+                action: { name: 'browser' },
+                hint: 'Opens this version’s file in your browser, outside Kothar’s sandbox: there it can reach the web',
+              },
+            ]
+          : []),
+        { label: 'Rename', action: { name: 'renaming', value: true } },
+        { type: 'divider' as const },
+        {
+          label: 'Delete',
+          action: { name: 'delete', value: keyOf(artifact) },
+          danger: true,
+          confirm: {
+            text: `Delete the artifact "${artifact.title}"?`,
+            body: `${artifact.versions.length === 1 ? 'It goes' : `All ${artifact.versions.length} versions go`}, with its files in its space.`,
+            ok: 'Delete',
+            danger: true,
+          },
+        },
+      ],
+    }
 
     const header: ExtensionView = {
       type: 'row',
@@ -226,7 +296,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
         {
           type: 'row',
           children: [
-            { type: 'button', label: '‹ All', variant: 'ghost', action: { name: 'list', value: true }, hint: 'Every artifact, searchable' },
+            ...(back ? [back] : []),
             { type: 'heading', text: artifact.title, ...(artifact.description && { hint: artifact.description }) },
             { type: 'badge', text: badgeOf(artifact), tone: 'muted' },
           ],
@@ -244,6 +314,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
               action: { name: 'version', value: artifact.versions[index + 1]?.n ?? newest.n },
               hint: 'Later version',
             },
+            more,
           ],
         },
       ],
@@ -269,30 +340,6 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
     const actions: ExtensionView[] = [
       { type: 'copy', text: content, label: 'Copy' },
       { type: 'download', text: content, filename: `${artifact.slug}-v${shown.n}.${ext}`, mimeType: MIME[ext] ?? 'text/plain', label: 'Download' },
-      ...(opensInBrowser(artifact)
-        ? [
-            {
-              type: 'button',
-              label: 'Open in browser',
-              variant: 'ghost',
-              action: { name: 'browser' },
-              hint: 'Opens this version’s file in your browser, outside Kothar’s sandbox: there it can reach the web',
-            } as ExtensionView,
-          ]
-        : []),
-      { type: 'button', label: 'Rename…', variant: 'ghost', action: { name: 'renaming', value: true } },
-      {
-        type: 'button',
-        label: 'Delete…',
-        variant: 'ghost',
-        action: { name: 'delete', value: keyOf(artifact) },
-        confirm: {
-          text: `Delete the artifact "${artifact.title}"?`,
-          body: `${artifact.versions.length === 1 ? 'It goes' : `All ${artifact.versions.length} versions go`}, with its files in this space.`,
-          ok: 'Delete',
-          danger: true,
-        },
-      },
     ]
 
     const rename: ExtensionView[] = state.renaming
@@ -399,6 +446,63 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
     }
   }
 
+  // The library: every space's artifacts (or one space's), searched, beside the one open.
+  const libraryView = (host: ExtensionHost, chat: ChatDetail): ExtensionView => {
+    const all = spaces(host)
+    // A space that's gone or archived since: back to all of them.
+    if (library.space && !all.some((s) => s.id === library.space)) delete library.space
+    const where = library.space ? all.filter((s) => s.id === library.space) : all
+    const names = new Map(all.map((s) => [s.id, s.name]))
+    const found = matching(host, where, library.query)
+    const open = library.open && found.find((a) => isOpen(library, a))
+    const artifact = open ?? (library.query.trim() ? undefined : found[0])
+    if (!open) {
+      delete library.version
+      library.renaming = false
+      if (artifact) library.open = { space: artifact.spaceId, slug: artifact.slug }
+      else delete library.open
+    }
+    const scope = library.space ? (names.get(library.space) ?? 'This space') : 'All spaces'
+    const filter: ExtensionView = {
+      type: 'menu',
+      label: 'Show artifacts from',
+      items: [
+        { label: 'All spaces', action: { name: 'space', value: null }, checked: !library.space },
+        ...(all.length ? [{ type: 'divider' as const }] : []),
+        ...all.map((s) => ({ label: s.name, action: { name: 'space', value: s.id }, checked: library.space === s.id })),
+      ],
+    }
+    const side: ExtensionView = {
+      type: 'stack',
+      gap: 'normal',
+      children: [
+        { type: 'row', justify: 'between', children: [{ type: 'heading', text: scope, hint: 'Which space’s artifacts show: ⋯ picks' }, filter] },
+        {
+          type: 'search',
+          key: library.space ?? 'all',
+          value: library.query,
+          placeholder: 'Search artifacts',
+          action: 'search',
+          submit: 'go',
+          autofocus: true,
+        },
+        {
+          type: 'list',
+          label: 'Artifacts',
+          items: found.map((a) => itemOf(a, library, [!library.space && names.get(a.spaceId), ago(latest(a).at)].filter(Boolean).join(' · '), false)),
+          empty: library.query.trim() ? 'Nothing matches.' : library.space ? 'No artifacts in this space yet.' : 'No artifacts yet.',
+        },
+      ],
+    }
+    const main: ExtensionView = artifact
+      ? artifactView(host, artifact, library, { beside: !!spaceOf(host, chat.id) })
+      : {
+          type: 'empty',
+          text: found.length || library.query.trim() ? 'Pick an artifact.' : 'Ask an agent in a space for a page, app, chart, diagram or document, and it shows here.',
+        }
+    return { type: 'split', side, main }
+  }
+
   // The chat the Fix goes to: the one that made that version, if it's still there; else the space.
   const fixerOf = (host: ExtensionHost, artifact: Artifact, version: ArtifactVersion) => {
     const maker = version.chatId === undefined ? undefined : host.chat(version.chatId)
@@ -414,16 +518,135 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
     return found
   }
 
+  const openIn = (state: ViewState, artifact: Artifact, version?: unknown) => {
+    Object.assign(state, { open: { space: artifact.spaceId, slug: artifact.slug }, renaming: false, tab: 'preview' })
+    if (typeof version === 'number' && version !== latest(artifact).n && artifact.versions.some((v) => v.n === version)) state.version = version
+    else delete state.version
+  }
+
+  // What an artifact's view does, in the dock or the library. True when the action was one of these.
+  const act = async (host: ExtensionHost, chat: ChatDetail, state: ViewState, action: ExtensionAction): Promise<boolean> => {
+    const current = () => named(host, state.open)
+    const shownOf = (artifact: Artifact, n: unknown) => artifact.versions.find((v) => v.n === Number(n))
+    if (action.name.startsWith('error:')) {
+      // From a page's frame: error:<space>/<slug>@<version>.
+      if (typeof action.value === 'string' && keepError(action.name.slice('error:'.length), action.value)) host.refresh(chat.id)
+      return true
+    }
+    switch (action.name) {
+      case 'search':
+        state.query = String(action.value ?? '').slice(0, 200)
+        return true
+      case 'tab':
+        state.tab = action.value === 'code' || action.value === 'changes' ? action.value : 'preview'
+        return true
+      case 'version': {
+        const artifact = current()
+        const found = shownOf(artifact, action.value)
+        if (!found) return true
+        if (found === latest(artifact)) delete state.version
+        else state.version = found.n
+        return true
+      }
+      case 'restore': {
+        const artifact = current()
+        const found = shownOf(artifact, action.value)
+        if (!found) throw new Error('That version is gone')
+        const restored = addVersion(host, artifact, contentOf(artifact, found.n), { restored: found.n })
+        delete state.version
+        host.note(artifact.spaceId, `Restored v${found.n} as v${latest(restored).n}`, {
+          panel: 'artifacts',
+          action: { name: 'open', value: { space: restored.spaceId, slug: restored.slug } },
+          card: { title: restored.title, badge: badgeOf(restored), detail: `v${latest(restored).n}` },
+        })
+        host.refresh()
+        return true
+      }
+      case 'renaming':
+        state.renaming = action.value === true
+        return true
+      case 'rename': {
+        const { title } = (action.value ?? {}) as { title?: unknown }
+        renameArtifact(host, current(), title)
+        state.renaming = false
+        host.refresh()
+        return true
+      }
+      case 'fix': {
+        const artifact = current()
+        const found = shownOf(artifact, action.value)
+        const key = found && errorKey(artifact, found.n)
+        const error = key && errors.get(key)
+        if (!found || !key || !error) return true
+        const to = fixerOf(host, artifact, found)
+        host.send(
+          to,
+          `The artifact “${artifact.title}” (${artifact.slug}, v${found.n}) hits this error in Kothar’s preview:\n\n` +
+            `\`\`\`\n${error}\n\`\`\`\n\nFix it with update_artifact.`,
+        )
+        sent.add(key)
+        return true
+      }
+      case 'dismiss': {
+        const artifact = current()
+        errors.delete(errorKey(artifact, Number(action.value)))
+        return true
+      }
+      case 'browser': {
+        const artifact = current()
+        const n = shownOf(artifact, state.version)?.n ?? latest(artifact).n
+        const [command, args] = openerFor(platform, pathOf(artifact, n))
+        const { code, stderr } = await host.run(command, args, { timeoutMs: 10_000 })
+        if (code !== 0) throw new Error(`Couldn’t open it in a browser${stderr.trim() ? `: ${stderr.trim()}` : ''}`)
+        return true
+      }
+      case 'delete': {
+        const [space, slug] = String(action.value ?? '').split('/')
+        removeArtifact(named(host, { space, slug }))
+        // Wherever it's open, it closes.
+        for (const view of [library, ...docks.values()]) {
+          if (view.open?.space === space && view.open?.slug === slug) {
+            delete view.open
+            delete view.version
+          }
+        }
+        // Every chat showing it draws again.
+        host.refresh()
+        return true
+      }
+      default:
+        return false
+    }
+  }
+
   return {
     id: 'artifacts',
     name: 'Artifacts',
     description:
       'What agents make for you to look at, use or keep: pages and small apps, React components, SVGs, diagrams, ' +
-      'documents and code files. Kept per space with every version, shown in a panel beside the chat (⌘⇧A) and run in a ' +
-      'sandbox, offline.',
+      'documents and code files. Kept per space with every version, shown beside the chat, all of them in a library ' +
+      '(⌘⇧A), and run in a sandbox, offline.',
     enabledByDefault: true,
-    spaceSettings: [{ key: 'web', label: 'Load from the web', type: 'boolean', default: false }],
-    instructions: ({ chat, tools }, { host }) => (tools && spaceOf(host, chat.id) ? INSTRUCTIONS : undefined),
+    prompts: [
+      { id: PROMPTS.asked, label: 'When to make artifacts (Make artifacts: Only when asked)', text: INSTRUCTIONS.asked, where: 'instructions' },
+      { id: PROMPTS.useful, label: 'When to make artifacts (Make artifacts: When useful)', text: INSTRUCTIONS.useful, where: 'instructions' },
+    ],
+    // Saved as web, its name before; the key stays so saved values carry over.
+    settings: [
+      {
+        key: 'make',
+        label: 'Make artifacts',
+        description: 'When agents make an artifact: only when you ask for one, or whenever they think one would be useful.',
+        type: 'select',
+        options: [
+          { value: MAKE.asked, label: 'Only when asked' },
+          { value: MAKE.useful, label: 'When useful' },
+        ],
+        default: MAKE.asked,
+      },
+    ],
+    spaceSettings: [{ key: 'web', label: 'Load files from the internet', type: 'boolean', default: false, description: WEB_HINT }],
+    instructions: ({ chat, tools }, { host, values }) => (tools && spaceOf(host, chat.id) ? instructionsFor(values.make, host) : undefined),
     tools: [
       {
         name: 'create_artifact',
@@ -502,18 +725,19 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
     ],
     panels: [
       {
+        // This space's artifacts, beside the chat and as a tab in the right sidebar. It slides in when an agent makes or
+        // changes one.
         id: 'artifacts',
         title: 'Artifacts',
         placement: 'dock',
-        shortcut: 'Mod+Shift+A',
-        sidebar: true,
         // Home keeps no files, so it has no artifacts.
         shown: (chat, { host }) => !!spaceOf(host, chat.id),
         render(chat, { host }) {
           const space = spaceOf(host, chat.id)
           if (!space) return { type: 'empty', text: 'Artifacts belong to a space' }
-          const state = stateOf(chat.id)
-          // The one open, else this space's newest; one deleted elsewhere falls back the same way.
+          const state = dockOf(chat.id)
+          // The one open (one from another space, opened beside the chat from the library, stays), else this space's
+          // newest; one deleted elsewhere falls back the same way.
           const open = state.open && host.chat(state.open.space) ? artifactsIn(host, state.open.space).find((a) => a.slug === state.open!.slug) : undefined
           const artifact = open ?? artifactsIn(host, space.id)[0]
           if (!open) {
@@ -522,117 +746,71 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
             if (artifact) state.open = { space: artifact.spaceId, slug: artifact.slug }
             else delete state.open
           }
-          return state.list || !artifact ? listView(host, chat, state) : artifactView(host, chat, artifact, state)
+          if (state.list || !artifact) return spaceList(host, space, state)
+          const back: ExtensionView = { type: 'button', label: '‹', variant: 'ghost', action: { name: 'list', value: true }, hint: 'This space’s artifacts' }
+          return artifactView(host, artifact, state, { back })
         },
         async onAction(action: ExtensionAction, chat, { host }) {
-          const state = stateOf(chat.id)
-          const current = () => named(host, state.open)
-          const shownOf = (artifact: Artifact, n: unknown) => artifact.versions.find((v) => v.n === Number(n))
-          if (action.name.startsWith('error:')) {
-            // From a page's frame: error:<space>/<slug>@<version>.
-            if (typeof action.value === 'string' && keepError(action.name.slice('error:'.length), action.value)) host.refresh(chat.id)
+          const state = dockOf(chat.id)
+          if (action.name === 'open') {
+            openIn(state, named(host, action.value), ((action.value ?? {}) as { version?: unknown }).version)
+            state.list = false
             return
           }
-          switch (action.name) {
-            case 'open': {
-              const artifact = named(host, action.value)
-              const { version } = (action.value ?? {}) as { version?: unknown }
-              Object.assign(state, { open: { space: artifact.spaceId, slug: artifact.slug }, list: false, renaming: false, tab: 'preview' })
-              if (typeof version === 'number' && version !== latest(artifact).n && shownOf(artifact, version)) state.version = version
-              else delete state.version
-              return
-            }
-            case 'list':
-              state.list = action.value === true
-              return
-            case 'scope':
-              state.all = action.value === 'all'
-              return
-            case 'search':
-              state.query = String(action.value ?? '').slice(0, 200)
-              return
-            case 'tab':
-              state.tab = action.value === 'code' || action.value === 'changes' ? action.value : 'preview'
-              return
-            case 'version': {
-              const artifact = current()
-              const found = shownOf(artifact, action.value)
-              if (!found) return
-              if (found === latest(artifact)) delete state.version
-              else state.version = found.n
-              return
-            }
-            case 'restore': {
-              const artifact = current()
-              const found = shownOf(artifact, action.value)
-              if (!found) throw new Error('That version is gone')
-              const restored = addVersion(host, artifact, contentOf(artifact, found.n), { restored: found.n })
-              delete state.version
-              host.note(artifact.spaceId, `Restored v${found.n} as v${latest(restored).n}`, {
-                panel: 'artifacts',
-                action: { name: 'open', value: { space: restored.spaceId, slug: restored.slug } },
-                card: { title: restored.title, badge: badgeOf(restored), detail: `v${latest(restored).n}` },
-              })
-              host.refresh()
-              return
-            }
-            case 'renaming':
-              state.renaming = action.value === true
-              return
-            case 'rename': {
-              const { title } = (action.value ?? {}) as { title?: unknown }
-              renameArtifact(host, current(), title)
-              state.renaming = false
-              host.refresh()
-              return
-            }
-            case 'fix': {
-              const artifact = current()
-              const found = shownOf(artifact, action.value)
-              const key = found && errorKey(artifact, found.n)
-              const error = key && errors.get(key)
-              if (!found || !key || !error) return
-              const to = fixerOf(host, artifact, found)
-              host.send(
-                to,
-                `The artifact “${artifact.title}” (${artifact.slug}, v${found.n}) hits this error in Kothar’s preview:\n\n` +
-                  `\`\`\`\n${error}\n\`\`\`\n\nFix it with update_artifact.`,
-              )
-              sent.add(key)
-              return
-            }
-            case 'dismiss': {
-              const artifact = current()
-              errors.delete(errorKey(artifact, Number(action.value)))
-              return
-            }
-            case 'browser': {
-              const artifact = current()
-              const n = shownOf(artifact, state.version)?.n ?? latest(artifact).n
-              const [command, args] = openerFor(platform, pathOf(artifact, n))
-              const { code, stderr } = await host.run(command, args, { timeoutMs: 10_000 })
-              if (code !== 0) throw new Error(`Couldn’t open it in a browser${stderr.trim() ? `: ${stderr.trim()}` : ''}`)
-              return
-            }
-            case 'delete': {
-              const [space, slug] = String(action.value ?? '').split('/')
-              removeArtifact(named(host, { space, slug }))
-              if (state.open?.space === space && state.open?.slug === slug) {
-                delete state.open
-                delete state.version
-              }
-              // Every chat showing it draws again.
-              host.refresh()
-              return
-            }
-            default:
-              throw new Error(`Unknown action "${action.name}"`)
+          if (action.name === 'list') {
+            state.list = action.value === true
+            return
           }
+          if (!(await act(host, chat, state, action))) throw new Error(`Unknown action "${action.name}"`)
+        },
+      },
+      {
+        // Every space's artifacts, in a popup over the chat: from the sidebar's launcher or ⌘⇧A, in any chat.
+        id: 'library',
+        title: 'Artifacts',
+        placement: 'popup',
+        shortcut: 'Mod+Shift+A',
+        launcher: true,
+        render: (chat, { host }) => libraryView(host, chat),
+        async onAction(action: ExtensionAction, chat, { host }) {
+          switch (action.name) {
+            case 'open':
+              openIn(library, named(host, action.value))
+              return
+            case 'go': {
+              // Enter in the search: the best match opens.
+              const all = spaces(host)
+              const first = matching(host, library.space ? all.filter((s) => s.id === library.space) : all, String(action.value ?? ''))[0]
+              if (first) openIn(library, first)
+              return
+            }
+            case 'space': {
+              const id = typeof action.value === 'string' && spaces(host).some((s) => s.id === action.value) ? action.value : undefined
+              if (id) library.space = id
+              else delete library.space
+              return
+            }
+            case 'beside': {
+              // Into the dock beside this chat, at the version the library shows; the library closes.
+              const artifact = named(host, action.value)
+              if (!spaceOf(host, chat.id)) throw new Error('Artifacts open beside a chat in a space')
+              const dock = dockOf(chat.id)
+              openIn(dock, artifact, library.version)
+              dock.tab = library.tab
+              dock.list = false
+              host.closePanel(chat.id, 'library')
+              host.refresh(chat.id)
+              host.showPanel(chat.id, 'artifacts')
+              return
+            }
+          }
+          if (!(await act(host, chat, library, action))) throw new Error(`Unknown action "${action.name}"`)
         },
       },
     ],
     onChatRemoved(chat: ChatSummary) {
-      states.delete(chat.id)
+      docks.delete(chat.id)
+      if (library.space === chat.id) delete library.space
     },
   }
 }

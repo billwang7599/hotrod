@@ -112,6 +112,9 @@ export type SessionOptions = {
   model?: string
   thinking?: ThinkingLevel
   sandbox?: Sandbox
+  // The turn may read but change nothing (an extension's TurnOptions): an engine with a read-only mode starts in it.
+  // Kothar's sandbox and permission answers enforce it either way.
+  readOnly?: boolean
 }
 
 export type ImageInput = { mimeType: string; base64: string }
@@ -227,6 +230,8 @@ export type ChatInfo = PermissionSwitches & {
   parentId?: string
   worker?: boolean
   parentMessages?: number
+  // A child an extension made with quiet: its reply goes to the extension's onTurnCompleted, not its parent's queue.
+  quiet?: true
   folders: string[]
   files: string[]
   // The engine the chat runs on. With `model` set, the two are the chat's own pick and stay put; without it, the core
@@ -251,6 +256,8 @@ export type ChatInfo = PermissionSwitches & {
   readAt?: string
   // Spaces only: each extension's spaceSettings as saved, by extension id.
   extensionValues?: Record<string, Record<string, unknown>>
+  // Each extension's composer toggles as the user set them in this chat, by extension id, then toggle id.
+  toggles?: Record<string, Record<string, boolean>>
   // The id of the setup the chat uses (Settings → Setups). A worker uses one only when its spawn names it.
   setup?: string
 }
@@ -337,6 +344,20 @@ export const levelsOf = (engine: EngineInfo | undefined, model?: string): Thinki
 // with every chat and never saves it; it's absent when nothing can run.
 export type Run = { engine: string; model: string; thinking?: ThinkingLevel }
 
+// One of an extension's prompts, for its Settings page: where it goes ('tool': a tool's description, tool names it), its
+// default and the text sent now. edited: the user changed it; updatedDefault: the default changed since they did.
+export type PromptInfo = {
+  id: string
+  label: string
+  where: 'instructions' | 'message' | 'background' | 'tool'
+  tool?: string
+  description?: string
+  default: string
+  text: string
+  edited?: true
+  updatedDefault?: true
+}
+
 export type ExtensionInfo = {
   id: string
   name: string
@@ -350,6 +371,12 @@ export type ExtensionInfo = {
   loadError?: string
   // It has a chat of its own (Home). A setup can't leave it out of that chat, so setup forms don't list it.
   ownsChat?: boolean
+  // Its prompts the user can edit (Extension.prompts, and each tool's description), as sent now.
+  prompts?: PromptInfo[]
+  // It adds instructions the user can't edit: an instructions hook (or a memory's) with no 'instructions' prompt.
+  fixedInstructions?: boolean
+  // A built-in extension's uses, read from the fields it sets, for its page (a community one's are community.uses).
+  uses?: ExtensionUse[]
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
   // the version this run of Kothar loaded, if any; extensions load only at startup.
   community?: {
@@ -463,14 +490,14 @@ export type QueuedMessage = {
 }
 
 // An extension's tab in the right sidebar, and an extension's action in the General tab, for one chat.
-// placement, shortcut and sidebar as the panel declares them (ExtensionPanel).
+// placement, shortcut and launcher as the panel declares them (ExtensionPanel).
 export type PanelTab = {
   extension: string
   id: string
   title: string
   placement?: 'tab' | 'popup' | 'dock'
   shortcut?: string
-  sidebar?: boolean
+  launcher?: boolean
 }
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
 // An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.
@@ -479,11 +506,21 @@ export type MessageActionInfo = {
   id: string
   label: string
   activeLabel?: string
-  icon: 'pin' | 'bookmark' | 'star'
+  icon: 'pin' | 'bookmark' | 'star' | 'eye'
   hint?: string
   activeHint?: string
   kinds: ('user' | 'work' | 'talk')[]
   marked: number[]
+}
+// An extension's switch in the chat's composer (ExtensionComposerToggle), and whether it's on in the chat.
+export type ComposerToggleInfo = {
+  extension: string
+  id: string
+  label: string
+  on: boolean
+  icon?: 'search' | 'globe' | 'book' | 'sparkle' | 'bolt'
+  hint?: string
+  activeHint?: string
 }
 
 export type ChatState = ChatInfo & {
@@ -531,6 +568,8 @@ export type ClientMessage =
   | { type: 'extension.command'; chatId: string; extension: string; command: string }
   // One of an extension's message actions, on the message at entry in the chat's log.
   | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
+  // One of an extension's composer toggles, turned on or off in the chat.
+  | { type: 'extension.toggle'; chatId: string; extension: string; toggle: string; on: boolean }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
   | { type: 'context.add'; chatId: string; section: 'folders' | 'files'; path: string }
   | { type: 'context.remove'; chatId: string; section: 'folders' | 'files'; path: string }
@@ -548,6 +587,8 @@ export type ClientMessage =
   | { type: 'permission.setDefault'; name: PermissionSwitch; enabled: boolean }
   | { type: 'extension.setEnabled'; extensionId: string; enabled: boolean }
   | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
+  // Saves the user's edit of one of an extension's prompts; without text (or with the default), back to the default.
+  | { type: 'extension.prompt.set'; extensionId: string; promptId: string; text?: string }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
   // Draws the extension's settings view again (the page opened), answered with extension.updated.
@@ -655,6 +696,8 @@ export type CoreMessage =
       commands: CommandInfo[]
       // Absent: none.
       messageActions?: MessageActionInfo[]
+      // Absent: none.
+      toggles?: ComposerToggleInfo[]
     }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
@@ -686,6 +729,8 @@ export type CoreMessage =
   | { type: 'notify'; extension: string; title: string; body: string; chatId?: string }
   // An extension asks the UI to open one of its panels for the chat (host.showPanel), without taking focus.
   | { type: 'extension.panel.show'; chatId: string; extension: string; panel: string; placement: 'dock' | 'tab' }
+  // An extension closes its popup or dock for the chat, if the user has it open there (host.closePanel).
+  | { type: 'extension.panel.close'; chatId: string; extension: string; panel: string; placement: 'popup' | 'dock' }
   // The answer to terminal.open: error if no terminal opened.
   | { type: 'terminal.result'; chatId: string; path: string; error?: string }
   // copied: how many files the last copyBack copied back.

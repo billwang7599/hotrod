@@ -26,27 +26,64 @@ export type PermissionContext = {
   // The turn's attached folders: each one's mode, or a git folder's checkout. Edits in a folder set to Edit in place
   // are answered like the work folder's; edits in one set to Read only are refused, sandboxed or not.
   folders?: FolderPlace[]
+  // The turn is read only (an extension's TurnOptions): edits and commands that may change anything are refused, with
+  // reason (or a default) as the agent's message. Reads still follow the switches.
+  readOnly?: { reason?: string }
 }
+
+export const READ_ONLY_REASON = 'This turn is read only: it may read and search, but not edit files or run commands that change anything.'
+
+// A verdict and the rule that gave it, as the Inspector's Activity shows it.
+export type RuledVerdict = PermissionVerdict & { rule: string }
 
 // A verdict answers the request; undefined leaves it to extensions and then the user.
 export const verdictOf = (request: PermissionRequest, context: PermissionContext): PermissionVerdict | undefined => {
-  const { cwd, workDir, sandboxed, switches, home, garage, folders = [] } = context
+  const ruled = decide(request, context)
+  if (!ruled) return undefined
+  const { rule: _rule, ...verdict } = ruled
+  return verdict
+}
+
+// The switches as the Context panel names them.
+const SWITCH_NAMES: Record<PermissionSwitch, string> = {
+  editAnywhere: 'Edits anywhere',
+  autoRead: 'Read anywhere without asking',
+  autoFetch: 'Fetch web pages without asking',
+  autoRunCommands: 'Run commands without asking',
+  autoNetworkCommands: 'Run network commands without asking',
+  autoEnvCommands: 'Let commands use .env files without asking',
+}
+const switchRule = (...names: PermissionSwitch[]) => `Switch: ${names.map((name) => SWITCH_NAMES[name] ?? name).join(' + ')}`
+
+// verdictOf, with the rule behind each answer.
+export const decide = (request: PermissionRequest, context: PermissionContext): RuledVerdict | undefined => {
+  const { cwd, workDir, sandboxed, switches, home, garage, folders = [], readOnly } = context
+  if (readOnly) {
+    const refused = { allow: false, message: readOnly.reason?.trim() || READ_ONLY_REASON, rule: 'Read-only turn' }
+    if (request.kind === 'edit') return refused
+    // Whether the command only reads is asked without the login folders, so reading one still asks below rather than
+    // being refused as a change.
+    if (request.kind === 'shell' && (request.command === undefined || !isReadOnlyCommand(request.command, { cwd, home, secrets: [] }))) {
+      return refused
+    }
+  }
   if (request.kind === 'edit' && request.path !== undefined) {
     // Edits in the work folder need no asking; outside it the sandbox would fail them anyway.
     const target = realPath(resolve(cwd, request.path))
-    if (within(target, workDir)) return { allow: true }
+    if (within(target, workDir)) return { allow: true, rule: 'Kothar core: edits in the work folder' }
     // A folder edited in place is like the work folder, but logins, keys and .env files in it still ask.
     if (editableOf(folders).some((folder) => within(target, realPath(folder)))) {
-      return isSecret(target, { cwd, home, secrets: secretPathsOf(home, garage) }) ? undefined : { allow: true }
+      return isSecret(target, { cwd, home, secrets: secretPathsOf(home, garage) }) ? undefined : { allow: true, rule: 'Folder mode: Edit in place' }
     }
     // Unsandboxed, an edit elsewhere asks, but a folder the user set to Read only stays read only.
     const place = placeOf(target, folders)
     if (!sandboxed && (!place || place.mode === 'checkout')) return undefined
-    return { allow: false, message: refusedEditWhy(target, workDir, folders, OUTSIDE_EDIT_ADVICE) }
+    const why = place?.mode === 'readOnly' ? 'Folder mode: Read only' : 'Kothar core: the sandbox keeps edits in the work folder'
+    return { allow: false, message: refusedEditWhy(target, workDir, folders, OUTSIDE_EDIT_ADVICE), rule: why }
   }
   const on = (name: PermissionSwitch) => switchedOn(name, ...switches)
   // Fetching writes nothing, so it needs no sandbox.
-  if (request.kind === 'fetch') return on('autoFetch') ? { allow: true } : undefined
+  if (request.kind === 'fetch') return on('autoFetch') ? { allow: true, rule: switchRule('autoFetch') } : undefined
   // Reading writes nothing either, but logins and keys still ask.
   const reading = { cwd, home, secrets: secretPathsOf(home, garage) }
   // .env files are let through only where commands run without asking: sandboxed, both switches on.
@@ -55,14 +92,14 @@ export const verdictOf = (request: PermissionRequest, context: PermissionContext
   if (request.kind === 'read' || request.kind === 'search') {
     if (!on('autoRead')) return
     if (request.kind === 'read') {
-      return request.path !== undefined && !isSecret(request.path, sandboxedReading) ? { allow: true } : undefined
+      return request.path !== undefined && !isSecret(request.path, sandboxedReading) ? { allow: true, rule: switchRule('autoRead') } : undefined
     }
-    return searchReachesSecret(request.path ?? cwd, sandboxedReading) ? undefined : { allow: true }
+    return searchReachesSecret(request.path ?? cwd, sandboxedReading) ? undefined : { allow: true, rule: switchRule('autoRead') }
   }
   if (request.kind !== 'shell' || request.command === undefined) return
-  if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true }
+  if (on('autoRead') && isReadOnlyCommand(request.command, reading)) return { allow: true, rule: `${switchRule('autoRead')} (a command that only reads)` }
   if (!sandboxed || !on('autoRunCommands')) return
   if (!on('autoNetworkCommands') && ASKS_FIRST.test(request.command)) return
   if (mentionsSecret(request.command, sandboxedReading)) return
-  return { allow: true }
+  return { allow: true, rule: envFiles && /\.env\b/.test(request.command) ? switchRule('autoRunCommands', 'autoEnvCommands') : switchRule('autoRunCommands') }
 }

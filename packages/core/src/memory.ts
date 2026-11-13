@@ -75,17 +75,27 @@ export function windowView(messages: MemoryMessage[], maxChars = WINDOW_MAX_CHAR
   return [...note, ...shown].join('\n\n')
 }
 
+// One labelled part of a turn's prompt, for the Inspector: joined with a blank line they make the prompt exactly.
+// kind: the memory's view, a worker's report, the user's message, or Kothar's own prompt carrying on a turn.
+export type PromptPart = { kind: 'view' | 'report' | 'message' | 'kothar'; text: string }
+
 // The prompt that starts a turn: the history so far, then workers' reports and the user's message.
-export function seededPrompt(view: string, message: string, reports: Report[] = []) {
-  if (!reports.length && !view) return message
-  const fromUser = message || !reports.length ? [`New message from the user:\n\n${message}`] : []
-  const incoming = [...reports.map(reportText), ...fromUser].join('\n\n')
-  if (!view) return incoming
-  return `This is the conversation so far:\n\n${view}\n\n${incoming}`
+export function seededParts(view: string, message: string, reports: Report[] = []): PromptPart[] {
+  if (!reports.length && !view) return [{ kind: 'message', text: message }]
+  const fromUser = message || !reports.length ? [{ kind: 'message' as const, text: `New message from the user:\n\n${message}` }] : []
+  const incoming: PromptPart[] = [...reports.map((report) => ({ kind: 'report' as const, text: reportText(report) })), ...fromUser]
+  return [...(view ? [{ kind: 'view' as const, text: `This is the conversation so far:\n\n${view}` }] : []), ...incoming]
 }
 
 // A prompt from Kothar that carries on the chat's last turn; the view shows how far that turn got.
-export function continuationPrompt(view: string, text: string) {
-  if (!view) return text
-  return `This is the conversation so far:\n\n${view}\n\nFrom Kothar:\n\n${text}`
+export function continuationParts(view: string, text: string): PromptPart[] {
+  if (!view) return [{ kind: 'kothar', text }]
+  return [
+    { kind: 'view', text: `This is the conversation so far:\n\n${view}` },
+    { kind: 'kothar', text: `From Kothar:\n\n${text}` },
+  ]
 }
+
+const joined = (parts: PromptPart[]) => parts.map((part) => part.text).join('\n\n')
+export const seededPrompt = (view: string, message: string, reports: Report[] = []) => joined(seededParts(view, message, reports))
+export const continuationPrompt = (view: string, text: string) => joined(continuationParts(view, text))

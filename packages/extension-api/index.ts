@@ -138,7 +138,7 @@ export type ExtensionMessageAction = {
   // Such as "Pin", and "Unpin" on a marked message; both default to label.
   label: string
   activeLabel?: string
-  icon: 'pin' | 'bookmark' | 'star'
+  icon: 'pin' | 'bookmark' | 'star' | 'eye'
   hint?: string
   activeHint?: string
   // The kinds of message it's offered on; all three without it.
@@ -151,12 +151,33 @@ export type ExtensionMessageAction = {
   run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// A switch in a chat's composer, beside the message box, such as "Deep research": a chip the user turns on and off for
+// that chat. Each chat keeps its own state (saved with the chat, so it outlives a restart), starting at `default` (off
+// without it). Several extensions can each add theirs. The extension reads a chat's state with host.toggled and sets
+// it with host.setToggle; onChange runs when the user flips it, after the new state is saved. While the extension is
+// off, or left out of the chat by its setup, the chip isn't shown and the saved state waits for it to come back.
+export type ExtensionComposerToggle = {
+  id: string
+  // Short, such as "Deep research"; shown on the chip.
+  label: string
+  icon?: 'search' | 'globe' | 'book' | 'sparkle' | 'bolt'
+  // Explanations on hover, while it's off and while it's on; both default to label.
+  hint?: string
+  activeHint?: string
+  default?: boolean
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  onChange?(on: boolean, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
+
 // A one-shot model call: no tools, no session. schema asks for JSON of that shape where the engine supports it.
-export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number }
+// chatId: the chat it's for (a memory summary of that chat, a research run started in it), so the Inspector's Activity
+// lists the call under that chat; without one it's listed as not tied to a chat.
+export type CompletionRequest = { system: string; prompt: string; schema?: object; timeoutMs: number; chatId?: string }
 
 // An extension's chat is pinned, can't be renamed, archived or deleted, and keeps no folders, files or AGENTS.md of its
-// own.
-export type ExtensionChat = { id: string; name: string; instructions: string; seesAll?: boolean }
+// own. prompt: the id of one of the extension's prompts (where 'instructions') that holds these instructions, so the
+// user can edit them in Settings; Kothar then sends the user's edit, else instructions.
+export type ExtensionChat = { id: string; name: string; instructions: string; prompt?: string; seesAll?: boolean }
 
 // provider: the model provider it signs in to, on engines with more than one (OpenCode); a model of one provider
 // doesn't run on another's account.
@@ -213,6 +234,10 @@ export type NewChatSpec = {
   parentId?: string
   // A child's model list; only with parentId.
   role?: ModelRole
+  // Only with parentId: the child's final reply isn't queued for its parent as a report and doesn't wake it. The
+  // extension reads it in onTurnCompleted (TurnSummary.text, for the child's chat), for children whose work it gathers
+  // itself, such as research workers. It's still listed under its parent while it runs, and removed once it's done.
+  quiet?: boolean
 }
 
 // Each extension gets a host of its own, so storage and notes know which extension they belong to.
@@ -223,7 +248,8 @@ export type ExtensionHost = {
   // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
   // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
   // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
-  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's.
+  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's. With quiet, its reply comes
+  // to the extension instead (NewChatSpec.quiet).
   createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
@@ -313,6 +339,10 @@ export type ExtensionHost = {
   // isn't opened, since it would take over the window. For something new the user will want to see, such as an artifact
   // an agent just made; not for every change.
   showPanel(chatId: string, panel: string): void
+  // Closes one of this extension's panels for the chat, if the user has it open there: a popup or a dock closes; a tab
+  // stays. For a panel's own action that hands off elsewhere, such as a popup's Open beside chat; not to take a panel
+  // away from the user unasked.
+  closePanel(chatId: string, panel: string): void
   // Draws this extension's panels and commands for the chat again, and its open panels: call it when what they show
   // changed. Without a chat, for every chat.
   refresh(chatId?: string): void
@@ -333,7 +363,63 @@ export type ExtensionHost = {
   processes(spaceId: string): (ExtensionProcessRow & { extension: string })[]
   processAction(spaceId: string, extension: string, key: string, action: string): Promise<void>
   processesChanged(spaceId: string): void
+  // Runs another extension's agent tool (ExtensionTool) as if chatId's agent called it, such as the Artifacts
+  // extension's create_artifact, and returns what it returns. Only a tool that's on for that chat and offered to it
+  // (as its agent would see it); rejects otherwise, or with the tool's own error. For handing work to another
+  // extension through its public tools rather than its files.
+  callTool(chatId: string, name: string, input: Record<string, unknown>): Promise<unknown>
+  // Whether one of this extension's composerToggles is on for the chat (its default if the chat never set it). Throws
+  // for a toggle the extension doesn't have.
+  toggled(chatId: string, toggle: string): boolean
+  // Turns one of this extension's composerToggles on or off for the chat, as the user flipping it does, but without
+  // calling onChange; the chip redraws.
+  setToggle(chatId: string, toggle: string, on: boolean): void
+  // One of this extension's prompts (Extension.prompts) as it's sent now: the user's edit from Settings, else its
+  // default text. Throws for a prompt the extension doesn't declare.
+  prompt(id: string): string
+  // Tells the user something the extension did on its own, outside what the agent's tool calls show (it launched a
+  // browser, handed one to the user, checked quotes): it's listed in the chat's Activity in the Inspector, labelled
+  // with the extension's name. Kothar already lists the extension's model calls (complete), messages it sends
+  // (send, continue, retry), chats it starts, account switches and tool calls (callTool), so don't repeat those.
+  activity(event: ActivityInput): void
+  // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
+  // tool it relays: as an engine's tool asks, through Kothar's own rules, then extensions' policies
+  // (onPermissionRequested, this extension's too), else the permission card in the chat; recorded in the Activity with
+  // the rule that answered. changes: it may change something, so a read-only turn refuses it (default true). Rejects
+  // when the chat has no turn running; an unanswered request is denied when the turn ends.
+  requestPermission(chatId: string, request: ExtensionPermissionRequest, options?: { changes?: boolean }): Promise<ExtensionPermissionAnswer>
 }
+
+// Something Kothar or an extension did on its own, outside the agent's own tool calls (Extension.onActivity).
+// kind: 'model' (a model call outside the chat's turn), 'permission' (a request answered, and which rule answered it),
+// 'turn' (how an extension changed a turn: read only, another model list, a toggle that was on, a rewritten message),
+// 'worker' (a chat started or sent a message by an extension, such as a quiet worker), 'tool' (an extension called
+// another's tool), 'retry' (a turn carried on or run again), 'account' (an account switch), 'browser', 'other'.
+export type ActivityKind = 'model' | 'permission' | 'turn' | 'worker' | 'tool' | 'retry' | 'account' | 'browser' | 'other'
+export type ActivityEvent = {
+  id: string
+  at: string
+  // The chat it's about; none for a model call not tied to a chat.
+  chatId?: string
+  // The chat's turn running then (SentTurn.turn), if any.
+  turn?: string
+  kind: ActivityKind
+  // Who did it: Kothar itself (no extension), or an extension by id and name.
+  by: { extension?: string; name: string }
+  title: string
+  detail?: string
+  // A model call's model, and what it was sent, labelled as in SentSection.
+  model?: string
+  sections?: { label: string; text: string }[]
+  result?: string
+  error?: string
+  // A permission request: how it was answered, and the rule that answered it.
+  decision?: 'allowed' | 'denied'
+  rule?: string
+}
+export type ActivityInput = { kind: ActivityKind; title: string; chatId?: string } & Partial<
+  Pick<ActivityEvent, 'detail' | 'model' | 'sections' | 'result' | 'error'>
+>
 
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
 // (such as a version) beside it. Each is plain text, cut if long.
@@ -341,7 +427,11 @@ export type ExtensionNoteCard = { title: string; badge?: string; detail?: string
 export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
-export type ExtensionWait = { text: string; buttons: { id: string; label: string; primary?: boolean; hint?: string }[] }
+// closes: the button answers the wait for good, such as Done. Clicking it ends the wait at once, in the UI and in the
+// core, before onWaitAction runs, so the bar goes the moment it's clicked, whatever slow work the extension then does,
+// and a second click finds nothing to answer. Without it the wait stays until the extension calls endWait.
+export type ExtensionWaitButton = { id: string; label: string; primary?: boolean; hint?: string; closes?: boolean }
+export type ExtensionWait = { text: string; buttons: ExtensionWaitButton[] }
 
 // How the user answered a wait: a button, or a message they sent the chat instead (it still goes to the agent).
 export type ExtensionWaitAnswer = { button: string } | { message: string }
@@ -397,14 +487,42 @@ export type TurnSummary = {
 // message is shown to the agent when the request is denied.
 export type PermissionVerdict = { allow: boolean; message?: string }
 
+// How one turn of a chat runs, set by an extension as the turn starts (Extension.turnOptions). It can only make a turn
+// stricter, or pick the model list it runs on; nothing here gives a turn more than the chat's own settings do.
+// - readOnly: the turn may read but change nothing. Kothar enforces it, not the agent: where the chat is sandboxed,
+//   nothing in the work folder, checkouts or folders is writable (only the session's scratch .tmp folder and the
+//   engine's own state); edit requests are refused; a command is refused unless Kothar can tell it only reads; and the
+//   engine is started read-only where it has such a mode (Codex's read-only sandbox, OpenCode's edits denied, Claude
+//   Code's edit tools off). Reads, searches and fetches are answered as the chat's switches say. These refusals are the
+//   core's, so no extension's onPermissionRequested can allow them.
+// - reason: what the agent is told when a request is refused for readOnly, such as "Plan first is on: …".
+// - role: the turn runs on this model list (Settings → Models) when the user has put models in it; otherwise on the
+//   chat's own model, as usual. The chat's saved engine and model don't change.
+export type TurnOptions = { readOnly?: boolean; reason?: string; role?: ModelRole }
+
 export type ExtensionTool = {
   name: string
   description: string
-  inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[] }
+  // A JSON Schema of an object. Kothar reads type, properties, required and the usual keywords; one it can't read
+  // leaves the tool out of the session, with the error shown.
+  inputSchema: { type: 'object'; properties?: Record<string, object>; required?: string[]; [keyword: string]: unknown }
   offered(caller: ChatSummary): boolean
   // caller: the chat whose agent called the tool. host.reaches(caller.id, …) says which chats it may act on.
   run(input: Record<string, unknown>, call: { caller: ChatSummary; values: ExtensionValues; host: ExtensionHost }): unknown
+  // 'mcp': run returns an McpToolResult, passed to the agent as it is (pictures and all) instead of as text. For an
+  // extension that relays another MCP server's tools.
+  result?: 'mcp'
 }
+
+// What an MCP tool call returns (the MCP spec's CallToolResult): content blocks such as { type: 'text', text } or
+// { type: 'image', data, mimeType }, and isError for a failure the agent should see.
+export type McpToolResult = { content: { type: string; [key: string]: unknown }[]; isError?: boolean; structuredContent?: Record<string, unknown> }
+
+// A permission an extension asks for (host.requestPermission), as an engine's tool asks for one: name and summary as
+// the card shows them, kind (default 'mcp') for the core's rules, input as the card's detail.
+export type ExtensionPermissionRequest = { name: string; summary: string; kind?: ToolKind; input?: unknown; path?: string; command?: string }
+// The answer, and the rule that gave it as the Activity names it ("You", "Read-only turn", an extension's name, …).
+export type ExtensionPermissionAnswer = { allow: boolean; rule: string; message?: string }
 
 export type McpServer = {
   name: string
@@ -477,6 +595,22 @@ export type ExtensionListItem = {
   // A small button at the end of the row, apart from its action, such as "Link" on a mention.
   button?: { label: string; action: ExtensionAction; hint?: string }
 }
+
+// An entry of a menu view: acts as a button does (confirm and pick too; an entry whose pick has no picker, in a
+// browser tab, isn't drawn). checked: a tick before it, such as the order a list is in. danger colours it red.
+// { type: 'divider' } draws a line between groups.
+export type ExtensionMenuItem =
+  | {
+      label: string
+      action: ExtensionAction
+      hint?: string
+      disabled?: boolean
+      checked?: boolean
+      danger?: boolean
+      confirm?: { text: string; body?: string; ok?: string; danger?: boolean }
+      pick?: { kind: 'folder' | 'file'; title?: string }
+    }
+  | { type: 'divider' }
 
 export type ExtensionView =
   | { type: 'stack'; children: ExtensionView[]; gap?: 'tight' | 'normal' | 'loose' }
@@ -621,6 +755,9 @@ export type ExtensionView =
   // history first if needed) and flashes it. buttons: small views beside the author line, such as an Unpin button or
   // a copy.
   | { type: 'message'; entry: number; author: string; at: string; text: string; buttons?: ExtensionView[]; hint?: string }
+  // A ⋯ button that opens a menu of actions, for the rarer things a view can do (rename, move, delete) so they don't
+  // crowd it. label names the button for screen readers and on hover ("More for Project plan"). See ExtensionMenuItem.
+  | { type: 'menu'; label: string; items: ExtensionMenuItem[] }
   // A button that copies text, such as a file's contents, to the clipboard.
   | { type: 'copy'; text: string; label: string; hint?: string }
   // A button that saves text as a file through the browser's download (a save dialog in the desktop app). mimeType
@@ -654,17 +791,19 @@ export type ExtensionPanel = {
   id: string
   title: string
   // 'tab' (the default): a tab in the right sidebar. 'popup': a large window over the chat, for work that wants room,
-  // such as notes; Esc closes it. 'dock': a column beside the chat, between the transcript and the right sidebar, for
-  // something to look at while the chat goes on, such as an artifact: the user resizes it by its edge, widens it to
-  // fill the chat pane, and closes it; it takes no focus when it opens. One dock panel shows at a time. Whichever, it
-  // belongs to the chat that's open, and draws for it.
+  // such as notes; Esc closes it. 'dock': a column beside the chat, for something to look at while the chat goes on,
+  // such as an artifact: the user resizes it by its edge, widens it to fill the chat pane, and closes it; it takes no
+  // focus when it opens. One dock panel shows at a time, kept per chat. Only one right-hand column shows: while a dock
+  // is open the right sidebar hides, and the sidebar's toggle swaps the two. Whichever, it belongs to the chat that's
+  // open, and draws for it.
   placement?: 'tab' | 'popup' | 'dock'
   // Keys that open the panel (a popup) or show its tab, out of the box, such as 'Mod+Shift+N' (Mod is ⌘ on macOS,
   // Ctrl elsewhere). The user can change them in Settings → Shortcuts. Keys some other shortcut already has are left
   // off; pick ones that are free.
   shortcut?: string
-  // An entry in the left sidebar, below the spaces, that opens the panel.
-  sidebar?: boolean
+  // Also show a launcher for this panel in the left sidebar; the panel is always a tab in the right panel. The user
+  // picks where launchers sit (Settings → Appearance), at the top of the sidebar by default.
+  launcher?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
@@ -690,6 +829,52 @@ export type ExtensionCommand = {
   run(chat: ChatDetail, context: ExtensionContext): void | Promise<void>
 }
 
+// Text an extension sends to agents that the user can read and change: in Settings, on the extension's page (Prompts),
+// and in the Inspector, where it shows labelled in what each turn was sent. Read it with host.prompt(id), which gives
+// the user's edit or else text, and send that, such as from instructions(). The user can reset an edit to text; when
+// text changes in an update, an edit made before it is marked "Updated default".
+// - id: lowercase letters, digits and dashes, unique in the extension.
+// - label: what it's for, such as "When to make artifacts".
+// - where: 'instructions' for text that goes in the session's instructions (from instructions() or memory.instructions);
+//   'message' for text put with the user's message, such as a memory's view header; 'background' for text the
+//   extension sends a model it calls on its own (host.complete, a quiet worker's prompt), outside the chat's turn.
+// Each agent tool's description is a prompt too, without declaring it: id tool:<name>. Agents are sent the user's edit.
+export type ExtensionPrompt = { id: string; label: string; text: string; where: 'instructions' | 'message' | 'background'; description?: string }
+
+// What a turn was sent, in order, as Kothar handed it to the engine (Extension.onTurnSent). Joining the instructions
+// sections with a blank line gives the session's instructions exactly, and the prompt sections the prompt.
+// source: you (the user's message), core (Kothar's own rules), context (the chat's context items and setup), extension
+// (an extension's text: extension is its id), tools (a tool the session is offered, with its owner), turn (how the turn
+// runs: engine, model, read only, sandbox), engine (what the engine adds itself, which Kothar can't see: text says so).
+export type SentSource = 'you' | 'core' | 'context' | 'extension' | 'tools' | 'turn' | 'engine'
+export type SentSection = {
+  source: SentSource
+  // 'instructions', 'prompt' (the message the engine gets), or 'other' (tools, how the turn runs, the engine's own)
+  part: 'instructions' | 'prompt' | 'other'
+  label: string
+  text: string
+  extension?: string
+  // The extension's name, as Settings shows it.
+  extensionName?: string
+  // The extension's prompts in it, with whether the user edited each; editable: the user can change it in Settings.
+  prompts?: { id: string; label: string; edited: boolean }[]
+  editable?: boolean
+}
+// kind 'turn': a turn's session opened with these sections. 'steer': a message entered the running turn (turn is the
+// id of the turn it entered), with one section.
+export type SentTurn = {
+  id: string
+  kind: 'turn' | 'steer'
+  turn: string
+  chat: ChatSummary
+  at: string
+  engine: string
+  model?: string
+  account?: string
+  continued: boolean
+  sections: SentSection[]
+}
+
 // Hooks run in the core. A hook that throws or rejects shows its error and doesn't stop the chat; the core doesn't wait
 // for async hooks except onPermissionRequested.
 export type Extension = {
@@ -698,6 +883,8 @@ export type Extension = {
   description: string
   enabledByDefault: boolean
   settings?: ExtensionSetting[]
+  // Text it sends agents that the user may edit (see ExtensionPrompt).
+  prompts?: ExtensionPrompt[]
   // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
   // a worker uses its space's. Read them with host.spaceValues, change them with host.setSpaceValue or with a switch or
   // picker in a panel. They're saved in the space's chat.json, so they go when the space is deleted.
@@ -714,6 +901,10 @@ export type Extension = {
   onSettingsChanged?(changed: { key: string; value: unknown; previous: unknown }, context: ExtensionContext): void | Promise<void>
   chats?: ExtensionChat[]
   tools?: ExtensionTool[]
+  // More tools, made for each chat as its session lists them (each turn's session asks once, as it starts), such as
+  // tools relayed from another MCP server. Keep it quick and synchronous; an error shows and offers none. offered still
+  // counts. host.callTool reaches them too.
+  toolsFor?(caller: ChatSummary, context: ExtensionContext): ExtensionTool[]
   mcpServers?(session: ExtensionSession): McpServer[]
   // Text for every session's instructions, after where the chat may write and before its memory. Return nothing to add
   // none. Extensions are joined in load order.
@@ -722,6 +913,7 @@ export type Extension = {
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
   messageActions?: ExtensionMessageAction[]
+  composerToggles?: ExtensionComposerToggle[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
   // that. For background work, such as summarizing chats.
@@ -744,6 +936,12 @@ export type Extension = {
   onSessionEnded?(ended: { chat: ChatDetail; error?: string }, context: ExtensionContext): void | Promise<void>
   // Every common event as it arrives, deltas included. Read-only, so keep it quick.
   onEvent?(chat: ChatDetail, event: EngineEvent, context: ExtensionContext): void
+  // What a turn's session was sent, as it opens, and each message steered into it (SentTurn). Called only when some
+  // extension that's on watches it, so the core builds nothing otherwise.
+  onTurnSent?(sent: SentTurn, context: ExtensionContext): void
+  // Something Kothar or an extension did on its own (ActivityEvent), as it happens. Like onTurnSent, called only when
+  // some extension that's on watches, so the core builds nothing otherwise.
+  onActivity?(event: ActivityEvent, context: ExtensionContext): void
   // A policy for permission requests the core would otherwise ask the user about, or would allow on its own. Return a
   // verdict to answer it, or nothing to leave it. Extensions are asked in load order; the first verdict wins. The
   // core's own denials (edits outside the work folder in a sandbox) always stand.
@@ -752,6 +950,11 @@ export type Extension = {
     chat: ChatDetail,
     context: ExtensionContext,
   ): PermissionVerdict | undefined | Promise<PermissionVerdict | undefined>
+  // How the chat's next turn runs (TurnOptions), asked as each turn starts, continuations included, before its
+  // session opens: read only, and on which model list. Return nothing to leave the turn as it is. Every extension
+  // that's on for the chat is asked: the turn is read only if any says so (the first one's reason is used), and runs on
+  // the first role given. Keep it quick and synchronous; one that throws shows its error and counts as nothing.
+  turnOptions?(chat: ChatDetail, context: ExtensionContext): TurnOptions | undefined
   // Rewrites a message on its way to the engine. The log and the user keep the original. Extensions chain in load
   // order.
   transformMessage?(text: string, chat: ChatDetail, context: ExtensionContext): string
@@ -788,11 +991,12 @@ export type ExtensionManifest = {
 }
 
 export type ExtensionUse =
-  // Extension fields.
+  // Extension fields: tools, toolsFor; and host.callTool
   | 'tools'
   | 'mcpServers'
+  // instructions, prompts
   | 'instructions'
-  // onPermissionRequested
+  // onPermissionRequested, turnOptions, and host.requestPermission
   | 'permissions'
   // transformMessage, transformOutput
   | 'transforms'
@@ -802,7 +1006,7 @@ export type ExtensionUse =
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
-  // commands, messageActions
+  // commands, messageActions, composerToggles, and host.toggled, setToggle
   | 'commands'
   // settings, spaceSettings, migrateSettings, settingsView, onSettingsChanged, and host.spaceValues, setSpaceValue
   | 'settings'
@@ -810,7 +1014,7 @@ export type ExtensionUse =
   | 'setup'
   // memory, and host.chatStorage, everyChatStorage
   | 'memory'
-  // Host calls: chats, chat, read, space, messages, message, reaches, reachable.
+  // Host calls: chats, chat, read, space, messages, message, reaches, reachable; and onTurnSent.
   | 'readChats'
   // send, createChat, retry, continue, interrupt, addContextFile
   | 'sendMessages'

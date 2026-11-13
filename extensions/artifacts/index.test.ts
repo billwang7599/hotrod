@@ -7,7 +7,7 @@ import { startCore } from '@kothar/core/main'
 import type { Adapter, ClientMessage, CoreMessage, SessionOptions } from '@kothar/core/shared'
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import home from '../home/index.ts'
-import { ago, applyEdits, createArtifactsExtension, diffLines, MAX_CONTENT_BYTES, openerFor, slugOf } from './index.ts'
+import { ago, applyEdits, createArtifactsExtension, diffLines, INSTRUCTIONS, MAX_CONTENT_BYTES, openerFor, slugOf, toolDescription } from './index.ts'
 import { until as waitUntil } from '@kothar/core/test-wait'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -69,16 +69,17 @@ async function start() {
     return { isError: result.isError === true, text: result.content[0].text as string, instructions: options.instructions }
   }
   const views = (chatId: string) => messages.filter((m) => m.type === 'extension.panel' && m.chatId === chatId)
-  const panel = async (chatId: string, action?: { name: string; value?: unknown }): Promise<ExtensionView> => {
+  const panel = async (chatId: string, action?: { name: string; value?: unknown }, id = 'artifacts'): Promise<ExtensionView> => {
     const seen = views(chatId).length
-    const where = { chatId, extension: 'artifacts', panel: 'artifacts' }
+    const where = { chatId, extension: 'artifacts', panel: id }
     handle(action ? ({ type: 'extension.panel.action', ...where, action } as ClientMessage) : { type: 'extension.panel.get', ...where })
     await until(() => views(chatId).length > seen)
     const shown = views(chatId).at(-1)
     if (shown?.type !== 'extension.panel' || !shown.view) throw new Error(shown?.type === 'extension.panel' ? shown.error : 'no view')
     return shown.view
   }
-  return { core, garage, sessions, handle, create, tool, panel, messages }
+  const library = (chatId: string, action?: { name: string; value?: unknown }) => panel(chatId, action, 'library')
+  return { core, garage, sessions, handle, create, tool, panel, library, messages }
 }
 
 // Every node of a view, depth first.
@@ -91,6 +92,9 @@ const nodeOf = <T extends ExtensionView['type']>(view: ExtensionView, type: T) =
   nodes(view).find((n): n is Extract<ExtensionView, { type: T }> => n.type === type)
 
 
+const menus = (view: ExtensionView) => nodes(view).flatMap((n) => (n.type === 'menu' ? [n] : []))
+const menuLabels = (view: ExtensionView) => menus(view).map((m) => m.items.flatMap((i) => ('label' in i ? [i.label] : [])))
+const listed = (view: ExtensionView) => nodeOf(view, 'list')!.items.map((i) => i.label)
 const buttons = (view: ExtensionView) => nodes(view).flatMap((n) => (n.type === 'button' ? [n] : []))
 const button = (view: ExtensionView, label: string) => buttons(view).find((b) => b.label === label)
 const texts = (view: ExtensionView) => nodes(view).flatMap((n) => (n.type === 'text' || n.type === 'heading' || n.type === 'empty' ? [n.text] : []))
@@ -173,11 +177,39 @@ it('refuses an artifact without a title or content, of an unknown type, or too b
   expect(JSON.parse((await tool(app, 'create_artifact', { title: '!!!', type: 'html', content: '<p/>' })).text).name).toBe('artifact')
 })
 
-it('tells agents when to make one, and only chats in a space with the tools', async () => {
+it('tells agents to make one only when asked, and only chats in a space with the tools', async () => {
   const { create, tool } = await start()
   const made = await tool(create('App'), 'list_artifacts')
-  expect(made.instructions).toContain('create_artifact rather than pasting it into your reply')
+  expect(made.instructions).toContain(INSTRUCTIONS.asked)
+  expect(made.instructions).not.toContain('rather than pasting it into your reply')
   expect((await tool('main', 'list_artifacts')).instructions).not.toContain('create_artifact')
+})
+
+it('says only when asked in its tool descriptions, and no longer pushes long content into artifacts', () => {
+  const tools = createArtifactsExtension().tools!
+  const description = (name: string) => tools.find((t) => t.name === name)!.description
+  expect(description('create_artifact')).toBe(toolDescription.create)
+  expect(description('create_artifact')).toContain('only when the user asks')
+  expect(description('create_artifact')).toContain('code for a coding task in files')
+  expect(description('create_artifact')).not.toContain('15 lines')
+  expect(description('update_artifact')).toContain('only when the user asks')
+})
+
+it('has a Make artifacts setting, Only when asked by default, and When useful brings back the old instructions', async () => {
+  const setting = createArtifactsExtension().settings?.find((s) => s.key === 'make')
+  expect(setting).toMatchObject({ label: 'Make artifacts', type: 'select', default: 'asked' })
+  expect(setting?.type === 'select' && setting.options.map((o) => o.label)).toEqual(['Only when asked', 'When useful'])
+
+  const { create, tool, handle, garage } = await start()
+  const app = create('App')
+  handle({ type: 'extension.setValue', extensionId: 'artifacts', key: 'make', value: 'useful' })
+  const useful = (await tool(app, 'list_artifacts')).instructions
+  expect(useful).toContain(INSTRUCTIONS.useful)
+  expect(useful).not.toContain(INSTRUCTIONS.asked)
+  // Saved, so it lasts past a restart.
+  await until(() => existsSync(join(garage, 'settings.json')) && readFileSync(join(garage, 'settings.json'), 'utf8').includes('"useful"'))
+  handle({ type: 'extension.setValue', extensionId: 'artifacts', key: 'make', value: 'asked' })
+  expect((await tool(app, 'list_artifacts')).instructions).toContain(INSTRUCTIONS.asked)
 })
 
 it('puts a card in the chat that opens the artifact, and slides the panel in beside the chat', async () => {
@@ -204,7 +236,7 @@ it('puts a card in the chat that opens the artifact, and slides the panel in bes
   })
 })
 
-it('docks beside the chat with a sidebar entry and keys, in spaces only', async () => {
+it('docks beside the chat in spaces, and has a library popup with a launcher and keys in every chat', async () => {
   const { create, handle, messages } = await start()
   const app = create('App')
   const panelsOf = (chatId: string) => {
@@ -212,15 +244,12 @@ it('docks beside the chat with a sidebar entry and keys, in spaces only', async 
     const shown = messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === chatId)
     return shown?.type === 'chat.extensions' ? shown.panels : []
   }
-  expect(panelsOf(app)).toContainEqual({
-    extension: 'artifacts',
-    id: 'artifacts',
-    title: 'Artifacts',
-    placement: 'dock',
-    shortcut: 'Mod+Shift+A',
-    sidebar: true,
-  })
-  expect(panelsOf('main').some((p) => p.extension === 'artifacts')).toBe(false)
+  const ours = (chatId: string) => panelsOf(chatId).filter((p) => p.extension === 'artifacts')
+  const library = { extension: 'artifacts', id: 'library', title: 'Artifacts', placement: 'popup', shortcut: 'Mod+Shift+A', launcher: true }
+  // The launcher opens the library, not the dock.
+  expect(ours(app)).toEqual([{ extension: 'artifacts', id: 'artifacts', title: 'Artifacts', placement: 'dock' }, library])
+  // Home keeps none, but the library opens there too.
+  expect(ours('main')).toEqual([library])
 })
 
 it('previews each type as it should look, sandboxed and offline', async () => {
@@ -261,7 +290,9 @@ it('steps through versions, shows the code and what changed, restores one, and r
   expect(nodeOf(view, 'html')).toMatchObject({ html: '<p>two</p>\n<p>same</p>', label: 'Mock', errors: `error:${app}/mock@2` })
   expect(nodeOf(view, 'copy')).toMatchObject({ label: 'Copy', text: '<p>two</p>\n<p>same</p>' })
   expect(nodeOf(view, 'download')).toMatchObject({ filename: 'mock-v2.html', mimeType: 'text/html' })
-  expect(buttons(view).map((b) => b.label)).toEqual(['‹ All', '‹', '›', 'Preview', 'Code', 'Changes', 'Open in browser', 'Rename…', 'Delete…'])
+  expect(buttons(view).map((b) => b.label)).toEqual(['‹', '‹', '›', 'Preview', 'Code', 'Changes'])
+  // The rarer actions are in ⋯; the dock is beside the chat already.
+  expect(menuLabels(view)).toEqual([['Open in browser', 'Rename', 'Delete']])
 
   view = await panel(app, { name: 'tab', value: 'changes' })
   expect(texts(view)).toContain('v1 → v2: 1 added, 1 removed')
@@ -284,6 +315,10 @@ it('steps through versions, shows the code and what changed, restores one, and r
 
   // The space's switch lets its pages load from the web; the list shows it.
   handle({ type: 'extension.space.set', chatId: app, extension: 'artifacts', key: 'web', value: true })
+  const web = nodeOf(await panel(app, { name: 'list', value: true }), 'switch')!
+  expect(web).toMatchObject({ setting: 'web', label: 'Load files from the internet', value: true })
+  expect(web.hint).toContain('can’t fetch data')
+  await panel(app, { name: 'list', value: false })
   expect(nodeOf(await panel(app), 'html')!.web).toBe(true)
 
   view = await panel(app, { name: 'renaming', value: true })
@@ -300,8 +335,8 @@ it('steps through versions, shows the code and what changed, restores one, and r
   expect(nodeOf(view, 'list')!.empty).toContain('No artifacts in this space yet')
 })
 
-it('lists, searches and opens artifacts in this space or every space', async () => {
-  const { create, tool, panel, messages } = await start()
+it('lists and searches only this space’s artifacts beside the chat, a worker’s too', async () => {
+  const { create, tool, panel, sessions } = await start()
   const app = create('App')
   const other = create('Other')
   await tool(app, 'create_artifact', { title: 'Sales chart', type: 'html', content: '<p/>' })
@@ -309,22 +344,93 @@ it('lists, searches and opens artifacts in this space or every space', async () 
   await tool(other, 'create_artifact', { title: 'Other chart', type: 'svg', content: '<svg/>' })
 
   let view = await panel(app, { name: 'list', value: true })
-  expect(nodeOf(view, 'list')!.items.map((i) => i.label)).toEqual(['Notes', 'Sales chart'])
+  expect(listed(view)).toEqual(['Notes', 'Sales chart'])
+  expect(buttons(view).map((b) => b.label)).toEqual(['Back'])
   view = await panel(app, { name: 'search', value: 'chart' })
-  expect(nodeOf(view, 'list')!.items.map((i) => i.label)).toEqual(['Sales chart'])
-  view = await panel(app, { name: 'scope', value: 'all' })
-  const items = nodeOf(view, 'list')!.items
-  expect(items.map((i) => i.label)).toEqual(['Other chart', 'Sales chart'])
-  expect(items[0]!.detail).toMatch(/^Other · v1 · /)
-  expect(items[0]!.badges).toEqual([{ text: 'SVG', tone: 'muted' }])
+  expect(listed(view)).toEqual(['Sales chart'])
   view = await panel(app, { name: 'search', value: 'nothing like it' })
   expect(nodeOf(view, 'list')!.empty).toBe('Nothing matches.')
 
-  // One from another space opens here.
-  view = await panel(app, { name: 'open', value: { space: other, slug: 'other-chart' } })
-  expect(nodeOf(view, 'heading')!.text).toBe('Other chart')
-  await panel(app, { name: 'open', value: { space: other, slug: 'gone' } })
+  // A worker's dock shows its space's.
+  const spawned = await tool(app, 'spawn_worker', { task: 'Look' })
+  await until(() => sessions.at(-1)!.prompt === 'Look')
+  const worker = JSON.parse(spawned.text).chatId as string
+  expect(listed(await panel(worker, { name: 'list', value: true }))).toEqual(['Notes', 'Sales chart'])
+
+  // A space without any says so, once its list has drawn, and points to the library.
+  const empty = create('Empty')
+  view = await panel(empty)
+  expect(nodeOf(view, 'list')!.empty).toContain('No artifacts in this space yet')
+  expect(nodeOf(view, 'heading')).toMatchObject({ text: 'This space', hint: expect.stringContaining('library') })
+})
+
+it('keeps a library of every space’s artifacts in a popup, filtered by space and searched, that opens one beside the chat', async () => {
+  const { create, tool, library, panel, messages } = await start()
+  const app = create('App')
+  const other = create('Other')
+  await tool(app, 'create_artifact', { title: 'Sales chart', type: 'html', content: '<p/>' })
+  await tool(other, 'create_artifact', { title: 'Other chart', type: 'svg', content: '<svg/>' })
+
+  // Two columns: every space's, the newest first and open, with their space's name.
+  let view = await library(app)
+  expect(view.type).toBe('split')
+  expect(listed(view)).toEqual(['Other chart', 'Sales chart'])
+  expect(nodeOf(view, 'list')!.items[0]).toMatchObject({ detail: expect.stringMatching(/^Other · /), selected: true })
+  expect(nodeOf(view, 'list')!.items[0]!.badges).toBeUndefined()
+  expect(nodeOf(view, 'search')).toMatchObject({ autofocus: true, submit: 'go' })
+  expect(texts(view)).toContain('All spaces')
+  // The space filter: All, then each space (Home keeps none, so isn't one).
+  expect(menuLabels(view)[0]).toEqual(['All spaces', 'App', 'Other'])
+
+  view = await library(app, { name: 'space', value: app })
+  expect(listed(view)).toEqual(['Sales chart'])
+  expect(nodeOf(view, 'list')!.items[0]!.detail).not.toContain('App')
+  expect(texts(view)).toContain('App')
+  view = await library(app, { name: 'space', value: null })
+  view = await library(app, { name: 'search', value: 'sales' })
+  expect(listed(view)).toEqual(['Sales chart'])
+  view = await library(app, { name: 'go', value: 'sales' })
+  expect(texts(view)).toContain('Sales chart')
+  view = await library(app, { name: 'search', value: '' })
+
+  // Clicking one opens it in the popup, with Open beside chat first among its rarer actions.
+  view = await library(app, { name: 'open', value: { space: other, slug: 'other-chart' } })
+  expect(texts(view)).toContain('Other chart')
+  expect(menuLabels(view).at(-1)).toEqual(['Open beside chat', 'Open in browser', 'Rename', 'Delete'])
+  expect(nodeOf(view, 'html')).toBeDefined()
+
+  // Open beside chat: the popup closes, and the dock opens to it beside this chat, though it's another space's.
+  await library(app, { name: 'beside', value: { space: other, slug: 'other-chart' } })
+  expect(messages).toContainEqual({ type: 'extension.panel.close', chatId: app, extension: 'artifacts', panel: 'library', placement: 'popup' })
+  expect(messages.findLast((m) => m.type === 'extension.panel.show')).toEqual({
+    type: 'extension.panel.show',
+    chatId: app,
+    extension: 'artifacts',
+    panel: 'artifacts',
+    placement: 'dock',
+  })
+  expect(texts(await panel(app))).toContain('Other chart')
+
+  // In Home: the library, but nothing opens beside it.
+  view = await library('main')
+  expect(listed(view)).toEqual(['Other chart', 'Sales chart'])
+  expect(menuLabels(view).at(-1)).not.toContain('Open beside chat')
+  await library('main', { name: 'beside', value: { space: other, slug: 'other-chart' } })
+  expect(JSON.stringify(messages)).toContain('Artifacts open beside a chat in a space')
+
+  // Deleting one in the library closes it wherever it's open.
+  view = await library(app, { name: 'delete', value: `${other}/other-chart` })
+  expect(listed(view)).toEqual(['Sales chart'])
+  expect(texts(await panel(app))).toContain('Sales chart')
+  await library(app, { name: 'open', value: { space: other, slug: 'gone' } })
   expect(JSON.stringify(messages)).toContain('That artifact is gone')
+})
+
+it('says the library is empty only when no space has any', async () => {
+  const { library } = await start()
+  const view = await library('main')
+  expect(nodeOf(view, 'list')!.empty).toBe('No artifacts yet.')
+  expect(texts(view).join(' ')).toContain('Ask an agent in a space')
 })
 
 it('shows a page’s error and sends it to the agent that made that version to fix', async () => {

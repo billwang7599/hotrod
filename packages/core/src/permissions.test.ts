@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PermissionRequest } from '@kothar/extension-api'
 import { afterAll, describe, expect, it } from 'vitest'
-import { ASKS_FIRST, OUTSIDE_EDIT_ADVICE, type PermissionContext, verdictOf } from './permissions.ts'
+import { ASKS_FIRST, decide, OUTSIDE_EDIT_ADVICE, type PermissionContext, verdictOf } from './permissions.ts'
 import type { PermissionSwitches } from './shared.ts'
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-permissions-')))
@@ -230,5 +230,28 @@ describe('switch layers', () => {
     expect(verdictOf(shell('npm test'), parentOff)).toBeUndefined()
     const chatOn = contextOf({ autoRunCommands: true }, true, [{ autoRunCommands: false }])
     expect(verdictOf(shell('npm test'), chatOn)).toEqual(ALLOW)
+  })
+})
+
+describe('the rule behind each verdict (decide)', () => {
+  it('names the rule for each kind of answer, and verdictOf gives the same verdict without it', () => {
+    const cases: [PermissionRequest, PermissionContext, string][] = [
+      [request('edit', { path: join(workDir, 'a.ts') }), contextOf(), 'Kothar core: edits in the work folder'],
+      [request('edit', { path: join(project, 'a.ts') }), { ...contextOf(), folders: [{ path: project, mode: 'edit' }] }, 'Folder mode: Edit in place'],
+      [request('edit', { path: join(project, 'a.ts') }), { ...contextOf(), folders: [{ path: project, mode: 'readOnly' }] }, 'Folder mode: Read only'],
+      [request('edit', { path: join(home, 'x.ts') }), contextOf(), 'Kothar core: the sandbox keeps edits in the work folder'],
+      [request('edit', { path: join(workDir, 'a.ts') }), { ...contextOf(), readOnly: { reason: 'Planning.' } }, 'Read-only turn'],
+      [request('fetch'), contextOf(), 'Switch: Fetch web pages without asking'],
+      [request('read', { path: join(workDir, 'a.ts') }), contextOf(), 'Switch: Read anywhere without asking'],
+      [shell('ls'), contextOf(), 'Switch: Read anywhere without asking (a command that only reads)'],
+      [shell('npm test'), contextOf(), 'Switch: Run commands without asking'],
+    ]
+    for (const [req, context, rule] of cases) {
+      const ruled = decide(req, context)
+      expect(ruled?.rule).toBe(rule)
+      const { rule: _rule, ...verdict } = ruled!
+      expect(verdictOf(req, context)).toEqual(verdict)
+    }
+    expect(decide(shell('curl https://example.com'), contextOf())).toBeUndefined()
   })
 })

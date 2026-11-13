@@ -199,15 +199,15 @@ test("commands are grouped under the name of the extension that added them, with
   expect(sent).toContainEqual({ type: 'extension.command', chatId: 'space', extension: 'browser', command: 'clear' })
 })
 
-test("the state keeps the selected chat's extension tabs and panel views, and drops them on a switch", () => {
+test("the state keeps each chat's extension tabs and panel views, and shows the other chat's at once on a switch", () => {
   let state = reduce({ ...initialState, chats: [space], selectedId: 'space' }, { type: 'chat.extensions', ...extensionUi! })
   state = reduce(state, { type: 'extension.panel', chatId: 'space', extension: 'git', panel: 'changes', view })
   state = reduce(state, { type: 'chat.extensions', chatId: 'other', panels: [], commands: [] })
   expect(state.extensionUi).toEqual(extensionUi)
   expect(state.panelViews).toEqual({ [panelKey('space', 'git', 'changes')]: { view } })
   state = reduce(state, { type: 'select', chatId: 'other' })
-  expect(state.extensionUi).toBeUndefined()
-  expect(state.panelViews).toEqual({})
+  expect(state.extensionUi).toEqual({ chatId: 'other', panels: [], commands: [] })
+  expect(state.panelViews[panelKey('space', 'git', 'changes')]).toEqual({ view })
 })
 
 test("an extension's note keeps the panel it opens", () => {

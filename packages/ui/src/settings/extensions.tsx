@@ -1,8 +1,8 @@
-// The Built-in extensions page, an extension's setup (dialog and row), and the page each extension with settings gets.
+// The Built-in extensions page, an extension's setup (dialog and row), and the page every extension gets.
 import { useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
 import { AlertDialog } from 'radix-ui'
-import { settingProblem, type ClientMessage, type ExtensionInfo } from '@kothar/core/shared'
+import { settingProblem, type ClientMessage, type ExtensionInfo, type PromptInfo } from '@kothar/core/shared'
 import type { ExtensionSetting } from '@kothar/extension-api'
 import { Button, ErrorText, GROUP, MOTION, Select, Switch, useReturnFocus } from '../controls.tsx'
 import { UsesList } from '../marketplace.tsx'
@@ -179,38 +179,157 @@ function ExtensionSettingsView({ extension, connected, send }: SetupProps) {
   )
 }
 
-// A built-in extension with a settings view keeps its page while off, showing only that view.
+// An extension with something to set (settings, a setup, a settings view or prompts) gets a page, as in Obsidian; one without
+// gets none. Each page starts with the same header, saying what it is, whether it's on and what it may do, then its
+// setup, settings and settings view. It keeps its page while off. A community extension's page shows while community
+// extensions are on (its switch and details are in Community hub too).
+export const hasPage = (extension: ExtensionInfo) =>
+  !!(extension.setup || extension.settings.length || extension.settingsView || extension.prompts?.length)
+
 export const extensionPages = (extensions: ExtensionInfo[], communityExtensions: boolean): Page[] =>
   extensions
-    .filter(
-      (extension) =>
-        (extension.enabled || (extension.settingsView && !extension.community)) &&
-        (!extension.community || communityExtensions) &&
-        (extension.settings.length || extension.setup || extension.settingsView),
-    )
+    .filter((extension) => (!extension.community || communityExtensions) && hasPage(extension))
     .map((extension) => ({
       id: `extension:${extension.id}`,
       group: 'Extensions',
       title: extension.name,
-      body: ({ connected, send }: PageProps) => (
-        <div className={GROUP}>
-          {extension.community && (
-            <SettingRow name="Uses" description={<UsesList uses={extension.community.uses} />} />
-          )}
-          {extension.enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
-          {extension.enabled && extension.settings.map((setting) => (
-            <ExtensionSettingRow
-              key={setting.key}
-              setting={setting}
-              value={extension.values[setting.key]}
-              disabled={!connected}
-              save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
-            />
-          ))}
-          {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
-        </div>
-      ),
+      body: ({ connected, send }: PageProps) => <ExtensionPage extension={extension} connected={connected} send={send} />,
     }))
+
+function ExtensionPage({ extension, connected, send }: SetupProps) {
+  const { enabled, community } = extension
+  // A community extension's settings view draws only while it runs; a built-in's, while off too.
+  const shownOff = !!extension.settingsView && !community
+  const uses = community?.uses ?? extension.uses
+  return (
+    <div className={GROUP}>
+      <SettingRow
+        name={extension.name}
+        description={
+          <>
+            {extension.description}
+            <span className="block text-faint" data-testid="extension-kind">
+              {community
+                ? `Community extension · ${community.version}${community.author ? ` by ${community.author}` : ''}`
+                : 'Built-in extension'}
+            </span>
+          </>
+        }
+        below={extension.loadError && <ErrorText>Couldn't load: {extension.loadError}</ErrorText>}
+      >
+        <Switch
+          label={`${extension.name} on`}
+          checked={enabled}
+          disabled={!connected || (!community && extension.loadError !== undefined)}
+          onChange={(on) => send({ type: 'extension.setEnabled', extensionId: extension.id, enabled: on })}
+        />
+      </SettingRow>
+      {uses && <SettingRow name={community ? 'Uses' : 'What it does'} description={<UsesList uses={uses} />} />}
+      {enabled && extension.setup && <ExtensionSetupRow extension={extension} connected={connected} send={send} />}
+      {enabled && extension.settings.map((setting) => (
+        <ExtensionSettingRow
+          key={setting.key}
+          setting={setting}
+          value={extension.values[setting.key]}
+          disabled={!connected}
+          save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
+        />
+      ))}
+      {extension.settingsView && <ExtensionSettingsView extension={extension} connected={connected} send={send} />}
+      {extension.prompts?.length ? <PromptsSection extension={extension} connected={connected} send={send} /> : null}
+      {!enabled && !shownOff && (
+        <p className="py-12 text-sm text-faint">Turn {extension.name} on to change its settings.</p>
+      )}
+    </div>
+  )
+}
+
+const WHERE: Record<PromptInfo['where'], string> = {
+  instructions: 'In every session’s instructions',
+  message: 'With your message',
+  background: 'To a model it calls on its own',
+  tool: 'A tool’s description',
+}
+
+// The extension's prompts (Extension.prompts and its tools' descriptions): the text agents are sent, which the user can
+// change, with Reset to default. Each has an id (prompt-<extension>-<prompt>) that the Inspector's Edit links scroll to.
+function PromptsSection({ extension, connected, send }: SetupProps) {
+  return (
+    <section aria-label="Prompts" className="flex flex-col py-12 not-first:border-t">
+      <h3 className="text-[13px] font-semibold">Prompts</h3>
+      <p className="pb-4 text-sm text-muted">
+        What {extension.name} tells agents. Your edits are sent instead of the defaults; the Inspector shows each where
+        it’s sent.
+      </p>
+      {extension.fixedInstructions && (
+        <p className="pb-4 text-sm text-faint">It also adds instructions it doesn’t name as prompts, so they can’t be edited.</p>
+      )}
+      {extension.prompts!.map((prompt) => (
+        <PromptRow
+          key={prompt.id}
+          prompt={prompt}
+          anchor={promptAnchor(extension.id, prompt.id)}
+          disabled={!connected}
+          save={(text) => send({ type: 'extension.prompt.set', extensionId: extension.id, promptId: prompt.id, ...(text !== undefined && { text }) })}
+        />
+      ))}
+    </section>
+  )
+}
+
+export const promptAnchor = (extension: string, prompt: string) => `prompt-${extension}-${prompt.replace(/[^a-z0-9-]/gi, '-')}`
+
+function PromptRow({ prompt, anchor, disabled, save }: { prompt: PromptInfo; anchor: string; disabled: boolean; save: (text?: string) => void }) {
+  const [draft, setDraft] = useState(prompt.text)
+  const [was, setWas] = useState(prompt.text)
+  if (prompt.text !== was) {
+    setWas(prompt.text)
+    setDraft(prompt.text)
+  }
+  const commit = () => {
+    if (!draft.trim()) {
+      setDraft(prompt.default)
+      if (prompt.edited) save()
+    } else if (draft !== prompt.text) save(draft)
+  }
+  return (
+    <div id={anchor} className="flex scroll-mt-12 flex-col gap-6 py-10">
+      <div className="flex items-center gap-8">
+        <span className="text-sm font-medium">{prompt.label}</span>
+        {prompt.edited && <span className="rounded-full bg-accent/14 px-6 py-1 text-xs text-accent">Edited</span>}
+        {prompt.updatedDefault && (
+          <span className="rounded-full bg-amber/14 px-6 py-1 text-xs text-amber" title="The default changed since you edited this. Reset to use the new one.">
+            Updated default
+          </span>
+        )}
+        <span className="ml-auto text-xs text-faint">{WHERE[prompt.where]}</span>
+        {(prompt.edited || draft !== prompt.default) && (
+          <Button
+            size="small"
+            disabled={disabled}
+            onClick={() => {
+              setDraft(prompt.default)
+              save()
+            }}
+          >
+            Reset to default
+          </Button>
+        )}
+      </div>
+      {prompt.description && <span className="text-sm text-muted">{linked(prompt.description)}</span>}
+      <textarea
+        className="block w-full resize-y px-8 py-6 font-mono text-sm leading-[1.5] focus:border-accent disabled:text-muted"
+        aria-label={prompt.label}
+        rows={Math.min(12, Math.max(3, Math.ceil(draft.length / 90)))}
+        spellCheck={false}
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+      />
+    </div>
+  )
+}
 
 type ExtensionSettingProps = {
   setting: ExtensionSetting

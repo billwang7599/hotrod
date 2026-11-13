@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Kothar",
+  "version": "1.0.0",
+  "description": "Lets Kothar's agents browse in your Chrome, only in each space's blue Kothar tab group.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAkGLne/B2oqrQWMdoZmi3OMzk14sydzQQPWV3QJyWNfsD4FCgBqGwG455UJGZmCYGef9LRChlwuAX+8IOu+2SAdrDKBMzBqp49oyI320LwK4EnF/DaqxS6D+S67ORfeSHttegyT2JNXHromx68IBE4FtLgTHV7EmfWfogt7xsfeZ+g7n5Zc2CqFbRsa8l06yw0n8dm3J7wAkY4EzGmyCzcqa60ZSqiYcc5MsnKIXg1m4uhpx5K4oUbF7bEp2+9E81FTF0Gu1+X2d959ngrPVyNRiwS5K4EV9l0+ZbuMrZ4YMmJoFCWw1X5Del8cTZwdIG9rGV9jKL5grErvO/f0dF/wIDAQAB",
+  "minimum_chrome_version": "125",
+  "permissions": ["tabs", "tabGroups", "debugger", "storage", "alarms"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "Kothar", "default_popup": "popup.html" }
+}

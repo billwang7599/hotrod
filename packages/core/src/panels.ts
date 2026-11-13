@@ -13,8 +13,9 @@ import type {
 } from '@kothar/extension-api'
 import type { Chat } from './chat.ts'
 import { panelTabOf } from './extensions.ts'
+import { isToggled, toggleInfo, toggleOf, withToggle } from './composer-toggles.ts'
 import { messageActionInfo, messageAt } from './message-actions.ts'
-import type { CommandInfo, CoreMessage, MessageActionInfo, PanelTab } from './shared.ts'
+import type { ChatInfo, CommandInfo, ComposerToggleInfo, CoreMessage, MessageActionInfo, PanelTab } from './shared.ts'
 import { messageOf } from './util.ts'
 
 export type PanelDeps = {
@@ -33,6 +34,10 @@ export type PanelDeps = {
   shownChats: () => Chat[]
   detailOf: (chat: Chat) => ChatDetail
   broadcast: (message: CoreMessage) => void
+  /** Sets or ends an extension's wait on a chat (turn.ts). */
+  setWait: (chat: Chat, extensionId: string, wait: ExtensionWait | undefined) => void
+  /** Saves a change to the chat's info (chat.json) and tells the UI. */
+  updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
 }
 
 export function openPanels(deps: PanelDeps) {
@@ -51,6 +56,8 @@ export function openPanels(deps: PanelDeps) {
     shownChats,
     detailOf,
     broadcast,
+    setWait,
+    updateChat,
   } = deps
   type Offered = { shown?(chat: ChatDetail, context: ExtensionContext): boolean }
   const offeredBy = (extension: Extension, item: Offered, chat: Chat) => {
@@ -86,7 +93,25 @@ export function openPanels(deps: PanelDeps) {
         }
       }),
     )
-    return { type: 'chat.extensions', chatId: chat.info.id, panels, commands, ...(messageActions.length && { messageActions }) }
+    const toggles = on.flatMap((extension) =>
+      (extension.composerToggles ?? []).flatMap((t): ComposerToggleInfo[] => {
+        if (!offeredBy(extension, t, chat)) return []
+        try {
+          return [toggleInfo(extension.id, t, isToggled(chat.info, extension, t))]
+        } catch (error) {
+          extensionError(extension, error)
+          return []
+        }
+      }),
+    )
+    return {
+      type: 'chat.extensions',
+      chatId: chat.info.id,
+      panels,
+      commands,
+      ...(messageActions.length && { messageActions }),
+      ...(toggles.length && { toggles }),
+    }
   }
   const openPanels = new Map<string, Set<string>>()
   const renders = new Map<string, number>()
@@ -162,10 +187,11 @@ export function openPanels(deps: PanelDeps) {
   const answerWait = (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => {
     const wait = chat.waits.get(extensionId)
     if (!wait) throw new Error('Nothing is waiting there any more')
-    if ('button' in answer && !wait.buttons.some((b) => b.id === answer.button)) {
-      throw new Error(`No button "${answer.button}"`)
-    }
+    const button = 'button' in answer ? wait.buttons.find((b) => b.id === answer.button) : undefined
+    if ('button' in answer && !button) throw new Error(`No button "${answer.button}"`)
     const extension = extensionFor(extensionId)
+    // A closing button ends the wait first: the bar goes now, and a second click finds nothing waiting.
+    if (button?.closes) setWait(chat, extensionId, undefined)
     callExtension(extension, () => extension.onWaitAction?.(detailOf(chat), answer, contextOf(extension)))
   }
   const checkWait = (wait: ExtensionWait): ExtensionWait => {
@@ -173,7 +199,16 @@ export function openPanels(deps: PanelDeps) {
     for (const b of wait.buttons) {
       if (typeof b?.id !== 'string' || typeof b.label !== 'string') throw new Error('Each button needs an id and a label')
     }
-    return { text: wait.text, buttons: wait.buttons.map(({ id, label, primary, hint }) => ({ id, label, ...(primary && { primary }), ...(hint && { hint }) })) }
+    return {
+      text: wait.text,
+      buttons: wait.buttons.map(({ id, label, primary, hint, closes }) => ({
+        id,
+        label,
+        ...(primary && { primary }),
+        ...(hint && { hint }),
+        ...(closes && { closes }),
+      })),
+    }
   }
   const runCommand = (chat: Chat, extensionId: unknown, commandId: unknown) => {
     const extension = extensionFor(String(extensionId))
@@ -201,10 +236,27 @@ export function openPanels(deps: PanelDeps) {
     }
     if (chats.has(chat.info.id)) refreshExtension(extension, chat.info.id)
   }
+  // The user flipped one of an extension's composer toggles in the chat: saved, then onChange, then the chip redraws.
+  const flipToggle = async (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
+    const toggle = toggleOf(extension, toggleId)
+    if (!offeredBy(extension, toggle, chat)) throw new Error(`${extension.name} has no composer toggle "${toggleId}" here`)
+    if (typeof on !== 'boolean') throw new Error('A composer toggle is on or off')
+    updateChat(chat, { toggles: withToggle(chat.info, extension, toggle, on) })
+    try {
+      await toggle.onChange?.(on, detailOf(chat), contextOf(extension))
+    } catch (error) {
+      extensionError(extension, error)
+    }
+    if (chats.has(chat.info.id)) refreshExtension(extension, chat.info.id)
+  }
 
   return {
     extensionsOf,
     runMessageAction,
+    flipToggle,
     panelOf,
     openPanel,
     panelAction,

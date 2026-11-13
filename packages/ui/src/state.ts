@@ -13,6 +13,7 @@ import type {
   ChatStatus,
   CommandInfo,
   MessageActionInfo,
+  ComposerToggleInfo,
   ContextItem,
   ContextSection,
   CoreMessage,
@@ -119,15 +120,31 @@ export type State = {
   setupSave?: { count: number; id?: string; error?: string }
   // The core's latest answer to the search palette.
   search?: { id: number; query: string; hits: SearchHit[] }
-  context?: { chatId: string; items: ContextItem[] }
-  // The selected chat's extension panels and commands, and the views of the panels it has opened (panelKey).
-  extensionUi?: { chatId: string; panels: PanelTab[]; commands: CommandInfo[]; messageActions?: MessageActionInfo[] }
-  panelViews: Record<string, { view?: ExtensionView; error?: string }>
+  // The selected chat's context, and its extension panels and commands. Switching chats shows the next chat's from the
+  // caches below at once; a chat not seen yet borrows the last chat's, marked stale, until its own arrive (follow).
+  context?: { chatId: string; items: ContextItem[]; stale?: true }
+  extensionUi?: ExtensionUi
+  // Every chat's context and extension UI as the core last sent them, so switching back to a chat draws it at once.
+  contexts: Record<string, ContextItem[]>
+  extensionUis: Record<string, ExtensionUi>
+  // The views of the panels chats have opened (panelKey). Stale: borrowed from the last chat until this chat's arrives.
+  panelViews: Record<string, PanelView>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
   nextToastId: number
 }
+
+export type ExtensionUi = {
+  chatId: string
+  panels: PanelTab[]
+  commands: CommandInfo[]
+  messageActions?: MessageActionInfo[]
+  toggles?: ComposerToggleInfo[]
+  stale?: true
+}
+
+export type PanelView = { view?: ExtensionView; error?: string; stale?: true }
 
 export type Action =
   | CoreMessage
@@ -151,6 +168,8 @@ export const initialState: State = {
   marketFailures: {},
   communityExtensions: false,
   restart: { changes: [], canRestart: false },
+  contexts: {},
+  extensionUis: {},
   panelViews: {},
   terminalErrors: {},
   toasts: [],
@@ -359,6 +378,45 @@ const endsText = (entry: ChatEntry) =>
   entry.type === 'text.completed' || entry.type === 'turn.completed' || entry.type === 'session.ended'
 
 export function reduce(state: State, action: Action): State {
+  const next = follow(state, reduceAll(state, action))
+  return action.type === 'snapshot' || action.type === 'chat.removed' ? forget(next) : next
+}
+
+/**
+ * When the selected chat changes, by a click or because its chat went: the right panel, the dock, popups and launchers
+ * draw the next chat's context, extension UI and panel views from the caches, so nothing blinks empty in between. A
+ * chat not seen yet borrows the last chat's, marked stale (drawn inert), until its own arrive moments later, rather
+ * than flashing an empty panel, a Loading line or a popup that closes and opens again. Borrowed views a chat never
+ * replaced are dropped when it's left, so coming back to it can't show another chat's.
+ */
+function follow(before: State, state: State): State {
+  const from = before.selectedId
+  const to = state.selectedId
+  if (to === from) return state
+  const items = state.contexts[to]
+  const borrowed = state.context && { chatId: to, items: state.context.items, stale: true as const }
+  const context = items ? { chatId: to, items } : to ? borrowed : undefined
+  const ui = state.extensionUi && { ...state.extensionUi, chatId: to, stale: true as const }
+  const extensionUi = state.extensionUis[to] ?? (to ? ui : undefined)
+  const panelViews: State['panelViews'] = {}
+  for (const [key, entry] of Object.entries(state.panelViews)) {
+    const left = key.startsWith(`${from}/`)
+    if (!left || !entry.stale) panelViews[key] = entry
+    const mine = left && to && `${to}/${key.slice(from.length + 1)}`
+    if (mine && !state.panelViews[mine]) panelViews[mine] = { ...entry, stale: true }
+  }
+  return { ...state, context, extensionUi, panelViews }
+}
+
+// Drops what's cached for chats that are gone.
+function forget(state: State): State {
+  const ids = new Set(state.chats.map((c) => c.id))
+  const kept = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)))
+  const views = Object.entries(state.panelViews).filter(([key]) => ids.has(key.slice(0, key.indexOf('/'))))
+  return { ...state, contexts: kept(state.contexts), extensionUis: kept(state.extensionUis), panelViews: Object.fromEntries(views) }
+}
+
+function reduceAll(state: State, action: Action): State {
   switch (action.type) {
     case 'snapshot':
       return keepSelection({
@@ -435,25 +493,27 @@ export function reduce(state: State, action: Action): State {
       const { waits } = action
       return updateChat(state, action.chatId, ({ waits: _, ...c }) => (waits.length ? { ...c, waits } : c))
     }
-    case 'chat.context':
-      if (action.chatId !== state.selectedId) return state
-      return { ...state, context: { chatId: action.chatId, items: action.items } }
+    case 'chat.context': {
+      const { chatId, items } = action
+      const contexts = { ...state.contexts, [chatId]: items }
+      return { ...state, contexts, ...(chatId === state.selectedId && { context: { chatId, items } }) }
+    }
     case 'chat.extensions': {
-      if (action.chatId !== state.selectedId) return state
-      const { chatId, panels, commands, messageActions } = action
-      return { ...state, extensionUi: { chatId, panels, commands, ...(messageActions && { messageActions }) } }
+      const { chatId, panels, commands, messageActions, toggles } = action
+      const extensionUi = { chatId, panels, commands, ...(messageActions && { messageActions }), ...(toggles && { toggles }) }
+      const extensionUis = { ...state.extensionUis, [chatId]: extensionUi }
+      return { ...state, extensionUis, ...(chatId === state.selectedId && { extensionUi }) }
     }
     case 'extension.panel': {
-      if (action.chatId !== state.selectedId) return state
       const { view, error } = action
       const key = panelKey(action.chatId, action.extension, action.panel)
       return { ...state, panelViews: { ...state.panelViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
     }
     case 'context.file': {
+      const withText = (items: ContextItem[]) => items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
+      const contexts = Object.fromEntries(Object.entries(state.contexts).map(([id, items]) => [id, withText(items)]))
       const { context } = state
-      if (!context) return state
-      const items = context.items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
-      return { ...state, context: { ...context, items } }
+      return { ...state, contexts, ...(context && { context: { ...context, items: withText(context.items) } }) }
     }
     case 'context.defaults':
       return { ...state, contextDefaults: action.defaults }
@@ -509,8 +569,9 @@ export function reduce(state: State, action: Action): State {
     }
     // Shown by the notifier (notifications.ts), not kept in state.
     case 'notify':
-    // Opens a dock or a tab (main.tsx), not kept in state.
+    // Open or close a dock, a tab or a popup (main.tsx), not kept in state.
     case 'extension.panel.show':
+    case 'extension.panel.close':
     // Kept by the file link cache, so a check's answer re-renders only the messages that asked.
     case 'files.checked':
     // Kept by Copy changes back (folder-copies.tsx), the only one that reads it.
@@ -527,7 +588,7 @@ export function reduce(state: State, action: Action): State {
     case 'connection':
       return { ...state, connected: action.connected, rejected: action.rejected ?? false }
     case 'select':
-      return { ...state, selectedId: action.chatId, context: undefined, extensionUi: undefined, panelViews: {} }
+      return { ...state, selectedId: action.chatId }
     case 'toast.dismiss':
       return { ...state, toasts: state.toasts.filter((t) => t.id !== action.id) }
   }

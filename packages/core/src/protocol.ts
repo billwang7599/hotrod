@@ -94,9 +94,11 @@ export type ProtocolDeps = {
   setSpaceValue: (extension: Extension, chat: Chat, key: string, value: unknown) => void
   runCommand: (chat: Chat, extensionId: unknown, commandId: unknown) => void
   runMessageAction: (chat: Chat, extensionId: unknown, actionId: unknown, entry: unknown) => Promise<void>
+  flipToggle: (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => Promise<void>
   answerWait: (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => void
   setExtensionEnabled: (extension: Extension, enabled: boolean) => void
   setExtensionValue: (extension: Extension, key: string, value: unknown) => void
+  setPrompt: (extension: Extension, id: string, text: string | undefined) => void
   install: (extension: Extension) => void
   cancelInstall: (extension: Extension) => void
   settingsViewChanged: (extension: Extension) => void
@@ -248,6 +250,7 @@ export function openProtocol(deps: ProtocolDeps) {
     'extension.command': (message) => deps.runCommand(chatFor(message.chatId), message.extension, message.command),
     'extension.message.action': (message) =>
       deps.runMessageAction(chatFor(message.chatId), message.extension, message.action, message.entry),
+    'extension.toggle': (message) => deps.flipToggle(chatFor(message.chatId), message.extension, message.toggle, message.on),
     'extension.wait.answer': (message) =>
       deps.answerWait(chatFor(message.chatId), String(message.extension), { button: String(message.button) }),
 
@@ -285,6 +288,12 @@ export function openProtocol(deps: ProtocolDeps) {
       deps.setExtensionEnabled(deps.extensionFor(String(message.extensionId)), message.enabled === true),
     'extension.setValue': (message) =>
       deps.setExtensionValue(deps.extensionFor(String(message.extensionId)), String(message.key), message.value),
+    'extension.prompt.set': (message) =>
+      deps.setPrompt(
+        deps.extensionFor(String(message.extensionId)),
+        String(message.promptId),
+        typeof message.text === 'string' ? message.text : undefined,
+      ),
     'extension.install': (message) => deps.install(deps.extensionFor(String(message.extensionId))),
     'extension.settingsView.get': (message) => deps.settingsViewChanged(deps.extensionFor(String(message.extensionId))),
     'extension.settingsView.action': (message) =>
