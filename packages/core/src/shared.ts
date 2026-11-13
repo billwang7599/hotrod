@@ -500,6 +500,9 @@ export type ContextItem = {
   binary?: boolean
   // Folders only: a git repo, checked out in the work folder whatever its mode.
   git?: true
+  // Folders only: a git repo with no commits yet. It isn't checked out (git isn't set): it has a mode like any folder
+  // until its first commit.
+  unborn?: true
   // Folders that aren't git repos: how agents may write in it, and why they can't when Kothar refuses the mode.
   mode?: FolderMode
   blocked?: string

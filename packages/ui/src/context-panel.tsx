@@ -328,6 +328,11 @@ function PathCard({
         />
       </div>
       {folder && item.mode && <FolderModeRow item={item} mode={item.mode} chatId={chatId} disabled={readOnly} send={send} />}
+      {folder && item.unborn && (
+        <span className={`pt-4 text-xs text-muted ${item.enabled ? '' : 'opacity-55'}`}>
+          Git repo with no commits yet: checked out from the first message after its first commit
+        </span>
+      )}
       {folder && item.mode === 'copy' && !item.blocked && (
         <CopyRow chatId={chatId} path={item.path} copy={item.copy} disabled={readOnly} send={send} />
       )}

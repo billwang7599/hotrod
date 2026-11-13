@@ -2,8 +2,8 @@
 // chat may write to use them, and removing them with a deleted space. Removing merged work while the space lives is
 // the Git extension's (extensions/git/cleanup.ts). The core passes in the machine and how to save a space's
 // worktrees; nothing here keeps chats.
-import { existsSync, rmSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { basename, join, resolve } from 'node:path'
 import type { ChatInfo, Machine, Worktree } from './shared.ts'
 import { within, messageOf } from './util.ts'
 
@@ -98,6 +98,32 @@ export function openCheckouts<S extends Space>(deps: {
   }
 
   return { checkoutOf, gitAccess, removeWorkDir }
+}
+
+/**
+ * Whether the folder is a git repo with no commits yet (a fresh `git init`: HEAD names a branch that doesn't exist).
+ * There's nothing to check out, and a worktree off it would be empty and hide the user's files, so such a folder is
+ * used as a plain folder, with its mode, until its first commit. Read from the files, not git: the context items ask
+ * on every draw, and the Machine is this computer for now (as the `.git` check beside it assumes). Anything it can't
+ * read, such as a reftable repo or a broken `.git`, counts as having commits, so git itself says what's wrong.
+ */
+export const hasNoCommits = (folder: string) => {
+  try {
+    const dotGit = join(folder, '.git')
+    const gitDir = statSync(dotGit).isDirectory()
+      ? dotGit
+      : resolve(folder, readFileSync(dotGit, 'utf8').match(/^gitdir: (.+)$/m)?.[1]?.trim() ?? '')
+    const commonFile = join(gitDir, 'commondir')
+    const common = existsSync(commonFile) ? resolve(gitDir, readFileSync(commonFile, 'utf8').trim()) : gitDir
+    const ref = readFileSync(join(gitDir, 'HEAD'), 'utf8').match(/^ref: (refs\/heads\/\S+)\s*$/)?.[1]
+    // Detached (a commit), unreadable, or reftable's placeholder: let git decide.
+    if (!ref || ref === 'refs/heads/.invalid' || existsSync(join(common, 'reftable'))) return false
+    if (existsSync(join(common, ref))) return false
+    const packed = join(common, 'packed-refs')
+    return !(existsSync(packed) && readFileSync(packed, 'utf8').split('\n').some((line) => line.endsWith(` ${ref}`)))
+  } catch {
+    return false
+  }
 }
 
 /** Only a folder Kothar made for this space, whatever chat.json says. */

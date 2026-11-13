@@ -3,6 +3,7 @@
 import { existsSync, mkdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { Chat } from './chat.ts'
+import { hasNoCommits } from './checkouts.ts'
 import type { Settings } from './chat-store.ts'
 import type { openFolderCopies } from './folder-copies.ts'
 import { blockedWhy, checkMode, modeOf } from './folder-modes.ts'
@@ -69,13 +70,16 @@ export function openContext(deps: ContextDeps) {
   }
 
   // A folder's place: a git repo (checked out whatever its mode), or its mode and why Kothar refuses it, if it does.
+  // A repo with no commits yet has nothing to check out, so it's a plain folder with its mode until its first commit.
   const folderOf = (chat: Chat, path: string) => {
-    if (existsSync(join(path, '.git'))) return { git: true as const }
+    const repo = existsSync(join(path, '.git'))
+    const unborn = repo && hasNoCommits(path)
+    if (repo && !unborn) return { git: true as const }
     const blocked = blockedWhy(path, garage)
     const nearestFirst = chainOf(chat).map((c) => c.info).reverse()
     const mode = modeOf(nearestFirst, path)
     const copy = mode === 'copy' ? copies.savedCopy(chainOf(chat)[0]!, path)?.path : undefined
-    return { mode, ...(blocked && { blocked }), ...(copy && { copy }) }
+    return { mode, ...(blocked && { blocked }), ...(copy && { copy }), ...(unborn && { unborn: true as const }) }
   }
 
   // The folder, if it's one of the chat's folders set to Work on a copy.
