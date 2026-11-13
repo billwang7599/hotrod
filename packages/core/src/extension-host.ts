@@ -25,7 +25,7 @@ import type {
 import type { openAccounts } from './accounts.ts'
 import { isToggled, toggleOf, withToggle } from './composer-toggles.ts'
 import { guardHost } from './extensions.ts'
-import { summaryOf } from './kothar-mcp.ts'
+import { summaryOf, workerName } from './kothar-mcp.ts'
 import { messagesOf } from './memory.ts'
 import { messageAt } from './message-actions.ts'
 import type { Machine, ChatEntry, ChatInfo, ChatStatus, CompletionRequest, CoreMessage } from './shared.ts'
@@ -113,8 +113,9 @@ export type HostDeps<C extends HostChat> = {
   detailOf: (chat: C) => ChatDetail
   spaceOf: (chat: C) => SpaceDetail
   reachable: (callerId: string, chat: C) => boolean
-  createChat: (spec: Pick<CreateSpec, 'name' | 'folders' | 'files' | 'engine'>) => ChatInfo
-  createChild: (parentId: string, spec: Omit<CreateSpec, 'parentId'>) => ChatInfo
+  // name is checked by the core (a chat needs one).
+  createChat: (spec: Pick<CreateSpec, 'folders' | 'files' | 'engine'> & { name: string }) => ChatInfo
+  createChild: (parentId: string, spec: Omit<CreateSpec, 'parentId' | 'task' | 'name'> & { name: string }) => ChatInfo
   enqueue: (chat: C, message: { text: string }) => void
   interrupt: (chat: C) => void
   retry: (chat: C) => void
@@ -189,6 +190,34 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
 
   const contextOf = (extension: Extension): ExtensionContext => ({ values: deps.valuesOf(extension), host: hostFor(extension) })
 
+  // Capabilities extensions share (host.provide, host.use): by name, each provider in the order it provided. use gets
+  // the first that runs.
+  const provided = new Map<string, { extension: Extension; api: unknown }[]>()
+  const providerOf = (name: string) => provided.get(name)?.find((p) => deps.isOn(p.extension))
+  // Tells each running extension that lists the capability in optionalDependencies whether host.use finds it now.
+  const capabilityChanged = (name: string, from: Extension) => {
+    const enabled = providerOf(name) !== undefined
+    for (const other of deps.extensions) {
+      if (other === from || !deps.isOn(other) || !other.onDependencyChanged || !other.optionalDependencies?.includes(name)) continue
+      try {
+        const done = other.onDependencyChanged({ id: name, enabled }, contextOf(other))
+        if (done instanceof Promise) done.catch((error) => extensionError(other, error))
+      } catch (error) {
+        extensionError(other, error)
+      }
+    }
+  }
+  // The extension stopped (or is uninstalled): what it provided is withdrawn, and those that use it hear.
+  const dropProvided = (extension: Extension) => {
+    for (const [name, list] of provided) {
+      const kept = list.filter((p) => p.extension !== extension)
+      if (kept.length === list.length) continue
+      if (kept.length) provided.set(name, kept)
+      else provided.delete(name)
+      capabilityChanged(name, extension)
+    }
+  }
+
   // The extension's tools for a chat: its fixed ones, then those it makes for the chat (toolsFor). A toolsFor that
   // throws shows its error and adds none.
   const toolsOf = (extension: Extension, chat: C): ExtensionTool[] => {
@@ -209,8 +238,11 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
     const dir = join(deps.garage, 'extensions', extension.id)
     const chatStorageOf = (chat: C) => storageAt(chat.dir, `${extension.name}'s files in this chat`, deps.chatOwnFiles)
     const host: ExtensionHost = {
-      createChat({ name, folders, files, engine, parentId, role, quiet, showReport }) {
+      createChat({ name: given, folders, files, engine, parentId, role, quiet, showReport, task }) {
+        if (task !== undefined && (typeof task !== 'string' || !task.trim())) throw new Error('A worker’s task is text')
+        const name = (given ?? (task === undefined ? '' : workerName(task))) as string
         if (parentId === undefined) {
+          if (task !== undefined) throw new Error('Only a worker (with parentId) takes a task')
           if (role !== undefined) throw new Error('Only a child chat (with parentId) takes a role')
           if (quiet !== undefined) throw new Error('Only a child chat (with parentId) can be quiet')
           if (showReport !== undefined) throw new Error('Only a quiet child chat can show its report')
@@ -222,9 +254,12 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         deps.activity.emit(String(parentId), () => ({
           kind: 'worker',
           by: extension,
-          title: `Started ${quiet === true ? (shows ? 'a quiet worker, shown in the chat' : 'a quiet worker') : 'a child chat'}: ${info.name}`,
+          title: `Started ${quiet === true ? (shows ? 'a quiet worker, shown in the chat' : 'a quiet worker') : 'a worker'}: ${info.name}`,
           ...(role !== undefined && { detail: `On the ${role} model list` }),
+          ...(task !== undefined && { sections: [{ label: 'Its task', text: task }] }),
         }))
+        // Its task goes as its first message, as spawn_worker's does; over the limit it waits for a slot (turn.ts).
+        if (task !== undefined) deps.enqueue(chatFor(info.id), { text: task })
         return info
       },
       send(chatId, text) {
@@ -449,6 +484,18 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         if (!other || !deps.isOn(other)) return false
         return chatId === undefined ? true : deps.isOnFor(other, chatFor(String(chatId)))
       },
+      provide(name, api) {
+        const capability = String(name)
+        if (!extension.provides?.includes(capability)) {
+          throw new Error(`${extension.name} provides "${capability}" without declaring it: list it in its provides`)
+        }
+        if (!deps.isOn(extension)) throw new Error(`${extension.name} is off`)
+        const others = (provided.get(capability) ?? []).filter((p) => p.extension !== extension)
+        const had = providerOf(capability)
+        provided.set(capability, [...others, { extension, api }])
+        if (!had) capabilityChanged(capability, extension)
+      },
+      use: <T,>(name: string) => providerOf(String(name))?.api as T | undefined,
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
       prompt: (id) => deps.promptText(extension, String(id)),
       activity(input) {
@@ -473,9 +520,13 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
   }
 
   /** Drops an extension's host, for an uninstall; a reinstall gets a fresh one. */
-  const forgetHost = (extensionId: string) => hosts.delete(extensionId)
+  const forgetHost = (extensionId: string) => {
+    const extension = deps.extensions.find((e) => e.id === extensionId)
+    if (extension) dropProvided(extension)
+    hosts.delete(extensionId)
+  }
 
-  return { hostFor, contextOf, forgetHost, stopSpawned, toolsOf }
+  return { hostFor, contextOf, forgetHost, stopSpawned, toolsOf, dropProvided }
 }
 
 // Plain files under dir, by relative name; names can't leave it or reach the core's own files in it.

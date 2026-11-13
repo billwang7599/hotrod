@@ -445,6 +445,39 @@ describe('a wait as the turn ends', () => {
   })
 })
 
+describe('start a worker', () => {
+  it('starts one with a task exactly as spawn_worker does: named after it, sent it, and it reports and wakes its parent', async () => {
+    const t = withHost()
+    const space = t.create()
+    const worker = t.host().createChat({ parentId: space, task: 'Count the files in the repo' })
+    expect(t.core.chats().find((c) => c.id === worker.id)?.name).toBe('Count the files in the repo')
+    await until(() => t.prompts.includes('Count the files in the repo'))
+    await until(() => !t.core.chats().some((c) => c.id === worker.id))
+    await until(() => t.chat(space).status === 'idle' && t.chat(space).entries.some((e) => e.type === 'worker.report'))
+    // The report wakes the parent: it runs a turn of its own on it.
+    await until(() => t.prompts.length >= 2)
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(1)
+  })
+
+  it('refuses a task without a parent, or one that isn’t text', () => {
+    const t = withHost()
+    const space = t.create()
+    expect(() => t.host().createChat({ name: 'Odd', task: 'Go' })).toThrow('Only a worker (with parentId) takes a task')
+    expect(() => t.host().createChat({ parentId: space, task: '  ' })).toThrow('A worker’s task is text')
+  })
+
+  it('counts its workers against Settings → Workers, queuing the rest until a slot frees', async () => {
+    const t = withHost()
+    t.handle({ type: 'workers.set', limit: 1 })
+    const space = t.create()
+    const a = t.host().createChat({ parentId: space, task: 'First', quiet: true })
+    const b = t.host().createChat({ parentId: space, task: 'Second', quiet: true })
+    expect(t.core.chats().filter((c) => c.parentId === space && c.status !== 'idle').length).toBeLessThanOrEqual(1)
+    await until(() => !t.core.chats().some((c) => c.id === a.id || c.id === b.id))
+    expect(t.prompts).toEqual(expect.arrayContaining(['First', 'Second']))
+  })
+})
+
 describe('the host', () => {
   it('lists and reads chats', async () => {
     const t = withHost()

@@ -420,6 +420,8 @@ function assembleCore(options: {
   const stopExtension = (extension: Extension) => {
     if (!startedExtensions.delete(extension.id)) return
     callExtension(extension, () => extension.onStop?.(contextOf(extension)))
+    // What it shared with host.provide goes, and those that use it hear.
+    dropProvided(extension)
   }
   // The extension that provides memory: the first that's on with one. Without it, the core's window.
   const memoryExtension = (chat?: Chat) => extensions.find((extension) => isOnFor(extension, chat) && extension.memory)
@@ -646,7 +648,7 @@ function assembleCore(options: {
     workerLimit: () => workers.limit(),
   })
 
-  const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf } = openExtensionHosts<Chat>({
+  const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf, dropProvided } = openExtensionHosts<Chat>({
     garage,
     home,
     now,

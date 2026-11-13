@@ -1,6 +1,6 @@
 ---
 title: Depending on other extensions
-description: optionalDependencies, requires, a setting's requires, host.extensionEnabled and onDependencyChanged.
+description: optionalDependencies, requires, a setting's requires, host.extensionEnabled, onDependencyChanged, and sharing an API with provides, host.provide and host.use.
 ---
 
 # Depending on other extensions
@@ -8,7 +8,7 @@ description: optionalDependencies, requires, a setting's requires, host.extensio
 An extension can work with another one: turn a feature on while the other extension is there, grey out a setting while
 it isn't, or refuse to run without it. Extensions are named by `id`, such as `browser` for the built-in Browser.
 Workers aren't an extension: they're part of Kothar, so any extension can start one with
-[`host.createChat`](host.md#child-chats) and needs no dependency for it.
+[`host.createChat`](host.md#start-a-worker) and needs no dependency for it.
 
 | You want | Use |
 |---|---|
@@ -16,6 +16,7 @@ Workers aren't an extension: they're part of Kothar, so any extension can start 
 | A setting that means nothing without another extension | `requires` on the setting |
 | To hear when another extension is turned on or off | `onDependencyChanged` |
 | An extension that's no use at all without another | `requires` on the extension |
+| To call another extension's code, whichever extension provides it | [Capabilities](#capabilities-provide-and-use): `provides`, `host.provide`, `host.use` |
 
 Most extensions need none of this: the agent already combines every extension's tools (see
 [Working with other extensions](../working-together.md)). Use it when one extension changes how another one looks or
@@ -137,4 +138,76 @@ const clipper: Extension = {
 }
 
 export default clipper
+```
+
+## Capabilities: provide and use
+
+One extension can share an API for others to call, under a **capability** name. Name the capability for what it does
+(`research`, `notes`, `search`), not after the extension, so a community extension can provide the same capability
+instead of a built-in one, and every extension that uses it keeps working.
+
+```ts
+provides: ['search']                       // on the extension that shares it
+host.provide('search', api)                // in its onStart (or later)
+host.use<SearchApi>('search')              // in any other extension: the API, or undefined
+```
+
+- **`provides`** lists the capability names the extension may share. `host.provide` with a name that isn't listed
+  throws.
+- **`host.provide(name, api)`** shares `api` (any value: an object of functions is usual). Call it in `onStart`: it's
+  withdrawn when the extension stops, and `onStart` runs again when it's turned back on. Providing again replaces
+  your earlier API.
+- **`host.use(name)`** returns the API of the first running extension that provides it, or `undefined` if none does.
+  Call it when the feature runs, not once at start, and handle `undefined`: the user can turn the provider off at any
+  time. The API is whatever its provider shared, so type it yourself (`host.use<SearchApi>('search')`); a provider
+  should document its API's shape.
+- **Hear when a provider comes or goes:** list the capability name in `optionalDependencies`. `onDependencyChanged`
+  gets `{ id: 'search', enabled }`, where `enabled` says whether `host.use` finds it now.
+- `provide` and `use` need nothing listed in a community extension's manifest.
+
+Use a capability when one extension's code must call another's, such as a notes extension asking whichever search
+extension is installed to index a note. When the agent could do the combining itself, give both extensions tools
+instead (see [Working with other extensions](../working-together.md)).
+
+```ts
+import type { Extension } from '@kothar/extension-api'
+
+type SearchApi = { index: (name: string, text: string) => Promise<void> }
+
+const search: Extension = {
+  id: 'quick-search',
+  name: 'Quick search',
+  description: 'Indexes text for fast lookup.',
+  enabledByDefault: true,
+  provides: ['search'],
+  onStart({ host }) {
+    const api: SearchApi = { index: async (name, text) => void host.storage.write(`index/${name}`, text) }
+    host.provide('search', api)
+  },
+}
+
+const journal: Extension = {
+  id: 'journal',
+  name: 'Journal',
+  description: 'A daily journal the agent can add to.',
+  enabledByDefault: true,
+  optionalDependencies: ['search'],
+  onDependencyChanged({ id, enabled }, { host }) {
+    if (id === 'search' && !enabled) host.activity({ kind: 'other', title: 'No search extension: entries aren’t indexed' })
+  },
+  tools: [
+    {
+      name: 'add_journal_entry',
+      description: 'Adds an entry to today’s journal.',
+      inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+      offered: () => true,
+      async run(input, { host }) {
+        await host.use<SearchApi>('search')?.index(`journal-${host.now().toISOString()}`, String(input.text))
+        return 'Added'
+      },
+    },
+  ],
+}
+
+export { search, journal }
 ```

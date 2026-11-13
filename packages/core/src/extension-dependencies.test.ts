@@ -191,3 +191,43 @@ describe('a setting that requires another extension', () => {
     expect(t.info('main').values.x).toBe(false)
   })
 })
+
+describe('capabilities: provides, host.provide and host.use', () => {
+  it('shares an API under a capability name, withdraws it when its provider stops, and tells those that list it', async () => {
+    const heard: string[] = []
+    let consumer: ExtensionHost | undefined
+    const provider = base('searcher', {
+      provides: ['search'],
+      onStart: ({ host }) => host.provide('search', { find: (q: string) => `found ${q}` }),
+    })
+    const user = base('user', {
+      optionalDependencies: ['search'],
+      onStart: ({ host }) => void (consumer = host),
+      onDependencyChanged: ({ id, enabled }) => void heard.push(`${id} ${enabled}`),
+    })
+    const t = await start([user, provider])
+    await until(() => consumer?.use('search') !== undefined)
+    expect(consumer!.use<{ find: (q: string) => string }>('search')!.find('x')).toBe('found x')
+    expect(consumer!.use('nothing')).toBeUndefined()
+    t.setEnabled('searcher', false)
+    expect(consumer!.use('search')).toBeUndefined()
+    expect(heard).toContain('search false')
+    t.setEnabled('searcher', true)
+    await until(() => consumer!.use('search') !== undefined)
+    expect(heard.at(-1)).toBe('search true')
+    expect(t.errors).toEqual([])
+  })
+
+  it('lets another extension provide the same capability, and refuses an undeclared one', async () => {
+    let host: ExtensionHost | undefined
+    const stock = base('stock', { provides: ['search'], onStart: ({ host }) => host.provide('search', 'stock') })
+    const community = base('community', { provides: ['search'], onStart: ({ host }) => host.provide('search', 'community') })
+    const sneaky = base('sneaky', { onStart: ({ host: h }) => void (host = h) })
+    const t = await start([stock, community, sneaky])
+    await until(() => host !== undefined)
+    expect(host!.use('search')).toBe('stock')
+    t.setEnabled('stock', false)
+    expect(host!.use('search')).toBe('community')
+    expect(() => host!.provide('search', 1)).toThrow('without declaring it')
+  })
+})

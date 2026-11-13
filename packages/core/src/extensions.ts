@@ -169,6 +169,8 @@ export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = [
   'prompt',
   'activity',
   'extensionEnabled',
+  'provide',
+  'use',
 ]
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This

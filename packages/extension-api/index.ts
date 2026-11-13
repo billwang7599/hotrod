@@ -249,7 +249,12 @@ export type ExtensionStoredFile = { name: string; size: number }
 export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
 
 export type NewChatSpec = {
-  name: string
+  // The chat's name in the sidebar. A worker started with a task may leave it out: it's named after its task, as
+  // spawn_worker names one.
+  name?: string
+  // Only with parentId: the worker's first message, sent at once (or, over Settings → Workers' limit, as soon as a slot
+  // frees), just as spawn_worker sends its task. Without it, send one with host.send.
+  task?: string
   folders?: string[]
   files?: string[]
   // An engine that is on; without one, the chat follows its role's model list.
@@ -302,7 +307,8 @@ export type ExtensionHost = {
   read(chatId: string, options?: { last?: number }): ChatEntry[]
   // The space the chat is in (the chat itself for a space).
   space(chatId: string): SpaceDetail | undefined
-  // Asks a running turn to stop, as Stop does.
+  // Asks a running turn to stop, as Stop does. For a worker, that ends it: it reports what it has (quiet: to your
+  // onTurnCompleted) and is removed, as stop_chat does.
   interrupt(chatId: string): void
   // An engine's saved accounts, in the order Settings lists them, or undefined if it keeps none.
   accounts(engine: string): ExtensionAccounts | undefined
@@ -416,6 +422,14 @@ export type ExtensionHost = {
   // False for an id Kothar doesn't know. Workers are part of Kothar, not an extension, so need no check. For features that turn on
   // when another extension is there (Extension.optionalDependencies); check it when the feature runs, not once at start.
   extensionEnabled(id: string, chatId?: string): boolean
+  // Shares an API under a capability name this extension declares in Extension.provides, for other extensions to get
+  // with use. Call it in onStart (or later); it's withdrawn when the extension stops. Name the capability for what it
+  // does ('research', 'notes'), not after the extension, so another extension can provide the same one instead.
+  provide(name: string, api: unknown): void
+  // The API a running extension provides under this capability name, or undefined if none does now. List the name in
+  // optionalDependencies to hear (onDependencyChanged, with the name as id) when a provider comes or goes. Check it
+  // when the feature runs, not once at start; the API is whatever its provider shared, so type it yourself.
+  use<T = unknown>(name: string): T | undefined
   // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
   // tool it relays: as an engine's tool asks, through Kothar's own rules, then extensions' policies
   // (onPermissionRequested, this extension's too), else the permission card in the chat; recorded in the Activity with
@@ -939,12 +953,18 @@ export type Extension = {
   settings?: ExtensionSetting[]
   // Other extensions, by id, this one works with when they're there: features of its own turn on while they're on
   // (check with host.extensionEnabled) and it's told when they switch (onDependencyChanged). It runs without them.
+  // A capability name (Extension.provides) works too: it's told when an extension starts or stops providing it.
   optionalDependencies?: string[]
+  // Capability names this extension shares an API under with host.provide, such as 'research'. Others get it with
+  // host.use, whichever extension provides it.
+  provides?: string[]
   // Other extensions, by id, this one can't run without. It can't be turned on while one is off (Settings says which
   // to turn on first), and turning one off stops it too (its own switch stays on, and it starts again when they're all
   // back on). Keep to optionalDependencies unless the extension is of no use at all without the other.
   requires?: string[]
-  // One of its optionalDependencies or requires, or an extension a setting of its requires, was turned on or off, as
+  // One of its optionalDependencies or requires, or an extension a setting of its requires, was turned on or off, or
+  // a capability in its optionalDependencies gained or lost its provider (id: the capability, enabled: host.use finds
+  // it now), as
   // the user (or the community extensions switch) did it. Called after that extension has started or stopped, and only
   // while this one runs: an extension stopped because a required one went off hears onStop instead.
   onDependencyChanged?(change: { id: string; enabled: boolean }, context: ExtensionContext): void | Promise<void>

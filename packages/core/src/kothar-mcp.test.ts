@@ -53,7 +53,7 @@ async function start(workers = { enabled: false, limit: 4 }) {
   }
   const extensionTools: { tool: ExtensionTool; values: ExtensionValues }[] = []
   const host = {
-    createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
+    createChat: ({ name, folders, files, engine }) => created({ name: name ?? "", folders, files, engine }),
     send: (chatId, text) => void calls.push(['send', chatId, text]),
   } as Partial<ExtensionHost> as ExtensionHost
   const mcp = openKotharMcp({

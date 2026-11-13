@@ -31,7 +31,7 @@ listed. The user can change the intro in **Settings → Prompts**, and the Inspe
 ## Workers get your tools too
 
 A worker (a chat an agent starts with `spawn_worker`, or an extension with
-[`host.createChat({ parentId })`](reference/host.md#child-chats)) gets the same extension tools as the chat that
+[`host.createChat({ parentId })`](reference/host.md#start-a-worker)) gets the same extension tools as the chat that
 started it, under the same switches: its space's setup and per-chat settings apply. The only thing a worker can't do
 is start workers itself. So "run this in a worker" works for any tool you write.
 

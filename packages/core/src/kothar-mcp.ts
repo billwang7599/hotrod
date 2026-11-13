@@ -37,7 +37,7 @@ export const summaryOf = ({ id, name, engine, parentId, worker }: ChatInfo): Cha
   ...(worker && { worker }),
 })
 
-const workerName = (task: string) => {
+export const workerName = (task: string) => {
   const line = task.trim().replace(/\s+/g, ' ')
   return line.length > WORKER_NAME_MAX_CHARS ? `${line.slice(0, WORKER_NAME_MAX_CHARS).trimEnd()}…` : line
 }

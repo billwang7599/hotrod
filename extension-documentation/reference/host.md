@@ -22,7 +22,7 @@ names the missing entry.
 | `home` | `files` |
 | `spaceValues`, `setSpaceValue` | `settings` |
 | `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
-| `note`, `error`, `notify`, `storage`, `refresh`, `now`, `prompt`, `activity`, `extensionEnabled` | nothing |
+| `note`, `error`, `notify`, `storage`, `refresh`, `now`, `prompt`, `activity`, `extensionEnabled`, `provide`, `use` | nothing |
 
 A community extension can't make any other host call, including one added in a later Kothar, until Kothar lists it here.
 Built-in extensions aren't held to `uses`.
@@ -90,10 +90,10 @@ export { lastQuestion, workFolder }
 | Call | What it does |
 |---|---|
 | `send(chatId, text)` | Sends a message as if you typed it. If a turn is running, it waits in the queue behind it. |
-| `createChat({ name, folders?, files?, engine?, parentId?, role? })` | Makes a new chat and returns `{ id }`. Without `parentId` it's a space; `folders` and `files` are absolute paths that go into its context. With `parentId` it's a [child chat](#child-chats). Send it its first message with `send`. |
+| `createChat({ name?, folders?, files?, engine?, parentId?, role?, quiet?, task? })` | Makes a new chat and returns `{ id }`. Without `parentId` it's a space and needs a `name`; `folders` and `files` are absolute paths that go into its context. With `parentId` it's a worker: see [Start a worker](#start-a-worker). |
 | `retry(chatId)` | Sends the chat's last message again, ahead of anything queued. |
 | `continue(chatId, text)` | Carries on the chat's last turn with a prompt from Kothar, as a turn of its own. The agent sees the turn so far in its memory. The prompt isn't shown or logged as a message, and queued messages run after it. The chat must be idle. |
-| `interrupt(chatId)` | Asks a running turn to stop, as the Stop button does. |
+| `interrupt(chatId)` | Asks a running turn to stop, as the Stop button does. For a worker, that ends it, as `stop_chat` does: it reports what it has and is removed. |
 | `addContextFile(chatId, path)` | Adds a file to the chat's context (**Context → Files**), as the user adding it there does. It's pasted into the instructions of the chat's next sessions and its workers'. A worker's goes to its space. Throws a short message for the user when there's no such file, it's already there, or the chat keeps no files (an extension's own chat, such as Home). |
 
 ```ts
@@ -116,10 +116,13 @@ export default reviewer
 This extension lists `events` and `sendMessages`. Careful: an extension that sends a message after every turn can loop.
 Here the review turn only sends again if it edited files.
 
-### Child chats
+### Start a worker
 
-`createChat` with `parentId` makes a worker below that chat, exactly as `spawn_worker` does. Workers are part of Kothar,
-so this needs no other extension:
+`createChat` with `parentId` starts a worker below that chat, exactly as `spawn_worker` does. Workers are part of
+Kothar, so this needs no other extension:
+
+- Give it a `task`: that's its first message, sent at once (or as soon as a slot frees, see below), and its name in the
+  sidebar unless you give a `name`. Without a `task`, give a `name` and send its first message with `send`.
 
 - It's listed under its parent, and it's view only: you can watch it and stop it, not write to it.
 - It works in its space's work folder and checkouts, so it takes no `folders` or `files` of its own.
@@ -134,11 +137,13 @@ so this needs no other extension:
   transcript as a worker's report, folded like any other, so the user can read it. It's marked `quiet` in the log
   (`worker.report` with `quiet: true`): it isn't queued for the parent's agent, doesn't wake it and starts no turn,
   though the parent's memory includes it. Deep Research uses it for its "Show research workers as subagents" setting.
-- A child can't have children of its own, and its parent must not be archived.
+- Stop it with `interrupt(id)`, as `stop_chat` does: it reports what it has and is removed.
+- Its parent must not be archived. An extension may start a worker below a worker (one level, no deeper), so a worker
+  that runs your tool can hand parts of it out; the agent's own `spawn_worker` is never offered to workers.
 
 Every running child counts toward **Settings → Workers → Max running per chat**, the same limit `spawn_worker` keeps,
 whether it's quiet or not and whichever extension started it. A child started while its parent is at the limit isn't
-refused: the message you `send` it waits in its queue, and it starts as soon as one of the parent's workers is done (the
+refused: its task (or the message you `send` it) waits in its queue, and it starts as soon as one of the parent's workers is done (the
 parent's Activity says so). So start as many as your work needs; don't keep your own count. The user's **Let agents
 start workers** switch only concerns `spawn_worker`; your extension can start workers either way.
 
@@ -146,9 +151,8 @@ start workers** switch only concerns `spawn_worker`; your extension can start wo
 import type { ExtensionHost } from '@kothar/extension-api'
 
 function research(host: ExtensionHost, parentId: string, question: string) {
-  const child = host.createChat({ name: 'Research', parentId, role: 'searching' })
-  host.send(child.id, `Find out: ${question}. Reply with a short answer and your sources.`)
-  return child.id
+  const task = `Find out: ${question}. Reply with a short answer and your sources.`
+  return host.createChat({ name: 'Research', parentId, role: 'searching', task }).id
 }
 
 export { research }
@@ -466,6 +470,13 @@ try {
   host.chatStorage(chatId).write('report.md', content)
 }
 ```
+
+## Sharing an API with other extensions
+
+`provide(name, api)` shares an API under a capability name listed in your extension's `provides`; `use(name)` gets the
+API of whichever running extension provides that capability, or `undefined`. Use it when your code needs another
+extension's code, not just its tools; name capabilities for what they do so another extension can provide the same one.
+See [Capabilities](dependencies.md#capabilities-provide-and-use).
 
 ## Asking the user's leave
 
