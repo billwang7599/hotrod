@@ -798,11 +798,15 @@ it("lets an extension start a child chat as spawn_worker does, with agents kept 
   // Its tool isn't offered to a child, and no memory extension is on, so the child has no Kothar MCP server at all.
   expect(child.options.kotharMcp).toBeUndefined()
 
-  // A child takes its folders from its space, and can't have children of its own.
+  // A child takes its folders from its space. An extension can start one below it (so research a worker runs doesn't
+  // wait for the slot that worker holds), but no deeper.
   const refused = await tool(token, 'delegate', { task: 'More', spec: { folders: [garage] } })
   expect(refused).toEqual({ isError: true, text: 'A child chat takes its folders from its space' })
-  const grandchild = await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId } })
-  expect(grandchild).toEqual({ isError: true, text: 'A worker cannot start chats' })
+  const grandchild = JSON.parse((await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId, quiet: true } })).text).chatId
+  expect(chatIn(core, grandchild)).toMatchObject({ parentId: chatId, worker: true })
+  const deepest = await tool(token, 'delegate', { task: 'Deepest', spec: { parentId: grandchild } })
+  expect(deepest).toEqual({ isError: true, text: "A worker's worker cannot start chats" })
+  sessionOf(grandchild).end('Deeper done')
   expect((await tool(token, 'delegate', { task: 'Odd', spec: { role: 'boss' } })).text).toBe('Unknown role "boss"')
 
   child.end('Checked')

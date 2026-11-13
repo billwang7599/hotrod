@@ -7,6 +7,7 @@ The sidebar order of these pages. Each line links a page; indented lines sit und
 - [Using extensions](using-extensions.md)
 - [Quick start](quick-start.md)
 - [Extension anatomy](anatomy.md)
+- [Working with other extensions](working-together.md)
 - API reference
   - [The extension object](reference/extension.md)
   - [Settings and setup](reference/settings.md)

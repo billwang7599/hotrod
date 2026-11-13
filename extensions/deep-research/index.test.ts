@@ -299,6 +299,24 @@ describe('the deep_research tool', () => {
     expect(await done).toMatchObject({ status: 'done', sources: 1 })
   })
 
+  it('runs inside a worker with no plan to approve, its searches below that worker, even at a limit of 1', async () => {
+    const t = await core({ depth: 'quick' })
+    t.handle({ type: 'workers.set', limit: 1 })
+    const space = t.create()
+    // A worker the space's agent started, mid-turn while it runs deep_research (its one slot is taken).
+    t.hold.on = true
+    const worker = t.host().createChat({ name: 'Researcher', parentId: space }).id
+    t.host().send(worker, 'Look into Greek letters')
+    await until(() => t.chat(worker).status === 'running')
+    const outcome = await t.callTool(worker, 'Greek letters?')
+    expect(outcome).toMatchObject({ status: 'done', sources: 1 })
+    // Its searches ran below it, not below the space, so they never waited for the worker's own slot.
+    expect(t.messages.some((m) => m.type === 'chat.added' && m.chat.parentId === worker)).toBe(true)
+    expect(t.messages.some((m) => m.type === 'chat.added' && m.chat.parentId === space && m.chat.id !== worker)).toBe(false)
+    expect(t.chat(worker).waits ?? []).toEqual([])
+    t.hold.release?.()
+  })
+
   it('shows the plan on the chat’s bar while its turn runs, and Start goes on', async () => {
     const t = await core({ depth: 'quick' })
     const space = t.create()

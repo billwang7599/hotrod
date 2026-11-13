@@ -73,6 +73,7 @@ const snapshot = (chats: ChatState[]): Action =>
     setups: [],
     memory: {},
     workers,
+    corePrompts: [],
     workFolder: { defaultPath: '/g/work', canSandbox: true },
     themes: [],
     installed: [],

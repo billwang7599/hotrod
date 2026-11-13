@@ -3,6 +3,7 @@
 import { folderLines, type FolderPlace } from './folder-modes.ts'
 import type { ContextItem } from './shared.ts'
 import { WORKERS_PROMPT } from './workers.ts'
+import { corePromptLink } from './core-prompts.ts'
 
 export const WRITE_RULES =
   'You can write files only in your work folder and in attached folders set to Edit in place. Every other folder ' +
@@ -26,6 +27,9 @@ export type InstructionParts = {
   folders: FolderPlace[]
   // What extensions add (Extension.instructions), already trimmed, in extension order.
   extensions: string[]
+  // "What you can use": what the chat can use from Kothar and each extension, and the nudge to combine them
+  // (core-prompts.ts), for a session with Kothar's tools.
+  toolbox?: string
   // Settings → Workers' instructions, for a chat that may start workers.
   workers?: string
   // The memory extension's instructions, already trimmed.
@@ -61,7 +65,7 @@ export type InstructionSection = {
 }
 
 export const instructionSections = (parts: InstructionParts): InstructionSection[] => {
-  const { role, workDir, checkouts, folders, extensions, workers, memory, parentView, setup, items } = parts
+  const { role, workDir, checkouts, folders, toolbox, extensions, workers, memory, parentView, setup, items } = parts
   const core = (label: string, text: string): InstructionSection => ({ source: 'core', label, text })
   const from = (extension: string | undefined, label: string, text: string): InstructionSection =>
     extension ? { source: 'extension', label, text, extension } : core(label, text)
@@ -73,6 +77,7 @@ export const instructionSections = (parts: InstructionParts): InstructionSection
       ? [core('Git checkouts', [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n'))]
       : []),
     ...(folders.length ? [core('Folder modes', [FOLDER_RULES, ...folderLines(folders)].join('\n'))] : []),
+    ...(toolbox ? [{ ...core('What you can use', toolbox), settings: corePromptLink('combine') }] : []),
     ...extensions.map((text, i) => from(ids[i], 'Instructions', text)),
     ...(workers !== undefined
       ? [{ ...core('Workers: when to start workers', workers), settings: `${WORKERS_PROMPT.page}#prompt-${WORKERS_PROMPT.page}-${WORKERS_PROMPT.id}` }]

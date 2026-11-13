@@ -182,7 +182,10 @@ it('tells agents to make one only when asked, and only chats in a space with the
   const made = await tool(create('App'), 'list_artifacts')
   expect(made.instructions).toContain(INSTRUCTIONS.asked)
   expect(made.instructions).not.toContain('rather than pasting it into your reply')
-  expect((await tool('main', 'list_artifacts')).instructions).not.toContain('create_artifact')
+  // Home gets no artifact instructions; What you can use only names the tools it's offered.
+  const home = (await tool('main', 'list_artifacts')).instructions
+  expect(home).not.toContain(INSTRUCTIONS.asked)
+  expect(home.split('\n').filter((line) => line.includes('create_artifact')).every((line) => line.startsWith('- Artifacts ('))).toBe(true)
 })
 
 it('says only when asked in its tool descriptions, and no longer pushes long content into artifacts', () => {

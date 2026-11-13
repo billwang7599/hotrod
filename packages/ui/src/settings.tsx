@@ -16,7 +16,7 @@ import { ModelListsSection } from './settings/models.tsx'
 import { SettingRow } from './settings/rows.tsx'
 import { NAV_GROUPS, type Page, type PageProps } from './settings/types.ts'
 import { WORK_FOLDER_INTRO, WorkFolderPage } from './settings/work-folder.tsx'
-import { WORKERS_INTRO, WorkersPage } from './settings/workers.tsx'
+import { CORE_PROMPTS_INTRO, CorePromptsPage, WORKERS_INTRO, WorkersPage } from './settings/workers.tsx'
 
 const PAGES = [
   {
@@ -102,6 +102,13 @@ const PAGES = [
     title: 'Workers',
     intro: WORKERS_INTRO,
     body: ({ workers, connected, send }: PageProps) => <WorkersPage workers={workers} connected={connected} send={send} />,
+  },
+  {
+    id: 'prompts',
+    group: 'Options',
+    title: 'Prompts',
+    intro: CORE_PROMPTS_INTRO,
+    body: ({ corePrompts, connected, send }: PageProps) => <CorePromptsPage prompts={corePrompts} connected={connected} send={send} />,
   },
   {
     id: 'setups',

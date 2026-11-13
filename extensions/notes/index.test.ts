@@ -174,9 +174,10 @@ it('puts no notes in any prompt: agents reach the global notes and their spaceâ€
   const { garage, create, session, tool, sessions } = await start()
   const app = create('App')
   const other = create('Other')
-  // The old index started "Notes:" and told agents about the note tools.
-  expect(session(app).instructions).not.toContain('Notes:')
-  expect(session(app).instructions).not.toContain('write_note')
+  // The old index started "Notes:" and told agents about the note tools. What you can use names them on one line.
+  expect(session(app).instructions).not.toMatch(/^Notes:/m)
+  const mentions = session(app).instructions.split('\n').filter((line) => line.includes('write_note'))
+  expect(mentions).toEqual([expect.stringMatching(/^- Notes \(list_notes, .*write_note/)])
 
   const saved = await tool(app, 'write_note', { name: 'Run the tests', description: 'Before a PR', body: 'npm test' })
   expect(saved.isError).toBe(false)

@@ -132,6 +132,10 @@ Why some things are the way they are. Add one when you make a choice the next co
   agent knows and can wait or stop one; an extension's worker waits for a slot instead, because the extension's work
   (a research run) should finish, not fail. That's also why the switch for agents is separate from the limit: a
   limit of 0 would leave an extension's workers waiting forever.
+- **The agent combines extensions; code rarely does.** Each session's "What you can use" section (`core-prompts.ts`)
+  lists what the chat can use, made from extensions' metadata, and tells the agent to combine them. Workers get their
+  lead's extension tools. An extension a worker uses may start workers one level below that worker (only there), so a
+  worker's deep research doesn't wait for the slot the worker itself holds.
 
 ## Pull requests
 

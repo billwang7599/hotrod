@@ -21,6 +21,8 @@ export type InstructionPartsDeps = {
   roleOwnerOf?: (chat: Chat) => string | undefined
   // Settings → Workers' instructions, for a chat that may start workers (workers.ts); undefined for one that may not.
   workerInstructions: (chat: Chat) => string | undefined
+  // "What you can use" for a session with Kothar's tools (core-prompts.ts); undefined when there's nothing to list.
+  toolbox?: (chat: Chat) => string | undefined
   detailOf: (chat: Chat) => ChatDetail
   // The extension that provides memory for this chat, if any.
   memoryExtension: (chat: Chat) => Extension | undefined
@@ -58,6 +60,7 @@ export function openInstructionParts(deps: InstructionPartsDeps) {
     const parentView = readBytes(join(chat.dir, PARENT_VIEW_FILE)).toString('utf8')
     const forSession = { chat: deps.detailOf(chat), tools: zoomable }
     const workers = zoomable ? deps.workerInstructions(chat) : undefined
+    const toolbox = zoomable ? deps.toolbox?.(chat) : undefined
     const memory = memoryInstructions(forSession, chat)
     const ids: string[] = []
     const extensions = deps.watchersOf('instructions', chat).flatMap((extension) => {
@@ -68,7 +71,7 @@ export function openInstructionParts(deps: InstructionPartsDeps) {
     const memoryId = memory.length ? deps.memoryExtension(chat)?.id : undefined
     const roleId = role ? deps.roleOwnerOf?.(chat) : undefined
     const sources = { extensions: ids, ...(memoryId && { memory: memoryId }), ...(roleId && { role: roleId }) }
-    return { role, extensions, workers, memory, parentView, setup, items, sources }
+    return { role, ...(toolbox && { toolbox }), extensions, workers, memory, parentView, setup, items, sources }
   }
 
   return { instructionPartsOf }

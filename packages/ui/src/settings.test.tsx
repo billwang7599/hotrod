@@ -12,6 +12,7 @@ import {
   type ModelLists,
   type ExtensionInfo,
   type SetupState,
+  type PromptInfo,
   type WorkersSettings,
   type WorkFolder,
 } from '@kothar/core/shared'
@@ -99,7 +100,11 @@ test('shows a refusal that arrives after choosing, and picks with the desktop pi
   expect(sent.at(-1)).toEqual({ type: 'workFolder.set', path: '/picked' })
 })
 
-function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = [], more: { page?: SettingsPage; workers?: WorkersSettings } = {}) {
+function renderSettings(
+  workFolder: WorkFolder,
+  sent: ClientMessage[] = [],
+  more: { page?: SettingsPage; workers?: WorkersSettings; corePrompts?: PromptInfo[] } = {},
+) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -109,6 +114,7 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = [], more
               open
               page={more.page ?? 'work'}
               workers={more.workers}
+              corePrompts={more.corePrompts}
               openPage={() => {}}
               close={() => {}}
               engines={[]}
@@ -148,6 +154,19 @@ test('Settings → Workers: agents’ switch, the limit for every child, and the
   ])
   // Not an extension any more: it isn't on the extensions page.
   expect([...dialog().querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toContain('Workers')
+})
+
+test('Settings → Prompts edits Kothar’s own prompts, each where the Inspector’s Edit link scrolls to', () => {
+  const combine: PromptInfo = { id: 'combine', label: 'What you can use', where: 'instructions', default: 'Combine them.', text: 'Combine them.' }
+  const sent = renderSettings(workFolder, [], { page: 'prompts', corePrompts: [combine] })
+  const box = dialog().querySelector<HTMLElement>('#prompt-kothar-combine')!.querySelector('textarea')!
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(box, 'Mix them.')
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  act(() => box.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(sent).toEqual([{ type: 'corePrompt.set', id: 'combine', text: 'Mix them.' }])
 })
 
 test('Settings → Work folder sets the default of each permission every chat follows', () => {

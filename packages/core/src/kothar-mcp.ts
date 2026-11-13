@@ -113,7 +113,9 @@ const TOOLS: Record<string, Tool> = {
     description:
       'Start a worker: a new chat below this one that works on the task, in this folder, on the models the ' +
       'user picked for workers. Its final reply comes back to you as a message when its turn ends, so ' +
-        "don't poll it. Give a role to run it on that role's models instead. It uses this chat's setup. Returns its id.",
+        "don't poll it. Give a role to run it on that role's models instead. It uses this chat's setup and gets the same " +
+      'tools as this chat (deep research, notes, MCP servers and the rest), so it can run any of them for you. Returns ' +
+      'its id.',
     input: z.object({
       task: z.string().min(1),
       role: z.enum(['planning', 'searching']).optional(),

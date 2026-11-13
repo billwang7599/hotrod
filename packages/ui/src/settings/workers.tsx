@@ -1,6 +1,6 @@
 // Settings → Workers: workers are part of Kothar, not an extension. Whether agents may start them, how many one chat
 // runs at once (extensions' workers count too), and what chats that may start them are told.
-import type { ClientMessage, WorkersSettings } from '@kothar/core/shared'
+import type { ClientMessage, PromptInfo, WorkersSettings } from '@kothar/core/shared'
 import { GROUP, Switch } from '../controls.tsx'
 import { ExtensionSettingRow, PromptRow } from './extensions.tsx'
 import { SettingRow } from './rows.tsx'
@@ -61,5 +61,29 @@ export function WorkersPage({ workers, connected, send }: Props) {
         />
       </section>
     </>
+  )
+}
+
+export const CORE_PROMPTS_INTRO =
+  'Kothar’s own prompts, sent with every message of the chats they apply to. Your edit is sent instead of the default; ' +
+  'the Inspector shows each where it’s sent. Workers’ instructions are under Settings → Workers.'
+
+// Settings → Prompts: Kothar's own prompts, such as the intro to "What you can use". Each has an id
+// (prompt-kothar-<prompt>) that the Inspector's Edit links scroll to.
+export function CorePromptsPage({ prompts = [], connected, send }: { prompts?: PromptInfo[]; connected: boolean; send: (m: ClientMessage) => void }) {
+  return (
+    <section aria-label="Prompts" className="flex flex-col">
+      {prompts.map((prompt) => (
+        <div key={prompt.id}>
+          {prompt.description && <p className="text-sm text-muted">{prompt.description}</p>}
+          <PromptRow
+            prompt={prompt}
+            anchor={`prompt-kothar-${prompt.id}`}
+            disabled={!connected}
+            save={(text) => send({ type: 'corePrompt.set', id: prompt.id, ...(text !== undefined && { text }) })}
+          />
+        </div>
+      ))}
+    </section>
   )
 }

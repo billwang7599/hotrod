@@ -124,7 +124,9 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         // Workers are part of Kothar, so this needs nothing else: a child chat counts toward Settings → Workers' limit,
         // and one over it waits for a slot. The setting is read as each worker starts, so a change applies mid-run.
         const shown = values.showWorkers === true
-        chatId = h.createChat({ name: label, parentId: run.spaceId, role, quiet: true, ...(shown && { showReport: true }) }).id
+        // Below the chat that asked: its space, Home, or a worker that runs research for its lead (so a worker's
+        // research doesn't wait for the slot that worker holds).
+        chatId = h.createChat({ name: label, parentId: run.chatId, role, quiet: true, ...(shown && { showReport: true }) }).id
       } catch (error) {
         return resolve({ reply: '', error: error instanceof Error ? error.message : String(error) })
       }
@@ -195,7 +197,10 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
     } catch {
       // The chat went; the run goes on and shows in the Research tab.
     }
-    return engine.execute(run.id, { askFirst: settings.askFirst, ...(spec.waitOn && { waitOn: spec.waitOn }) })
+    // A worker's run goes ahead without the plan to approve: its lead chose to run it, and no one watches a worker's
+    // own view to approve it.
+    const byWorker = h.chat(spec.chatId)?.worker === true
+    return engine.execute(run.id, { askFirst: settings.askFirst && !byWorker, ...(spec.waitOn && { waitOn: spec.waitOn }) })
   }
 
   const runsOf = (chat: ChatDetail) => {

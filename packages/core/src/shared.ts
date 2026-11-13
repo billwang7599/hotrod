@@ -625,6 +625,8 @@ export type ClientMessage =
   // Settings → Workers. text undefined: the instructions go back to their default.
   | { type: 'workers.set'; start?: boolean; limit?: number }
   | { type: 'workers.prompt.set'; text?: string }
+  // Settings → Prompts: one of Kothar's own prompts (core-prompts.ts). text undefined: back to its default.
+  | { type: 'corePrompt.set'; id: string; text?: string }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
   // Draws the extension's settings view again (the page opened), answered with extension.updated.
@@ -706,6 +708,7 @@ export type CoreMessage =
       setups: Setup[]
       memory: MemorySettings
       workers: WorkersSettings
+      corePrompts: PromptInfo[]
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
@@ -757,6 +760,7 @@ export type CoreMessage =
   | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
   | { type: 'workers.updated'; workers: WorkersSettings }
+  | { type: 'corePrompts.updated'; prompts: PromptInfo[] }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).
   | { type: 'marketplace.catalog'; entries?: MarketEntry[]; error?: string }

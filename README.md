@@ -68,6 +68,9 @@ What works today:
 - **Workers:** a lead can hand tasks to workers that run beside it, and extensions start them for their own work. They're
   part of Kothar, not an extension: Settings → Workers sets whether agents may start them, how many one chat runs at
   once (every worker counts, an extension's too; more wait for a slot), and the instructions agents get about them.
+- **Extensions that work together:** each session is told what it can use (Kothar's tools and every extension's, one
+  line each, made from their names and descriptions) and to combine them on its own, such as handing a deep research
+  run to a worker. Workers get the same tools as their lead. The intro is editable in Settings → Prompts.
 - **Memory:** every chat has its own.
 - **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
 - **Folder modes:** each attached folder that isn't a git repo has a mode, picked in the Context panel. **Edit in

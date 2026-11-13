@@ -9,6 +9,7 @@ import type {
   ModelLists,
   RestartState,
   Setup,
+  PromptInfo,
   WorkersSettings,
   WorkFolder,
 } from '@kothar/core/shared'
@@ -24,6 +25,8 @@ export type PageProps = {
   setupSave?: { count: number; id?: string; error?: string }
   // Settings → Workers; absent until the core's snapshot arrives.
   workers?: WorkersSettings
+  // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
+  corePrompts?: PromptInfo[]
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean

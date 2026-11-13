@@ -25,6 +25,7 @@ import type {
   Run,
   Setup,
   WorkersSettings,
+  PromptInfo,
   ExtensionInfo,
   PanelTab,
   QueuedMessage,
@@ -116,6 +117,8 @@ export type State = {
   setups: Setup[]
   // Settings → Workers; absent until the core's snapshot arrives.
   workers?: WorkersSettings
+  // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
+  corePrompts?: PromptInfo[]
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
@@ -467,6 +470,7 @@ function reduceAll(state: State, action: Action): State {
         modelLists: action.modelLists,
         setups: action.setups ?? [],
         workers: action.workers,
+        corePrompts: action.corePrompts,
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
@@ -597,6 +601,8 @@ function reduceAll(state: State, action: Action): State {
       return state
     case 'workers.updated':
       return { ...state, workers: action.workers }
+    case 'corePrompts.updated':
+      return { ...state, corePrompts: action.prompts }
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
     case 'themes.updated':

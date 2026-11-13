@@ -151,7 +151,9 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
     const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
     const engine = spec.engine ?? models.engineFor(role, setup)
     if (parent) deps.checkActive(parent)
-    if (parent?.info.worker) throw new Error('A worker cannot start chats')
+    // An agent's worker can't start workers itself (spawn_worker isn't offered to it), but an extension it uses can,
+    // one level down, so research it runs doesn't wait for the slot its own worker holds. No deeper.
+    if (parent?.info.worker && deps.parentOf(parent)?.info.worker) throw new Error("A worker's worker cannot start chats")
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders', deps.home)))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files', deps.home)))]
     let id = randomBytes(4).toString('hex')

@@ -57,6 +57,7 @@ describe('sections of what is sent', () => {
       workDir: '/w',
       checkouts: [{ folder: '/a', path: '/w/a', branch: 'b' }],
       folders: [{ path: '/docs', mode: 'edit' as const }],
+      toolbox: 'TOOLBOX',
       extensions: ['ONE', 'TWO'],
       workers: 'WORKERS',
       memory: ['MEMORY'],
@@ -69,11 +70,13 @@ describe('sections of what is sent', () => {
     expect(sections.map((s) => s.text).join('\n\n')).toBe(buildInstructions(parts))
     // The workers' instructions are the core's, edited in Settings → Workers.
     expect(sections.find((s) => s.text === 'WORKERS')?.settings).toBe('workers#prompt-workers-instructions')
+    expect(sections.find((s) => s.text === 'TOOLBOX')?.settings).toBe('prompts#prompt-kothar-combine')
     expect(sections.map((s) => [s.source, s.label, s.extension])).toEqual([
       ['extension', 'Role of this chat', 'home'],
       ['core', 'Where you can write', undefined],
       ['core', 'Git checkouts', undefined],
       ['core', 'Folder modes', undefined],
+      ['core', 'What you can use', undefined],
       ['extension', 'Instructions', 'one'],
       ['extension', 'Instructions', 'two'],
       ['core', 'Workers: when to start workers', undefined],

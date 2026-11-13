@@ -17,6 +17,10 @@ Workers aren't an extension: they're part of Kothar, so any extension can start 
 | To hear when another extension is turned on or off | `onDependencyChanged` |
 | An extension that's no use at all without another | `requires` on the extension |
 
+Most extensions need none of this: the agent already combines every extension's tools (see
+[Working with other extensions](../working-together.md)). Use it when one extension changes how another one looks or
+behaves.
+
 Prefer the soft forms. `requires` on the extension stops it outright whenever the other one is off.
 
 ## optionalDependencies

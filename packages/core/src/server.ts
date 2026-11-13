@@ -111,6 +111,7 @@ export async function startServer(options: {
       setups: core.setups(),
       memory: core.memory(),
       workers: core.workers(),
+      corePrompts: core.corePrompts(),
       workFolder: core.workFolder(),
       themes: core.themes(),
       installed: core.installed(),

@@ -9,6 +9,7 @@ import { openChatLifecycle } from './chat-lifecycle.ts'
 import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
 import { agentStartsWorkers, openWorkers, workerInstructionsFor } from './workers.ts'
+import { firstSentence, openCorePrompts, toolboxText, type ToolboxGroup } from './core-prompts.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
@@ -273,6 +274,8 @@ function assembleCore(options: {
       setEngine: (chat, engine) => updateChat(chat, { engine }),
       showRun: (chat) => broadcast({ type: 'chat.updated', chat: withRun(chat) }),
     })
+  // Kothar's own named prompts, edited in Settings → Prompts (core-prompts.ts).
+  const corePrompts = openCorePrompts({ settings, saveSettings, broadcast })
   // Settings → Workers: part of the core (workers.ts).
   const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
   const prompts = openPrompts({
@@ -569,6 +572,7 @@ function assembleCore(options: {
     },
     roleOwnerOf: (chat) => extensionChatOf(chat)?.extension.id,
     workerInstructions: (chat) => workerInstructionsFor(chat, workers, setupOf(chat)),
+    toolbox: (chat) => toolboxOf(chat),
     detailOf: (chat) => detailOf(chat),
     memoryExtension,
     watchersOf: (hook, chat) => watchersOf(hook, chat),
@@ -920,6 +924,30 @@ function assembleCore(options: {
         ),
   })
 
+  // "What you can use" (core-prompts.ts): the tools the chat's session is offered over Kothar's MCP server, grouped by
+  // Kothar's own and each extension's, with what each extension is for, after the nudge to combine them. Made from
+  // extensions' names and descriptions, so a community extension is listed like a built-in one.
+  const toolboxOf = (chat: Chat) => {
+    const offered: { name: string; extension?: string }[] = mcp.toolsFor(chat.info.id)
+    const own = offered.filter((tool) => !tool.extension).map((tool) => tool.name)
+    const groups: ToolboxGroup[] = []
+    const starts = own.includes('spawn_worker')
+    if (starts) {
+      groups.push({
+        name: 'Workers',
+        about: 'hand a whole task to a new chat below this one, which works while you talk and reports back.',
+        tools: ['spawn_worker', ...(own.includes('stop_chat') ? ['stop_chat'] : [])],
+      })
+    }
+    const reach = ['list_chats', 'read_chat', 'send_message', ...(starts ? [] : ['stop_chat'])].filter((name) => own.includes(name))
+    if (reach.length) groups.push({ name: 'Chats', about: 'read and message the chats this one can reach.', tools: reach })
+    for (const extension of extensions) {
+      const tools = offered.filter((tool) => tool.extension === extension.id).map((tool) => tool.name)
+      if (tools.length) groups.push({ name: extension.name, about: firstSentence(extension.description), tools })
+    }
+    return groups.length ? toolboxText(corePrompts.textOf('combine'), groups) : undefined
+  }
+
   // What a turn's session was sent, labelled (sent.ts), for each extension that watches (onTurnSent). Built only when
   // one does, so a turn costs nothing extra otherwise.
   const turnSent = (chat: Chat, input: SentInput) => {
@@ -977,6 +1005,7 @@ function assembleCore(options: {
     setTerminal,
     setMemory,
     workers,
+    corePrompts,
     models,
     followModels,
     saveSetup,
@@ -1053,6 +1082,7 @@ function assembleCore(options: {
     setups: jobSetups.list,
     memory: () => settings.memory ?? {},
     workers: workers.info,
+    corePrompts: corePrompts.info,
     chats: () => shownChats().map(shownState),
     workFolder,
     setWorkFolder,

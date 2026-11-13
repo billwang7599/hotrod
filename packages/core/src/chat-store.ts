@@ -27,6 +27,8 @@ export type Settings = PermissionSwitches &
     prompts?: Record<string, Record<string, { text: string; base: string }>>
     // Settings → Workers (workers.ts).
     workers?: SavedWorkers
+    // The user's edits of Kothar's own prompts (core-prompts.ts), by id.
+    corePrompts?: Record<string, { text: string; base: string }>
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */
