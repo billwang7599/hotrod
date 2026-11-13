@@ -987,6 +987,10 @@ export type Extension = {
   // Capability names this extension shares an API under with host.provide, such as 'research'. Others get it with
   // host.use, whichever extension provides it.
   provides?: string[]
+  // What engines' own built-in tools this extension stands in for (ToolCapability), such as 'background-shell' for
+  // Processes. While it's on for a chat, every engine's tools for those are off in that chat's sessions, unless the
+  // user turned one back on in Settings → Engines → Tools.
+  replaces?: ToolCapability[]
   // Other extensions, by id, this one can't run without. It can't be turned on while one is off (Settings says which
   // to turn on first), and turning one off stops it too (its own switch stays on, and it starts again when they're all
   // back on). Keep to optionalDependencies unless the extension is of no use at all without the other.

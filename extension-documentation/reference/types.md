@@ -92,8 +92,16 @@ all of them.
 | `limit.reached` | `message`, `resetsAt?` | The account ran into a usage or rate limit. |
 | `steer.landed` | `id` | A message you sent mid-turn entered the running turn. |
 | `steer.returned` | `id` | A message you sent mid-turn was handed back unsent. |
+| `tools.listed` | `names` | The engine's built-in tools for this session, by its own names, as it starts (Claude Code only). |
 | `turn.completed` | `error?`, `errorKind?` | A turn ended. `errorKind` says why it failed (see [`onTurnCompleted`](events.md)). |
 | `session.ended` | `error?`, `errorKind?` | The engine session ended. |
 
 A tool's `kind` is one of `shell`, `edit`, `read`, `search`, `fetch`, `mcp` or `other`, the same across engines. So one
 permission policy works for every engine.
+
+## Tool capabilities
+
+`ToolCapability` names what an engine's built-in tool is for, the same across engines: `shell`, `edit`, `read`,
+`search`, `web`, `questions`, `tool-search`, `subagents`, `background-shell`, `skills`, `todos`, `plan-mode`,
+`scheduling`, `worktrees`, `messaging`, `notifications` and `publishing`. An extension lists the ones it stands in for
+in [`replaces`](../working-together.md#replacing-engines-own-tools).

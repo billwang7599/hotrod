@@ -84,6 +84,39 @@ seen your extension, with a dozen others beside it.
    id, so another extension can provide it instead. See
    [Capabilities](reference/dependencies.md#capabilities-provide-and-use).
 
+## Replacing engines' own tools
+
+Engines come with built-in tools of their own: commands, edits, searches, but also subagents, background shells,
+skills, todo lists and plan modes. Some of these run out of Kothar's sight, where the user can't open, stop or log
+them. When your extension gives agents a better way to do the same job, say so with `replaces`, using the shared
+capability names (`ToolCapability` in [Types](reference/types.md)), never an engine's own tool names:
+
+```ts
+const extension: Extension = {
+  id: 'processes',
+  name: 'Processes',
+  // …
+  replaces: ['background-shell'],
+}
+```
+
+While your extension is on for a chat, every engine's tools for those capabilities are off in that chat's sessions,
+on every engine Kothar can switch tools for (Claude Code's `Monitor` and `TaskStop` here). The user still decides: a
+tool they turned back on in Settings → Engines → Tools stays on, and Settings shows "<your extension> instead" next to
+the tools you replace.
+
+The built-in extensions use it this way:
+
+| Extension | `replaces` | Engines' tools turned off |
+|---|---|---|
+| Processes | `background-shell` | Claude Code's `Monitor`, `TaskStop` |
+| Skills | `skills` | Claude Code's `Skill`, OpenCode's `skill` |
+| Plan | `plan-mode` | Claude Code's `EnterPlanMode`, `ExitPlanMode`; OpenCode's `plan_enter`, `plan_exit` |
+| (Workers, in Kothar itself) | `subagents` | Claude Code's `Agent`/`Task`, OpenCode's `task` |
+
+Only replace what you really cover. If an engine tool gave the agent something yours doesn't (Monitor woke the agent
+when its command exited), add it first: that's why `start_process` takes `notify: 'exit'`.
+
 ## When code has to know about another extension
 
 Use the agent first. Reach for code only when one extension changes how another one looks or behaves, such as a

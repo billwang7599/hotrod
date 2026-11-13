@@ -146,13 +146,13 @@ describe('engine tools in a turn', () => {
   const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
   const mainExtension: Extension = { id: 'main-extension', name: 'Main', description: '', enabledByDefault: true, chats: [MAIN] }
 
-  function setup(script: FakeStep[], saved?: object) {
+  function setup(script: FakeStep[], saved?: object, more: Extension[] = []) {
     const garage = tempDir()
     if (saved) writeFileSync(join(garage, 'settings.json'), JSON.stringify({ engineTools: saved }))
     const calls: SessionOptions[] = []
     const fake = { ...createFakeAdapter(script, 0), tools: TOOLS }
     const adapter: Adapter = { ...fake, start: (machine, options, emit) => (calls.push(options), fake.start(machine, options, emit)) }
-    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [mainExtension] })
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [mainExtension, ...more] })
     cores.push(core)
     core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
     core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
@@ -201,6 +201,31 @@ describe('engine tools in a turn', () => {
     await until(() => sentTurns.length === 2)
     const none = sentTurns[1].sections.find((s: any) => s.label === "Fake's own tools: all off")
     expect(none.text).toContain("Only MCP tools were left")
+  })
+
+  it("turns off an engine's tools an extension that's on replaces, unless the user turned them back on", async () => {
+    const todos: Extension = { id: 'todos', name: 'Todos', description: '', enabledByDefault: true, replaces: ['todos'] }
+    const t = setup([{ type: 'text.completed', text: 'ok' }], undefined, [todos])
+    expect(t.core.engineTools().engines[0]!.tools.find((tool) => tool.name === 'TodoWrite')).toMatchObject({
+      on: false,
+      defaultOn: false,
+      replacedBy: 'Todos',
+    })
+    t.send()
+    await until(() => t.calls.length === 1 && t.core.chats().find((c) => c.id === 'main')?.status === 'idle')
+    expect(t.calls[0]!.tools?.off).toContain('TodoWrite')
+
+    t.core.handle({ type: 'engineTools.setTool', engine: 'fake', tool: 'TodoWrite', on: true }, () => {})
+    t.send()
+    await until(() => t.calls.length === 2 && t.core.chats().find((c) => c.id === 'main')?.status === 'idle')
+    expect(t.calls[1]!.tools?.on).toContain('TodoWrite')
+
+    t.core.handle({ type: 'engineTools.reset', engine: 'fake' }, () => {})
+    t.core.handle({ type: 'extension.setEnabled', extensionId: 'todos', enabled: false }, () => {})
+    expect(t.core.engineTools().engines[0]!.tools.find((tool) => tool.name === 'TodoWrite')?.on).toBe(true)
+    t.send()
+    await until(() => t.calls.length === 3)
+    expect(t.calls[2]!.tools?.on).toContain('TodoWrite')
   })
 
   it('records the tools a session reports', async () => {

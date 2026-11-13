@@ -10,6 +10,7 @@ import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
 import { agentStartsWorkers, openWorkers, workerInstructionsFor } from './workers.ts'
 import { openEngineTools, type Provided } from './engine-tools.ts'
+import type { ToolCapability } from './shared.ts'
 import { firstSentence, openCorePrompts, toolboxText, type ToolboxGroup } from './core-prompts.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { windowView } from './memory.ts'
@@ -280,9 +281,17 @@ function assembleCore(options: {
   // Settings → Workers: part of the core (workers.ts).
   const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
   // Settings → Engines → Tools: engines' own tools, switched from Kothar (engine-tools.ts).
-  // What Kothar has its own version of, for a chat: workers stand in for engines' subagents everywhere, since
-  // extensions start workers even where agents may not.
-  const providedFor = (_chat?: Chat): Provided => new Map([['subagents', 'Workers']])
+  // What Kothar has its own version of, for a chat (or, for Settings, anywhere): workers stand in for engines'
+  // subagents everywhere, since extensions start workers even where agents may not; then each extension that's on and
+  // declares what it replaces.
+  const providedFor = (chat?: Chat): Provided => {
+    const provided = new Map<ToolCapability, string>([['subagents', 'Workers']])
+    for (const extension of extensions) {
+      if (!extension.replaces?.length || !(chat ? isOnFor(extension, chat) : isOn(extension))) continue
+      for (const capability of extension.replaces) if (!provided.has(capability)) provided.set(capability, extension.name)
+    }
+    return provided
+  }
   const engineTools = openEngineTools({
     garage,
     settings,
@@ -1045,7 +1054,11 @@ function assembleCore(options: {
     noteViewAction,
     flipToggle,
     answerWait,
-    setExtensionEnabled,
+    // Settings → Engines → Tools shows which extension stands in for a tool, so it hears the switch too.
+    setExtensionEnabled: (extension, enabled) => {
+      setExtensionEnabled(extension, enabled)
+      if (extension.replaces?.length) engineTools.changed()
+    },
     setExtensionValue,
     setPrompt: prompts.set,
     install,

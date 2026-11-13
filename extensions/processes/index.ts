@@ -56,6 +56,8 @@ export type Proc = {
   spaceId: string
   // The chat that started it, as it was named then.
   startedBy: string
+  // start_process's notify: 'exit': the chat to wake with what it printed once it exits on its own.
+  notify?: string
   status: Status
   code?: number | null
   startedAt: number
@@ -143,6 +145,16 @@ export function endNote(name: string, code: number | null) {
   const signal = code > 128 ? SIGNALS[code - 128] : undefined
   if (signal) return `${name} was killed outside Kothar (${signal})`
   return `${name} exited with code ${code}`
+}
+
+// How many of its last lines a process's exit message carries (notify: 'exit').
+export const NOTIFY_LINES = 20
+
+// The message that wakes the chat that asked to hear when a process exits, like a worker's report.
+export function exitMessage(proc: Pick<Proc, 'id' | 'name' | 'command'>, code: number | null, output: string) {
+  const how = code === null ? 'was killed' : `exited with code ${code}`
+  const shown = output ? `Its last lines:\n\n${output}` : 'It printed nothing.'
+  return `[Process "${proc.name}" (${proc.id}) ${how}: ${proc.command}]\n\n${shown}`
 }
 
 export function createProcessesExtension(
@@ -305,6 +317,11 @@ export function createProcessesExtension(
       // in the space. One Kothar stopped isn't.
       const line = proc.status === 'exited' && host.chat(proc.spaceId) ? endNote(proc.name, code) : undefined
       if (line) host.note(proc.spaceId, line, { panel: PANEL })
+      // notify: 'exit' wakes the chat that asked, with what it printed, as a worker's report wakes its lead: on its own
+      // exit, not when someone stopped it, and only while that chat is still there.
+      if (proc.notify && proc.status === 'exited' && host.chat(proc.notify)) {
+        host.send(proc.notify, exitMessage(proc, code, tail(proc, NOTIFY_LINES)))
+      }
     })
     // Stopped while it was starting (its space deleted or archived, Stop pressed): it goes now.
     if (proc.stopping) handle.stop()
@@ -316,7 +333,7 @@ export function createProcessesExtension(
     return { ended, end }
   }
 
-  const newProc = (spaceId: string, fields: Pick<Proc, 'name' | 'command' | 'cwd' | 'startedBy' | 'log' | 'id'>) => {
+  const newProc = (spaceId: string, fields: Pick<Proc, 'name' | 'command' | 'cwd' | 'startedBy' | 'notify' | 'log' | 'id'>) => {
     const proc: Proc = { ...fields, spaceId, status: 'running', startedAt: now(), lines: [], partial: '', ...endable() }
     return proc
   }
@@ -336,7 +353,7 @@ export function createProcessesExtension(
     }
   }
 
-  type Spec = Pick<Proc, 'command' | 'cwd' | 'name' | 'startedBy'>
+  type Spec = Pick<Proc, 'command' | 'cwd' | 'name' | 'startedBy' | 'notify'>
   const start = async (host: ExtensionHost, space: SpaceDetail, spec: Spec) => {
     const list = listOf(space.id)
     checkFree(space.id, spec)
@@ -578,6 +595,8 @@ export function createProcessesExtension(
       'They belong to the space, not the chat that started them, and stop when you or an agent stops them, the ' +
       'space is deleted or archived, or Kothar quits.',
     enabledByDefault: true,
+    // Engines' own background shells (Claude Code's Monitor) die with the session; start_process with notify stands in.
+    replaces: ['background-shell'],
     prompts: [{ id: 'instructions', label: 'When to start a process', text: PROCESSES_INSTRUCTIONS, where: 'instructions' }],
     instructions: ({ tools }, { host }) => (tools ? promptOf(host, 'instructions', PROCESSES_INSTRUCTIONS) : undefined),
     tools: [
@@ -587,13 +606,20 @@ export function createProcessesExtension(
           'Start a long-running command (a dev server, a watcher) for this space. It keeps running after your turn ' +
           'ends, until stop_process, and its output is kept. Runs with sh -c in cwd (default: where your shell ' +
           'starts; it must be inside the space’s work folder or a checkout). Refuses a duplicate of one already ' +
-          'running. Returns its id, status, the first lines it printed, and its address once it opens a port.',
+          'running. Returns its id, status, the first lines it printed, and its address once it opens a port. ' +
+          "With notify: 'exit', a message with its exit code and last lines wakes you once it exits on its own, so " +
+          'you can start a command that finishes (a CI watch, a long build or test run), carry on, and not poll.',
         inputSchema: {
           type: 'object',
           properties: {
             command: { type: 'string', minLength: 1, description: 'The shell command, e.g. npm run dev' },
             cwd: { type: 'string', description: 'Folder to run it in, absolute or relative' },
             name: { type: 'string', description: 'A short name to know it by, e.g. web' },
+            notify: {
+              type: 'string',
+              enum: ['exit'],
+              description: "'exit': wake this chat with its exit code and last lines when it exits on its own",
+            },
           },
           required: ['command'],
         },
@@ -604,7 +630,9 @@ export function createProcessesExtension(
           const space = spaceOf(host, caller)
           const cwd = cwdOf(space, text(input.cwd))
           const name = text(input.name) || (command.length > 40 ? `${command.slice(0, 39)}…` : command)
-          const proc = await start(host, space, { command, cwd, name, startedBy: caller.name })
+          if (input.notify !== undefined && input.notify !== 'exit') throw new Error("notify is 'exit' or left out")
+          const notify = input.notify === 'exit' ? { notify: caller.id } : {}
+          const proc = await start(host, space, { command, cwd, name, startedBy: caller.name, ...notify })
           // Long enough to catch a command that fails at once, or the port a server opens.
           const ready = new Promise<void>((resolve) => {
             const check = setInterval(() => (proc.port !== undefined || proc.status !== 'running') && done(), 50)

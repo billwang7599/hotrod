@@ -368,6 +368,9 @@ export function createPlanExtension(): Extension {
       'while it works out a plan, then you approve, edit or cancel it, and the Plan tab ticks off its steps as the ' +
       'work goes on.',
     enabledByDefault: true,
+    // Engines' own plan modes (Claude Code's EnterPlanMode and ExitPlanMode) work out of Kothar's sight; Plan first is
+    // Kothar's, on every engine.
+    replaces: ['plan-mode'],
     prompts: PROMPTS,
     settings: [
       {
