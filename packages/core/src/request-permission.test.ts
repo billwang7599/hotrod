@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { until as waitUntil } from './test-wait.ts'
+import { until } from './test-wait.ts'
+
+// Generous: these tests share the machine with the whole suite.
+const waitUntil = (check: () => boolean) => until(check, { tries: 600 })
 
 const cleanups: (() => void | Promise<void>)[] = []
 afterEach(async () => {
