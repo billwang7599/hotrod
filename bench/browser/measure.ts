@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { connect, type Cdp } from '../../extensions/browser/cdp.ts'
 import { HIDDEN_TOOLS } from '../../extensions/browser/mcp-filter.ts'
 import { findChrome } from '../../extensions/browser/profiles.ts'
-import { type AXNode, type FrameTree, format, Refs, render } from '../../extensions/browser/snapshot.ts'
+import { format, readFrames, Refs, render } from '../../extensions/browser/snapshot.ts'
 
 const TOKENS = (chars: number) => Math.round(chars / 3.57)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -99,19 +99,9 @@ const listChars = JSON.stringify(tools).length
 const shown = tools.filter((t: { name: string }) => !HIDDEN_TOOLS.includes(t.name))
 const shownChars = JSON.stringify(shown).length
 
-// Kothar's snapshot of a tab: the page's tree and each frame's, by the <iframe> that holds it.
+// Kothar's snapshot of a tab: the page's tree and each frame's.
 async function ourSnapshot(cdp: Cdp, session: string, refs: Refs) {
-  const { frameTree } = await cdp.send<any>('Page.getFrameTree', {}, session)
-  const tree = async (frame: any): Promise<FrameTree> => {
-    const { nodes } = await cdp.send<{ nodes: AXNode[] }>('Accessibility.getFullAXTree', { frameId: frame.frame.id }, session)
-    const children = new Map<number, FrameTree>()
-    for (const child of frame.childFrames ?? []) {
-      const { backendNodeId } = await cdp.send<{ backendNodeId: number }>('DOM.getFrameOwner', { frameId: child.frame.id }, session)
-      children.set(backendNodeId, await tree(child))
-    }
-    return { session: '', nodes, children }
-  }
-  return format(render(await tree(frameTree), { refs }))
+  return format(render(await readFrames((method, params, id) => cdp.send(method, params, id), session), { refs }))
 }
 
 const rows: string[] = []

@@ -7,6 +7,7 @@ import { until as waitUntil } from '@kothar/core/test-wait'
 import { createAgent, parseCode } from './chrome-extension/agent.js'
 import type { ChatDetail, ExtensionHost, ExtensionTool, ExtensionWait } from '@kothar/extension-api'
 import browser, { createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL, YOUR_CHROME } from './index.ts'
+import { CdpClient, Pages } from './client.ts'
 import { extensionId, EXTENSION_DIR, NOT_CONNECTED, type Relay, startRelay } from './relay.ts'
 
 const dirs: string[] = []
@@ -303,6 +304,22 @@ it("a popup from an agent's tab joins its group, and Chrome's events reach the s
   agent.events.onTabCreated(theirs)
   await new Promise((r) => setTimeout(r, 30))
   expect(theirs.groupId).toBe(-1)
+})
+
+it("Kothar's own CDP client drives a space's tabs through the relay as it does its own Chrome", async () => {
+  const { relay, fake } = await paired()
+  const client = await CdpClient.connect(relay.cdpUrl('sales'))
+  cleanups.push(() => client.close())
+  const pages = new Pages(client)
+  await pages.start()
+  expect(pages.list()).toEqual([])
+  const tab = await pages.create('https://example.com/')
+  expect(pages.list()).toHaveLength(1)
+  const tabId = [...fake.tabs.values()].find((t) => t.url === 'https://example.com/')!.id
+  expect(tab.targetId).toBe(`T${tabId}`)
+  const { result } = await client.send<{ result: { value: string } }>('Runtime.evaluate', { expression: 'location.href' }, tab.sessionId)
+  expect(result.value).toBe('https://example.com/')
+  await expect(client.send('Storage.getCookies')).rejects.toThrow("isn't allowed in your own Chrome")
 })
 
 it("refuses browser-wide calls that would read or change the user's own browser", async () => {

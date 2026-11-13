@@ -3,7 +3,8 @@
 // control's own text, the text boxes inside an input and list bullets go; what's left is one line per thing, indented
 // under the landmark, list item, row or dialog it's in. Each control gets a short ref (e12) that stays the same for the
 // same element while the tab lives, so browser_act can name it; the ref maps to the element's backendDOMNodeId in its
-// frame's session. Only plain data in and text out, so it can be tested without a browser.
+// frame's session. Plain data in and text out (readFrames takes the CDP call as a parameter), so it can be tested without
+// a browser.
 
 export type AXValue = { type?: string; value?: unknown }
 export type AXProperty = { name: string; value: AXValue }
@@ -191,3 +192,89 @@ function walkFrame(frame: FrameTree, depth: number, options: RenderOptions, line
 }
 
 export const format = (lines: Line[]) => lines.map((l) => `${'  '.repeat(l.depth)}- ${l.text}`)
+
+// A CDP call, as CdpClient.send makes it; a parameter so the frame reading below can be tested with a fake.
+export type Send = (method: string, params?: object, sessionId?: string) => Promise<any>
+
+type FrameNode = { frame: { id: string; url?: string }; childFrames?: FrameNode[] }
+
+// Frames inside frames are read this deep, no deeper.
+const MAX_FRAME_DEPTH = 6
+
+// Reads a tab's tree and every frame's in it: a same-site iframe through the tab's own session (by its frame id), a
+// cross-site one through the session its own target was attached on (children: frame id → session). An iframe whose
+// tree can't be read is left out, and shows as not loaded.
+export async function readFrames(send: Send, sessionId: string, children: Map<string, string> = new Map()): Promise<FrameTree> {
+  const read = async (node: FrameNode, session: string, own: boolean, depth: number): Promise<FrameTree> => {
+    // A frame with a session of its own is that session's root: its tree is read without a frame id.
+    const { nodes } = await send('Accessibility.getFullAXTree', own ? {} : { frameId: node.frame.id }, session)
+    const tree: FrameTree = { session, nodes, children: new Map() }
+    if (depth >= MAX_FRAME_DEPTH) return tree
+    for (const child of node.childFrames ?? []) {
+      try {
+        const { backendNodeId } = await send('DOM.getFrameOwner', { frameId: child.frame.id }, session)
+        const childSession = children.get(child.frame.id)
+        if (childSession) {
+          const { frameTree } = await send('Page.getFrameTree', {}, childSession)
+          tree.children!.set(backendNodeId, await read(frameTree, childSession, true, depth + 1))
+        } else {
+          tree.children!.set(backendNodeId, await read(child, session, false, depth + 1))
+        }
+      } catch {
+        // Gone, or not ready: shown as not loaded.
+      }
+    }
+    return tree
+  }
+  const { frameTree } = await send('Page.getFrameTree', {}, sessionId)
+  return read(frameTree, sessionId, true, 0)
+}
+
+// The default size of one snapshot, in characters (about 3,400 tokens); a longer page goes on with a cursor.
+export const SNAPSHOT_CHARS = 12_000
+
+// The lines from cursor on that fit in maxChars (at least one), and the cursor for the rest, if any.
+export function paginate(lines: string[], { cursor = 0, maxChars = SNAPSHOT_CHARS }: { cursor?: number; maxChars?: number } = {}) {
+  const from = Math.max(0, Math.min(cursor, lines.length))
+  let size = 0
+  let to = from
+  while (to < lines.length && (to === from || size + lines[to]!.length + 1 <= maxChars)) size += lines[to++]!.length + 1
+  return { lines: lines.slice(from, to), ...(to < lines.length && { next: to }), total: lines.length }
+}
+
+// What changed between two snapshots of a tab: the lines that are new, each marked "+", under the lines they sit in
+// (unmarked, for context), and how many lines went. Lines are compared whole, refs and all, so an element that only
+// moved shows as new where it is now.
+export function changes(before: string[], after: string[]): { lines: string[]; added: number; removed: number } {
+  const left = new Map<string, number>()
+  for (const line of before) left.set(line, (left.get(line) ?? 0) + 1)
+  const added = new Set<number>()
+  after.forEach((line, i) => {
+    const count = left.get(line) ?? 0
+    if (count) left.set(line, count - 1)
+    else added.add(i)
+  })
+  const removed = [...left.values()].reduce((a, b) => a + b, 0)
+  const depthOf = (line: string) => line.length - line.trimStart().length
+  const shown = new Set<number>()
+  const lines: string[] = []
+  for (const i of [...added].sort((a, b) => a - b)) {
+    // Its parents, nearest last, that aren't shown yet.
+    const context: number[] = []
+    let depth = depthOf(after[i]!)
+    for (let j = i - 1; j >= 0 && depth > 0; j--) {
+      if (depthOf(after[j]!) < depth) {
+        depth = depthOf(after[j]!)
+        if (!shown.has(j) && !added.has(j)) context.unshift(j)
+        else break
+      }
+    }
+    for (const j of context) {
+      shown.add(j)
+      lines.push(` ${after[j]}`)
+    }
+    shown.add(i)
+    lines.push(`+${after[i]}`)
+  }
+  return { lines, added: added.size, removed }
+}
