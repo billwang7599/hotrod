@@ -359,7 +359,7 @@ const shout: Extension = {
 | `icon?` | `search`, `globe`, `book`, `sparkle` or `bolt`. |
 | `hint?`, `activeHint?` | Shown on hover, while off and while on (both default to `label`). |
 | `default?` | Its state in a chat that never set it. Off without it. |
-| `shown(chat, context)` | Optional. Whether this chat gets the chip. |
+| `shown(chat, context)` | Optional. Whether this chat gets the chip. Home is the Home extension's own chat, so `chat.extension` is set there: to leave out workers, check `chat.worker`, not `chat.extension`. |
 | `onChange(on, chat, context)` | Optional. Runs after the user flips it. A throw shows as an error; the new state stays. |
 
 `host.setToggle(chatId, id, on)` sets it from the extension (say, to turn a one-shot switch off once it's used); that

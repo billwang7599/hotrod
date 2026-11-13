@@ -8,6 +8,7 @@ import type { ClientMessage, CoreMessage, EngineEvent } from '@kothar/core/share
 import { sandboxingMachine } from '@kothar/core/test-machine'
 import { until } from '@kothar/core/test-wait'
 import { afterEach, describe, expect, it } from 'vitest'
+import home from '../home/index.ts'
 import { createDeepResearchExtension, PLAN_SCHEMA, WRITE_SCHEMA, type Outcome } from './index.ts'
 
 const cleanups: (() => void | Promise<void>)[] = []
@@ -65,7 +66,7 @@ function engine(hold: Hold) {
   return { adapter, prompts }
 }
 
-async function core(settings: Record<string, string | number | boolean> = {}) {
+async function core(settings: Record<string, string | number | boolean> = {}, others: Extension[] = []) {
   const garage = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-deep-research-')))
   const env = { KOTHAR_ENGINE: 'fake', KOTHAR_GARAGE: garage, KOTHAR_WORK: join(garage, 'work'), KOTHAR_PORT: '0' }
   const hold: Hold = { on: false, releaseWorkers: [] }
@@ -91,7 +92,7 @@ async function core(settings: Record<string, string | number | boolean> = {}) {
     values = context.values
     return onStart(context)
   }
-  const kothar = await startCore({ env, adapters: [adapter], extensions: [extension], machine: sandboxingMachine })
+  const kothar = await startCore({ env, adapters: [adapter], extensions: [extension, ...others], machine: sandboxingMachine })
   cleanups.push(async () => {
     await kothar.close(true)
     rmSync(garage, { recursive: true, force: true })
@@ -159,6 +160,23 @@ describe('the Deep research toggle', () => {
     expect(t.prompts.filter((p) => p.includes('Call the deep_research tool'))).toHaveLength(2)
     // The log keeps what the user typed.
     expect(t.chat(on).entries.filter((e) => e.type === 'user.message').map((e) => (e as { text: string }).text)).toContain('Which Greek letter comes first?')
+  })
+
+  // Home is the Home extension's own chat (chat.extension is 'home'), but it's still a chat the user types in.
+  it('sits in Home’s composer too, and researches from there', async () => {
+    const t = await core({ askFirst: false, depth: 'quick' }, [home])
+    await until(() => t.chats().some((c) => c.extension === 'home'))
+    const main = t.chats().find((c) => c.extension === 'home')!.id
+    expect(t.toggles(main)).toEqual([expect.objectContaining({ extension: 'deep-research', id: 'research', label: 'Deep research', on: false })])
+    // Its Research tab too, where Edit on the plan bar takes the plan.
+    const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === main)
+    expect(listed?.type === 'chat.extensions' && listed.panels.map((p) => p.id)).toEqual(expect.arrayContaining(['research', 'report', 'new']))
+    await t.flip(main, true)
+    await t.send(main, 'Which Greek letter comes first?')
+    expect(t.prompts.filter((p) => p.includes('Call the deep_research tool'))).toHaveLength(1)
+    const outcome = await t.callTool(main, 'Greek letters?')
+    expect(outcome).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === main))
   })
 
   it('goes from the composer when the extension is turned off', async () => {

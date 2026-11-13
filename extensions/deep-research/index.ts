@@ -459,7 +459,8 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         icon: 'search',
         hint: 'Research your next messages in depth, with a cited report',
         activeHint: 'On: each message you send starts deep research. Click to turn off.',
-        shown: (chat) => !chat.worker && !chat.extension,
+        // Every chat the user types in, Home included (Home is the Home extension's own chat); not workers.
+        shown: (chat) => !chat.worker,
       },
     ],
     tools: [
@@ -553,7 +554,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
       {
         id: PANEL,
         title: 'Research',
-        shown: (chat) => !chat.extension,
         render(chat, context) {
           values = context.values
           ensure(context.host)
@@ -627,7 +627,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         id: REPORT,
         title: 'Research report',
         placement: 'dock',
-        shown: (chat) => !chat.extension,
         render(chat, context) {
           ensure(context.host)
           const spaceId = spaceOf(context.host, chat.id)
@@ -650,7 +649,6 @@ export function createDeepResearchExtension(options: DeepResearchOptions = {}): 
         placement: 'popup',
         launcher: true,
         shortcut: 'Mod+Shift+D',
-        shown: (chat) => !chat.extension,
         render(chat, context) {
           ensure(context.host)
           return newView(spaceOf(context.host, chat.id), settingsOf(context).depth)
