@@ -82,6 +82,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['commands', 'commands'],
   ['messageActions', 'commands'],
   ['messageDetails', 'panels'],
+  ['noteViews', 'panels'],
   ['composerToggles', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
@@ -103,7 +104,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
 // What the UI gets of a panel: where it shows, its keys and whether it has a launcher in the left sidebar. Anything else an
 // extension put there is dropped, and a placement, shortcut or launcher of the wrong kind is left out.
 export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
-  const { id, title, placement, shortcut, launcher } = panel
+  const { id, title, placement, shortcut, launcher, tab } = panel
   return {
     extension,
     id,
@@ -111,6 +112,7 @@ export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
     ...((placement === 'popup' || placement === 'dock') && { placement }),
     ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
     ...(launcher === true && { launcher }),
+    ...(placement === 'dock' && tab === false && { tab: false as const }),
   }
 }
 

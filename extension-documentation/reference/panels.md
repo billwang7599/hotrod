@@ -64,6 +64,7 @@ A `ExtensionPanel` has:
 | `render(chat, context)` | Returns the panel's view, or a promise of one. If it throws, the panel shows the error. |
 | `onAction(action, chat, context)` | Optional. Called when the user clicks something with an `action` in the panel. |
 | `placement` | Optional. `'tab'` (the default), `'popup'`: a large window over the chat, for work that wants room, such as notes (Esc closes it), or `'dock'`: a column beside the chat, for something to look at while the chat goes on, such as an artifact. Only one right-hand column shows at a time: while a dock is open, the right sidebar hides, and the right sidebar's toggle swaps the two (the dock keeps its scroll and drafts). Closing the dock brings the right sidebar back as the user left it. A dock is kept per chat. Whichever, it draws for the chat that's open, as a tab does. |
+| `tab` | Optional, docks only. `false` keeps the dock out of the right sidebar's tabs, so it shows only when something opens it: [`host.showPanel`](host.md), a note, or a button in a [live card](#live-cards). For a document view, such as a report, that would only crowd the sidebar. |
 | `shortcut` | Optional. Keys that open the panel out of the box, such as `'Mod+Shift+N'` (`Mod` is ⌘ on macOS, Ctrl elsewhere). A popup opens or closes; a tab shows in the right sidebar. The user can change them in **Settings → Shortcuts**. Keys another shortcut already has, or that aren't a shortcut (no ⌘, ⌃ or ⌥), are left off. |
 | `launcher` | Optional. `true` also shows a launcher for the panel in the left sidebar; the panel is always a tab in the right panel. Launchers sit at the top, under Home, unless the user moves them to the bottom or hides them in **Settings → Appearance**. |
 
@@ -368,6 +369,61 @@ const wordCount: Extension = {
 Views in a message detail can't send actions back (it has no `onAction`); links, Copy and folding cards work.
 
 List `panels` in the manifest's `uses` for `messageDetails`.
+
+## Live cards
+
+`noteViews` adds live cards to the transcript, drawn by the extension, such as Deep Research's card for each run: its
+plan, its progress with Stop, then a link to the report. Put one in a chat with
+[`host.note`](host.md#notes) and `{ view: { id, key } }`: `id` names one of your `noteViews`, and `key` is what this card
+shows (a run's id, say), 1 to 200 characters.
+
+```ts
+const jobs = new Map<string, { done: number; total: number }>()
+
+const batch: Extension = {
+  id: 'batch',
+  name: 'Batch',
+  description: 'Runs a batch and shows its progress in the chat.',
+  enabledByDefault: false,
+  noteViews: [
+    {
+      id: 'job',
+      render(key) {
+        const job = jobs.get(key)
+        if (!job) return { type: 'text', text: 'Gone', tone: 'muted' }
+        return {
+          type: 'row',
+          justify: 'between',
+          children: [
+            { type: 'badge', text: `${job.done} of ${job.total}`, tone: 'accent' },
+            { type: 'button', label: 'Stop', variant: 'ghost', action: { name: 'stop' } },
+          ],
+        }
+      },
+      onAction(action, key) {
+        if (action.name === 'stop') jobs.delete(key)
+      },
+    },
+  ],
+}
+
+// Starting one: host.note(chatId, 'Batch job', { view: { id: 'job', key: jobId } }), then host.refresh(chatId) as it moves.
+```
+
+| Field | What it is |
+|---|---|
+| `id` | Unique within the extension. |
+| `render(key, chat, context)` | Draws the card for that key, as a [view](#views). Called when it shows, and again whenever the chat's extensions draw ([`host.refresh(chatId)`](host.md#refresh)), so call `refresh` as your work moves on and the card follows live. Every card of the view in the open chat draws each time, so keep it quick. |
+| `onAction(action, key, chat, context)` | Optional. A button in the card was clicked; the card draws again after. |
+
+- A card stays in view when its turn's steps fold, as a note's card does.
+- The note's `text` shows instead while your extension is off or left out of the chat, so make it say what the card
+  was ("Deep research: …"). Agents don't see notes.
+- A note with `view` takes no `card` or `panel`.
+- To open something bigger from a card, such as a document, use a dock panel with `tab: false` and
+  [`host.showPanel`](host.md) from `onAction`.
+
+List `panels` in the manifest's `uses` for `noteViews`.
 
 
 ## Composer toggles

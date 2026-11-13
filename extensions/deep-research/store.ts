@@ -75,6 +75,8 @@ export function openStore(storage: ExtensionStorage) {
         .flatMap((f) => read(spaceId, f.name.slice(0, -'.json'.length)) ?? [])
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
     },
+    // Whether the space has any run, without reading them: for whether its Research tab shows.
+    has: (spaceId: string) => storage.list(folderOf(spaceId)).some((f) => f.name.endsWith('.json')),
     // Every space's runs, for finding runs Kothar quit in the middle of.
     spaces: (): string[] => {
       try {

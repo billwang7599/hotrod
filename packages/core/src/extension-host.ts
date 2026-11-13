@@ -59,6 +59,16 @@ function noteCard(card: unknown): ExtensionNoteCard {
   return { title, ...(badge && { badge }), ...(detail && { detail }) }
 }
 
+// A note's live card: one of the extension's noteViews, for a key of at most 200 characters.
+function noteView(extension: Extension, view: unknown): { id: string; key: string } {
+  const { id, key } = (view ?? {}) as Record<string, unknown>
+  if (typeof id !== 'string' || !extension.noteViews?.some((v) => v.id === id)) {
+    throw new Error(`${extension.name} has no note view "${String(id)}"`)
+  }
+  if (typeof key !== 'string' || !key || key.length > 200) throw new Error('A note view’s key is text of 1 to 200 characters')
+  return { id, key }
+}
+
 // An extension's notification (host.notify), cut to what a system notification shows anyway.
 const NOTIFY_TITLE_CHARS = 120
 const NOTIFY_BODY_CHARS = 400
@@ -291,6 +301,8 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         }
         const action = options?.action === undefined ? undefined : noteAction(options.action, panel)
         const card = options?.card === undefined ? undefined : noteCard(options.card)
+        const view = options?.view === undefined ? undefined : noteView(extension, options.view)
+        if (view && (card || panel !== undefined)) throw new Error('A note with a view is a card of its own: give it no card or panel')
         const at = deps.now().toISOString()
         deps.append(chatFor(chatId), {
           at,
@@ -301,6 +313,7 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
           ...(card && { card }),
           // A card is the extension's even without a panel, so the transcript can say whose it is.
           ...(card && panel === undefined && { extension: extension.id }),
+          ...(view && { extension: extension.id, view }),
         })
       },
       error: (text) => extensionError(extension, String(text)),

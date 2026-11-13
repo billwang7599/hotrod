@@ -160,7 +160,7 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     else stopExtension(extension)
     if (enabled) family.toReversed().forEach((chat) => broadcast({ type: 'chat.added', chat: shownState(chat) }))
     else family.forEach((chat) => broadcast({ type: 'chat.removed', chatId: chat.info.id }))
-    if (extension.panels?.length || extension.commands?.length || extension.messageActions?.length || extension.composerToggles?.length) shownChats().forEach((chat) => broadcast(extensionsOf(chat)))
+    if (extension.panels?.length || extension.commands?.length || extension.messageActions?.length || extension.composerToggles?.length || extension.noteViews?.length) shownChats().forEach((chat) => broadcast(extensionsOf(chat)))
   }
   const familyOfExtension = (extension: Extension) =>
     (extension.chats ?? []).flatMap(({ id }) => {

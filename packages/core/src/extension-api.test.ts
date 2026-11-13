@@ -576,6 +576,60 @@ describe('the host', () => {
     expect(() => t.host().note(id, 'x', { card: { title: ' ' } })).toThrow('needs a title')
   })
 
+  it('notes a live card the extension draws, redrawn live, whose buttons come back to it', async () => {
+    const counts = new Map<string, number>()
+    const t = withHost({
+      noteViews: [
+        {
+          id: 'progress',
+          render: (key) => ({ type: 'text', text: `${key}: ${counts.get(key) ?? 0}` }),
+          onAction: (action, key) => void counts.set(key, (counts.get(key) ?? 0) + (action.name === 'add' ? 1 : 0)),
+        },
+      ],
+      panels: [{ id: 'info', title: 'Info', render: () => ({ type: 'empty', text: '' }) }],
+    })
+    const id = t.create()
+    t.host().note(id, 'Counting', { view: { id: 'progress', key: 'a' } })
+    expect(t.chat(id).entries.findLast((e) => e.type === 'extension.note')).toMatchObject({
+      text: 'Counting',
+      extension: 'test',
+      view: { id: 'progress', key: 'a' },
+    })
+    t.handle({ type: 'context.get', chatId: id })
+    expect([...t.messages, ...t.replies].findLast((m) => m.type === 'chat.extensions' && m.chatId === id)).toMatchObject({ noteViews: [{ extension: 'test', id: 'progress' }] })
+    const drawn = () => t.replies.findLast((m) => m.type === 'extension.noteView')
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'progress', key: 'a' })
+    expect(drawn()).toMatchObject({ chatId: id, extension: 'test', noteView: 'progress', key: 'a', view: { type: 'text', text: 'a: 0' } })
+    // An action, then the chat's extensions draw again, so the window asks for the card again.
+    const before = t.messages.filter((m) => m.type === 'chat.extensions').length
+    await t.handle({ type: 'extension.noteView.action', chatId: id, extension: 'test', noteView: 'progress', key: 'a', action: { name: 'add' } })
+    expect(t.messages.filter((m) => m.type === 'chat.extensions').length).toBe(before + 1)
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'progress', key: 'a' })
+    expect(drawn()).toMatchObject({ view: { text: 'a: 1' } })
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'nope', key: 'a' })
+    expect(drawn()).toMatchObject({ noteView: 'nope', error: 'Test extension has no note view "nope"' })
+    expect(() => t.host().note(id, 'x', { view: { id: 'nope', key: 'a' } })).toThrow('has no note view "nope"')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: '' } })).toThrow('1 to 200 characters')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: 'a' }, card: { title: 'T' } })).toThrow('a card of its own')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: 'a' }, panel: 'info' })).toThrow('a card of its own')
+  })
+
+  it('keeps a dock with tab: false out of the tabs, and only a dock', () => {
+    const t = withHost({
+      panels: [
+        { id: 'doc', title: 'Doc', placement: 'dock', tab: false, render: () => ({ type: 'empty', text: '' }) },
+        { id: 'list', title: 'List', tab: false, render: () => ({ type: 'empty', text: '' }) },
+      ],
+    })
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    const listed = [...t.messages, ...t.replies].findLast((m) => m.type === 'chat.extensions' && m.chatId === id)
+    expect(listed?.type === 'chat.extensions' && listed.panels).toEqual([
+      { extension: 'test', id: 'doc', title: 'Doc', placement: 'dock', tab: false },
+      { extension: 'test', id: 'list', title: 'List' },
+    ])
+  })
+
   it('runs commands through the Machine', async () => {
     const t = withHost()
     t.create()

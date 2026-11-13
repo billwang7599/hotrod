@@ -507,7 +507,11 @@ export type PanelTab = {
   placement?: 'tab' | 'popup' | 'dock'
   shortcut?: string
   launcher?: boolean
+  // A dock kept out of the right sidebar's tabs (ExtensionPanel.tab false).
+  tab?: false
 }
+// One of an extension's live transcript cards (ExtensionNoteView) the chat can draw now.
+export type NoteViewInfo = { extension: string; id: string }
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
 // An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.
 export type MessageActionInfo = {
@@ -589,6 +593,8 @@ export type ClientMessage =
   | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
   // Draws one of an extension's message details for the message at entry; replies with extension.detail.
   | { type: 'extension.detail.get'; chatId: string; extension: string; detail: string; entry: number }
+  | { type: 'extension.noteView.get'; chatId: string; extension: string; noteView: string; key: string }
+  | { type: 'extension.noteView.action'; chatId: string; extension: string; noteView: string; key: string; action: ExtensionAction }
   // One of an extension's composer toggles, turned on or off in the chat.
   | { type: 'extension.toggle'; chatId: string; extension: string; toggle: string; on: boolean }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
@@ -721,9 +727,12 @@ export type CoreMessage =
       messageDetails?: MessageDetailInfo[]
       // Absent: none.
       toggles?: ComposerToggleInfo[]
+      // Absent: none.
+      noteViews?: NoteViewInfo[]
     }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
   | { type: 'extension.detail'; chatId: string; extension: string; detail: string; entry: number; view?: ExtensionView; error?: string }
+  | { type: 'extension.noteView'; chatId: string; extension: string; noteView: string; key: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   // An extension that's new to the list (a community extension just installed) is added.

@@ -120,6 +120,8 @@ export type ChatEntry = { at: string } & (
       panel?: string
       action?: ExtensionAction
       card?: ExtensionNoteCard
+      // A live card the extension draws (ExtensionNoteView); extension is set with it.
+      view?: ExtensionNoteViewRef
     }
   | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
 )
@@ -455,7 +457,21 @@ export type ActivityInput = { kind: ActivityKind; title: string; chatId?: string
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
 // (such as a version) beside it. Each is plain text, cut if long.
 export type ExtensionNoteCard = { title: string; badge?: string; detail?: string }
-export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
+// view: the note is a live card the extension draws, one of its noteViews by id, for key (what it shows, such as a
+// run's id). text is what shows when the extension can't draw it (it's off, or left out of the chat).
+export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard; view?: ExtensionNoteViewRef }
+export type ExtensionNoteViewRef = { id: string; key: string }
+
+// A live card in the transcript, drawn by the extension as a panel is, such as a research run's progress: host.note
+// with { view: { id, key } } puts one in a chat, and it stays in view when the turn's steps fold. render draws it for
+// that key whenever it shows, and again whenever the chat's extensions draw (host.refresh(chatId)), so it updates
+// live; buttons in it come back to onAction with the same key, then it draws again. Keep render quick: every card of
+// this view in the open chat draws each time.
+export type ExtensionNoteView = {
+  id: string
+  render(key: string, chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
+  onAction?(action: ExtensionAction, key: string, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
 // closes: the button answers the wait for good, such as Done. Clicking it ends the wait at once, in the UI and in the
@@ -835,6 +851,9 @@ export type ExtensionPanel = {
   // Also show a launcher for this panel in the left sidebar; the panel is always a tab in the right panel. The user
   // picks where launchers sit (Settings → Appearance), at the top of the sidebar by default.
   launcher?: boolean
+  // A dock only: false keeps it out of the right sidebar's tabs, so it shows only when something opens it (host.showPanel,
+  // a note or a card's button). For a document view, such as a report, that would only crowd the sidebar.
+  tab?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
@@ -957,6 +976,8 @@ export type Extension = {
   messageActions?: ExtensionMessageAction[]
   // Folded rows under messages, drawn only when opened (see ExtensionMessageDetail).
   messageDetails?: ExtensionMessageDetail[]
+  // Live cards in the transcript, put there with host.note (see ExtensionNoteView).
+  noteViews?: ExtensionNoteView[]
   composerToggles?: ExtensionComposerToggle[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
@@ -1047,7 +1068,7 @@ export type ExtensionUse =
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
   // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop, onDependencyChanged
   | 'events'
-  // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
+  // panels, noteViews, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
   // commands, messageActions, composerToggles, and host.toggled, setToggle

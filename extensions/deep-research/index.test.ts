@@ -168,15 +168,46 @@ describe('the Deep research toggle', () => {
     await until(() => t.chats().some((c) => c.extension === 'home'))
     const main = t.chats().find((c) => c.extension === 'home')!.id
     expect(t.toggles(main)).toEqual([expect.objectContaining({ extension: 'deep-research', id: 'research', label: 'Deep research', on: false })])
-    // Its Research tab too, where Edit on the plan bar takes the plan.
+    // New research and the report beside the chat work there too; the Research tab shows once it has a run.
     const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === main)
-    expect(listed?.type === 'chat.extensions' && listed.panels.map((p) => p.id)).toEqual(expect.arrayContaining(['research', 'report', 'new']))
+    expect(listed?.type === 'chat.extensions' && listed.panels.map((p) => p.id)).toEqual(expect.arrayContaining(['report', 'new']))
+    expect(listed?.type === 'chat.extensions' && listed.noteViews).toEqual([{ extension: 'deep-research', id: 'run' }])
     await t.flip(main, true)
     await t.send(main, 'Which Greek letter comes first?')
     expect(t.prompts.filter((p) => p.includes('Call the deep_research tool'))).toHaveLength(1)
     const outcome = await t.callTool(main, 'Greek letters?')
     expect(outcome).toMatchObject({ status: 'done', sources: 1 })
     await until(() => !t.chats().some((c) => c.parentId === main))
+  })
+
+  it('gives Home the whole experience: subagent workers, the live card with its report link, and the Research tab', async () => {
+    const t = await core({ askFirst: false, depth: 'quick', showWorkers: true }, [home])
+    await until(() => t.chats().some((c) => c.extension === 'home'))
+    const main = t.chats().find((c) => c.extension === 'home')!.id
+    const panels = () => {
+      t.handle({ type: 'context.get', chatId: main })
+      const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === main)
+      return listed?.type === 'chat.extensions' ? listed : undefined
+    }
+    expect(panels()?.panels.map((p) => p.id)).not.toContain('research')
+    expect(panels()?.noteViews).toEqual([{ extension: 'deep-research', id: 'run' }])
+    expect(await t.callTool(main, 'Greek letters?')).toMatchObject({ status: 'done', sources: 1 })
+    await until(() => !t.chats().some((c) => c.parentId === main))
+    // Its workers show as subagents in Home, quietly.
+    const reports = t.chat(main).entries.filter((e) => e.type === 'worker.report')
+    expect(reports).toHaveLength(2)
+    expect(reports.every((e) => (e as { quiet?: true }).quiet === true)).toBe(true)
+    expect(t.chat(main).queue).toEqual([])
+    // Its live card is in Home, and becomes the report's link, which opens beside the chat.
+    const runId = readRunId(t.garage, main)
+    expect(t.chat(main).entries.findLast((e) => e.type === 'extension.note')).toMatchObject({ view: { id: 'run', key: runId } })
+    await t.handle({ type: 'extension.noteView.get', chatId: main, extension: 'deep-research', noteView: 'run', key: runId })
+    const drawn = t.messages.findLast((m) => m.type === 'extension.noteView' && m.key === runId)
+    expect(drawn?.type === 'extension.noteView' && JSON.stringify(drawn.view)).toContain('Open report')
+    await t.handle({ type: 'extension.noteView.action', chatId: main, extension: 'deep-research', noteView: 'run', key: runId, action: { name: 'report' } })
+    expect(t.messages).toContainEqual(expect.objectContaining({ type: 'extension.panel.show', chatId: main, panel: 'report', placement: 'dock' }))
+    // And Home's Research tab shows now that it has a run.
+    expect(panels()?.panels.map((p) => p.id)).toContain('research')
   })
 
   it('goes from the composer when the extension is turned off', async () => {
@@ -204,8 +235,11 @@ describe('the deep_research tool', () => {
     await until(() => !t.chats().some((c) => c.parentId === space))
     expect(t.chat(space).entries.some((e) => e.type === 'worker.report')).toBe(false)
     expect(t.chat(space).queue).toEqual([])
-    // A card in the chat, and the run's evidence kept.
-    expect(t.chat(space).entries.findLast((e) => e.type === 'extension.note')).toMatchObject({ card: { badge: 'Research', detail: '1 source' } })
+    // Its live card in the chat, and the run's evidence kept.
+    const runId = readRunId(t.garage, space)
+    expect(t.chat(space).entries.filter((e) => e.type === 'extension.note')).toEqual([
+      expect.objectContaining({ extension: 'deep-research', view: { id: 'run', key: runId }, text: 'Deep research: Greek letters?' }),
+    ])
     expect(existsSync(join(t.garage, 'extensions', 'deep-research', 'runs', space))).toBe(true)
   })
 
@@ -313,6 +347,11 @@ describe('the deep_research tool', () => {
   })
 })
 
+function readRunIdOrNone(garage: string, space: string): string | undefined {
+  const dir = join(garage, 'extensions', 'deep-research', 'runs', space)
+  return existsSync(dir) ? readdirSync(dir).find((name) => name.endsWith('.json'))?.slice(0, -'.json'.length) : undefined
+}
+
 function readRunId(garage: string, space: string): string {
   const dir = join(garage, 'extensions', 'deep-research', 'runs', space)
   return readdirSync(dir).find((name) => name.endsWith('.json'))!.slice(0, -'.json'.length)
@@ -334,43 +373,74 @@ describe('a deleted space', () => {
   })
 })
 
-describe('New research and the Research tab', () => {
+describe('Research in the chat', () => {
   const panelView = (t: Awaited<ReturnType<typeof core>>, chatId: string, panel: string) => {
     const drawn = t.messages.findLast((m) => m.type === 'extension.panel' && m.chatId === chatId && m.panel === panel)
     return drawn?.type === 'extension.panel' ? JSON.stringify(drawn.view ?? drawn.error) : ''
   }
+  // The run's card as the chat's window last asked for it.
+  const card = async (t: Awaited<ReturnType<typeof core>>, chatId: string, key: string) => {
+    await t.handle({ type: 'extension.noteView.get', chatId, extension: 'deep-research', noteView: 'run', key })
+    const drawn = t.messages.findLast((m) => m.type === 'extension.noteView' && m.chatId === chatId && m.key === key)
+    return drawn?.type === 'extension.noteView' ? JSON.stringify(drawn.view ?? drawn.error) : ''
+  }
+  const act = (t: Awaited<ReturnType<typeof core>>, chatId: string, key: string, action: { name: string; value?: unknown }) =>
+    t.handle({ type: 'extension.noteView.action', chatId, extension: 'deep-research', noteView: 'run', key, action } as ClientMessage)
+  const panelsOf = (t: Awaited<ReturnType<typeof core>>, chatId: string) => {
+    t.handle({ type: 'context.get', chatId })
+    const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === chatId)
+    return listed?.type === 'chat.extensions' ? listed.panels : []
+  }
 
-  it('starts from the popup in the background; the plan waits in the tab, and Start there runs it', async () => {
+  it('puts a live card in the chat as a run starts: the plan, then its progress, then the report’s link', async () => {
     const t = await core()
     const space = t.create()
-    t.handle({ type: 'context.get', chatId: space })
-    const listed = t.messages.findLast((m) => m.type === 'chat.extensions' && m.chatId === space)
-    expect(listed).toMatchObject({
-      panels: expect.arrayContaining([
-        expect.objectContaining({ extension: 'deep-research', id: 'new', placement: 'popup', launcher: true, shortcut: 'Mod+Shift+D' }),
-        expect.objectContaining({ id: 'research', title: 'Research' }),
-        expect.objectContaining({ id: 'report', placement: 'dock' }),
-      ]),
-    })
-    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'new' })
     await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'new', action: { name: 'depth', value: 'quick' } })
-    await until(() => panelView(t, space, 'new').includes('"label":"Quick","variant":"primary"'))
     await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'new', action: { name: 'start-new', value: { question: 'Greek letters?' } } })
     expect(t.messages).toContainEqual(expect.objectContaining({ type: 'extension.panel.close', chatId: space, panel: 'new' }))
-    expect(t.messages).toContainEqual(expect.objectContaining({ type: 'extension.panel.show', chatId: space, panel: 'research' }))
-    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'research' })
-    await until(() => panelView(t, space, 'research').includes('Plan waiting for you'))
-    // No bar: nothing's running in the chat to hold it.
-    expect(t.chat(space).waits ?? []).toEqual([])
-    expect(panelView(t, space, 'research')).toContain('Which letter is first?')
+    // No jump to the Research tab: the card is in the chat.
+    expect(t.messages).not.toContainEqual(expect.objectContaining({ type: 'extension.panel.show', panel: 'research' }))
+    await until(() => readRunIdOrNone(t.garage, space) !== undefined)
     const runId = readRunId(t.garage, space)
-    await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'research', action: { name: 'start', value: runId } })
-    await until(() => panelView(t, space, 'research').includes('Open report'))
-    expect(panelView(t, space, 'research')).toContain('"text":"Done"')
-    expect(t.prompts.filter((p) => p.includes("Kothar's Deep Research"))).toHaveLength(2)
+    expect(t.chat(space).entries.findLast((e) => e.type === 'extension.note')).toMatchObject({ extension: 'deep-research', view: { id: 'run', key: runId } })
+    await until(async () => (await card(t, space, runId)).includes('Plan waiting for you'))
+    expect(await card(t, space, runId)).toContain('Which letter is first?')
+    // No bar: nothing's running in the chat to hold it. Start is in the card.
+    expect(t.chat(space).waits ?? []).toEqual([])
+    t.hold.workers = true
+    await act(t, space, runId, { name: 'start' })
+    await until(() => t.hold.releaseWorkers.length === 2)
+    await until(async () => (await card(t, space, runId)).includes('Researching 0 of 2'))
+    expect(await card(t, space, runId)).toContain('"label":"Stop"')
+    t.hold.releaseWorkers.shift()!()
+    await until(async () => (await card(t, space, runId)).includes('Researching 1 of 2'))
+    t.hold.releaseWorkers.shift()!()
+    await until(async () => (await card(t, space, runId)).includes('Open report'))
+    const done = await card(t, space, runId)
+    expect(done).toContain('"text":"Report"')
+    expect(done).not.toContain('"label":"Stop"')
+    // The link opens the report beside the chat.
+    await act(t, space, runId, { name: 'report' })
+    expect(t.messages).toContainEqual(expect.objectContaining({ type: 'extension.panel.show', chatId: space, panel: 'report', placement: 'dock' }))
+    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'report' })
+    await until(() => panelView(t, space, 'report').includes('## Sources'))
   })
 
-  it('edits the plan in the tab after Edit on the bar', async () => {
+  it('stops a run from its card, which then links the partial report', async () => {
+    const t = await core({ askFirst: false, depth: 'quick' })
+    const space = t.create()
+    t.hold.workers = true
+    const done = t.callTool(space, 'Greek letters?')
+    await until(() => t.hold.releaseWorkers.length === 2)
+    const runId = readRunId(t.garage, space)
+    await act(t, space, runId, { name: 'stop' })
+    expect(await done).toMatchObject({ status: 'partial' })
+    const stopped = await card(t, space, runId)
+    expect(stopped).toContain('Partial report')
+    expect(stopped).toContain('Open report')
+  })
+
+  it('opens the plan in the card for Edit on the bar', async () => {
     const t = await core({ depth: 'quick' })
     const space = t.create()
     t.hold.on = true
@@ -378,11 +448,11 @@ describe('New research and the Research tab', () => {
     await until(() => t.chat(space).status === 'running')
     const done = t.callTool(space, 'Greek letters?')
     await until(() => (t.chat(space).waits ?? []).length > 0)
-    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'research' })
+    const runId = readRunId(t.garage, space)
     await t.handle({ type: 'extension.wait.answer', chatId: space, extension: 'deep-research', button: 'edit' })
     expect(t.chat(space).waits ?? []).toEqual([])
-    await until(() => panelView(t, space, 'research').includes('Sub-questions, one per line'))
-    await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'research', action: { name: 'start-edited', value: { subs: '1. Only this one?' } } })
+    await until(async () => (await card(t, space, runId)).includes('Sub-questions, one per line'))
+    await act(t, space, runId, { name: 'start-edited', value: { subs: '1. Only this one?' } })
     expect(await done).toMatchObject({ status: 'done' })
     const asked = t.prompts.filter((p) => p.includes("Kothar's Deep Research"))
     expect(asked).toHaveLength(1)
@@ -390,22 +460,35 @@ describe('New research and the Research tab', () => {
     t.hold.release?.()
   })
 
-  it('opens a finished report in the dock with one click, shows its evidence, and deletes it', async () => {
+  it('shows the Research tab only once the space has a run, and keeps the report out of the tabs', async () => {
     const t = await core({ askFirst: false, depth: 'quick' })
     const space = t.create()
+    const before = panelsOf(t, space)
+    expect(before.map((p) => p.id)).not.toContain('research')
+    expect(before).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ extension: 'deep-research', id: 'new', placement: 'popup', launcher: true, shortcut: 'Mod+Shift+D' }),
+        expect.objectContaining({ id: 'report', placement: 'dock', tab: false }),
+      ]),
+    )
     await t.callTool(space, 'Greek letters?')
     const runId = readRunId(t.garage, space)
-    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'report' })
+    expect(panelsOf(t, space)).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'research', title: 'Research' })]))
+    // The tab is the list of runs; a finished one opens its report in one click.
+    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'research' })
+    await until(() => panelView(t, space, 'research').includes('Greek letters?'))
+    expect(panelView(t, space, 'research')).not.toContain('Sub-questions')
     await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'research', action: { name: 'open', value: runId } })
     expect(t.messages).toContainEqual(expect.objectContaining({ type: 'extension.panel.show', chatId: space, panel: 'report', placement: 'dock' }))
-    await until(() => panelView(t, space, 'report').includes('## Sources'))
-    expect(panelView(t, space, 'report')).toContain('"type":"download"')
-    await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'research', action: { name: 'evidence', value: runId } })
+    // Evidence and Delete are in the card's menu.
+    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'report' })
+    await act(t, space, runId, { name: 'evidence', value: runId })
     await until(() => panelView(t, space, 'report').includes('Findings'))
     expect(panelView(t, space, 'report')).toContain('Alpha is the first letter of the Greek alphabet')
-    await t.handle({ type: 'extension.panel.action', chatId: space, extension: 'deep-research', panel: 'research', action: { name: 'delete', value: runId } })
+    await act(t, space, runId, { name: 'delete', value: runId })
     expect(existsSync(join(t.garage, 'extensions', 'deep-research', 'runs', space, `${runId}.json`))).toBe(false)
-    await t.handle({ type: 'extension.panel.get', chatId: space, extension: 'deep-research', panel: 'research' })
-    await until(() => panelView(t, space, 'research').includes('No research yet'))
+    expect(await card(t, space, runId)).toContain('This research was deleted.')
+    expect(panelsOf(t, space).map((p) => p.id)).not.toContain('research')
   })
 })
+

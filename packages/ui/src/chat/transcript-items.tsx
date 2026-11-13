@@ -2,7 +2,8 @@
 import type { ExtensionAction, ExtensionNoteCard } from '@kothar/extension-api'
 import { Fragment, useContext, useState, type ReactNode } from 'react'
 import { AnimatePresence, m } from 'motion/react'
-import type { ClientMessage, ContextItem, MessageActionInfo, MessageDetailInfo } from '@kothar/core/shared'
+import type { ClientMessage, ContextItem, MessageActionInfo, MessageDetailInfo, NoteViewInfo } from '@kothar/core/shared'
+import { NoteView } from './note-view.tsx'
 import { Chevron, CopyBlock, CopyButton, ErrorText, MOTION } from '../controls.tsx'
 import { LinkedText, NoFileLinks } from '../file-links.tsx'
 import { Markdown } from '../markdown.tsx'
@@ -58,6 +59,8 @@ type ItemProps = {
   // Extensions' folded rows under messages, such as What was sent, and the views of those the user unfolded.
   messageDetails?: readonly MessageDetailInfo[]
   detailViews?: Record<string, PanelView>
+  // Extensions' live cards the chat can draw now (ExtensionNoteView); their views are in detailViews.
+  noteViews?: readonly NoteViewInfo[]
 }
 
 /** An extension's note drawn as a card, such as an artifact an agent made: click to open it in the extension's panel. */
@@ -246,6 +249,20 @@ export function ItemView(props: ItemProps) {
       )
     case 'note': {
       const { extension, panel, card } = item
+      if (extension && item.view) {
+        return (
+          <NoteView
+            chatId={chat.id}
+            extension={extension}
+            view={item.view}
+            text={item.text}
+            offered={props.noteViews}
+            views={props.detailViews}
+            connected={connected}
+            send={send}
+          />
+        )
+      }
       const open = extension && panel && openPanel ? () => openPanel(extension, panel, item.action) : undefined
       if (card) return <NoteCard card={card} text={item.text} open={open} />
       if (!open) return <div className="text-sm text-muted">{item.text}</div>

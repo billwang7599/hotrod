@@ -15,7 +15,16 @@ import type { Chat } from './chat.ts'
 import { panelTabOf } from './extensions.ts'
 import { isToggled, toggleInfo, toggleOf, withToggle } from './composer-toggles.ts'
 import { messageActionInfo, messageAt, messageDetailInfo } from './message-actions.ts'
-import type { ChatInfo, CommandInfo, ComposerToggleInfo, CoreMessage, MessageActionInfo, MessageDetailInfo, PanelTab } from './shared.ts'
+import type {
+  ChatInfo,
+  CommandInfo,
+  ComposerToggleInfo,
+  CoreMessage,
+  MessageActionInfo,
+  MessageDetailInfo,
+  NoteViewInfo,
+  PanelTab,
+} from './shared.ts'
 import { messageOf } from './util.ts'
 
 export type PanelDeps = {
@@ -115,9 +124,11 @@ export function openPanels(deps: PanelDeps) {
         }
       }),
     )
+    const noteViews = on.flatMap((extension) => (extension.noteViews ?? []).map((v): NoteViewInfo => ({ extension: extension.id, id: v.id })))
     return {
       type: 'chat.extensions',
       chatId: chat.info.id,
+      ...(noteViews.length && { noteViews }),
       panels,
       commands,
       ...(messageActions.length && { messageActions }),
@@ -266,6 +277,35 @@ export function openPanels(deps: PanelDeps) {
       return { ...base, error: messageOf(error) }
     }
   }
+  // Draws one of an extension's live cards in the chat's transcript (ExtensionNoteView), for the asking window.
+  const noteViewOf = (chat: Chat, extensionId: unknown, viewId: unknown) => {
+    const extension = extensionFor(String(extensionId))
+    if (!isOn(extension)) throw new Error(`${extension.name} is off`)
+    if (!isOnFor(extension, chat)) throw new Error(`${extension.name} is left out of this chat by its setup`)
+    const view = extension.noteViews?.find((v) => v.id === viewId)
+    if (!view) throw new Error(`${extension.name} has no note view "${String(viewId)}"`)
+    return { extension, view }
+  }
+  const renderNoteView = async (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown) => {
+    const base = { type: 'extension.noteView' as const, chatId: chat.info.id, extension: String(extensionId), noteView: String(viewId), key: String(key) }
+    try {
+      const { extension, view } = noteViewOf(chat, extensionId, viewId)
+      return { ...base, view: withControls(extension, chat, await view.render(String(key), detailOf(chat), contextOf(extension))) }
+    } catch (error) {
+      return { ...base, error: messageOf(error) }
+    }
+  }
+  // A button in a live card: the extension acts, then the chat's extensions draw again, which redraws its cards.
+  const noteViewAction = async (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown, action: ExtensionAction) => {
+    const { extension, view } = noteViewOf(chat, extensionId, viewId)
+    if (typeof action?.name !== 'string') throw new Error('A card action needs a name')
+    try {
+      await view.onAction?.(action, String(key), detailOf(chat), contextOf(extension))
+    } catch (error) {
+      extensionError(extension, error)
+    }
+    if (chats.has(chat.info.id)) refreshExtension(extension, chat.info.id)
+  }
   // The user flipped one of an extension's composer toggles in the chat: saved, then onChange, then the chip redraws.
   const flipToggle = async (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => {
     const extension = extensionFor(String(extensionId))
@@ -287,6 +327,8 @@ export function openPanels(deps: PanelDeps) {
     extensionsOf,
     runMessageAction,
     renderDetail,
+    renderNoteView,
+    noteViewAction,
     flipToggle,
     panelOf,
     openPanel,

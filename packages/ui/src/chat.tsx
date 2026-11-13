@@ -321,6 +321,7 @@ export function Chat(props: ChatProps) {
     messageActions: props.extensionUi?.chatId === chat.id ? (props.extensionUi.messageActions ?? NO_ACTIONS) : NO_ACTIONS,
     messageDetails: props.extensionUi?.chatId === chat.id ? props.extensionUi.messageDetails : undefined,
     detailViews: props.detailViews,
+    noteViews: props.extensionUi?.chatId === chat.id ? props.extensionUi.noteViews : undefined,
     ...(viewOnly && space !== chat && { space, select: props.select }),
     openChat: (chatId: string) => {
       const select = props.select

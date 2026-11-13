@@ -95,6 +95,8 @@ export type ProtocolDeps = {
   runCommand: (chat: Chat, extensionId: unknown, commandId: unknown) => void
   runMessageAction: (chat: Chat, extensionId: unknown, actionId: unknown, entry: unknown) => Promise<void>
   renderDetail: (chat: Chat, extensionId: unknown, detailId: unknown, entry: unknown) => Promise<Extract<CoreMessage, { type: 'extension.detail' }>>
+  renderNoteView: (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown) => Promise<Extract<CoreMessage, { type: 'extension.noteView' }>>
+  noteViewAction: (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown, action: ExtensionAction) => Promise<void>
   flipToggle: (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => Promise<void>
   answerWait: (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => void
   setExtensionEnabled: (extension: Extension, enabled: boolean) => void
@@ -253,6 +255,10 @@ export function openProtocol(deps: ProtocolDeps) {
       deps.runMessageAction(chatFor(message.chatId), message.extension, message.action, message.entry),
     'extension.detail.get': async (message, reply) =>
       reply(await deps.renderDetail(chatFor(message.chatId), message.extension, message.detail, message.entry)),
+    'extension.noteView.get': async (message, reply) =>
+      reply(await deps.renderNoteView(chatFor(message.chatId), message.extension, message.noteView, message.key)),
+    'extension.noteView.action': (message) =>
+      deps.noteViewAction(chatFor(message.chatId), message.extension, message.noteView, message.key, message.action),
     'extension.toggle': (message) => deps.flipToggle(chatFor(message.chatId), message.extension, message.toggle, message.on),
     'extension.wait.answer': (message) =>
       deps.answerWait(chatFor(message.chatId), String(message.extension), { button: String(message.button) }),

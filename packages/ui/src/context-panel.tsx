@@ -759,7 +759,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const tab = usePanelTab()
   const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
   // A popup panel opens over the chat instead (extension-popups.tsx).
-  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup') : []
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup' && p.tab !== false) : []
   const extensionNames = useMemo(() => new Map((props.extensions ?? []).map((e) => [e.id, e.name])), [props.extensions])
   const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
   const known = tab === 'general' || extensionTab

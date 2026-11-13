@@ -229,7 +229,9 @@ For a path the user should be able to find, a `text` view with `reveal: true` dr
 ## Notes
 
 `note(chatId, text, { panel? })` writes a short line into the chat's transcript, for you. Agents don't see it. With
-`panel`, clicking the note opens that panel of your extension's; it must be one of your extension's panel ids.
+`panel`, clicking the note opens that panel of your extension's; it must be one of your extension's panel ids. With
+`view: { id, key }`, the note is a live card your extension draws (see
+[Live cards](panels.md#live-cards)); `text` shows only while it can't be drawn.
 
 ```ts
 import type { ExtensionHost } from '@kothar/extension-api'
