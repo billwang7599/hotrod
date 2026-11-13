@@ -15,6 +15,10 @@ export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
 
+export const NO_COMMITS_RULES =
+  "These git folders have no commits yet, so Kothar hasn't checked them out: use them as the folder modes below " +
+  'say. Each is checked out in your work folder from the first message after its first commit:'
+
 export type InstructionCheckout = { folder: string; path: string; branch: string }
 
 export type InstructionParts = {
@@ -75,6 +79,9 @@ export const instructionSections = (parts: InstructionParts): InstructionSection
     ...(workDir !== undefined ? [core('Where you can write', `${WRITE_RULES}\nYour work folder: ${workDir}`)] : []),
     ...(checkouts.length
       ? [core('Git checkouts', [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n'))]
+      : []),
+    ...(folders.some((f) => f.unborn)
+      ? [core('Git folders without commits', [NO_COMMITS_RULES, ...folders.flatMap((f) => (f.unborn ? [`- ${f.path}`] : []))].join('\n'))]
       : []),
     ...(folders.length ? [core('Folder modes', [FOLDER_RULES, ...folderLines(folders)].join('\n'))] : []),
     ...(toolbox ? [{ ...core('What you can use', toolbox), settings: corePromptLink('combine') }] : []),

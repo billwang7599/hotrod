@@ -228,7 +228,8 @@ the full API reference. Built-in extensions in `extensions/` follow the same API
   - Use `host.home` and `host.now()` for the home folder and the time, not `node:os` or `Date.now()`.
   - Use `host.space(chatId).checkouts` and `onSpaceRemoved` for a space's checkouts.
 - The core creates every checkout and removes them when a space is deleted (design rule 10). Optional cleanup of merged
-  work belongs to an extension; see `extensions/git/cleanup.ts`.
+  work belongs to an extension; see `extensions/git/cleanup.ts`. A repo with no commits yet isn't checked out: it's a
+  plain folder with its mode until its first commit (`hasNoCommits` in `checkouts.ts`), so `checkouts` lacks it.
 - If the API lacks something, add the smallest generic change to `packages/extension-api/index.ts` and the core in its
   own PR, update `extension-documentation/reference/`, then build the extension on top.
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildInstructions, CHECKOUT_RULES, contextTextOf, FOLDER_RULES, type InstructionParts, WRITE_RULES } from './instructions.ts'
+import { buildInstructions, CHECKOUT_RULES, contextTextOf, FOLDER_RULES, type InstructionParts, NO_COMMITS_RULES, WRITE_RULES } from './instructions.ts'
 import type { ContextItem } from './shared.ts'
 
 const item = (section: ContextItem['section'], path: string, text: string, more: Partial<ContextItem> = {}): ContextItem => ({
@@ -50,6 +50,20 @@ describe('buildInstructions', () => {
       'SETUP',
       'GLOBAL',
       '<file path="/code/a/notes.md">\nFILE\n</file>',
+    ])
+  })
+
+  it('names the git folders with no commits yet, before their folder modes', () => {
+    const instructions = buildInstructions({
+      ...EMPTY,
+      folders: [
+        { path: '/new', mode: 'edit', unborn: true },
+        { path: '/docs', mode: 'readOnly' },
+      ],
+    })
+    expect(instructions.split('\n\n')).toEqual([
+      `${NO_COMMITS_RULES}\n- /new`,
+      `${FOLDER_RULES}\n- /new: Edit in place. Write in it directly.\n- /docs: Read only.`,
     ])
   })
 
