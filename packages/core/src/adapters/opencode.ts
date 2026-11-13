@@ -5,8 +5,10 @@ import {
   type AccountProvider,
   type AccountStatus,
   type Adapter,
+  type EngineToolSpec,
   type Machine,
   type Sandbox,
+  type SessionOptions,
   type ThinkingLevel,
   type ToolKind,
 } from '../shared.ts'
@@ -66,9 +68,45 @@ const CLEAN_ENV = {
   OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
 }
 
-// OpenCode's tools that run out of Kothar's sight or bypass it: its own subagents (Kothar's spawn_worker replaces
-// them), skills and its question tool.
-const TOOLS_OFF = { task: false, skill: false, question: false }
+// OpenCode's built-in tools (1.17). Off by default, as before: its own subagents (Kothar's workers replace them), its
+// skills and its question tool, which ACP can't bring to Kothar.
+export const OPENCODE_TOOLS: EngineToolSpec[] = [
+  { name: 'bash', capability: 'shell', group: 'core' },
+  { name: 'edit', capability: 'edit', group: 'core' },
+  { name: 'write', capability: 'edit', group: 'core' },
+  { name: 'patch', capability: 'edit', group: 'core' },
+  { name: 'apply_patch', capability: 'edit', group: 'core' },
+  { name: 'multiedit', capability: 'edit', group: 'core' },
+  { name: 'read', capability: 'read', group: 'core' },
+  { name: 'list', capability: 'read', group: 'core' },
+  { name: 'grep', capability: 'search', group: 'core' },
+  { name: 'glob', capability: 'search', group: 'core' },
+  { name: 'codesearch', capability: 'search', group: 'core' },
+  { name: 'webfetch', capability: 'web', group: 'core' },
+  { name: 'websearch', capability: 'web', group: 'core' },
+  { name: 'task', capability: 'subagents', group: 'replaced' },
+  { name: 'todowrite', capability: 'todos', group: 'replaced' },
+  { name: 'plan_enter', capability: 'plan-mode', group: 'replaced' },
+  { name: 'plan_exit', capability: 'plan-mode', group: 'replaced' },
+  { name: 'skill', capability: 'skills', group: 'replaced', on: false },
+  { name: 'question', capability: 'questions', group: 'outside' },
+]
+
+// Without tool choices from the core (tests, one-off callers): the tools OpenCode has always run without.
+const TOOLS_OFF = ['task', 'skill', 'question']
+// Experimental tools OpenCode may offer, off too with every tool off.
+const EXPERIMENTAL = ['lsp', 'batch', 'todoread']
+
+// OpenCode's `tools` config for a session: false for each tool off, true for one OpenCode would leave out. With every
+// tool off, each built-in it has by name: never `*`, which would take the MCP servers' tools (kothar_*) as well.
+export function openCodeTools({ tools, noTools }: Pick<SessionOptions, 'tools' | 'noTools'>): Record<string, boolean> {
+  if (noTools) return Object.fromEntries([...OPENCODE_TOOLS.map((tool) => tool.name), ...EXPERIMENTAL].map((name) => [name, false]))
+  const startsOff = OPENCODE_TOOLS.filter((tool) => tool.on === false).map((tool) => tool.name)
+  return Object.fromEntries([
+    ...(tools?.on ?? []).filter((name) => startsOff.includes(name)).map((name) => [name, true]),
+    ...(tools?.off ?? TOOLS_OFF).map((name) => [name, false]),
+  ])
+}
 
 // A Kothar tool call can wait on the user; OpenCode's default MCP timeout would end it.
 const MCP_CALL_TIMEOUT_MS = 24 * 60 * 60 * 1000
@@ -340,6 +378,7 @@ export function createOpencode(user: UserEnv = processUserEnv()): Adapter {
     name: 'OpenCode',
     imageInput: true,
     kotharMcp: true,
+    tools: OPENCODE_TOOLS,
 
     async detect(machine) {
       const options = { cwd: '/' }
@@ -484,7 +523,7 @@ export function createOpencode(user: UserEnv = processUserEnv()): Adapter {
       for (const server of mcpServers) permission[`${toolPrefix(server.name)}*`] = server.allowTools ? 'allow' : 'ask'
       const config = {
         ...BASE_CONFIG,
-        tools: TOOLS_OFF,
+        tools: openCodeTools(options),
         agent: { title: { disable: true } },
         permission,
         experimental: { mcp_timeout: MCP_CALL_TIMEOUT_MS },

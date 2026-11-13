@@ -48,6 +48,7 @@ import {
   type MemoryMessage,
   type QueuedMessage,
   type Session,
+  type SessionOptions,
   type Upload,
 } from './shared.ts'
 import { messageOf } from './util.ts'
@@ -118,6 +119,10 @@ export type TurnDeps = {
   activity?: Activity
   /** How many of one chat's children may run at once (Settings → Workers; -1: no limit). Absent: no limit. */
   workerLimit?: () => number
+  // The engine's built-in tools for a chat's session (engine-tools.ts). Absent: the adapter's own defaults.
+  engineToolsFor?: (chat: Chat, engine: string) => Pick<SessionOptions, 'tools' | 'noTools'>
+  // The engine said which built-in tools its session has.
+  toolsListed?: (engine: string, names: string[]) => void
 }
 
 // What the core hands on of a turn as its session opens (kind 'turn'), or of a message steered into it ('steer'), for
@@ -761,7 +766,7 @@ export function openTurns(deps: TurnDeps) {
       folders: folderPlaces,
       ...(readOnly && { readOnly }),
     })
-    const events = sessionEvents(chat, permissionsOf)
+    const events = sessionEvents(chat, adapter.id, permissionsOf)
     liveEvents.set(chat, events)
     try {
       chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
@@ -782,6 +787,7 @@ export function openTurns(deps: TurnDeps) {
         ...(thinking && { thinking }),
         ...(jail && { sandbox: jail }),
         ...(readOnly && { readOnly: true }),
+        ...deps.engineToolsFor?.(chat, adapter.id),
       }
       chat.account = accounts.activeOf(adapter.id)
       chat.runModel = model
@@ -822,7 +828,7 @@ export function openTurns(deps: TurnDeps) {
   // Handles the events one session sends for chat: tools tracked for the turn summary, text streamed and saved, steers,
   // limits, questions, and permission requests answered by the core's rules, then extensions, else the user. Events
   // from any other session than ref.session (an older turn's, or one that never became the chat's) are dropped.
-  const sessionEvents = (chat: Chat, permissionsOf: () => Parameters<typeof verdictOf>[1]) => {
+  const sessionEvents = (chat: Chat, engine: string, permissionsOf: () => Parameters<typeof verdictOf>[1]) => {
     const ref: { session?: Session } = {}
     // Where each tool sits in chat.turn.tools, counting from 1.
     const toolIds = new Map<string, number>()
@@ -840,6 +846,7 @@ export function openTurns(deps: TurnDeps) {
       if (chat.session !== ref.session) return
       const at = now().toISOString()
       for (const extension of watchersOf('onEvent')) callExtension(extension, () => extension.onEvent!(detailOf(chat), event, contextOf(extension)))
+      if (event.type === 'tools.listed') return deps.toolsListed?.(engine, event.names)
       if (event.type === 'tool.started') {
         const { name, kind, summary, path } = event
         chat.turn?.tools.push({ name, kind, summary, ...(path !== undefined && { path }) })

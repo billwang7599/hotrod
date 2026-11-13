@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { type Adapter, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
+import { type Adapter, type EngineToolSpec, type Sandbox, type SessionOptions, type ThinkingLevel, type ToolKind } from '../shared.ts'
 import { onJsonLines } from './jsonl.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
 import { type EngineErrors, withKind } from './error-kind.ts'
@@ -16,6 +16,33 @@ const KINDS: Record<string, ToolKind> = {
   ls: 'read',
   grep: 'search',
   find: 'search',
+}
+
+// pi's built-in tools (pi 1.5). It starts with read, bash, edit and write; the rest only when named (on: false).
+export const PI_TOOLS: EngineToolSpec[] = [
+  { name: 'bash', capability: 'shell', group: 'core' },
+  { name: 'powershell', capability: 'shell', group: 'core', on: false },
+  { name: 'read', capability: 'read', group: 'core' },
+  { name: 'ls', capability: 'read', group: 'core', on: false },
+  { name: 'edit', capability: 'edit', group: 'core' },
+  { name: 'write', capability: 'edit', group: 'core' },
+  { name: 'grep', capability: 'search', group: 'core', on: false },
+  { name: 'find', capability: 'search', group: 'core', on: false },
+]
+
+const startsOff = new Set(PI_TOOLS.filter((tool) => tool.on === false).map((tool) => tool.name))
+const known = new Set(PI_TOOLS.map((tool) => tool.name))
+
+// pi's tool flags for a session: --no-builtin-tools with every tool off, which keeps extension tools, MCP's among them
+// (--no-tools would take those too); else +name for a tool pi leaves out and -name for one it starts with. pi takes
+// only exact built-in names there, so names it may not know are left out.
+export function piToolArgs({ tools, noTools }: Pick<SessionOptions, 'tools' | 'noTools'>): string[] {
+  if (noTools) return ['--no-builtin-tools']
+  const changes = [
+    ...(tools?.on ?? []).filter((name) => startsOff.has(name)).map((name) => `+${name}`),
+    ...(tools?.off ?? []).filter((name) => known.has(name) && !startsOff.has(name)).map((name) => `-${name}`),
+  ]
+  return changes.length ? ['--tools', changes.join(',')] : []
 }
 
 const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
@@ -94,6 +121,7 @@ export function createPi(user: UserEnv = processUserEnv()): Adapter {
     imageInput: true,
     kotharMcp: true,
     steering: true,
+    tools: PI_TOOLS,
 
     async detect(machine) {
       const options = { cwd: '/' }
@@ -141,8 +169,9 @@ export function createPi(user: UserEnv = processUserEnv()): Adapter {
       return stdout
     },
 
-    start(machine, { cwd, instructions, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox }, emit) {
-      const args = [...RPC_ARGS, '-e', 'builtin:mcp']
+    start(machine, options, emit) {
+      const { cwd, instructions, kotharMcp, mcpServers = [], extraDirs = [], model, thinking, sandbox } = options
+      const args = [...RPC_ARGS, '-e', 'builtin:mcp', ...piToolArgs(options)]
       if (model) args.push('--model', model)
       if (thinking) args.push('--thinking', thinking)
       const dirs = extraDirs.map((dir) => `\n- ${dir}`).join('')

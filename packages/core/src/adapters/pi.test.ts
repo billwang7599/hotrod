@@ -51,6 +51,23 @@ describe('pi adapter', () => {
     ])
   })
 
+  it('switches its tools with +name for one pi leaves out and -name for one it starts with, known names only', () => {
+    const tools = { on: ['grep', 'bash', 'Nope'], off: ['write', 'find', 'Bash'] }
+    const args = startSession('', { tools }).fake.spawned[0]!.args
+    expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2)).toEqual(['--tools', '+grep,-write'])
+    expect(startSession('', { tools: { on: ['bash'], off: ['find'] } }).fake.spawned[0]!.args).not.toContain('--tools')
+  })
+
+  it("turns every built-in tool off with --no-builtin-tools, keeping Kothar's MCP server", () => {
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const spawned = startSession('', { noTools: true, tools: { on: ['grep'], off: [] }, kotharMcp }).fake.spawned[0]!
+    expect(spawned.args).toContain('--no-builtin-tools')
+    expect(spawned.args).not.toContain('--no-tools')
+    expect(spawned.args).not.toContain('--tools')
+    expect(spawned.args).toContain('builtin:mcp')
+    expect(JSON.parse(spawned.env!.KOTHAR_PI_MCP!).mcpServers.kothar.url).toBe(kotharMcp.url)
+  })
+
   it('takes the Kothar MCP server and extension servers', () => {
     expect(pi.kotharMcp).toBe(true)
   })

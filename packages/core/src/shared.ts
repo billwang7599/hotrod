@@ -1,4 +1,5 @@
 import type {
+  ToolCapability,
   ModelRole as ApiModelRole,
   Answers,
   Attachment,
@@ -24,6 +25,7 @@ export type {
   MemoryMessage,
   MessageKind,
   Question,
+  ToolCapability,
   ToolKind,
 } from '@kothar/extension-api'
 
@@ -115,7 +117,23 @@ export type SessionOptions = {
   // The turn may read but change nothing (an extension's TurnOptions): an engine with a read-only mode starts in it.
   // Kothar's sandbox and permission answers enforce it either way.
   readOnly?: boolean
+  // The engine's built-in tools, by its own names, as Settings → Engines → Tools has them (engine-tools.ts): off ones
+  // the engine must not offer, on ones it must (some engines leave a tool out unless named). Names the adapter
+  // doesn't know may be in either list. Only for adapters with `tools`.
+  tools?: { off: string[]; on: string[] }
+  // Every built-in tool off (the Engine tools master switch): only MCP tools, Kothar's and extensions', are left.
+  noTools?: boolean
 }
+
+// Where an engine's built-in tool sits by default (Settings → Engines → Tools):
+// - core: what the engine works with (commands, edits, reads, searches); on.
+// - replaced: Kothar has its own version (workers for subagents, say); off while Kothar's version is on, else on.
+// - outside: acts where Kothar can't see, stop or log it (schedules, notifications, publishing); off.
+export type ToolGroup = 'core' | 'replaced' | 'outside'
+
+// One of an engine's built-in tools as its adapter knows it. on: its default when it isn't the group's (a tool the
+// engine itself leaves out unless named, or one Kothar has always kept off).
+export type EngineToolSpec = { name: string; capability?: ToolCapability; group: ToolGroup; on?: boolean }
 
 export type ImageInput = { mimeType: string; base64: string }
 
@@ -169,6 +187,9 @@ export interface Adapter {
   kotharMcp?: boolean
   // Its sessions have steer, so the UI can say Enter steers.
   steering?: boolean
+  // The engine's built-in tools it knows, which Kothar can switch on and off per session (SessionOptions.tools,
+  // noTools). Without it, the engine's tools can't be switched.
+  tools?: EngineToolSpec[]
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void, choice?: AccountChoice): LoginFlow

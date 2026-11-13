@@ -16,6 +16,27 @@ export type ExtensionValues = Record<string, string | number | boolean>
 
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
 
+// What an engine's built-in tool is for, in words every engine shares (Settings → Engines → Tools). Engines' own tool
+// names stay inside their adapters; these are what Kothar and extensions talk about.
+export type ToolCapability =
+  | 'shell'
+  | 'edit'
+  | 'read'
+  | 'search'
+  | 'web'
+  | 'questions'
+  | 'tool-search'
+  | 'subagents'
+  | 'background-shell'
+  | 'skills'
+  | 'todos'
+  | 'plan-mode'
+  | 'scheduling'
+  | 'worktrees'
+  | 'messaging'
+  | 'notifications'
+  | 'publishing'
+
 export type Question = {
   header: string
   question: string
@@ -60,6 +81,8 @@ export type EngineEvent =
   // A message the core passed to Session.steer entered the running turn here, or is handed back unsent.
   | { type: 'steer.landed'; id: string }
   | { type: 'steer.returned'; id: string }
+  // The built-in tools the engine says the session has, by its own names (MCP servers' tools left out), as it starts.
+  | { type: 'tools.listed'; names: string[] }
   // errorKind (here and on session.ended): why it failed, as the engine's adapter reads its error (see TurnErrorKind).
   | { type: 'turn.completed'; error?: string; errorKind?: TurnErrorKind }
   | { type: 'session.ended'; error?: string; errorKind?: TurnErrorKind }
@@ -129,7 +152,7 @@ export type ChatEntry = { at: string } & (
       // A live card the extension draws (ExtensionNoteView); extension is set with it.
       view?: ExtensionNoteViewRef
     }
-  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
+  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' | 'tools.listed' }>
 )
 
 // A chat's log as memory reads it: the entries a conversation is made of, numbered from 0 in log order. user is the

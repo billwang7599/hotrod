@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import type { ModelSettings } from './models.ts'
 import type { ChatEntry, ChatInfo, ContextSection, PermissionSwitches } from './shared.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
+import type { SavedEngineTools } from './engine-tools.ts'
 import { moveWorkersSettings, type SavedWorkers } from './workers.ts'
 
 export type Settings = PermissionSwitches &
@@ -29,6 +30,8 @@ export type Settings = PermissionSwitches &
     workers?: SavedWorkers
     // The user's edits of Kothar's own prompts (core-prompts.ts), by id.
     corePrompts?: Record<string, { text: string; base: string }>
+    // Settings → Engines → Tools: the master switches and each engine's tool choices (engine-tools.ts).
+    engineTools?: SavedEngineTools
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */

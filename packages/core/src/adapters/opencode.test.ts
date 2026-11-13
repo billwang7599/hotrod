@@ -109,6 +109,25 @@ describe('OpenCode adapter', () => {
     })
   })
 
+  it('turns off the tools Settings has off, and turns on one OpenCode leaves out only when it is switched on', () => {
+    const tools = { off: ['websearch', 'task'], on: ['skill', 'bash'] }
+    expect(configOf(startSession({ tools }).fake.spawned[0]?.env).tools).toEqual({ skill: true, websearch: false, task: false })
+  })
+
+  it("turns every built-in tool off by name with every tool off, never with *, so Kothar's MCP tools stay", async () => {
+    const token = 'secret-token'
+    const { fake } = startSession({ noTools: true, kotharMcp: { url: 'http://127.0.0.1:4317/mcp', token } })
+    const { tools } = configOf(fake.spawned[0]?.env)
+    expect(tools['*']).toBeUndefined()
+    expect(Object.keys(tools).filter((name) => name.startsWith('kothar'))).toEqual([])
+    for (const name of ['bash', 'edit', 'write', 'read', 'grep', 'glob', 'list', 'webfetch', 'task', 'todowrite', 'lsp']) {
+      expect(tools[name]).toBe(false)
+    }
+    fake.stdout(INITIALIZED)
+    await tick()
+    expect(fake.sent()[1]?.params.mcpServers.map((s: any) => s.name)).toEqual(['kothar'])
+  })
+
   it("gives OpenCode Kothar's server and the extensions' servers in session/new, the token only on stdin", async () => {
     const token = 'secret-token'
     const { fake } = startSession({

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { type AccountStatus, type Adapter, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
+import { type AccountStatus, type Adapter, type EngineToolSpec, type Machine, type Question, type Sandbox, type ThinkingLevel, type ToolKind } from '../shared.ts'
 import { onJsonLines } from './jsonl.ts'
 import { processUserEnv, type UserEnv } from './user-env.ts'
 import { type EngineErrors, withKind } from './error-kind.ts'
@@ -26,6 +26,57 @@ const KINDS: Record<string, ToolKind> = {
   WebFetch: 'fetch',
   WebSearch: 'fetch',
 }
+
+// Claude Code's built-in tools (2.1.319's list, plus older names), for Settings → Engines → Tools. Tools it reports that
+// aren't here show there as new.
+export const CLAUDE_TOOLS: EngineToolSpec[] = [
+  { name: 'Bash', capability: 'shell', group: 'core' },
+  { name: 'Edit', capability: 'edit', group: 'core' },
+  { name: 'Write', capability: 'edit', group: 'core' },
+  { name: 'MultiEdit', capability: 'edit', group: 'core' },
+  { name: 'NotebookEdit', capability: 'edit', group: 'core' },
+  { name: 'Read', capability: 'read', group: 'core' },
+  { name: 'Grep', capability: 'search', group: 'core' },
+  { name: 'Glob', capability: 'search', group: 'core' },
+  { name: 'WebFetch', capability: 'web', group: 'core' },
+  { name: 'WebSearch', capability: 'web', group: 'core' },
+  // Its questions come to Kothar as question.asked, so the user answers them in the chat.
+  { name: 'AskUserQuestion', capability: 'questions', group: 'core' },
+  // Loads the schemas of tools Claude Code defers, Kothar's MCP tools among them.
+  { name: 'ToolSearch', capability: 'tool-search', group: 'core' },
+  // Its subagents run out of sight, where the user can't open or stop them; Kothar's workers replace them. `Task` is
+  // the tool's name before Claude Code 2.1.
+  { name: 'Agent', capability: 'subagents', group: 'replaced' },
+  { name: 'Task', capability: 'subagents', group: 'replaced' },
+  // A command in the background that wakes the turn as it exits, and the tool that stops one.
+  { name: 'Monitor', capability: 'background-shell', group: 'replaced' },
+  { name: 'TaskStop', capability: 'background-shell', group: 'replaced' },
+  { name: 'TodoWrite', capability: 'todos', group: 'replaced' },
+  { name: 'EnterPlanMode', capability: 'plan-mode', group: 'replaced' },
+  { name: 'ExitPlanMode', capability: 'plan-mode', group: 'replaced' },
+  { name: 'Skill', capability: 'skills', group: 'replaced' },
+  { name: 'Workflow', capability: 'subagents', group: 'outside' },
+  { name: 'CronCreate', capability: 'scheduling', group: 'outside' },
+  { name: 'CronDelete', capability: 'scheduling', group: 'outside' },
+  { name: 'CronList', capability: 'scheduling', group: 'outside' },
+  { name: 'ScheduleWakeup', capability: 'scheduling', group: 'outside' },
+  { name: 'RemoteTrigger', capability: 'scheduling', group: 'outside' },
+  { name: 'EnterWorktree', capability: 'worktrees', group: 'outside' },
+  { name: 'ExitWorktree', capability: 'worktrees', group: 'outside' },
+  { name: 'SendMessage', capability: 'messaging', group: 'outside' },
+  { name: 'ListAgents', capability: 'messaging', group: 'outside' },
+  { name: 'PushNotification', capability: 'notifications', group: 'outside' },
+  { name: 'PublishPlugin', capability: 'publishing', group: 'outside' },
+  { name: 'ShareOnboardingGuide', capability: 'publishing', group: 'outside' },
+  { name: 'DesignSync', capability: 'publishing', group: 'outside' },
+  { name: 'ReportFindings', group: 'outside' },
+]
+
+// What a session turns off when the core gives no tool choices (tests, one-off callers): Claude Code's subagents.
+const TOOLS_OFF = ['Agent', 'Task']
+
+// With every built-in tool off, ToolSearch stays: Claude Code may defer MCP tools behind it, Kothar's among them.
+const NO_TOOLS = ['ToolSearch']
 
 const SUMMARY_FIELDS: Partial<Record<ToolKind, string[]>> = {
   shell: ['command'],
@@ -174,6 +225,7 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
     imageInput: true,
     kotharMcp: true,
     steering: true,
+    tools: CLAUDE_TOOLS,
 
     async detect(machine) {
       const options = { cwd: '/' }
@@ -258,14 +310,15 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
         ...CLEAN_ARGS,
         // Headless Claude Code omits thinking text unless asked; the flag is hidden from --help.
         '--thinking-display', 'summarized',
-        // Claude Code's own subagents run out of sight, where the user can't open or stop them; Kothar's
-        // spawn_worker replaces them. `Task` is the tool's name before Claude Code 2.1.
-        '--disallowedTools', 'Agent', 'Task',
-        // A read-only turn has no edit tools at all; Bash still asks, and Kothar refuses commands that change anything.
-        ...(options.readOnly ? READ_ONLY_DENIED : []),
         // Echoes a steered message, with its uuid, once a turn takes it in.
         '--replay-user-messages',
       ]
+      // The engine's tools as Settings has them (CLAUDE_TOOLS). A read-only turn has no edit tools at all; Bash still
+      // asks, and Kothar refuses commands that change anything.
+      if (options.noTools) args.push('--tools', NO_TOOLS.join(','))
+      const off = [...(options.tools?.off ?? TOOLS_OFF), ...(options.readOnly ? READ_ONLY_DENIED : [])]
+      const denied = [...new Set(off)]
+      if (denied.length) args.push('--disallowedTools', ...denied)
       if (model) args.push('--model', model)
       if (thinking) args.push('--effort', thinking)
       for (const dir of extraDirs) args.push('--add-dir', dir)
@@ -334,6 +387,11 @@ export function createClaudeCode(user: UserEnv = processUserEnv()): Adapter {
       const handle = (msg: any) => {
         const subagent = msg.parent_tool_use_id != null
         switch (msg.type) {
+          case 'system': {
+            if (msg.subtype !== 'init' || !Array.isArray(msg.tools)) return
+            const names = msg.tools.filter((name: unknown): name is string => typeof name === 'string' && !name.startsWith('mcp__'))
+            return emit({ type: 'tools.listed', names })
+          }
           case 'rate_limit_event': {
             const info = msg.rate_limit_info ?? {}
             // Rejected but on overage (extra usage) means the turn goes on and is billed.

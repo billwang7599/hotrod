@@ -10,9 +10,11 @@ const fixture = (name: string) => readFileSync(new URL(`fixtures/claude-code/${n
 function startSession(instructions = '', extra: Partial<SessionOptions> = {}, adapter = claudeCode) {
   const fake = fakeMachine()
   const events: EngineEvent[] = []
+  // The tool list each fixture's init carries is checked on its own (listed), not in every event list.
+  const listed: string[][] = []
   const options = { cwd: '/tmp/project', instructions, ...extra }
-  const session = adapter.start(fake.machine, options, (e) => events.push(e))
-  return { fake, events, session }
+  const session = adapter.start(fake.machine, options, (e) => (e.type === 'tools.listed' ? listed.push(e.names) : events.push(e)))
+  return { fake, events, session, listed }
 }
 
 const detected = {
@@ -40,8 +42,8 @@ describe('claudeCode adapter', () => {
           '--disable-slash-commands',
           '--settings', '{"autoMemoryEnabled":false,"attribution":false}',
           '--thinking-display', 'summarized',
-          '--disallowedTools', 'Agent', 'Task',
           '--replay-user-messages',
+          '--disallowedTools', 'Agent', 'Task',
         ],
       },
     ])
@@ -51,6 +53,38 @@ describe('claudeCode adapter', () => {
     const args = startSession('', { readOnly: true }).fake.spawned[0]!.args
     const from = args.indexOf('--disallowedTools')
     expect(args.slice(from + 1, from + 7)).toEqual(['Agent', 'Task', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+  })
+
+  it('turns off the tools Settings has off, and with every tool off keeps only ToolSearch next to the MCP tools', () => {
+    const tools = { off: ['WebSearch', 'Agent', 'Task', 'CronCreate'], on: ['Bash'] }
+    const args = startSession('', { tools }).fake.spawned[0]!.args
+    expect(args.slice(args.indexOf('--disallowedTools') + 1)).toEqual(['WebSearch', 'Agent', 'Task', 'CronCreate'])
+    expect(args).not.toContain('--tools')
+    const kotharMcp = { url: 'http://127.0.0.1:4317/mcp', token: 't' }
+    const none = startSession('', { noTools: true, tools: { off: [], on: [] }, kotharMcp }).fake.spawned[0]!.args
+    expect(none.slice(none.indexOf('--tools'), none.indexOf('--tools') + 2)).toEqual(['--tools', 'ToolSearch'])
+    expect(none).not.toContain('--disallowedTools')
+    expect(none.slice(none.indexOf('--allowedTools') + 1)).toEqual(['mcp__kothar__*'])
+    expect(none).toContain('--mcp-config')
+  })
+
+  it("adds a read-only turn's edit tools to the tools Settings has off, once each", () => {
+    const args = startSession('', { readOnly: true, tools: { off: ['Edit', 'WebFetch'], on: [] } }).fake.spawned[0]!.args
+    expect(args.slice(args.indexOf('--disallowedTools') + 1)).toEqual(['Edit', 'WebFetch', 'Write', 'MultiEdit', 'NotebookEdit'])
+  })
+
+  it('reports the built-in tools the session starts with, leaving out MCP tools', () => {
+    const { fake, listed } = startSession()
+    const init = { type: 'system', subtype: 'init', tools: ['Bash', 'Monitor', 'mcp__kothar__zoom', 'BrandNew'] }
+    fake.stdout(JSON.stringify(init) + '\n')
+    expect(listed).toEqual([['Bash', 'Monitor', 'BrandNew']])
+  })
+
+  it('knows the tools in the list Claude Code reports, each with a group', () => {
+    const { fake, listed } = startSession()
+    fake.stdout(fixture('text'))
+    const known = new Set(claudeCode.tools!.map((tool) => tool.name))
+    expect(listed[0]!.filter((name) => !known.has(name))).toEqual([])
   })
 
   it("connects Kothar's MCP server with the token in the env, and runs its tools without asking", () => {

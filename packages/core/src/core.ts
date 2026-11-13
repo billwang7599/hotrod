@@ -9,6 +9,7 @@ import { openChatLifecycle } from './chat-lifecycle.ts'
 import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
 import { agentStartsWorkers, openWorkers, workerInstructionsFor } from './workers.ts'
+import { openEngineTools, type Provided } from './engine-tools.ts'
 import { firstSentence, openCorePrompts, toolboxText, type ToolboxGroup } from './core-prompts.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { windowView } from './memory.ts'
@@ -278,6 +279,11 @@ function assembleCore(options: {
   const corePrompts = openCorePrompts({ settings, saveSettings, broadcast })
   // Settings → Workers: part of the core (workers.ts).
   const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
+  // Settings → Engines → Tools: engines' own tools, switched from Kothar (engine-tools.ts).
+  const engineTools = openEngineTools({ garage, settings, saveSettings, adapterFor })
+  // What Kothar has its own version of, for a chat: workers stand in for engines' subagents everywhere, since
+  // extensions start workers even where agents may not.
+  const providedFor = (_chat?: Chat): Provided => new Map([['subagents', 'Workers']])
   const prompts = openPrompts({
     settings,
     saveSettings,
@@ -647,6 +653,8 @@ function assembleCore(options: {
     turnSent: (chat, input) => turnSent(chat, input),
     activity,
     workerLimit: () => workers.limit(),
+    engineToolsFor: (chat, engine) => engineTools.sessionFor(engine, providedFor(chat)),
+    toolsListed: (engine, names) => engineTools.record(engine, names),
   })
 
   const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf, dropProvided } = openExtensionHosts<Chat>({

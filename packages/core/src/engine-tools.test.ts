@@ -1,0 +1,151 @@
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { Extension, ExtensionChat } from '@kothar/extension-api'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createFakeAdapter, type FakeStep } from './adapters/fake.ts'
+import { sandboxingMachine } from './adapters/test-machine.ts'
+import { openCore, type Core } from './core.ts'
+import { openEngineTools, toolRowsOf, type Provided } from './engine-tools.ts'
+import type { Adapter, EngineToolSpec, SessionOptions } from './shared.ts'
+import { until } from './test-wait.ts'
+
+const TOOLS: EngineToolSpec[] = [
+  { name: 'Bash', capability: 'shell', group: 'core' },
+  { name: 'Grep', capability: 'search', group: 'core', on: false },
+  { name: 'Agent', capability: 'subagents', group: 'replaced' },
+  { name: 'TodoWrite', capability: 'todos', group: 'replaced' },
+  { name: 'CronCreate', capability: 'scheduling', group: 'outside' },
+]
+const WORKERS: Provided = new Map([['subagents', 'Workers']])
+
+let dirs: string[] = []
+let cores: Core[] = []
+const tempDir = () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kothar-tools-')))
+  dirs.push(dir)
+  return dir
+}
+afterEach(async () => {
+  await Promise.all(cores.map((core) => core.close(true)))
+  for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+  dirs = []
+  cores = []
+})
+
+describe('toolRowsOf', () => {
+  it('gives each group its default: core on, replaced off while Kothar has its version, outside off', () => {
+    const rows = toolRowsOf(TOOLS, undefined, undefined, WORKERS)
+    expect(rows.map(({ name, on, defaultOn }) => [name, on, defaultOn])).toEqual([
+      ['Bash', true, true],
+      ['Grep', false, false],
+      ['Agent', false, false],
+      ['TodoWrite', true, true],
+      ['CronCreate', false, false],
+    ])
+    expect(rows.find((row) => row.name === 'Agent')?.replacedBy).toBe('Workers')
+    expect(toolRowsOf(TOOLS, undefined, undefined, new Map()).find((row) => row.name === 'Agent')?.on).toBe(true)
+  })
+
+  it("lets the user's choice beat the default, core tools included, and marks it saved", () => {
+    const rows = toolRowsOf(TOOLS, undefined, { Bash: false, CronCreate: true }, WORKERS)
+    expect(rows.find((row) => row.name === 'Bash')).toMatchObject({ on: false, defaultOn: true, saved: true })
+    expect(rows.find((row) => row.name === 'CronCreate')).toMatchObject({ on: true, saved: true })
+    expect(rows.find((row) => row.name === 'Agent')?.saved).toBeUndefined()
+  })
+
+  it('adds tools the engine reported that the adapter does not know, on and marked new', () => {
+    const rows = toolRowsOf(TOOLS, ['Bash', 'Shiny'], undefined, WORKERS)
+    expect(rows.at(-1)).toEqual({ name: 'Shiny', group: 'core', isNew: true, defaultOn: true, on: true })
+    expect(rows.filter((row) => row.name === 'Bash')).toHaveLength(1)
+  })
+})
+
+describe('openEngineTools', () => {
+  const adapter = { ...createFakeAdapter([], 0), tools: TOOLS } as Adapter
+  const open = (engineTools?: object, garage = tempDir()) => {
+    const settings: { engineTools?: any } = engineTools ? { engineTools } : {}
+    const saved: unknown[] = []
+    const tools = openEngineTools({ garage, settings, saveSettings: () => saved.push(1), adapterFor: (id) => (id === 'fake' ? adapter : undefined) })
+    return { tools, garage }
+  }
+
+  it("gives a session the off and on tools by the engine's names, and nothing for an engine that can't switch", () => {
+    const { tools } = open({ engines: { fake: { tools: { TodoWrite: false } } } })
+    expect(tools.sessionFor('fake', WORKERS)).toEqual({
+      tools: { off: ['Grep', 'Agent', 'TodoWrite', 'CronCreate'], on: ['Bash'] },
+    })
+    expect(tools.sessionFor('other', WORKERS)).toEqual({})
+  })
+
+  it('turns every tool off with either master switch off, keeping the per-tool choices as they were', () => {
+    const choices = { TodoWrite: false }
+    const global = open({ enabled: false, engines: { fake: { tools: choices } } }).tools.sessionFor('fake', WORKERS)
+    expect(global).toMatchObject({ noTools: true, tools: { off: ['Grep', 'Agent', 'TodoWrite', 'CronCreate'] } })
+    const engine = open({ engines: { fake: { enabled: false, tools: choices } } }).tools.sessionFor('fake', WORKERS)
+    expect(engine.noTools).toBe(true)
+    expect(open({ engines: { fake: { tools: choices } } }).tools.sessionFor('fake', WORKERS).noTools).toBeUndefined()
+  })
+
+  it('keeps the tools an engine reported in engine-tools.json, read back on the next start', () => {
+    const { tools, garage } = open()
+    tools.record('fake', ['Bash', 'Shiny', 'Shiny'])
+    expect(JSON.parse(readFileSync(join(garage, 'engine-tools.json'), 'utf8'))).toEqual({ fake: ['Bash', 'Shiny'] })
+    const again = open(undefined, garage).tools
+    expect(again.rowsOf('fake', WORKERS).at(-1)).toMatchObject({ name: 'Shiny', isNew: true })
+  })
+
+  it('reads a broken engine-tools.json as empty', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'engine-tools.json'), '{not json')
+    expect(open(undefined, garage).tools.reported('fake')).toBeUndefined()
+  })
+})
+
+describe('engine tools in a turn', () => {
+  const MAIN: ExtensionChat = { id: 'main', name: 'Main', instructions: 'MAIN ROLE', seesAll: true }
+  const mainExtension: Extension = { id: 'main-extension', name: 'Main', description: '', enabledByDefault: true, chats: [MAIN] }
+
+  function setup(script: FakeStep[], saved?: object) {
+    const garage = tempDir()
+    if (saved) writeFileSync(join(garage, 'settings.json'), JSON.stringify({ engineTools: saved }))
+    const calls: SessionOptions[] = []
+    const fake = { ...createFakeAdapter(script, 0), tools: TOOLS }
+    const adapter: Adapter = { ...fake, start: (machine, options, emit) => (calls.push(options), fake.start(machine, options, emit)) }
+    const core = openCore({ garage, adapters: [adapter], defaultEngine: 'fake', machine: sandboxingMachine, extensions: [mainExtension] })
+    cores.push(core)
+    core.handle({ type: 'engine.setEnabled', engine: 'fake', enabled: true }, () => {})
+    core.handle({ type: 'workFolder.set', path: join(garage, 'work') }, () => {})
+    const send = () => core.handle({ type: 'chat.send', chatId: 'main', text: 'hi' }, () => {})
+    return { core, garage, calls, send }
+  }
+
+  it("starts each session with the engine's tools as Settings has them, workers standing in for subagents", async () => {
+    const t = setup([{ type: 'text.completed', text: 'ok' }], { engines: { fake: { tools: { CronCreate: true } } } })
+    t.send()
+    await until(() => t.calls.length === 1)
+    expect(t.calls[0]!.tools).toEqual({ off: ['Grep', 'Agent'], on: ['Bash', 'TodoWrite', 'CronCreate'] })
+    expect(t.calls[0]!.noTools).toBeUndefined()
+  })
+
+  it('starts sessions with no tools of their own while the master switch is off', async () => {
+    const t = setup([{ type: 'text.completed', text: 'ok' }], { enabled: false })
+    t.send()
+    await until(() => t.calls.length === 1)
+    expect(t.calls[0]!.noTools).toBe(true)
+  })
+
+  it('records the tools a session reports', async () => {
+    const t = setup([{ type: 'tools.listed', names: ['Bash', 'Shiny'] }, { type: 'text.completed', text: 'ok' }])
+    t.send()
+    const file = join(t.garage, 'engine-tools.json')
+    await until(() => {
+      try {
+        return JSON.parse(readFileSync(file, 'utf8')).fake?.length === 2
+      } catch {
+        return false
+      }
+    })
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ fake: ['Bash', 'Shiny'] })
+  })
+})
