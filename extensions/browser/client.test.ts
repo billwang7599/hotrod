@@ -1,8 +1,7 @@
-import { createServer } from 'node:http'
 import { afterEach, describe, expect, it } from 'vitest'
-import { WebSocketServer, type WebSocket } from 'ws'
 import { until as waitUntil } from '@kothar/core/test-wait'
 import { CdpClient, CdpError, nextLoad, Pages, settle } from './client.ts'
+import { fakeBrowser as fake } from './test-cdp.ts'
 import { type AXNode, changes, format, paginate, readFrames, Refs, render } from './snapshot.ts'
 
 const cleanups: (() => unknown)[] = []
@@ -10,43 +9,10 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
 })
 const until = (check: () => boolean) => waitUntil(check, { tries: 300, everyMs: 10 })
-
-type Handler = (method: string, params: any, sessionId: string | undefined, peer: Peer) => unknown
-type Peer = { emit(method: string, params: object, sessionId?: string): void; calls: { method: string; sessionId?: string }[]; drop(): void }
-
-// A fake browser: a DevTools endpoint whose /json/version points at a WebSocket that answers with handler.
-async function fakeBrowser(handler: Handler) {
-  let socket: WebSocket | undefined
-  const calls: Peer['calls'] = []
-  const peer: Peer = {
-    emit: (method, params, sessionId) => socket?.send(JSON.stringify({ method, params, ...(sessionId && { sessionId }) })),
-    calls,
-    drop: () => socket?.terminate(),
-  }
-  const server = createServer((request, response) => {
-    if (request.url !== '/json/version') return void response.writeHead(404).end()
-    const { port } = server.address() as { port: number }
-    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/x` }))
-  })
-  const wss = new WebSocketServer({ server })
-  wss.on('connection', (ws) => {
-    socket = ws
-    ws.on('message', async (data) => {
-      const { id, method, params, sessionId } = JSON.parse(String(data))
-      calls.push({ method, ...(sessionId && { sessionId }) })
-      try {
-        const result = await handler(method, params, sessionId, peer)
-        if (result === 'never') return
-        ws.send(JSON.stringify({ id, result: result ?? {}, ...(sessionId && { sessionId }) }))
-      } catch (error) {
-        ws.send(JSON.stringify({ id, error: { code: -32000, message: (error as Error).message } }))
-      }
-    })
-  })
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  cleanups.push(() => new Promise<void>((resolve) => (wss.close(), server.closeAllConnections(), server.close(() => resolve()))))
-  const { port } = server.address() as { port: number }
-  return { endpoint: `http://127.0.0.1:${port}`, peer }
+const fakeBrowser = async (handler: Parameters<typeof fake>[0]) => {
+  const browser = await fake(handler)
+  cleanups.push(browser.close)
+  return browser
 }
 
 const page = (targetId: string, url = 'about:blank', type = 'page') => ({ targetId, type, url, title: '' })

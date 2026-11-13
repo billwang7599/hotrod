@@ -5,9 +5,9 @@
 //   user pasted into the extension (Settings → Extensions → Browser shows it), and the Origin must be the extension's
 //   own chrome-extension:// address, so no web page can connect even if it learned the code. One at a time: a newer
 //   one replaces the old.
-// - Playwright MCP's, one per chat, given http://127.0.0.1:<port>/<cdpToken>/<space> as --cdp-endpoint. Its
-//   /json/version points Playwright at a WebSocket here that speaks enough of a browser's DevTools protocol for
-//   Playwright to drive the space's tabs: the tabs in the space's Kothar tab group, each driven with chrome.debugger in
+// - Kothar's own CDP client's (client.ts), one per space, at http://127.0.0.1:<port>/<cdpToken>/<space>. Its
+//   /json/version points it at a WebSocket here that speaks enough of a browser's DevTools protocol to drive the
+//   space's tabs: the tabs in the space's Kothar tab group, each driven with chrome.debugger in
 //   the extension. Browser-wide calls that would read, change or end the user's own browser (every cookie, closing it,
 //   new profiles) are refused.
 //
@@ -41,6 +41,10 @@ export const REFUSED = new Set([
   'Browser.resetPermissions',
   'Browser.setPermission',
   'Network.getAllCookies',
+  'Network.getCookies',
+  'Network.setCookie',
+  'Network.setCookies',
+  'Network.deleteCookies',
   'Network.clearBrowserCookies',
   'Network.clearBrowserCache',
   'Storage.getCookies',
@@ -245,7 +249,7 @@ export async function startRelay(options: RelayOptions): Promise<Relay> {
     options.onChange?.()
   }
 
-  // A Playwright call: some answered here, the rest sent to the tab its session is.
+  // A DevTools call from Kothar's client: some answered here, the rest sent to the tab its session is.
   const handle = async (client: Client, method: string, params: any, sessionId?: string): Promise<unknown> => {
     if (REFUSED.has(method)) throw new Error(`${method} isn't allowed in your own Chrome`)
     const spaceId = client.space
@@ -339,7 +343,7 @@ export async function startRelay(options: RelayOptions): Promise<Relay> {
     if (!given || !same(given, cdpToken) || !spaceId || !/^json(\/(version|list))?$/.test(path)) {
       return void response.writeHead(404).end()
     }
-    // A web page could make this request; it has no Origin from Playwright.
+    // A web page could make this request; Kothar's own client sends no Origin.
     if (request.headers.origin) return void response.writeHead(403).end()
     if (!extension) return void response.writeHead(503, { 'content-type': 'text/plain' }).end(NOT_CONNECTED)
     const body =

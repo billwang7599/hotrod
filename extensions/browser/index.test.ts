@@ -11,8 +11,8 @@ import { getCookies, listTabs } from './cdp.ts'
 import { chromiumArgs, chromiumLauncher, freeProfile, type Launch, type Launcher } from './chromium.ts'
 import { findChrome } from './profiles.ts'
 import { serveEndpoints } from './endpoint.ts'
-import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
 import browser, { BROWSER_INSTRUCTIONS, createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL } from './index.ts'
+import { BROWSER_TOOL_NAMES } from './tools.ts'
 import { type BrowserOps, SpaceBrowser } from './space-browser.ts'
 import { until as waitUntil } from '@kothar/core/test-wait'
 
@@ -32,8 +32,6 @@ afterAll(() => {
 
 const run: ExtensionRun = (command, args, options = {}) => sandboxingMachine.run(command, args, { cwd: '/', ...options })
 const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
-const valueAfter = (args: string[] = [], flag: string) =>
-  args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined
 const until = (check: () => boolean | Promise<boolean>, ms = 4000) => waitUntil(check, { tries: ms / 10, everyMs: 10 })
 
 // A fake browser: each launch is a "browser" with tabs the test can see and change, so the window step runs without
@@ -126,45 +124,42 @@ const NO_CHROME = { places: { home: '/nonexistent-home', apps: [] }, platform: '
 
 async function startedExtension() {
   const fakes = fakeBrowsers()
-  const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, ...NO_CHROME })
+  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, ...NO_CHROME })
   const storage = tempDir('kothar-browser-extension-')
   const fake = fakeHost(storage)
   await extension.onStart!({ values: defaults, host: fake.host })
   cleanups.push(() => extension.onStop!({ values: defaults, host: fake.host }))
   const tool = extension.tools!.find((t) => t.name === HAND_OFF_TOOL) as ExtensionTool
   const show = extension.tools!.find((t) => t.name === SHOW_TOOL) as ExtensionTool
-  return { extension, fakes, storage, tool, show, ...fake }
+  return { extension, cdpUrl, fakes, storage, tool, show, ...fake }
 }
 
-it('attaches Playwright MCP to the space’s browser through Kothar’s endpoint, never launching one itself', async () => {
-  const { extension, chat } = await startedExtension()
-  chat('space')
-  chat('worker', { parentId: 'space', worker: true })
-  const serverOf = (id: string, values = defaults) =>
-    extension.mcpServers!({ chat: { id, name: id, engine: 'fake' }, workDir: '/work/space', sandboxed: true, values })[0]!
-  const { name, command, args, env, allowTools } = serverOf('space')
-  expect({ name, command, allowTools }).toEqual({ name: 'browser', command: process.execPath, allowTools: true })
-  // Playwright MCP runs behind the filter that leaves out tools agents don't need.
-  expect(args!.slice(0, 4)).toEqual(['-e', FILTER_SCRIPT, HIDDEN_TOOLS.join(','), process.execPath])
-  expect(args![4]).toMatch(/@playwright[/\\]mcp[/\\]cli\.js$/)
-  expect(valueAfter(args, '--cdp-endpoint')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[\w-]+\/space$/)
-  expect(valueAfter(args, '--output-dir')).toBe('/work/space/.browser/output')
-  for (const flag of ['--headless', '--browser', '--user-data-dir', '--isolated', '--extension', '--no-sandbox']) {
-    expect(args).not.toContain(flag)
+it('offers the browser tools in a space once started, on Kothar’s endpoint for the space, shared by its workers', async () => {
+  const { extension, cdpUrl, chat } = await startedExtension()
+  const space = chat('space')
+  const worker = chat('worker', { parentId: 'space', worker: true })
+  const loose = { ...space, id: 'nowhere' }
+  const names = extension.tools!.map((t) => t.name)
+  expect(names).toEqual([...BROWSER_TOOL_NAMES, HAND_OFF_TOOL, SHOW_TOOL])
+  const tools = extension.tools!.filter((t) => BROWSER_TOOL_NAMES.includes(t.name))
+  for (const tool of tools) {
+    expect(tool.offered(space)).toBe(true)
+    expect(tool.offered(worker)).toBe(true)
+    expect(tool.offered(loose)).toBe(false)
   }
-  expect(env).toEqual({
-    ELECTRON_RUN_AS_NODE: '1',
-    TMPDIR: tmpdir(),
-    PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
-  })
-  // A worker shares its space's browser.
-  expect(valueAfter(serverOf('worker').args, '--cdp-endpoint')).toBe(valueAfter(args, '--cdp-endpoint'))
-  expect(serverOf('space', { ...defaults, askEachAction: true }).allowTools).toBe(false)
+  // No MCP server of its own: the tools are Kothar's.
+  expect(extension.mcpServers).toBeUndefined()
+  expect(await cdpUrl('space')).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/[\w-]+\/space$/)
+  // The tool list stays short: about 1,000 tokens.
+  const listed = JSON.stringify(tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })))
+  expect(listed.length).toBeLessThan(4_500)
 })
 
-it('has no browser before it starts, and drops the old picker settings when it migrates', () => {
-  const { extension } = createBrowserExtension()
-  expect(extension.mcpServers!({ chat: { id: 'a', name: 'a', engine: 'fake' }, workDir: '/w', sandboxed: true, values: defaults })).toEqual([])
+it('has no browser before it starts, and drops the old picker settings when it migrates', async () => {
+  const { extension, cdpUrl } = createBrowserExtension()
+  const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
+  expect(extension.tools!.find((t) => t.name === 'browser_open')!.offered(chat)).toBe(false)
+  await expect(cdpUrl('a')).rejects.toThrow('isn’t running')
   expect(extension.settings!.map((s) => s.key)).toEqual(['engine', 'profile', 'profileFolder', 'askEachAction', 'idleMinutes'])
   expect(extension.settingsVersion).toBe(1)
   const old = { browser: 'chrome', port: 9333, extensionToken: 'x', background: true, askEachAction: true }
@@ -175,21 +170,18 @@ it('tells agents about snapshots, batching, closing tabs and handing the browser
   const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   const text = browser.instructions!({ chat, tools: true }, { values: defaults, host: {} as never })
   expect(text).toBe(BROWSER_INSTRUCTIONS)
-  for (const word of ['snapshot', 'screenshot', 'browser_fill_form', 'Close', HAND_OFF_TOOL]) expect(text).toContain(word)
+  for (const word of ['browser_open', 'snapshot', 'cursor', 'screenshot', 'browser_cdp', 'Close', HAND_OFF_TOOL]) expect(text).toContain(word)
   expect(browser.instructions!({ chat, tools: false }, { values: defaults, host: {} as never })).toBeUndefined()
   const tool = browser.tools!.find((t) => t.name === HAND_OFF_TOOL)!
   expect(tool.description).toContain('not submitted is lost')
 })
 
 it('launches the space’s browser headless on the first browse, and keeps it for the next', async () => {
-  const { extension, fakes, storage, chat } = await startedExtension()
+  const { cdpUrl, fakes, storage, chat } = await startedExtension()
   chat('space')
-  const endpoint = valueAfter(
-    extension.mcpServers!({ chat: { id: 'space', name: 's', engine: 'fake' }, workDir: '/w', sandboxed: true, values: defaults })[0]!.args,
-    '--cdp-endpoint',
-  )!
+  const endpoint = await cdpUrl('space')
   expect(fakes.launched).toHaveLength(0)
-  // Playwright's first call: the fake has no real /json/version, so the endpoint answers 503, but it launched.
+  // The tools' first call: the fake has no real /json/version, so the endpoint answers 503, but it launched.
   await fetch(`${endpoint}/json/version/`)
   await fetch(`${endpoint}/json/version/`)
   expect(fakes.launched).toHaveLength(1)
@@ -199,11 +191,10 @@ it('launches the space’s browser headless on the first browse, and keeps it fo
 })
 
 it('shows the browser to the user in a window with the same tabs and logins, and goes back headless on Done', async () => {
-  const { extension, fakes, show: tool, waits, changed, chat, host, notified } = await startedExtension()
+  const { extension, cdpUrl, fakes, show: tool, waits, changed, chat, host, notified } = await startedExtension()
   const space = chat('space')
   // The agent browsed: a headless browser with two tabs and a cookie.
-  const servers = extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })
-  await fetch(`${valueAfter(servers[0]!.args, '--cdp-endpoint')}/json/version/`)
+  await fetch(`${await cdpUrl(space.id)}/json/version/`)
   const headless = fakes.launched[0]!
   headless.tabs = [
     { id: 'a', url: 'https://example.com/', title: 'Example' },
@@ -427,7 +418,7 @@ it('times out a hand-off nobody answers, and lets only one chat in a space wait 
   cleanups.push(() => extension.onStop!({ values: defaults, host: h.host }))
   const space = h.chat('space')
   const worker = h.chat('worker', { parentId: 'space', worker: true })
-  const tool = extension.tools![0]!
+  const tool = extension.tools!.find((t) => t.name === HAND_OFF_TOOL)!
   const call = tool.run({ reason: 'Pay' }, { caller: space, values: defaults, host: h.host })
   await until(() => h.waits.has('space'))
   await expect(
@@ -437,10 +428,10 @@ it('times out a hand-off nobody answers, and lets only one chat in a space wait 
 })
 
 it('opens on demand from Processes, refuses agents while the user has it, and stops', async () => {
-  const { extension, fakes, chat, host } = await startedExtension()
+  const { extension, cdpUrl, fakes, chat, host } = await startedExtension()
   const space = chat('space')
   const context = { values: defaults, host }
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   await fetch(`${endpoint}/json/version/`)
   expect(extension.processes!('space', context)[0]!.actions.map((a) => a.name)).toEqual(['open', 'signin', 'stop'])
   await extension.onProcessAction!('space', 'browser', 'open', context)
@@ -459,14 +450,14 @@ it('opens on demand from Processes, refuses agents while the user has it, and st
 
 it('closes a space’s browser once the space has been idle a while, and its profile goes with the space', async () => {
   const fakes = fakeBrowsers()
-  const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, ...NO_CHROME })
+  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, ...NO_CHROME })
   const storage = tempDir('kothar-browser-extension-')
   const h = fakeHost(storage)
   const values = { ...defaults, idleMinutes: 0.001 }
   await extension.onStart!({ values, host: h.host })
   cleanups.push(() => extension.onStop!({ values, host: h.host }))
   const space = h.chat('space')
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   await fetch(`${endpoint}/json/version/`)
   space.status = 'idle'
   extension.onStatusChanged!(space, 'idle', { values, host: h.host })
@@ -658,7 +649,7 @@ function fakeChrome() {
 it('runs a copy of the picked profile on that browser’s own app, copied again on each cold start only', async () => {
   const chrome = fakeChrome()
   const fakes = fakeBrowsers()
-  const { extension, browsers } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, places: chrome.places, platform: 'darwin' })
+  const { extension, cdpUrl, browsers } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, places: chrome.places, platform: 'darwin' })
   const profile = extension.settings!.find((s) => s.key === 'profile')!
   expect(profile.type === 'select' && profile.options).toEqual([
     { value: 'kothar', label: 'Kothar’s own' },
@@ -674,7 +665,7 @@ it('runs a copy of the picked profile on that browser’s own app, copied again 
   // Nothing to install: it runs on the user's Chrome.
   expect(await extension.setup!.check(run, values)).toEqual({ ready: true, message: 'Uses Chrome: Person 1 (me@example.com), in the background' })
   const space = h.chat('space')
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   await fetch(`${endpoint}/json/version/`)
   const mirror = join(storage, 'mirrors', 'space')
   expect(fakes.launched[0]!.launch).toEqual({ profile: mirror, headless: true, cold: true, executable: chrome.executable, keychain: 'real' })
@@ -727,13 +718,13 @@ it('runs a copy of the picked profile on that browser’s own app, copied again 
 it('refuses to browse on a profile that can’t be used, and says where to fix it', async () => {
   const chrome = fakeChrome()
   const fakes = fakeBrowsers()
-  const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places })
+  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places })
   const h = fakeHost(tempDir('kothar-browser-extension-'))
   const values = { ...defaults, profile: 'folder', profileFolder: '' }
   await extension.onStart!({ values, host: h.host })
   cleanups.push(() => extension.onStop!({ values, host: h.host }))
   const space = h.chat('space')
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   const answer = await fetch(`${endpoint}/json/version/`)
   expect(answer.status).toBe(503)
   expect(await answer.text()).toBe('No folder given: pick a profile in Settings → Extensions → Browser')
@@ -764,7 +755,7 @@ it('shows and hides the space’s browser from the General tab and Processes, wi
 })
 
 it('offers show_browser beside ask_user_in_browser, and tells agents when to use each', () => {
-  expect(browser.tools!.map((t) => t.name)).toEqual([HAND_OFF_TOOL, SHOW_TOOL])
+  expect(browser.tools!.map((t) => t.name).slice(-2)).toEqual([HAND_OFF_TOOL, SHOW_TOOL])
   expect(BROWSER_INSTRUCTIONS).toContain(SHOW_TOOL)
 })
 
@@ -814,7 +805,7 @@ it('finds the installed Google Chrome, stable before Beta and Canary, and on Lin
 it('runs Kothar’s own profile on the installed Chrome, in a folder apart from Chromium’s, and falls back without it', async () => {
   const chrome = fakeChrome()
   const fakes = fakeBrowsers()
-  const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places, platform: 'darwin' })
+  const { extension, cdpUrl } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, places: chrome.places, platform: 'darwin' })
   const storage = tempDir('kothar-browser-extension-')
   const h = fakeHost(storage)
   await extension.onStart!({ values: defaults, host: h.host })
@@ -823,7 +814,7 @@ it('runs Kothar’s own profile on the installed Chrome, in a folder apart from 
   expect(await extension.setup!.check(run, defaults)).toEqual({ ready: true, message: 'Uses Google Chrome, in the background' })
   expect(JSON.stringify(extension.settingsView!.render({ values: defaults, host: h.host }))).toContain('Google Chrome, on a profile of Kothar’s own per space')
   const space = h.chat('space')
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   await fetch(`${endpoint}/json/version/`)
   const chromeProfile = join(storage, 'chrome-profiles', 'space')
   expect(fakes.launched[0]!.launch).toEqual({ profile: chromeProfile, headless: true, cold: true, executable: chrome.executable })
@@ -853,10 +844,10 @@ it('runs Kothar’s own profile on the installed Chrome, in a folder apart from 
 })
 
 it('hands the browser over for signing in as a plain window, and the headless one reopens its tabs with both logins', async () => {
-  const { extension, fakes, tool, waits, chat, host } = await startedExtension()
+  const { extension, cdpUrl, fakes, tool, waits, chat, host } = await startedExtension()
   const space = chat('space')
   const context = { values: defaults, host }
-  const endpoint = valueAfter(extension.mcpServers!({ chat: space, workDir: '/w', sandboxed: true, values: defaults })[0]!.args, '--cdp-endpoint')!
+  const endpoint = await cdpUrl(space.id)
   await fetch(`${endpoint}/json/version/`)
   const headless = fakes.launched[0]!
   headless.tabs = [{ id: 'a', url: 'https://accounts.google.com/', title: 'Sign in' }]

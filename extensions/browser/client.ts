@@ -305,13 +305,15 @@ export class Pages {
   // The tab's address and title as it says now, read from the page itself (the relay doesn't tell of changes).
   async describe(page: Page): Promise<{ url: string; title: string }> {
     try {
-      const { result } = await this.client.send<{ result: { value?: { url: string; title: string } } }>(
+      const { result } = await this.client.send<{ result: { value?: { url?: unknown; title?: unknown } } }>(
         'Runtime.evaluate',
         { expression: '({ url: location.href, title: document.title })', returnByValue: true },
         page.sessionId,
         5000,
       )
-      if (result.value) Object.assign(page, result.value)
+      const { url, title } = result.value ?? {}
+      if (typeof url === 'string') page.url = url
+      if (typeof title === 'string') page.title = title
     } catch {}
     return { url: page.url, title: page.title }
   }

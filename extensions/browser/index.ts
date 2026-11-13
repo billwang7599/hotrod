@@ -1,5 +1,4 @@
 import { createRequire } from 'node:module'
-import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { rmSync } from 'node:fs'
 import type {
@@ -15,7 +14,6 @@ import type {
 } from '@kothar/extension-api'
 import { chromiumLauncher, type Launcher } from './chromium.ts'
 import { serveEndpoints, type Endpoints } from './endpoint.ts'
-import { FILTER_SCRIPT, HIDDEN_TOOLS } from './mcp-filter.ts'
 import { EXTENSION_DIR, NOT_CONNECTED, type Relay, type RelayOptions, startRelay } from './relay.ts'
 import {
   type BrowserProfile,
@@ -31,13 +29,15 @@ import {
   readMirror,
 } from './profiles.ts'
 import { type BrowserOps, type HandOffResult, SpaceBrowser } from './space-browser.ts'
+import { createBrowserTools } from './tools.ts'
 
 // Agents browse in the background: each space has one browser, headless, launched when an agent first browses and kept
 // between messages, so its tabs and logins stay. By default it's the user's installed Google Chrome (else Playwright's
 // Chromium) on a profile of Kothar's own per space, never the user's own Chrome profile;
 // the user can pick one of their own browser profiles instead, which the agents' browser runs a copy of (profiles.ts),
 // never the profile itself or the user's running browser.
-// Playwright MCP attaches to it over CDP (see endpoint.ts). When a page needs the user, ask_user_in_browser hands the
+// Agents drive it with Kothar's own browser tools (tools.ts), over CDP through the extension's endpoint (endpoint.ts).
+// When a page needs the user, ask_user_in_browser hands the
 // browser over: the same profile opens in a window with the same tabs, the chat waits, and Done puts it back in the
 // background where the user left it (see space-browser.ts).
 
@@ -48,8 +48,6 @@ const CORE_BUNDLE = require.resolve('playwright-core/lib/coreBundle', { paths: [
 // The core may be Electron, which runs scripts as Node only with this set.
 const NODE_ENV = { ELECTRON_RUN_AS_NODE: '1' }
 const INSTALL_TIMEOUT_MS = 30 * 60_000
-// Playwright waits this long for the browser, which may be launching on that first call.
-const CDP_TIMEOUT_MS = 60_000
 
 const CHECK_SCRIPT = `
 const fs = require('node:fs')
@@ -73,9 +71,11 @@ const promptOf = (host: { prompt?: (id: string) => string } | undefined, id: str
   typeof host?.prompt === 'function' ? host.prompt(id) : fallback
 
 export const BROWSER_INSTRUCTIONS =
-  'Browser (the browser_* tools): read a page from its snapshot, the one each action returns or browser_snapshot, ' +
-  'and take a screenshot only when how it looks matters. Fill a form with one browser_fill_form call, not a call ' +
-  'per field. Close the tabs you opened when you are done with them. The browser runs in the background and keeps ' +
+  'Browser (the browser_* tools): open a page with browser_open and read it from the snapshot it returns; act on it ' +
+  'with browser_act and browser_type by the refs in the snapshot (e12), and each returns only what changed. A long ' +
+  'page comes in parts: call browser_snapshot with the cursor it gives. Take a screenshot only when how it looks ' +
+  "matters. browser_cdp sends a DevTools command to your tab for what the other tools can't do. Close the tabs you " +
+  'opened when you are done with them. The browser runs in the background and keeps ' +
   `its tabs and logins between messages. When a page needs the user (a login, CAPTCHA, 2FA, payment, or anything ` +
   `you shouldn't do for them), call ${HAND_OFF_TOOL} instead of asking them for passwords or codes. To show them ` +
   `something on a page, call ${SHOW_TOOL}.`
@@ -196,6 +196,8 @@ export type BrowserExtensionOptions = {
   finishMs?: number
   // Tests start the relay on a spare port, with the fake extension's Origin.
   relay?: Partial<RelayOptions>
+  // How long the browser tools wait for a quiet network after an action.
+  settleMs?: number
   // Where to look for the user's browsers, and the platform whose Chrome paths apply.
   places?: Places
   platform?: NodeJS.Platform
@@ -322,6 +324,25 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       await closing?.close()
     }
   }
+  // The space's DevTools endpoint for Kothar's own CDP client: the relay's in the user's Chrome, else Kothar's
+  // endpoint, which launches the space's browser on the first call (and refuses while the user has its window).
+  const cdpUrl = async (spaceId: string) => {
+    if (usesExtension()) {
+      if (!relay?.connected) throw new Error(NOT_CONNECTED)
+      return relay.cdpUrl(spaceId)
+    }
+    if (!endpoints) throw new Error('The browser isn’t running yet')
+    return endpoints.url(spaceId)
+  }
+  const browserTools = createBrowserTools({
+    host: () => host,
+    spaceIdOf,
+    endpointOf: cdpUrl,
+    activity: (chatId, title, detail) => activityOf(chatId, title, detail),
+    ready: () => !!endpoints,
+    ...(options.settleMs !== undefined && { settleMs: options.settleMs }),
+  })
+
   // Chats waiting on the user to finish in their own Chrome, and how each ended.
   const chromeWaits = new Map<string, (how: HandOffResult['how']) => void>()
 
@@ -815,6 +836,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     async onStop() {
+      await browserTools.stop()
       const closing = endpoints
       endpoints = undefined
       for (const end of chromeWaits.values()) end('stopped')
@@ -826,39 +848,8 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       await closing?.close()
     },
 
-    mcpServers({ chat, workDir, values }) {
-      const spaceId = spaceIdOf(chat.id)
-      // Not started yet (it starts once Kothar is ready), or a chat outside any space: no browser this time.
-      if (!endpoints || !spaceId) return []
-      current = values
-      idleMs = Number(values.idleMinutes ?? 15) * 60_000
-      // Through the filter (mcp-filter.ts), which leaves out tools agents don't need.
-      const args = [
-        '-e',
-        FILTER_SCRIPT,
-        HIDDEN_TOOLS.join(','),
-        process.execPath,
-        CLI,
-        '--cdp-endpoint',
-        usesExtension(values) && relay ? relay.cdpUrl(spaceId) : endpoints.url(spaceId),
-        '--cdp-timeout',
-        String(CDP_TIMEOUT_MS),
-        '--output-dir',
-        join(workDir, '.browser', 'output'),
-        '--file-paths',
-        'absolute',
-      ]
-      const env: Record<string, string> = {
-        ...NODE_ENV,
-        // Playwright puts sockets here, and the work folder's temp path can pass a socket path's 104 bytes.
-        TMPDIR: tmpdir(),
-        // Its list of running browsers is otherwise in ~/Library/Caches, which the sandbox keeps read-only.
-        PWTEST_SERVER_REGISTRY: join(tmpdir(), 'kothar-browser-registry'),
-      }
-      return [{ name: 'browser', command: process.execPath, args, env, allowTools: !values.askEachAction }]
-    },
-
     tools: [
+      ...browserTools.tools,
       handOffTool(HAND_OFF_TOOL, HAND_OFF_DESCRIPTION, '"Log in to GitHub"', true),
       handOffTool(SHOW_TOOL, SHOW_DESCRIPTION, '"The chart on this page is empty"', false),
     ],
@@ -935,11 +926,13 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     onChatArchived(chat, archived) {
+      if (archived) browserTools.forget(chat.id)
       if (archived && chat.parentId === undefined) void stopSpace(chat.id)
     },
 
     // The space's profiles and its copy of the user's, logins with them, go with the space.
     onChatRemoved(chat) {
+      browserTools.forget(chat.id)
       if (chat.parentId !== undefined || !host) return
       const folders = [join(host.storage.dir, 'profiles', chat.id), chromeProfileOf(chat.id), mirrorOf(chat.id)]
       void Promise.resolve(stopSpace(chat.id)).finally(() => {
@@ -948,7 +941,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
   }
 
-  return { extension, browsers }
+  return { extension, browsers, cdpUrl }
 }
 
 async function checkChromium(run: ExtensionRun) {
