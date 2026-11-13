@@ -479,13 +479,24 @@ describe('start a worker', () => {
 })
 
 describe('the host', () => {
+  it('says whether a chat keeps context: spaces and their workers do, an extension’s own chat and its workers don’t', () => {
+    const t = withHost({ chats: [{ id: 'own', name: 'Own', instructions: '' }] })
+    const space = t.create()
+    const worker = t.host().createChat({ name: 'Helper', parentId: space, quiet: true })
+    const ownWorker = t.host().createChat({ name: 'Own helper', parentId: 'own', quiet: true })
+    expect(t.host().chat(space)?.keepsContext).toBe(true)
+    expect(t.host().chat(worker.id)?.keepsContext).toBe(true)
+    expect(t.host().chat('own')).toMatchObject({ extension: 'test', keepsContext: false })
+    expect(t.host().chat(ownWorker.id)?.keepsContext).toBe(false)
+  })
+
   it('lists and reads chats', async () => {
     const t = withHost()
     const id = t.create('Alpha')
     await t.send(id, 'Hi')
     const host = t.host()
     expect(host.chats().map((c: ChatDetail) => c.name)).toContain('Alpha')
-    expect(host.chat(id)).toMatchObject({ id, name: 'Alpha', status: 'idle', archived: false, folders: [] })
+    expect(host.chat(id)).toMatchObject({ id, name: 'Alpha', status: 'idle', archived: false, keepsContext: true, folders: [] })
     expect(host.chat('nope')).toBeUndefined()
     expect(host.read(id).map((e) => e.type)).toEqual(['user.message', 'turn.started', 'text.completed', 'turn.completed'])
     expect(host.read(id, { last: 1 }).map((e) => e.type)).toEqual(['turn.completed'])

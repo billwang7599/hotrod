@@ -80,8 +80,8 @@ describe('Settings page', () => {
       now: () => now,
       refresh: () => void refreshed++,
       chats: () => [
-        { id: 's1', name: 'Game', archived: false },
-        { id: 'h', name: 'Home', archived: false, extension: 'home' },
+        { id: 's1', name: 'Game', archived: false, keepsContext: true },
+        { id: 'h', name: 'Home', archived: false, extension: 'home', keepsContext: false },
       ],
     } as unknown as ExtensionHost
     const state: PageState = { query: '' }

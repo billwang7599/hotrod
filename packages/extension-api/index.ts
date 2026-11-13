@@ -77,7 +77,13 @@ export type ChatDetail = ChatSummary & {
   model?: string
   status: ChatStatus
   archived: boolean
+  // The extension whose own chat this is (Home's is 'home'). It says who owns the chat, not what the chat can do:
+  // check keepsContext, worker or parentId for that.
   extension?: string
+  // Whether the chat keeps context of its own: folders, files, its own AGENTS.md and a work folder. True for spaces
+  // and their workers; false for an extension's own chat, such as Home. Check this, not extension, before offering
+  // anything that needs a space.
+  keepsContext: boolean
   /** @deprecated The same as `extension`, for extensions written when they were called mods. */
   mod?: string
   folders: string[]

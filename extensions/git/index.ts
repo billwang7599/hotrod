@@ -424,7 +424,7 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
       {
         id: PANEL,
         title: 'Changes',
-        shown: (chat, { host }) => !chat.extension && targetsOf(host, chat.id).length > 0,
+        shown: (chat, { host }) => chat.keepsContext && targetsOf(host, chat.id).length > 0,
         async render(chat, { host }) {
           const targets = targetsOf(host, chat.id)
           const kept = reuse.delete(chat.id) ? shownStates.get(chat.id) : undefined
@@ -481,13 +481,13 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
       },
     ],
     async onTurnStarted({ chat }, { host }) {
-      if (chat.extension || chat.worker) return
+      if (!chat.keepsContext || chat.worker) return
       const shots = new Map<string, Snapshot>()
       for (const target of targetsOf(host, chat.id)) shots.set(target.path, await snapshot(host.run, target.path))
       before.set(chat.id, shots)
     },
     onEvent(chat, event, { host }) {
-      if (chat.extension) return
+      if (!chat.keepsContext) return
       if (event.type === 'tool.started' && (event.kind === 'shell' || event.kind === 'edit')) {
         const ids = writing.get(chat.id) ?? new Set()
         writing.set(chat.id, ids.add(event.toolId))
@@ -496,7 +496,7 @@ export function createGitExtension(options: { now?: () => number } = {}): Extens
       }
     },
     async onTurnCompleted({ chat }, { host, values }) {
-      if (chat.extension) return
+      if (!chat.keepsContext) return
       stopLive(chat.id)
       const shots = before.get(chat.id)
       before.delete(chat.id)

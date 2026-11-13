@@ -546,7 +546,7 @@ it("lists other extensions' rows, such as the Browser's, with their buttons, whi
     refresh: (chatId: string) => void refreshed.push(chatId),
   } as unknown as ExtensionHost
   const context = { values: {}, host }
-  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   // The tab shows for a space with no processes of its own, once another extension lists one.
   expect(panel.shown!(chat, context)).toBe(true)
   const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
@@ -580,7 +580,7 @@ it("says inline why another extension's button failed", async () => {
     refresh: () => {},
   } as unknown as ExtensionHost
   const context = { values: {}, host }
-  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   await panel.onAction!({ name: 'extension', value: { extension: 'browser', key: 'browser', action: 'open' } }, chat, context)
   const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
   expect(view.children).toContainEqual({ type: 'text', text: 'Browser is off', tone: 'error', small: true })

@@ -481,6 +481,7 @@ function assembleCore(options: {
       status: chat.status,
       archived: chat.info.archived,
       ...(chat.info.extension && { extension: chat.info.extension, mod: chat.info.extension }),
+      keepsContext: !chainOf(chat)[0]!.info.extension,
       folders: chat.info.folders,
       files: chat.info.files,
       createdAt: chat.info.createdAt,

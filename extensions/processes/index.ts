@@ -676,7 +676,7 @@ export function createProcessesExtension(
         shown(chat, { host }) {
           const spaceId = spaceIdOf(host, chat.id)
           return (
-            !chat.extension && spaceId !== undefined && (listOf(spaceId).length > 0 || host.processes(spaceId).length > 0)
+            chat.keepsContext && spaceId !== undefined && (listOf(spaceId).length > 0 || host.processes(spaceId).length > 0)
           )
         },
         render(chat, { host }) {

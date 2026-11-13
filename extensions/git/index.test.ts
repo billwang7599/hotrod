@@ -324,7 +324,7 @@ describe('during a turn', () => {
     cleanups.push(() => void vi.useRealTimers())
     const extension = createGitExtension({ now: () => Date.now() })
     const refreshed: (string | undefined)[] = []
-    const chat = { id: 's1' } as ChatDetail
+    const chat = { id: 's1', keepsContext: true } as ChatDetail
     const host = { refresh: (id?: string) => refreshed.push(id), chat: () => chat }
     const context = { host } as unknown as ExtensionContext
     const tool = (toolId: string, kind: 'shell' | 'edit' | 'read') => {

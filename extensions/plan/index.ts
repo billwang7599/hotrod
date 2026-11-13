@@ -204,8 +204,8 @@ const planOn = (host: ExtensionHost, chatId: string) => {
   }
 }
 
-// Only chats the user types in: not an extension's own chat (Home), not workers.
-const isUsersChat = (chat: Pick<ChatDetail, 'extension' | 'worker'>) => !chat.extension && !chat.worker
+// Chats with a space to plan changes in, that the user types in: not one that keeps no context (Home), not workers.
+const isUsersChat = (chat: Pick<ChatDetail, 'keepsContext' | 'worker'>) => chat.keepsContext && !chat.worker
 
 const waitText = (plan: Plan) =>
   `Plan ready: ${plan.goal.length > 90 ? plan.goal.slice(0, 89) + '…' : plan.goal} (${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}), in the Plan tab. Approve it?`
@@ -501,7 +501,7 @@ export function createPlanExtension(): Extension {
       {
         id: TAB,
         title: 'Plan',
-        shown: (chat) => !chat.extension,
+        shown: (chat) => chat.keepsContext,
         render: view,
         onAction(action, chat, { host, values }) {
           if (chat.worker) return

@@ -37,7 +37,7 @@ const APPROVALS: { value: Approval; label: string; hint: string }[] = [
 ]
 
 const act = (name: string, value?: ExtensionAction['value']): ExtensionAction => (value === undefined ? { name } : { name, value })
-const spacesOf = (host: ExtensionHost) => host.chats().filter((chat) => !chat.parentId && !chat.extension && !chat.archived)
+const spacesOf = (host: ExtensionHost) => host.chats().filter((chat) => !chat.parentId && chat.keepsContext && !chat.archived)
 
 export function renderPage(state: PageState, deps: PageDeps): ExtensionView {
   const { store, clients } = deps

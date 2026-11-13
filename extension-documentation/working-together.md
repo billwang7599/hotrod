@@ -68,6 +68,22 @@ seen your extension, with a dozen others beside it.
 - **Make tools safe to run from a worker:** a worker runs while the user talks with its lead, and nobody watches it.
   Don't wait on the user in a worker's chat; use `host.requestPermission`, which reaches the user wherever they are.
 
+## Rules
+
+1. **Shared building blocks are Kothar's.** Chats, workers, sessions, events, memory and permissions are core; reach
+   them through the host, and don't rebuild them in an extension (start a worker with
+   [`host.createChat({ parentId, task })`](reference/host.md#start-a-worker), not a worker system of your own).
+2. **Let the agent combine extensions.** Give your extension clear tools (see above) rather than code that calls other
+   extensions.
+3. **Use code dependencies only when your extension changes how another one looks or behaves.** See below.
+4. **Never check `chat.extension` to decide what a chat can do.** It names the extension that owns the chat (Home's is
+   `home`); it doesn't say whether the user types in it, or whether it has folders. Check what you need:
+   `chat.keepsContext` (folders, files and a work folder of its own: false for Home), `chat.worker`, `chat.parentId`,
+   or `host.space(chat.id)`'s folders.
+5. **Depend on capabilities, not ids.** Share an API under a name for what it does (`search`), not your extension's
+   id, so another extension can provide it instead. See
+   [Capabilities](reference/dependencies.md#capabilities-provide-and-use).
+
 ## When code has to know about another extension
 
 Use the agent first. Reach for code only when one extension changes how another one looks or behaves, such as a

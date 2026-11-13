@@ -137,8 +137,8 @@ export function chainOf(host: ExtensionHost, chatId: string): ChatDetail[] {
   return chain
 }
 
-// An extension's own chat (Home) keeps no files of its own, so it gets global notes only.
-export const hasSpaceNotes = (space: ChatDetail | undefined) => !!space && !space.extension
+// A chat that keeps no context of its own (Home) gets global notes only.
+export const hasSpaceNotes = (space: ChatDetail | undefined) => !!space?.keepsContext
 
 /** Every note file under dir, as paths relative to it with / between folders, sub-folders included. */
 export function filesIn(dir: string): string[] {

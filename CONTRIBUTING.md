@@ -136,6 +136,21 @@ Why some things are the way they are. Add one when you make a choice the next co
   lists what the chat can use, made from extensions' metadata, and tells the agent to combine them. Workers get their
   lead's extension tools. An extension a worker uses may start workers one level below that worker (only there), so a
   worker's deep research doesn't wait for the slot the worker itself holds.
+- **How extensions work together: five rules.** Other people write extensions and can't change the core, so these keep
+  every extension combinable without code linking them:
+  1. **Shared building blocks go in the core.** If two or more extensions need the same thing (chats, workers,
+     sessions, events, memory, permissions), it's core, reached through the public API. That's why workers moved in.
+  2. **Prefer the agent combining tools over code dependencies.** Give each extension clear tools; the agent is told
+     what it can use and combines them (a deep research run inside a worker needs no code in either).
+  3. **Code dependencies only when one extension changes how another looks or behaves.** Then use
+     `optionalDependencies`, `requires`, a setting's `requires`, or a capability (`provides`, `host.provide`,
+     `host.use`). Never import another extension's files. Calling another extension's tool with `host.callTool`, with
+     a fallback when it's off, is fine.
+  4. **Never check `chat.extension` to decide what a chat can do.** It says who owns a chat, not what it can do; that
+     check is how Home lost the Deep research chip (#376). Ask about the capability: `chat.keepsContext` (has folders,
+     files and a work folder: false for Home), `chat.worker` / `chat.parentId`, or the space's folders.
+  5. **Depend on capabilities, not ids.** Name a shared API for what it does (`search`, `research`), so a community
+     extension can provide it instead of a built-in one.
 
 ## Pull requests
 

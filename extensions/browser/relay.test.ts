@@ -375,7 +375,7 @@ async function yourChrome() {
     processesChanged: () => {},
     storage: { dir },
   } as unknown as ExtensionHost
-  const space: ChatDetail = { id: 'sales', name: 'Sales', engine: 'fake', status: 'running', archived: false, folders: [], files: [], createdAt: '' } as ChatDetail
+  const space: ChatDetail = { id: 'sales', name: 'Sales', engine: 'fake', status: 'running', archived: false, keepsContext: true, folders: [], files: [], createdAt: '' } as ChatDetail
   chats.push(space)
   await extension.onStart!({ values, host })
   cleanups.push(() => extension.onStop!({ values, host }))

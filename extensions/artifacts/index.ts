@@ -159,7 +159,7 @@ export function createArtifactsExtension({ platform = process.platform }: { plat
   }
 
   // Every space that can hold artifacts, for the library. Home keeps none, so it isn't one.
-  const spaces = (host: ExtensionHost) => host.chats().filter((c) => c.parentId === undefined && !c.extension && !c.archived)
+  const spaces = (host: ExtensionHost) => host.chats().filter((c) => c.parentId === undefined && c.keepsContext && !c.archived)
 
   // A made or updated artifact is what the dock opens to, in the chat whose agent made it and in its space, and the
   // dock slides in beside those chats, if the user is looking.

@@ -114,7 +114,7 @@ function fakeHost(storage: string) {
     run,
   } as unknown as ExtensionHost
   const chat = (id: string, more: Partial<ChatDetail> = {}): ChatDetail => {
-    const detail = { id, name: id, engine: 'fake', status: 'running' as const, archived: false, folders: [], files: [], createdAt: '', ...more }
+    const detail = { id, name: id, engine: 'fake', status: 'running' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '', ...more }
     chats.push(detail)
     return detail
   }
@@ -172,7 +172,7 @@ it('has no browser before it starts, and drops the old picker settings when it m
 })
 
 it('tells agents about snapshots, batching, closing tabs and handing the browser to the user', () => {
-  const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const chat = { id: 'a', name: 'a', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   const text = browser.instructions!({ chat, tools: true }, { values: defaults, host: {} as never })
   expect(text).toBe(BROWSER_INSTRUCTIONS)
   for (const word of ['snapshot', 'screenshot', 'browser_fill_form', 'Close', HAND_OFF_TOOL]) expect(text).toContain(word)
