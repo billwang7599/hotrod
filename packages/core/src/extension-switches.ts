@@ -1,7 +1,7 @@
 // Turning extensions on and off: one extension's switch, the master switch for community extensions, what a restart
 // would change, and a community extension installed, updated or uninstalled. Turning a community extension on approves
 // its exact files (approvals.ts); those approvals are kept here. The core passes in its extensions, chats and the rest.
-import type { Extension, ExtensionUse } from '@kothar/extension-api'
+import type { Extension, ExtensionContext, ExtensionUse } from '@kothar/extension-api'
 import { type Approval, approve, forget, logHistory, logInstall, reviewOf } from './approvals.ts'
 import type { Chat } from './chat.ts'
 import type { Settings } from './chat-store.ts'
@@ -45,7 +45,21 @@ export type ExtensionSwitchDeps = {
   shownState: (chat: Chat) => ChatState
   setWait: (chat: Chat, extensionId: string, wait: undefined) => void
   extensionsOf: (chat: Chat) => CoreMessage
+  /** Why something that needs the extension with this id can't be used now, or undefined while it runs. */
+  needs: (id: string) => string | undefined
+  /** Runs one of the extension's hooks, showing its error if it throws. */
+  callExtension: (extension: Extension, run: () => unknown) => void
+  contextOf: (extension: Extension) => ExtensionContext
 }
+
+// The other extensions that hear when this one switches: those that list it in optionalDependencies or requires, or
+// have a setting that requires it.
+const dependsOn = (extension: Extension, id: string) =>
+  extension.id !== id &&
+  (extension.optionalDependencies?.includes(id) === true ||
+    extension.requires?.includes(id) === true ||
+    extension.settings?.some((setting) => setting.requires === id) === true ||
+    extension.spaceSettings?.some((setting) => setting.requires === id) === true)
 
 export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
   const {
@@ -75,6 +89,9 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     shownState,
     setWait,
     extensionsOf,
+    needs,
+    callExtension,
+    contextOf,
   } = deps
   let approvals = deps.approvals
 
@@ -88,6 +105,11 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
     })
     const busy = family.find((chat) => chat.status !== 'idle')
     if (busy && !enabled) throw new Error(`Stop "${busy.info.name}" before turning ${extension.name} off`)
+    const missing = enabled ? (extension.requires ?? []).filter((id) => needs(id) !== undefined) : []
+    if (missing.length) {
+      const names = missing.map((id) => extensions.find((m) => m.id === id)?.name ?? id)
+      throw new Error(`Turn on ${names.join(' and ')} first: ${extension.name} needs ${missing.length > 1 ? 'them' : 'it'}`)
+    }
     const changed = isOn(extension) !== enabled
     const from = community.get(extension.id)
     if (from && enabled) {
@@ -104,7 +126,34 @@ export function openExtensionSwitches(deps: ExtensionSwitchDeps) {
 
   // What follows an extension starting or stopping to run: its chats show or hide, spawned processes stop, panels
   // update.
+  // Whether each extension ran when last switched, so an extension that starts or stops because one it requires did
+  // is found (requires can chain).
+  const runningNow = new Map(extensions.map((extension) => [extension.id, isOn(extension)]))
   const extensionSwitched = (extension: Extension, enabled: boolean, family = familyOfExtension(extension)) => {
+    const changes: { extension: Extension; enabled: boolean }[] = [{ extension, enabled }]
+    runningNow.set(extension.id, enabled)
+    switched(extension, enabled, family)
+    // The extensions that require it start or stop with it, and theirs with them.
+    for (let i = 0; i < changes.length; i++) {
+      for (const other of extensions) {
+        const now = isOn(other)
+        if (runningNow.get(other.id) === now || !other.requires?.some((id) => changes.some((c) => c.extension.id === id))) continue
+        runningNow.set(other.id, now)
+        changes.push({ extension: other, enabled: now })
+        switched(other, now, familyOfExtension(other))
+      }
+    }
+    // Then those that still run hear of each switch they depend on, and every dependent's page redraws.
+    for (const change of changes) {
+      for (const other of extensions.filter((e) => dependsOn(e, change.extension.id))) {
+        if (isOn(other) && other.onDependencyChanged && !changes.some((c) => c.extension === other)) {
+          callExtension(other, () => other.onDependencyChanged!({ id: change.extension.id, enabled: change.enabled }, contextOf(other)))
+        }
+        broadcast({ type: 'extension.updated', extension: extensionInfo(other) })
+      }
+    }
+  }
+  const switched = (extension: Extension, enabled: boolean, family: Chat[]) => {
     if (!enabled) stopSpawned(extension)
     if (!enabled) chats.forEach((chat) => setWait(chat, extension.id, undefined))
     if (enabled) startExtension(extension)

@@ -375,6 +375,12 @@ export type ExtensionInfo = {
   prompts?: PromptInfo[]
   // It adds instructions the user can't edit: an instructions hook (or a memory's) with no 'instructions' prompt.
   fixedInstructions?: boolean
+  // The extensions it can't run without (Extension.requires), and, while one of them is off, why it doesn't run
+  // ("Needs the Workers extension"): the switch shows greyed out with it.
+  requires?: string[]
+  blocked?: string
+  // Settings greyed out because an extension they need is off, by key, with why (ExtensionSetting.requires).
+  blockedSettings?: Record<string, string>
   // A built-in extension's uses, read from the fields it sets, for its page (a community one's are community.uses).
   uses?: ExtensionUse[]
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:

@@ -163,12 +163,36 @@ function assembleCore(options: {
   // A community extension's own switch: off until the user turns it on, whatever it says.
   const ownSwitch = (extension: Extension) => settings.extensions?.[extension.id]?.enabled === true
   // Whether an extension runs: a community extension only while community extensions are on too.
-  const isOn = (extension: Extension) => {
+  const switchedOn = (extension: Extension) => {
     const saved = settings.extensions?.[extension.id]?.enabled
     if (community.has(extension.id)) return communityOn() && saved === true
     return typeof saved === 'boolean' ? saved : extension.enabledByDefault
   }
-  const extensionValues = (extension: Extension) => valuesOf(extension, settings.extensions?.[extension.id])
+  // Whether an extension runs: its switch is on (switchedOn), and so is every extension it requires, all the way down.
+  // A loop of requires runs none of them.
+  const runs = (extension: Extension, seen: ReadonlySet<string>): boolean => {
+    if (!switchedOn(extension)) return false
+    if (!extension.requires?.length) return true
+    if (seen.has(extension.id)) return false
+    const next = new Set([...seen, extension.id])
+    return extension.requires.every((id) => {
+      const needed = extensions.find((m) => m.id === id)
+      return needed !== undefined && runs(needed, next)
+    })
+  }
+  const isOn = (extension: Extension) => runs(extension, new Set())
+  const isOnById = (id: string) => {
+    const extension = extensions.find((m) => m.id === id)
+    return extension !== undefined && isOn(extension)
+  }
+  // Why something that needs the extension with this id can't be used now, or undefined while it runs.
+  const neededBy = (id: string) => {
+    if (isOnById(id)) return undefined
+    const name = extensions.find((m) => m.id === id)?.name ?? brokenExtensions.find((m) => m.id === id)?.id ?? id
+    return `Needs the ${name} extension`
+  }
+  const extensionValues = (extension: Extension) =>
+    valuesOf(extension, settings.extensions?.[extension.id], extension.settings, isOnById)
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
@@ -286,6 +310,8 @@ function assembleCore(options: {
     chainOf: (chat) => chainOf(chat),
     updateChat: (chat, change) => updateChat(chat, change),
     promptsOf: prompts.infoOf,
+    needs: neededBy,
+    switchedOn,
   })
   const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
@@ -769,6 +795,9 @@ function assembleCore(options: {
       shownState,
       setWait,
       extensionsOf,
+      needs: neededBy,
+      callExtension,
+      contextOf,
     })
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {

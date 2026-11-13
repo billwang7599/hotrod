@@ -477,6 +477,30 @@ test('an extension with nothing to set gets no page; one with settings gets the 
   expect(sent).toEqual([{ type: 'extension.setEnabled', extensionId: 'plain', enabled: false }])
 })
 
+test('a setting that needs an extension that is off is greyed out and says which; so is an extension that requires one', () => {
+  const shown = { key: 'shown', label: 'Show as workers', type: 'boolean', default: false, requires: 'workers' } satisfies ExtensionSetting
+  const depth = { key: 'depth', label: 'Depth', type: 'number', default: 1 } satisfies ExtensionSetting
+  const extension: ExtensionInfo = {
+    id: 'research',
+    name: 'Research',
+    description: '',
+    enabled: true,
+    settings: [shown, depth],
+    values: { shown: false, depth: 1 },
+    blockedSettings: { shown: 'Needs the Workers extension' },
+  }
+  renderExtensions([extension], 'extension:research')
+  const toggle = dialog().querySelector('[aria-label="Show as workers"]') as HTMLButtonElement
+  expect(toggle.disabled).toBe(true)
+  expect([...dialog().querySelectorAll('[data-testid="extension-blocked"]')].map((e) => e.textContent)).toEqual(['Needs the Workers extension'])
+  expect((dialog().querySelector('input[aria-label="Depth"]') as HTMLInputElement).disabled).toBe(false)
+
+  renderExtensions([{ ...extension, enabled: false, blocked: 'Needs the Workers extension', blockedSettings: undefined }], 'extensions')
+  const main = dialog().querySelector('[aria-label="Research"]') as HTMLButtonElement
+  expect(main.disabled).toBe(true)
+  expect(dialog().textContent).toContain('Needs the Workers extension')
+})
+
 test("an off extension with settings keeps its page, saying to turn it on, and its settings stay hidden", () => {
   const setting = { key: 'n', label: 'Count', type: 'number', default: 1 } satisfies ExtensionSetting
   renderExtensions([{ id: 'off', name: 'Offish', description: '', enabled: false, settings: [setting], values: { n: 1 } }], 'extension:off')

@@ -33,6 +33,11 @@ export type ExtensionSettingsDeps = {
   updateChat: (chat: Chat, change: Partial<ChatInfo>) => void
   /** The extension's prompts as its page shows them. */
   promptsOf: (extension: Extension) => PromptInfo[]
+  /** Why something that requires the extension with this id can't be used now ("Needs the Workers extension"), or
+   * undefined while that extension runs. */
+  needs: (id: string) => string | undefined
+  /** An extension's own switch, apart from whether what it requires is on. */
+  switchedOn: (extension: Extension) => boolean
 }
 
 export function openExtensionSettings(deps: ExtensionSettingsDeps) {
@@ -54,6 +59,7 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
     refreshExtension,
     chainOf,
     updateChat,
+    needs,
   } = deps
   const setups = new Map<string, Omit<SetupState, 'description'>>()
   const installs = new Map<string, AbortController>()
@@ -66,12 +72,21 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
       ...(setups.get(id) ?? { status: 'checking' }),
     }
     // A community extension shows its own switch; the master switch is beside it in the UI.
-    const enabled = community.has(id) ? ownSwitch(extension) : isOn(extension)
+    // A built-in one shows its own switch too: one that requires an extension that's off keeps it, greyed (blocked).
+    const enabled = community.has(id) ? ownSwitch(extension) : deps.switchedOn(extension)
     const settingsError = settingsErrors.get(id)
     const view = settingsViewOf(extension)
     const prompts = deps.promptsOf(extension)
     const fixedInstructions =
       !!(extension.instructions || extension.memory?.instructions) && !prompts.some((prompt) => prompt.where === 'instructions')
+    // What's greyed out for an extension that's off: the extension itself, and each setting that needs it.
+    const blocked = [...new Set(extension.requires ?? [])].map(needs).filter((reason) => reason !== undefined)
+    const blockedSettings = Object.fromEntries(
+      declared.flatMap((setting) => {
+        const reason = setting.requires === undefined ? undefined : needs(setting.requires)
+        return reason === undefined ? [] : [[setting.key, reason]]
+      }),
+    )
     const info = {
       id,
       name,
@@ -84,6 +99,9 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
       ...(extension.chats?.length && { ownsChat: true }),
       ...(prompts.length && { prompts }),
       ...(fixedInstructions && { fixedInstructions }),
+      ...(extension.requires?.length && { requires: [...extension.requires] }),
+      ...(blocked.length && { blocked: blocked.join('. ') }),
+      ...(Object.keys(blockedSettings).length && { blockedSettings }),
       // A community extension's are its manifest's (community.uses).
       ...(!community.has(id) && { uses: usesOf(extension) }),
     }
@@ -196,6 +214,8 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
     if (!setting) throw new Error(`${extension.name} has no setting "${key}"`)
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
+    const blocked = setting.requires === undefined ? undefined : needs(setting.requires)
+    if (blocked) throw new Error(`${setting.label}: ${blocked}`)
     const previous = extensionValues(extension)[key]
     saveExtension(extension, { [key]: value })
     if (isOn(extension)) void checkSetup(extension)
@@ -209,12 +229,14 @@ export function openExtensionSettings(deps: ExtensionSettingsDeps) {
   // A space's own values for an extension's spaceSettings: the space a worker is in, else the chat itself.
   const spaceChat = (chat: Chat) => chainOf(chat)[0]!
   const spaceValuesOf = (extension: Extension, chat: Chat) =>
-    valuesOf(extension, spaceChat(chat).info.extensionValues?.[extension.id], extension.spaceSettings)
+    valuesOf(extension, spaceChat(chat).info.extensionValues?.[extension.id], extension.spaceSettings, (id) => !needs(id))
   const setSpaceValue = (extension: Extension, chat: Chat, key: string, value: unknown) => {
     const setting = extension.spaceSettings?.find((s) => s.key === key)
     if (!setting) throw new Error(`${extension.name} has no space setting "${key}"`)
     const problem = settingProblem(setting, value)
     if (problem) throw new Error(`${setting.label} ${problem}`)
+    const blocked = setting.requires === undefined ? undefined : needs(setting.requires)
+    if (blocked) throw new Error(`${setting.label}: ${blocked}`)
     const space = spaceChat(chat)
     const extensionValues = { ...space.info.extensionValues, [extension.id]: { ...space.info.extensionValues?.[extension.id], [key]: value } }
     updateChat(space, { extensionValues })

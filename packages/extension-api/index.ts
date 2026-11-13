@@ -1,4 +1,8 @@
-export type ExtensionSetting = { key: string; label: string; description?: string } & (
+// requires: the id of another extension this setting needs, such as 'workers'. While that extension is off (or isn't
+// installed), Settings greys the setting out and says why ("Needs the Workers extension"), Kothar refuses to change it,
+// and the extension reads its default instead of the saved value (context.values), so a run that had it on carries on
+// as if it were off. The saved value comes back when the other extension does.
+export type ExtensionSetting = { key: string; label: string; description?: string; requires?: string } & (
   | { type: 'select'; options: { value: string | number; label: string }[]; default: string | number }
   | { type: 'number'; default: number; min?: number; max?: number; integer?: boolean }
   | { type: 'boolean'; default: boolean }
@@ -399,6 +403,11 @@ export type ExtensionHost = {
   // with the extension's name. Kothar already lists the extension's model calls (complete), messages it sends
   // (send, continue, retry), chats it starts, account switches and tool calls (callTool), so don't repeat those.
   activity(event: ActivityInput): void
+  // Whether another extension, by id, runs now: installed, on in Settings (a community one only while community
+  // extensions are on) and with everything it requires on. With chatId, also not left out of that chat by its setup.
+  // False for an id Kothar doesn't know. The Workers extension (spawn_worker) is 'workers'. For features that turn on
+  // when another extension is there (Extension.optionalDependencies); check it when the feature runs, not once at start.
+  extensionEnabled(id: string, chatId?: string): boolean
   // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
   // tool it relays: as an engine's tool asks, through Kothar's own rules, then extensions' policies
   // (onPermissionRequested, this extension's too), else the permission card in the chat; recorded in the Activity with
@@ -900,6 +909,17 @@ export type Extension = {
   description: string
   enabledByDefault: boolean
   settings?: ExtensionSetting[]
+  // Other extensions, by id, this one works with when they're there: features of its own turn on while they're on
+  // (check with host.extensionEnabled) and it's told when they switch (onDependencyChanged). It runs without them.
+  optionalDependencies?: string[]
+  // Other extensions, by id, this one can't run without. It can't be turned on while one is off (Settings says which
+  // to turn on first), and turning one off stops it too (its own switch stays on, and it starts again when they're all
+  // back on). Keep to optionalDependencies unless the extension is of no use at all without the other.
+  requires?: string[]
+  // One of its optionalDependencies or requires, or an extension a setting of its requires, was turned on or off, as
+  // the user (or the community extensions switch) did it. Called after that extension has started or stopped, and only
+  // while this one runs: an extension stopped because a required one went off hears onStop instead.
+  onDependencyChanged?(change: { id: string; enabled: boolean }, context: ExtensionContext): void | Promise<void>
   // Text it sends agents that the user may edit (see ExtensionPrompt).
   prompts?: ExtensionPrompt[]
   // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
@@ -1020,7 +1040,7 @@ export type ExtensionUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop
+  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop, onDependencyChanged
   | 'events'
   // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged

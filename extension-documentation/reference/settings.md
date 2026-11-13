@@ -54,6 +54,10 @@ Every setting has a `key`, a `label` and an optional `description`, plus one of 
 | `select` | `options: { value, label }[]`, `default` | A picker. Values are strings or numbers. |
 | `text` | `default: string`, optional `rows` | A text field; `rows` is how many lines it shows. |
 
+Any setting can also take `requires: '<extension id>'`: while that extension is off, Settings greys the setting out with
+"Needs the … extension" and the extension reads its default. See
+[Depending on other extensions](dependencies.md#a-settings-requires).
+
 How values behave:
 
 - A saved value that's no longer valid, such as an option you removed, reads as the default.

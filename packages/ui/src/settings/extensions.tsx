@@ -34,6 +34,7 @@ export function ExtensionsPage({ extensions: all, connected, send }: PageProps) 
             <>
               {m.description}
               {m.enabled && m.setup?.status === 'missing' && <span className="block text-amber">{setupTitle(m)}</span>}
+              {m.blocked && <BlockedLine text={m.blocked} />}
             </>
           }
           below={m.loadError && <ErrorText>Couldn't load: {m.loadError}</ErrorText>}
@@ -41,7 +42,7 @@ export function ExtensionsPage({ extensions: all, connected, send }: PageProps) 
           <Switch
             label={m.name}
             checked={m.enabled}
-            disabled={!connected || m.loadError !== undefined}
+            disabled={!connected || m.loadError !== undefined || (!m.enabled && m.blocked !== undefined)}
             onChange={(enabled) => {
               send({ type: 'extension.setEnabled', extensionId: m.id, enabled })
               if (enabled && m.setup) setSetupFor(m.id)
@@ -213,6 +214,7 @@ function ExtensionPage({ extension, connected, send }: SetupProps) {
                 ? `Community extension · ${community.version}${community.author ? ` by ${community.author}` : ''}`
                 : 'Built-in extension'}
             </span>
+            {extension.blocked && <BlockedLine text={extension.blocked} />}
           </>
         }
         below={extension.loadError && <ErrorText>Couldn't load: {extension.loadError}</ErrorText>}
@@ -220,7 +222,7 @@ function ExtensionPage({ extension, connected, send }: SetupProps) {
         <Switch
           label={`${extension.name} on`}
           checked={enabled}
-          disabled={!connected || (!community && extension.loadError !== undefined)}
+          disabled={!connected || (!community && extension.loadError !== undefined) || (!enabled && extension.blocked !== undefined)}
           onChange={(on) => send({ type: 'extension.setEnabled', extensionId: extension.id, enabled: on })}
         />
       </SettingRow>
@@ -231,7 +233,8 @@ function ExtensionPage({ extension, connected, send }: SetupProps) {
           key={setting.key}
           setting={setting}
           value={extension.values[setting.key]}
-          disabled={!connected}
+          disabled={!connected || extension.blockedSettings?.[setting.key] !== undefined}
+          blocked={extension.blockedSettings?.[setting.key]}
           save={(value) => send({ type: 'extension.setValue', extensionId: extension.id, key: setting.key, value })}
         />
       ))}
@@ -335,10 +338,21 @@ type ExtensionSettingProps = {
   setting: ExtensionSetting
   value: string | number | boolean | undefined
   disabled: boolean
+  // Why it's greyed out: an extension it needs is off (ExtensionSetting.requires).
+  blocked?: string
   save: (value: string | number | boolean) => void
 }
 
-function ExtensionSettingRow({ setting, value, disabled, save }: ExtensionSettingProps) {
+// Why an extension, or one of its settings, can't be used now, such as "Needs the Workers extension".
+function BlockedLine({ text }: { text: string }) {
+  return (
+    <span className="block text-faint" data-testid="extension-blocked">
+      {text}
+    </span>
+  )
+}
+
+function ExtensionSettingRow({ setting, value, disabled, blocked, save }: ExtensionSettingProps) {
   const [draft, setDraft] = useState(String(value))
   const [was, setWas] = useState(value)
   if (value !== was) {
@@ -346,7 +360,18 @@ function ExtensionSettingRow({ setting, value, disabled, save }: ExtensionSettin
     setDraft(String(value))
   }
   const row = (control: ReactNode, below?: ReactNode) => (
-    <SettingRow name={setting.label} description={setting.description && linked(setting.description)} below={below}>
+    <SettingRow
+      name={setting.label}
+      description={
+        (setting.description || blocked) && (
+          <>
+            {setting.description && linked(setting.description)}
+            {blocked && <BlockedLine text={blocked} />}
+          </>
+        )
+      }
+      below={below}
+    >
       {control}
     </SettingRow>
   )

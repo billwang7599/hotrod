@@ -22,7 +22,7 @@ names the missing entry.
 | `home` | `files` |
 | `spaceValues`, `setSpaceValue` | `settings` |
 | `wait`, `endWait`, `processes`, `processAction`, `processesChanged` | `panels` |
-| `note`, `error`, `notify`, `storage`, `refresh`, `now` | nothing |
+| `note`, `error`, `notify`, `storage`, `refresh`, `now`, `prompt`, `activity`, `extensionEnabled` | nothing |
 
 A community extension can't make any other host call, including one added in a later Kothar, until Kothar lists it here.
 Built-in extensions aren't held to `uses`.

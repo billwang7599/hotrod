@@ -428,6 +428,11 @@ export function openExtensionHosts<C extends HostChat>(deps: HostDeps<C>) {
         }
         return deps.requestPermission(chat, asked, options.changes !== false)
       },
+      extensionEnabled(id, chatId) {
+        const other = deps.extensions.find((m) => m.id === String(id))
+        if (!other || !deps.isOn(other)) return false
+        return chatId === undefined ? true : deps.isOnFor(other, chatFor(String(chatId)))
+      },
       toggled: (chatId, toggle) => isToggled(chatFor(String(chatId)).info, extension, toggleOf(extension, toggle)),
       prompt: (id) => deps.promptText(extension, String(id)),
       activity(input) {

@@ -39,9 +39,16 @@ export async function loadExtensions(dir: string) {
   return { extensions, brokenExtensions }
 }
 
-export const valuesOf = (extension: Extension, saved: Record<string, unknown> = {}, list = extension.settings): ExtensionValues =>
+// needs: whether an extension a setting requires runs now; a setting whose extension doesn't reads as its default.
+export const valuesOf = (
+  extension: Extension,
+  saved: Record<string, unknown> = {},
+  list = extension.settings,
+  needs?: (id: string) => boolean,
+): ExtensionValues =>
   Object.fromEntries(
     (list ?? []).map((setting) => {
+      if (setting.requires !== undefined && needs && !needs(setting.requires)) return [setting.key, setting.default]
       const value = saved[setting.key]
       const blank = setting.type === 'text' && !String(value).trim()
       return [setting.key, blank || settingProblem(setting, value) ? setting.default : (value as ExtensionValues[string])]
@@ -85,6 +92,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['setup', 'setup'],
   ['memory', 'memory'],
   ['onStart', 'events'],
+  ['onDependencyChanged', 'events'],
   ['onStop', 'events'],
   ['onWaitAction', 'panels'],
   ['processes', 'panels'],
@@ -149,7 +157,17 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
 
 // Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
 // the clock.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now', 'prompt', 'activity']
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = [
+  'note',
+  'error',
+  'notify',
+  'storage',
+  'refresh',
+  'now',
+  'prompt',
+  'activity',
+  'extensionEnabled',
+]
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check

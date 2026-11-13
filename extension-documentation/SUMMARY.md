@@ -14,6 +14,7 @@ The sidebar order of these pages. Each line links a page; indented lines sit und
   - [Panels and commands](reference/panels.md)
   - [Events and hooks](reference/events.md)
   - [The host](reference/host.md)
+  - [Depending on other extensions](reference/dependencies.md)
   - [The manifest and uses](reference/manifest.md)
   - [Types](reference/types.md)
 - [Examples](examples.md)
