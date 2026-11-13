@@ -395,9 +395,10 @@ function FolderModeRow({ item, mode, chatId, disabled, send }: {
 }) {
   return (
     <div className={`flex items-center gap-8 pt-6 text-sm ${item.enabled ? '' : 'opacity-55'}`}>
-      <span className="min-w-0 flex-1 text-muted">Mode</span>
+      {/* The label never shrinks, so a long reason wraps beside it instead of drawing over it. */}
+      <span className={`shrink-0 text-muted ${item.blocked ? '' : 'flex-1'}`}>Mode</span>
       {item.blocked ? (
-        <span className="text-xs text-muted">Read only, since {item.blocked}</span>
+        <span className="min-w-0 flex-1 text-right text-xs text-muted">Read only, since {item.blocked}</span>
       ) : (
         <Select
           variant="chip"
