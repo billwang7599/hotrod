@@ -1,4 +1,8 @@
-export type ExtensionSetting = { key: string; label: string; description?: string } & (
+// requires: the id of another extension this setting needs, such as 'browser'. While that extension is off (or isn't
+// installed), Settings greys the setting out and says why ("Needs the Browser extension"), Kothar refuses to change it,
+// and the extension reads its default instead of the saved value (context.values), so a run that had it on carries on
+// as if it were off. The saved value comes back when the other extension does.
+export type ExtensionSetting = { key: string; label: string; description?: string; requires?: string } & (
   | { type: 'select'; options: { value: string | number; label: string }[]; default: string | number }
   | { type: 'number'; default: number; min?: number; max?: number; integer?: boolean }
   | { type: 'boolean'; default: boolean }
@@ -11,6 +15,27 @@ export type ExtensionValues = Record<string, string | number | boolean>
 // The common event stream every engine's adapter speaks. Extensions read it; only adapters write it.
 
 export type ToolKind = 'shell' | 'edit' | 'read' | 'search' | 'fetch' | 'mcp' | 'other'
+
+// What an engine's built-in tool is for, in words every engine shares (Settings → Engines → Tools). Engines' own tool
+// names stay inside their adapters; these are what Kothar and extensions talk about.
+export type ToolCapability =
+  | 'shell'
+  | 'edit'
+  | 'read'
+  | 'search'
+  | 'web'
+  | 'questions'
+  | 'tool-search'
+  | 'subagents'
+  | 'background-shell'
+  | 'skills'
+  | 'todos'
+  | 'plan-mode'
+  | 'scheduling'
+  | 'worktrees'
+  | 'messaging'
+  | 'notifications'
+  | 'publishing'
 
 export type Question = {
   header: string
@@ -56,6 +81,8 @@ export type EngineEvent =
   // A message the core passed to Session.steer entered the running turn here, or is handed back unsent.
   | { type: 'steer.landed'; id: string }
   | { type: 'steer.returned'; id: string }
+  // The built-in tools the engine says the session has, by its own names (MCP servers' tools left out), as it starts.
+  | { type: 'tools.listed'; names: string[] }
   // errorKind (here and on session.ended): why it failed, as the engine's adapter reads its error (see TurnErrorKind).
   | { type: 'turn.completed'; error?: string; errorKind?: TurnErrorKind }
   | { type: 'session.ended'; error?: string; errorKind?: TurnErrorKind }
@@ -73,7 +100,13 @@ export type ChatDetail = ChatSummary & {
   model?: string
   status: ChatStatus
   archived: boolean
+  // The extension whose own chat this is (Home's is 'home'). It says who owns the chat, not what the chat can do:
+  // check keepsContext, worker or parentId for that.
   extension?: string
+  // Whether the chat keeps context of its own: folders, files, its own AGENTS.md and a work folder. True for spaces
+  // and their workers; false for an extension's own chat, such as Home. Check this, not extension, before offering
+  // anything that needs a space.
+  keepsContext: boolean
   /** @deprecated The same as `extension`, for extensions written when they were called mods. */
   mod?: string
   folders: string[]
@@ -104,7 +137,8 @@ export type Attachment = { name: string; path: string; mimeType: string; size: n
 export type ChatEntry = { at: string } & (
   // midTurn: sent while a turn ran, and taken in by it at this point (steering).
   | { type: 'user.message'; text: string; attachments?: Attachment[]; midTurn?: true }
-  | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string }
+  // quiet: a quiet child's report, logged for the user (NewChatSpec.showReport); it didn't start a turn.
+  | { type: 'worker.report'; text: string; chatId: string; name: string; error?: string; quiet?: true }
   | { type: 'permission.resolved'; requestId: string; allow: boolean; auto?: true }
   | { type: 'question.resolved'; requestId: string; answers?: Answers }
   // panel: clicking the note opens that panel of the extension's, then sends it action. card: drawn as a card.
@@ -115,8 +149,10 @@ export type ChatEntry = { at: string } & (
       panel?: string
       action?: ExtensionAction
       card?: ExtensionNoteCard
+      // A live card the extension draws (ExtensionNoteView); extension is set with it.
+      view?: ExtensionNoteViewRef
     }
-  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' }>
+  | Exclude<EngineEvent, { type: 'text.delta' | 'thinking.delta' | 'steer.landed' | 'steer.returned' | 'tools.listed' }>
 )
 
 // A chat's log as memory reads it: the entries a conversation is made of, numbered from 0 in log order. user is the
@@ -149,6 +185,23 @@ export type ExtensionMessageAction = {
   marked?(chat: ChatDetail, context: ExtensionContext): number[]
   // Then the chat's extensions draw again (marks and open panels), as on host.refresh(chat.id).
   run(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
+
+// A folded row under messages in the transcript, such as the Inspector's "What was sent": folded, it shows only its
+// label; render draws what's inside when the user unfolds it, so a folded row costs nothing. It's drawn again each
+// time it's unfolded, and while it's open, whenever the chat's extensions draw (host.refresh).
+export type ExtensionMessageDetail = {
+  id: string
+  // Short, such as "What was sent"; shown on the folded row.
+  label: string
+  hint?: string
+  // The kinds of message it's offered on; all three without it.
+  kinds?: ExtensionMessage['kind'][]
+  shown?(chat: ChatDetail, context: ExtensionContext): boolean
+  // The messages that get the row, by entry; every message of its kinds without it. Called when the chat's extensions
+  // draw, as marked is; keep it quick.
+  entries?(chat: ChatDetail, context: ExtensionContext): number[]
+  render(message: ExtensionMessage, chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
 }
 
 // A switch in a chat's composer, beside the message box, such as "Deep research": a chip the user turns on and off for
@@ -225,7 +278,12 @@ export type ExtensionStoredFile = { name: string; size: number }
 export type ModelRole = 'chat' | 'planning' | 'searching' | 'workers'
 
 export type NewChatSpec = {
-  name: string
+  // The chat's name in the sidebar. A worker started with a task may leave it out: it's named after its task, as
+  // spawn_worker names one.
+  name?: string
+  // Only with parentId: the worker's first message, sent at once (or, over Settings → Workers' limit, as soon as a slot
+  // frees), just as spawn_worker sends its task. Without it, send one with host.send.
+  task?: string
   folders?: string[]
   files?: string[]
   // An engine that is on; without one, the chat follows its role's model list.
@@ -238,6 +296,10 @@ export type NewChatSpec = {
   // extension reads it in onTurnCompleted (TurnSummary.text, for the child's chat), for children whose work it gathers
   // itself, such as research workers. It's still listed under its parent while it runs, and removed once it's done.
   quiet?: boolean
+  // Only with quiet: the child's final reply is also logged in its parent's transcript as a worker's report is (folded
+  // like any worker's, and in the parent's memory), so the user can read it, but it isn't queued for the parent's agent
+  // and doesn't wake it. For quiet workers the user may want to see, such as research workers.
+  showReport?: boolean
 }
 
 // Each extension gets a host of its own, so storage and notes know which extension they belong to.
@@ -247,9 +309,10 @@ export type ExtensionHost = {
   // view only (the user can watch and stop it, not write to it), working in its space's work folder and checkouts,
   // seeing its parent's memory as it was at launch, on the models of `role` (default 'workers'). Its final reply joins
   // the parent's queue as a report and wakes it, and it is removed once it has reported. A child takes its folders from
-  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. The host
-  // sets no limit on how many run; spawn_worker counts them toward the Workers extension's. With quiet, its reply comes
-  // to the extension instead (NewChatSpec.quiet).
+  // its space (so no folders or files), can't have children of its own, and its parent must not be archived. Every
+  // running child counts toward Settings → Workers' limit, spawn_worker's and extensions' alike; one started over it
+  // waits with its first message queued and starts when a slot frees. With quiet, its reply comes to the extension
+  // instead (NewChatSpec.quiet).
   createChat(spec: NewChatSpec): { id: string }
   // Sends a message as if the user typed it, queued behind a running turn.
   send(chatId: string, text: string): void
@@ -273,7 +336,8 @@ export type ExtensionHost = {
   read(chatId: string, options?: { last?: number }): ChatEntry[]
   // The space the chat is in (the chat itself for a space).
   space(chatId: string): SpaceDetail | undefined
-  // Asks a running turn to stop, as Stop does.
+  // Asks a running turn to stop, as Stop does. For a worker, that ends it: it reports what it has (quiet: to your
+  // onTurnCompleted) and is removed, as stop_chat does.
   interrupt(chatId: string): void
   // An engine's saved accounts, in the order Settings lists them, or undefined if it keeps none.
   accounts(engine: string): ExtensionAccounts | undefined
@@ -382,6 +446,19 @@ export type ExtensionHost = {
   // with the extension's name. Kothar already lists the extension's model calls (complete), messages it sends
   // (send, continue, retry), chats it starts, account switches and tool calls (callTool), so don't repeat those.
   activity(event: ActivityInput): void
+  // Whether another extension, by id, runs now: installed, on in Settings (a community one only while community
+  // extensions are on) and with everything it requires on. With chatId, also not left out of that chat by its setup.
+  // False for an id Kothar doesn't know. Workers are part of Kothar, not an extension, so need no check. For features that turn on
+  // when another extension is there (Extension.optionalDependencies); check it when the feature runs, not once at start.
+  extensionEnabled(id: string, chatId?: string): boolean
+  // Shares an API under a capability name this extension declares in Extension.provides, for other extensions to get
+  // with use. Call it in onStart (or later); it's withdrawn when the extension stops. Name the capability for what it
+  // does ('research', 'notes'), not after the extension, so another extension can provide the same one instead.
+  provide(name: string, api: unknown): void
+  // The API a running extension provides under this capability name, or undefined if none does now. List the name in
+  // optionalDependencies to hear (onDependencyChanged, with the name as id) when a provider comes or goes. Check it
+  // when the feature runs, not once at start; the API is whatever its provider shared, so type it yourself.
+  use<T = unknown>(name: string): T | undefined
   // Asks the user's leave for something the extension is about to do for the chat's running turn, such as calling a
   // tool it relays: as an engine's tool asks, through Kothar's own rules, then extensions' policies
   // (onPermissionRequested, this extension's too), else the permission card in the chat; recorded in the Activity with
@@ -424,7 +501,21 @@ export type ActivityInput = { kind: ActivityKind; title: string; chatId?: string
 // How a note shows (host.note). card: title in bold, then text, with a badge (such as a kind) and a quieter detail
 // (such as a version) beside it. Each is plain text, cut if long.
 export type ExtensionNoteCard = { title: string; badge?: string; detail?: string }
-export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
+// view: the note is a live card the extension draws, one of its noteViews by id, for key (what it shows, such as a
+// run's id). text is what shows when the extension can't draw it (it's off, or left out of the chat).
+export type ExtensionNoteOptions = { panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard; view?: ExtensionNoteViewRef }
+export type ExtensionNoteViewRef = { id: string; key: string }
+
+// A live card in the transcript, drawn by the extension as a panel is, such as a research run's progress: host.note
+// with { view: { id, key } } puts one in a chat, and it stays in view when the turn's steps fold. render draws it for
+// that key whenever it shows, and again whenever the chat's extensions draw (host.refresh(chatId)), so it updates
+// live; buttons in it come back to onAction with the same key, then it draws again. Keep render quick: every card of
+// this view in the open chat draws each time.
+export type ExtensionNoteView = {
+  id: string
+  render(key: string, chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
+  onAction?(action: ExtensionAction, key: string, chat: ChatDetail, context: ExtensionContext): void | Promise<void>
+}
 
 // What waits for the user on a chat: a short line saying what's needed, and its buttons.
 // closes: the button answers the wait for good, such as Done. Clicking it ends the wait at once, in the UI and in the
@@ -804,6 +895,9 @@ export type ExtensionPanel = {
   // Also show a launcher for this panel in the left sidebar; the panel is always a tab in the right panel. The user
   // picks where launchers sit (Settings → Appearance), at the top of the sidebar by default.
   launcher?: boolean
+  // A dock only: false keeps it out of the right sidebar's tabs, so it shows only when something opens it (host.showPanel,
+  // a note or a card's button). For a document view, such as a report, that would only crowd the sidebar.
+  tab?: boolean
   // Whether the chat gets this tab. Without it, every chat does.
   shown?(chat: ChatDetail, context: ExtensionContext): boolean
   render(chat: ChatDetail, context: ExtensionContext): ExtensionView | Promise<ExtensionView>
@@ -859,6 +953,9 @@ export type SentSection = {
   // The extension's prompts in it, with whether the user edited each; editable: the user can change it in Settings.
   prompts?: { id: string; label: string; edited: boolean }[]
   editable?: boolean
+  // For Kothar's own text the user can change (the workers' instructions): the Settings page that changes it, with an
+  // #anchor, as a kothar:settings/<settings> link opens it.
+  settings?: string
 }
 // kind 'turn': a turn's session opened with these sections. 'steer': a message entered the running turn (turn is the
 // id of the turn it entered), with one section.
@@ -883,6 +980,27 @@ export type Extension = {
   description: string
   enabledByDefault: boolean
   settings?: ExtensionSetting[]
+  // Other extensions, by id, this one works with when they're there: features of its own turn on while they're on
+  // (check with host.extensionEnabled) and it's told when they switch (onDependencyChanged). It runs without them.
+  // A capability name (Extension.provides) works too: it's told when an extension starts or stops providing it.
+  optionalDependencies?: string[]
+  // Capability names this extension shares an API under with host.provide, such as 'research'. Others get it with
+  // host.use, whichever extension provides it.
+  provides?: string[]
+  // What engines' own built-in tools this extension stands in for (ToolCapability), such as 'background-shell' for
+  // Processes. While it's on for a chat, every engine's tools for those are off in that chat's sessions, unless the
+  // user turned one back on in Settings → Engines → Tools.
+  replaces?: ToolCapability[]
+  // Other extensions, by id, this one can't run without. It can't be turned on while one is off (Settings says which
+  // to turn on first), and turning one off stops it too (its own switch stays on, and it starts again when they're all
+  // back on). Keep to optionalDependencies unless the extension is of no use at all without the other.
+  requires?: string[]
+  // One of its optionalDependencies or requires, or an extension a setting of its requires, was turned on or off, or
+  // a capability in its optionalDependencies gained or lost its provider (id: the capability, enabled: host.use finds
+  // it now), as
+  // the user (or the community extensions switch) did it. Called after that extension has started or stopped, and only
+  // while this one runs: an extension stopped because a required one went off hears onStop instead.
+  onDependencyChanged?(change: { id: string; enabled: boolean }, context: ExtensionContext): void | Promise<void>
   // Text it sends agents that the user may edit (see ExtensionPrompt).
   prompts?: ExtensionPrompt[]
   // Settings kept per space instead of once for all of Kothar, of the same kinds. Each space starts at the defaults;
@@ -913,6 +1031,10 @@ export type Extension = {
   panels?: ExtensionPanel[]
   commands?: ExtensionCommand[]
   messageActions?: ExtensionMessageAction[]
+  // Folded rows under messages, drawn only when opened (see ExtensionMessageDetail).
+  messageDetails?: ExtensionMessageDetail[]
+  // Live cards in the transcript, put there with host.note (see ExtensionNoteView).
+  noteViews?: ExtensionNoteView[]
   composerToggles?: ExtensionComposerToggle[]
   memory?: ExtensionMemory
   // Kothar is ready for model calls (engines detected, a work folder chosen), or the extension was turned on after
@@ -1001,9 +1123,9 @@ export type ExtensionUse =
   // transformMessage, transformOutput
   | 'transforms'
   // onEvent, onTurnStarted, onTurnCompleted, onStatusChanged, onSessionEnded, onChatCreated, onChatRemoved,
-  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop
+  // onChatArchived, onSpaceRemoved, onLimitReached, onStart, onStop, onDependencyChanged
   | 'events'
-  // panels, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
+  // panels, noteViews, processes, onProcessAction, onProcessesChanged, onWaitAction, and host.wait, endWait, processes,
   // processAction, processesChanged
   | 'panels'
   // commands, messageActions, composerToggles, and host.toggled, setToggle

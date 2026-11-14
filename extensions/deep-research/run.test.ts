@@ -250,7 +250,8 @@ describe('a research run', () => {
     expect(t.store.readReport('space', run.id)).toContain('**Partial report.** You stopped it.')
     // Stopped: written without another model call.
     expect(t.requests.filter((r) => r.schema === WRITE_SCHEMA)).toHaveLength(0)
-    expect(t.notes.at(-1)?.card).toMatchObject({ badge: 'Partial research' })
+    // The run's card in the chat (posted by the extension as it starts) shows the partial report; the run posts no note.
+    expect(t.notes).toEqual([])
   })
 
   it('stays within its worker budget, and says so', async () => {

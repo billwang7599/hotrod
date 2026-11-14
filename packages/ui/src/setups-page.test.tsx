@@ -108,12 +108,15 @@ test('edits a setup in place, keeping its id and what it sets', () => {
   // Only extensions that are on are listed; the setup's own left-out one shows off.
   const switches = [...host.querySelectorAll('[role="switch"]')].map((s) => [s.getAttribute('aria-label'), s.getAttribute('aria-checked')])
   expect(switches).toEqual([
+    ['Agents start workers in this setup', 'true'],
     ['Browser in this setup', 'false'],
     ['Notes in this setup', 'true'],
   ])
   act(() => host.querySelector<HTMLButtonElement>('[aria-label="Notes in this setup"]')!.click())
+  // Workers are the core's: a setup keeps its chats from starting them with workers: false.
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Agents start workers in this setup"]')!.click())
   submit('Save')
-  expect(sent).toEqual([{ type: 'setup.save', setup: { ...reviewer, extensionsOff: ['browser', 'notes'] } }])
+  expect(sent).toEqual([{ type: 'setup.save', setup: { ...reviewer, extensionsOff: ['browser', 'notes'], workers: false } }])
 })
 
 test('duplicates a setup under a new name as a new one', () => {
@@ -161,7 +164,7 @@ test("doesn't list an extension with a chat of its own (Home) to leave out", () 
   renderPage([reviewer], undefined, [], [...extensions, { ...extension('home', 'Home'), ownsChat: true }])
   click('Edit')
   const labels = [...host.querySelectorAll('[role="switch"]')].map((s) => s.getAttribute('aria-label'))
-  expect(labels).toEqual(['Browser in this setup', 'Notes in this setup'])
+  expect(labels).toEqual(['Agents start workers in this setup', 'Browser in this setup', 'Notes in this setup'])
 })
 
 const space: ChatView = {

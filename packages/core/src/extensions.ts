@@ -39,9 +39,16 @@ export async function loadExtensions(dir: string) {
   return { extensions, brokenExtensions }
 }
 
-export const valuesOf = (extension: Extension, saved: Record<string, unknown> = {}, list = extension.settings): ExtensionValues =>
+// needs: whether an extension a setting requires runs now; a setting whose extension doesn't reads as its default.
+export const valuesOf = (
+  extension: Extension,
+  saved: Record<string, unknown> = {},
+  list = extension.settings,
+  needs?: (id: string) => boolean,
+): ExtensionValues =>
   Object.fromEntries(
     (list ?? []).map((setting) => {
+      if (setting.requires !== undefined && needs && !needs(setting.requires)) return [setting.key, setting.default]
       const value = saved[setting.key]
       const blank = setting.type === 'text' && !String(value).trim()
       return [setting.key, blank || settingProblem(setting, value) ? setting.default : (value as ExtensionValues[string])]
@@ -74,6 +81,8 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['panels', 'panels'],
   ['commands', 'commands'],
   ['messageActions', 'commands'],
+  ['messageDetails', 'panels'],
+  ['noteViews', 'panels'],
   ['composerToggles', 'commands'],
   ['settings', 'settings'],
   ['spaceSettings', 'settings'],
@@ -84,6 +93,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
   ['setup', 'setup'],
   ['memory', 'memory'],
   ['onStart', 'events'],
+  ['onDependencyChanged', 'events'],
   ['onStop', 'events'],
   ['onWaitAction', 'panels'],
   ['processes', 'panels'],
@@ -94,7 +104,7 @@ const FIELD_USES: [keyof Extension, ExtensionUse][] = [
 // What the UI gets of a panel: where it shows, its keys and whether it has a launcher in the left sidebar. Anything else an
 // extension put there is dropped, and a placement, shortcut or launcher of the wrong kind is left out.
 export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
-  const { id, title, placement, shortcut, launcher } = panel
+  const { id, title, placement, shortcut, launcher, tab } = panel
   return {
     extension,
     id,
@@ -102,6 +112,7 @@ export function panelTabOf(extension: string, panel: ExtensionPanel): PanelTab {
     ...((placement === 'popup' || placement === 'dock') && { placement }),
     ...(typeof shortcut === 'string' && shortcut.trim() && { shortcut: shortcut.trim() }),
     ...(launcher === true && { launcher }),
+    ...(placement === 'dock' && tab === false && { tab: false as const }),
   }
 }
 
@@ -148,7 +159,19 @@ export const HOST_USES: Partial<Record<keyof ExtensionHost, ExtensionUse>> = {
 
 // Host calls any extension may make: its own storage, notes and errors in chats, notifications, redrawing its panels,
 // the clock.
-export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = ['note', 'error', 'notify', 'storage', 'refresh', 'now', 'prompt', 'activity']
+export const FREE_HOST_CALLS: readonly (keyof ExtensionHost)[] = [
+  'note',
+  'error',
+  'notify',
+  'storage',
+  'refresh',
+  'now',
+  'prompt',
+  'activity',
+  'extensionEnabled',
+  'provide',
+  'use',
+]
 
 // What Node's own APIs in a community extension's main.mjs need listed, read from its text before it's imported. This
 // catches an honest author who forgot to list a use; it isn't a sandbox (code can reach Node in ways no text check

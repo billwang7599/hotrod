@@ -27,6 +27,9 @@ import {
 } from './shared.ts'
 import { checkSwitch } from './settings.ts'
 import { messageOf } from './util.ts'
+import type { Workers } from './workers.ts'
+import type { EngineTools } from './engine-tools.ts'
+import type { CorePrompts } from './core-prompts.ts'
 
 export type Reply = (message: CoreMessage) => void
 
@@ -78,6 +81,9 @@ export type ProtocolDeps = {
   setPermissionDefault: (name: unknown, enabled: boolean) => void
   setTerminal: (terminal: unknown) => void
   setMemory: (engine?: string, model?: string) => void
+  workers: Pick<Workers, 'set' | 'setInstructions'>
+  engineTools: Pick<EngineTools, 'setEnabled' | 'setTool' | 'reset'>
+  corePrompts: Pick<CorePrompts, 'set'>
   models: Pick<ReturnType<typeof openModels>, 'setList'>
   followModels: () => void
   saveSetup: (input: unknown) => Setup
@@ -94,6 +100,9 @@ export type ProtocolDeps = {
   setSpaceValue: (extension: Extension, chat: Chat, key: string, value: unknown) => void
   runCommand: (chat: Chat, extensionId: unknown, commandId: unknown) => void
   runMessageAction: (chat: Chat, extensionId: unknown, actionId: unknown, entry: unknown) => Promise<void>
+  renderDetail: (chat: Chat, extensionId: unknown, detailId: unknown, entry: unknown) => Promise<Extract<CoreMessage, { type: 'extension.detail' }>>
+  renderNoteView: (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown) => Promise<Extract<CoreMessage, { type: 'extension.noteView' }>>
+  noteViewAction: (chat: Chat, extensionId: unknown, viewId: unknown, key: unknown, action: ExtensionAction) => Promise<void>
   flipToggle: (chat: Chat, extensionId: unknown, toggleId: unknown, on: unknown) => Promise<void>
   answerWait: (chat: Chat, extensionId: string, answer: ExtensionWaitAnswer) => void
   setExtensionEnabled: (extension: Extension, enabled: boolean) => void
@@ -250,6 +259,12 @@ export function openProtocol(deps: ProtocolDeps) {
     'extension.command': (message) => deps.runCommand(chatFor(message.chatId), message.extension, message.command),
     'extension.message.action': (message) =>
       deps.runMessageAction(chatFor(message.chatId), message.extension, message.action, message.entry),
+    'extension.detail.get': async (message, reply) =>
+      reply(await deps.renderDetail(chatFor(message.chatId), message.extension, message.detail, message.entry)),
+    'extension.noteView.get': async (message, reply) =>
+      reply(await deps.renderNoteView(chatFor(message.chatId), message.extension, message.noteView, message.key)),
+    'extension.noteView.action': (message) =>
+      deps.noteViewAction(chatFor(message.chatId), message.extension, message.noteView, message.key, message.action),
     'extension.toggle': (message) => deps.flipToggle(chatFor(message.chatId), message.extension, message.toggle, message.on),
     'extension.wait.answer': (message) =>
       deps.answerWait(chatFor(message.chatId), String(message.extension), { button: String(message.button) }),
@@ -261,6 +276,12 @@ export function openProtocol(deps: ProtocolDeps) {
     'terminal.set': (message) => deps.setTerminal(message.terminal),
     'editor.set': (message) => deps.setEditor(message.editor, message.command),
     'memory.set': (message) => deps.setMemory(optionalText(message.engine), optionalText(message.model)),
+    'workers.set': (message) => deps.workers.set({ start: message.start, limit: message.limit }),
+    'workers.prompt.set': (message) => deps.workers.setInstructions(typeof message.text === 'string' ? message.text : undefined),
+    'engineTools.setEnabled': (message) => deps.engineTools.setEnabled(message.engine, message.enabled),
+    'engineTools.setTool': (message) => deps.engineTools.setTool(message.engine, message.tool, message.on),
+    'engineTools.reset': (message) => deps.engineTools.reset(message.engine),
+    'corePrompt.set': (message) => deps.corePrompts.set(String(message.id), typeof message.text === 'string' ? message.text : undefined),
     'models.setList': (message) => {
       deps.models.setList(message.role, message.models)
       return deps.followModels()

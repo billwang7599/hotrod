@@ -53,7 +53,7 @@ async function start(workers = { enabled: false, limit: 4 }) {
   }
   const extensionTools: { tool: ExtensionTool; values: ExtensionValues }[] = []
   const host = {
-    createChat: ({ name, folders, files, engine }) => created({ name, folders, files, engine }),
+    createChat: ({ name, folders, files, engine }) => created({ name: name ?? "", folders, files, engine }),
     send: (chatId, text) => void calls.push(['send', chatId, text]),
   } as Partial<ExtensionHost> as ExtensionHost
   const mcp = openKotharMcp({
@@ -378,7 +378,7 @@ describe('Kothar MCP server', () => {
       )
       expect(await tool(grant('aaaa0001'), 'spawn_worker', { task: 'One more' })).toEqual({
         isError: true,
-        text: `This chat already has ${limit} workers running; the limit is ${limit}`,
+        text: expect.stringContaining(`This chat already has ${limit} workers running (yours and any its extensions started); the limit is ${limit}.`),
       })
       expect(calls).toEqual([])
       chats.find((c) => c.id === 's3')!.status = 'idle'

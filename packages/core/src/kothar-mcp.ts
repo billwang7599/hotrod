@@ -20,8 +20,9 @@ type Hub = {
   deliver(chatId: string, text: string): 'sent' | 'steered' | 'queued'
   // What the chat's Stop button does.
   stop(chatId: string): void
-  // With a chat: whether that chat may start workers (its setup can leave the Workers extension out).
-  workers(chatId?: string): { enabled: boolean; limit: number }
+  // Whether that chat's agent may start workers (Settings → Workers, and its setup), and how many of its children may
+  // run at once (-1: no limit).
+  workers(chatId: string): { enabled: boolean; limit: number }
   // The tools of the extensions that shape this chat's sessions (its setup can leave some out).
   extensionTools(chatId: string): { tool: ExtensionTool; values: ExtensionValues; host: ExtensionHost; extension?: string }[]
 }
@@ -36,7 +37,7 @@ export const summaryOf = ({ id, name, engine, parentId, worker }: ChatInfo): Cha
   ...(worker && { worker }),
 })
 
-const workerName = (task: string) => {
+export const workerName = (task: string) => {
   const line = task.trim().replace(/\s+/g, ' ')
   return line.length > WORKER_NAME_MAX_CHARS ? `${line.slice(0, WORKER_NAME_MAX_CHARS).trimEnd()}…` : line
 }
@@ -112,16 +113,22 @@ const TOOLS: Record<string, Tool> = {
     description:
       'Start a worker: a new chat below this one that works on the task, in this folder, on the models the ' +
       'user picked for workers. Its final reply comes back to you as a message when its turn ends, so ' +
-      "don't poll it. Give a role to run it on that role's models instead. It uses this chat's setup. Returns its id.",
+        "don't poll it. Give a role to run it on that role's models instead. It uses this chat's setup and gets the same " +
+      'tools as this chat (deep research, notes, MCP servers and the rest), so it can run any of them for you. Returns ' +
+      'its id.',
     input: z.object({
       task: z.string().min(1),
       role: z.enum(['planning', 'searching']).optional(),
     }),
     run({ hub, caller }: Context, { task, role }: { task: string; role?: ModelRole }) {
-      const { limit } = hub.workers()
+      // Every running child counts, an extension's too (Deep Research's searches), so the user's limit holds.
+      const { limit } = hub.workers(caller.id)
       const running = hub.chats().filter((c) => c.parentId === caller.id && c.worker && c.status !== 'idle').length
       if (limit !== -1 && running >= limit) {
-        throw new Error(`This chat already has ${running} workers running; the limit is ${limit}`)
+        throw new Error(
+          `This chat already has ${running} workers running (yours and any its extensions started); the limit is ${limit}. ` +
+            'Wait for one to report, or stop one with stop_chat.',
+        )
       }
       const name = workerName(task)
       const chat = hub.createChild(caller.id, { name, ...(role && { role }) })

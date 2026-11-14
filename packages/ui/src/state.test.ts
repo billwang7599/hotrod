@@ -53,7 +53,12 @@ const extensionInfo = (id: string, enabled = false): ExtensionInfo => ({
   settings: [{ key: 'limit', label: 'Limit', type: 'number', default: 4 }],
   values: { limit: 4 },
 })
-const extensions = [extensionInfo('workers'), extensionInfo('other')]
+const extensions = [extensionInfo('browser'), extensionInfo('other')]
+const workers = {
+  start: true,
+  limit: 4,
+  instructions: { id: 'instructions', label: 'When to start workers', where: 'instructions' as const, default: 'D', text: 'D' },
+}
 const noLists = { chat: [], planning: [], searching: [], workers: [] }
 const modelLists = noLists
 const snapshot = (chats: ChatState[]): Action =>
@@ -67,6 +72,8 @@ const snapshot = (chats: ChatState[]): Action =>
     modelLists,
     setups: [],
     memory: {},
+    workers,
+    corePrompts: [],
     workFolder: { defaultPath: '/g/work', canSandbox: true },
     themes: [],
     installed: [],
@@ -598,8 +605,15 @@ describe('reduce', () => {
   it('loads the extensions from the snapshot and replaces only the one that changed', () => {
     const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
     expect(loaded.extensions).toEqual(extensions)
-    const on = { ...extensionInfo('workers', true), values: { limit: -1 } }
+    const on = { ...extensionInfo('browser', true), values: { limit: -1 } }
     expect(reduce(loaded, { type: 'extension.updated', extension: on }).extensions).toEqual([on, extensions[1]])
+  })
+
+  it('loads Settings → Workers from the snapshot and replaces it on update', () => {
+    const loaded = run(snapshot([chat(MAIN_CHAT_ID)]))
+    expect(loaded.workers).toEqual(workers)
+    const off = { ...workers, start: false, limit: -1 }
+    expect(reduce(loaded, { type: 'workers.updated', workers: off }).workers).toEqual(off)
   })
 
   it('loads the model lists from the snapshot and replaces them on update', () => {

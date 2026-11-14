@@ -9,6 +9,7 @@ import { engineProblem } from './state.ts'
 import { ShortcutsPage } from './shortcuts-page.tsx'
 import { SetupsPage } from './setups-page.tsx'
 import { EngineAccountsSection } from './settings/accounts.tsx'
+import { EngineToolsMaster, EngineToolsSections } from './settings/engine-tools.tsx'
 import { AppearancePage } from './settings/appearance.tsx'
 import { CommunityExtensionsPage } from './settings/community.tsx'
 import { extensionPages, ExtensionsPage } from './settings/extensions.tsx'
@@ -16,38 +17,43 @@ import { ModelListsSection } from './settings/models.tsx'
 import { SettingRow } from './settings/rows.tsx'
 import { NAV_GROUPS, type Page, type PageProps } from './settings/types.ts'
 import { WORK_FOLDER_INTRO, WorkFolderPage } from './settings/work-folder.tsx'
+import { CORE_PROMPTS_INTRO, CorePromptsPage, WORKERS_INTRO, WorkersPage } from './settings/workers.tsx'
 
 const PAGES = [
   {
     id: 'engines',
     group: 'Options',
     title: 'Engines',
-    intro: 'Kothar only starts the engines you turn on here.',
-    body: ({ engines, connected, send }: PageProps) => (
-      <div className={GROUP}>
-        {engines.map((engine) => {
-          const problem = engineProblem(engine)
-          return (
-            <SettingRow
-              key={engine.id}
-              name={<span className="font-mono">{engine.id}</span>}
-              description={
-                <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
-                  {problem ?? 'Ready'}
-                  {engine.detail && ` · ${engine.detail}`}
-                </span>
-              }
-            >
-              <Switch
-                label={`${engine.id} on`}
-                checked={engine.enabled}
-                disabled={!connected}
-                onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
-              />
-            </SettingRow>
-          )
-        })}
-      </div>
+    intro: 'Kothar only starts the engines you turn on here, and gives each the built-in tools you leave on.',
+    body: ({ engines, engineTools, connected, send }: PageProps) => (
+      <>
+        <EngineToolsMaster settings={engineTools} connected={connected} send={send} />
+        <div className={GROUP}>
+          {engines.map((engine) => {
+            const problem = engineProblem(engine)
+            return (
+              <SettingRow
+                key={engine.id}
+                name={<span className="font-mono">{engine.id}</span>}
+                description={
+                  <span className={`block first-letter:uppercase ${problem ? 'text-amber' : 'text-green'}`}>
+                    {problem ?? 'Ready'}
+                    {engine.detail && ` · ${engine.detail}`}
+                  </span>
+                }
+              >
+                <Switch
+                  label={`${engine.id} on`}
+                  checked={engine.enabled}
+                  disabled={!connected}
+                  onChange={(enabled) => send({ type: 'engine.setEnabled', engine: engine.id, enabled })}
+                />
+              </SettingRow>
+            )
+          })}
+        </div>
+        <EngineToolsSections settings={engineTools} engines={engines} connected={connected} send={send} />
+      </>
     ),
   },
   {
@@ -94,6 +100,20 @@ const PAGES = [
       if (!engines.some((e) => e.enabled)) return <p className="text-muted">Turn on an engine to pick models.</p>
       return <ModelListsSection engines={engines} lists={modelLists} connected={connected} send={send} />
     },
+  },
+  {
+    id: 'workers',
+    group: 'Options',
+    title: 'Workers',
+    intro: WORKERS_INTRO,
+    body: ({ workers, connected, send }: PageProps) => <WorkersPage workers={workers} connected={connected} send={send} />,
+  },
+  {
+    id: 'prompts',
+    group: 'Options',
+    title: 'Prompts',
+    intro: CORE_PROMPTS_INTRO,
+    body: ({ corePrompts, connected, send }: PageProps) => <CorePromptsPage prompts={corePrompts} connected={connected} send={send} />,
   },
   {
     id: 'setups',

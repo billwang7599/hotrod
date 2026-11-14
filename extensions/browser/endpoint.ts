@@ -1,7 +1,7 @@
-// The address Playwright MCP is given as --cdp-endpoint: http://127.0.0.1:<port>/<token>/<space>. Playwright asks it
-// for /json/version first, and only on an agent's first browser call; that's when the space's browser launches. The
-// answer is the browser's own, so Playwright then talks to the browser directly over its WebSocket. After a hand-off
-// the browser is a new one on a new port, and Playwright, which reconnects after a disconnect, finds it here again.
+// The address Kothar's own CDP client (client.ts) connects through: http://127.0.0.1:<port>/<token>/<space>. The
+// browser tools ask it for /json/version on an agent's first browser call; that's when the space's browser launches.
+// The answer is the browser's own, so the client then talks to the browser directly over its WebSocket. After a
+// hand-off the browser is a new one on a new port, and the tools, which connect again after a disconnect, find it here.
 import { randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 

@@ -328,6 +328,11 @@ function PathCard({
         />
       </div>
       {folder && item.mode && <FolderModeRow item={item} mode={item.mode} chatId={chatId} disabled={readOnly} send={send} />}
+      {folder && item.unborn && (
+        <span className={`pt-4 text-xs text-muted ${item.enabled ? '' : 'opacity-55'}`}>
+          Git repo with no commits yet: checked out from the first message after its first commit
+        </span>
+      )}
       {folder && item.mode === 'copy' && !item.blocked && (
         <CopyRow chatId={chatId} path={item.path} copy={item.copy} disabled={readOnly} send={send} />
       )}
@@ -390,9 +395,10 @@ function FolderModeRow({ item, mode, chatId, disabled, send }: {
 }) {
   return (
     <div className={`flex items-center gap-8 pt-6 text-sm ${item.enabled ? '' : 'opacity-55'}`}>
-      <span className="min-w-0 flex-1 text-muted">Mode</span>
+      {/* The label never shrinks, so a long reason wraps beside it instead of drawing over it. */}
+      <span className={`shrink-0 text-muted ${item.blocked ? '' : 'flex-1'}`}>Mode</span>
       {item.blocked ? (
-        <span className="text-xs text-muted">Read only, since {item.blocked}</span>
+        <span className="min-w-0 flex-1 text-right text-xs text-muted">Read only, since {item.blocked}</span>
       ) : (
         <Select
           variant="chip"
@@ -759,7 +765,7 @@ export function ContextPanel(props: ContextPanelProps) {
   const tab = usePanelTab()
   const extensionUi = props.extensionUi?.chatId === chatId ? props.extensionUi : undefined
   // A popup panel opens over the chat instead (extension-popups.tsx).
-  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup') : []
+  const extensionTabs: ExtensionTab[] = chat ? (extensionUi?.panels ?? []).filter((p) => p.placement !== 'popup' && p.tab !== false) : []
   const extensionNames = useMemo(() => new Map((props.extensions ?? []).map((e) => [e.id, e.name])), [props.extensions])
   const extensionTab = extensionTabs.find((p) => extensionTabId(p.extension, p.id) === tab)
   const known = tab === 'general' || extensionTab

@@ -88,7 +88,7 @@ Use the names the code uses:
 | Session | One run of an engine. Each message starts a fresh one; nothing resumes. |
 | Chat | An endless conversation owned by Kothar, backed by a series of sessions. |
 | Space | A top-level chat with its own folders, files and `AGENTS.md`. Its agent is the **lead**. |
-| Worker | A chat a lead starts below its own with `spawn_worker`, for one task. Its final reply wakes the lead. |
+| Worker | A chat started below another for one task: by its agent with `spawn_worker`, or by an extension with `host.createChat({ parentId })`. Its final reply wakes the lead (or, quiet, goes to the extension). Part of the core, set in Settings → Workers. |
 | Home | The built-in Home extension's chat (id `main`): a personal assistant that sees every space. |
 | Extension | Adds features to Kothar through the public extension API. **Built-in** ones ship in `extensions/`; **community** ones install from the marketplace. |
 | Setup | A saved choice for a kind of job: engine, model, thinking level, extensions to leave out, instructions. |
@@ -99,7 +99,8 @@ A **tool** is something an agent calls (run a command, edit a file, an MCP tool)
 
 ## Design rules
 
-1. **Small core.** The core is machines, sessions, chats and an event stream. Everything else is an extension.
+1. **Small core.** The core is machines, sessions, chats (workers included) and an event stream. Everything else is an
+   extension.
 2. **Built-in extensions use only the public extension API** (`@kothar/extension-api`). If one needs something the
    API lacks, add a small, generic API change in its own PR first, never a private hook.
 3. **Extensions never import the core at runtime.** `@kothar/core` may only be a `devDependency` of an extension, for
@@ -113,6 +114,61 @@ A **tool** is something an agent calls (run a command, edit a file, an MCP tool)
 8. **State is plain files** in the garage, not a database.
 9. **Pass dependencies in.** Core modules take the home folder, environment, clock and machine as arguments rather
    than reading `os.homedir()`, `process.env` or `Date.now()` themselves. Only startup code reads them.
+
+## Decisions
+
+Why some things are the way they are. Add one when you make a choice the next contributor would otherwise undo.
+
+- **Workers are part of the core, not an extension.** They were the Workers extension, but it was only a switch and two
+  settings over things that were already core: child chats (`chat-lifecycle.ts`) and the `spawn_worker` tool
+  (`kothar-mcp.ts`). As an extension it invited other extensions to depend on it (Deep Research greyed out a setting
+  without it), though what they need, child chats, never depended on it. Every agent and every extension can now count
+  on workers, so no extension declares a dependency to start one. Settings → Workers (`workers.ts`) keeps what the
+  extension had: **Let agents start workers** (the old switch, so turning it off still takes `spawn_worker` and its
+  instructions away), **Max running per chat**, and the instructions as an editable prompt. A setup keeps its chats
+  from starting workers with `workers: false` (older setups' `extensionsOff: ['workers']` reads as that).
+- **One limit counts every worker.** Max running per chat counts every running child of a chat, `spawn_worker`'s and
+  extensions' (quiet ones too), so an extension can't run past the user's limit. Over it, `spawn_worker` fails, so the
+  agent knows and can wait or stop one; an extension's worker waits for a slot instead, because the extension's work
+  (a research run) should finish, not fail. That's also why the switch for agents is separate from the limit: a
+  limit of 0 would leave an extension's workers waiting forever.
+- **The agent combines extensions; code rarely does.** Each session's "What you can use" section (`core-prompts.ts`)
+  lists what the chat can use, made from extensions' metadata, and tells the agent to combine them. Workers get their
+  lead's extension tools. An extension a worker uses may start workers one level below that worker (only there), so a
+  worker's deep research doesn't wait for the slot the worker itself holds.
+- **How extensions work together: five rules.** Other people write extensions and can't change the core, so these keep
+  every extension combinable without code linking them:
+  1. **Shared building blocks go in the core.** If two or more extensions need the same thing (chats, workers,
+     sessions, events, memory, permissions), it's core, reached through the public API. That's why workers moved in.
+  2. **Prefer the agent combining tools over code dependencies.** Give each extension clear tools; the agent is told
+     what it can use and combines them (a deep research run inside a worker needs no code in either).
+  3. **Code dependencies only when one extension changes how another looks or behaves.** Then use
+     `optionalDependencies`, `requires`, a setting's `requires`, or a capability (`provides`, `host.provide`,
+     `host.use`). Never import another extension's files. Calling another extension's tool with `host.callTool`, with
+     a fallback when it's off, is fine.
+  4. **Never check `chat.extension` to decide what a chat can do.** It says who owns a chat, not what it can do; that
+     check is how Home lost the Deep research chip (#376). Ask about the capability: `chat.keepsContext` (has folders,
+     files and a work folder: false for Home), `chat.worker` / `chat.parentId`, or the space's folders.
+  5. **Depend on capabilities, not ids.** Name a shared API for what it does (`search`, `research`), so a community
+     extension can provide it instead of a built-in one.
+
+- **Every engine tool can be switched from Kothar.** Kothar wants to see and control as much of what an agent does as
+  it can, so each engine's built-in tools are listed in Settings → Engines → Tools (`engine-tools.ts`), each with a
+  switch, core ones included, under two master switches (**Engine tools** for every engine, and one per engine). A
+  master off leaves the agent only MCP tools: Kothar's and extensions'. The per-tool choices stay saved underneath.
+- **Core tools stay on by default.** Commands, edits, reads and searches are what an engine is good at: its model was
+  trained on those exact tools, and Kothar's own MCP versions would make every engine worse and the same. Kothar
+  already sees every call (`tool.started`) and answers every permission request, so leaving them on costs no control.
+  Tools are grouped by what they do, not by engine: **core** (on), **replaced** (off while Kothar or an extension has
+  its own version: workers for subagents, Processes for background shells, Skills, Plan), and **outside** (off: they
+  act where Kothar can't see, stop or log them, such as schedules, notifications and publishing). A tool an engine
+  reports that its adapter doesn't know yet is on, marked new, and asks before each use.
+- **Extensions name capabilities, never engine tools.** An extension says what it stands in for with
+  `replaces: ['background-shell']`; each adapter maps its own tool names to those capabilities (`Adapter.tools`), so
+  engine names stay inside adapters and a community extension turns off the right tool on every engine.
+- **With every tool off, a few things stay.** Claude Code keeps `ToolSearch`, which it may need to load deferred MCP
+  tools (Kothar's among them); pi uses `--no-builtin-tools`, not `--no-tools`, which would drop MCP too; OpenCode turns
+  each built-in off by name, never `*`, which would match `kothar_*` as well.
 
 ## Pull requests
 
@@ -134,6 +190,11 @@ An adapter is one file in `packages/core/src/adapters/`, implementing `Adapter` 
   `turn.completed` and so on. Every tool call carries a common kind (`shell`, `edit`, `read`, `search`, `fetch`,
   `mcp`, `other`).
 - Optional: `complete` (one-shot model calls, used by Memory) and `accounts` (sign in, sign out, API keys).
+- Optional but wanted: `tools`, the engine's built-in tools, each with a shared capability and a group (`core`,
+  `replaced`, `outside`; see [Decisions](#decisions)). With it, `start` gets `options.tools` (`off` and `on`, by the
+  engine's names) and `options.noTools` (every built-in off, MCP tools kept), and Settings → Engines → Tools lists the
+  engine. Emit `tools.listed` with the engine's own list when a session starts, if the engine says it, so tools the
+  adapter doesn't know show up as new. Without `tools`, the engine's tools can't be switched (Codex today).
 
 Rules and helpers:
 
@@ -167,7 +228,8 @@ the full API reference. Built-in extensions in `extensions/` follow the same API
   - Use `host.home` and `host.now()` for the home folder and the time, not `node:os` or `Date.now()`.
   - Use `host.space(chatId).checkouts` and `onSpaceRemoved` for a space's checkouts.
 - The core creates every checkout and removes them when a space is deleted (design rule 10). Optional cleanup of merged
-  work belongs to an extension; see `extensions/git/cleanup.ts`.
+  work belongs to an extension; see `extensions/git/cleanup.ts`. A repo with no commits yet isn't checked out: it's a
+  plain folder with its mode until its first commit (`hasNoCommits` in `checkouts.ts`), so `checkouts` lacks it.
 - If the API lacks something, add the smallest generic change to `packages/extension-api/index.ts` and the core in its
   own PR, update `extension-documentation/reference/`, then build the extension on top.
 
@@ -192,6 +254,7 @@ the old names. Don't remove these, and don't use the old names in new code:
 | `packages/ui/src/connection.ts` (`VITE_HOTROD_CORE_URL`), `packages/ui/vite.config.ts` (`HOTROD_UI_PORT`) | Old UI environment variables. |
 | `packages/ui/src/renamed-storage.ts` | UI preferences saved under `hotrod.*` keys move to `kothar.*`. |
 | `packages/ui/src/panel-tab.ts` | Panel tabs saved as `mod:<id>`. |
+| `packages/core/src/workers.ts` (`moveWorkersSettings`), `packages/core/src/setups.ts` (`extensionsOff: ['workers']`) | Settings and setups saved while workers were an extension. |
 
 ## Licence of contributions
 

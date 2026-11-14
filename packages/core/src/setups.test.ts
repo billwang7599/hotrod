@@ -107,7 +107,21 @@ async function start({ tools = false } = {}) {
     const { result } = await response.json()
     return (result.tools as { name: string }[]).map((t) => t.name)
   }
-  return { core, garage, messages, errors, handle, create, chat, send, save, sessions, prompts, toolsIn }
+  // Calls a tool on the Kothar MCP server as the session's chat.
+  const call = async (options: SessionOptions, name: string, args: Record<string, unknown>) => {
+    const response = await fetch(options.kotharMcp!.url, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${options.kotharMcp!.token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
+    })
+    const { result } = await response.json()
+    return JSON.parse(result.content[0].text)
+  }
+  return { core, garage, messages, errors, handle, create, chat, send, save, sessions, prompts, toolsIn, toolsOf, call }
 }
 
 describe('setups', () => {
@@ -252,6 +266,47 @@ describe('setups', () => {
     t.handle({ type: 'chat.setSetup', chatId: quiet, setup: 'Quiet' })
     expect(await t.toolsIn(quiet)).not.toContain('test_tool')
     expect(await t.toolsIn(plain)).toContain('test_tool')
+  })
+
+  it('keep their chats from starting workers with workers: false, and read an older setup that left Workers out', async () => {
+    const t = await start({ tools: true })
+    const plain = t.create('Plain')
+    const solo = t.create('Solo')
+    expect(t.save({ name: 'Solo', workers: false })).toMatchObject({ workers: false })
+    t.handle({ type: 'chat.setSetup', chatId: solo, setup: 'Solo' })
+    expect(await t.toolsIn(solo)).not.toContain('spawn_worker')
+    expect(t.sessions.at(-1)!.instructions).not.toContain('spawn_worker')
+    expect(await t.toolsIn(plain)).toContain('spawn_worker')
+    // Workers were an extension: a setup saved then with them in extensionsOff now says workers: false.
+    writeFileSync(join(t.garage, 'setups', 'old.json'), JSON.stringify({ name: 'Old', extensionsOff: ['workers', 'test'] }))
+    expect(t.core.setups().find((s) => s.id === 'old')).toEqual({ id: 'old', name: 'Old', extensionsOff: ['test'], workers: false })
+  })
+
+  it('tell each chat what it can use, and give a worker its lead’s extension tools, listed the same way', async () => {
+    const t = await start({ tools: true })
+    const space = t.create()
+    t.handle({ type: 'chat.send', chatId: space, text: 'Go' })
+    await until(() => t.sessions.length > 0)
+    const lead = t.sessions.at(-1)!
+    expect(lead.instructions).toContain('They work together: when a task needs more than one, combine them on your own')
+    expect(lead.instructions).toContain('- Workers (spawn_worker, stop_chat): hand a whole task')
+    expect(lead.instructions).toContain('- Test extension (test_tool)')
+    const { chatId } = await t.call(lead, 'spawn_worker', { task: 'Use the test tool' })
+    await until(() => t.sessions.length > 1)
+    const worker = t.sessions.at(-1)!
+    expect(await t.toolsOf(worker)).toContain('test_tool')
+    expect(await t.toolsOf(worker)).not.toContain('spawn_worker')
+    expect(worker.instructions).toContain('- Test extension (test_tool)')
+    expect(worker.instructions).not.toContain('- Workers (')
+    await until(() => !t.core.chats().some((c) => c.id === chatId))
+    await until(() => t.chat(space).status === 'idle')
+
+    // The intro is Kothar's prompt, which the user can change in Settings → Prompts.
+    t.handle({ type: 'corePrompt.set', id: 'combine', text: 'Mix and match these.' })
+    expect(t.core.corePrompts()).toMatchObject([{ id: 'combine', text: 'Mix and match these.', edited: true }])
+    t.handle({ type: 'chat.send', chatId: space, text: 'Again' })
+    await until(() => t.sessions.at(-1)!.instructions.includes('Mix and match these.\n\n- Workers'))
+    await until(() => t.chat(space).status === 'idle')
   })
 
   it("never leave an extension out of its own chat, whose role needs its tools", async () => {

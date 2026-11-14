@@ -27,6 +27,7 @@ import { continuationParts, messagesOf, seededParts, withAttachments, type Promp
 import type { openModels } from './models.ts'
 import { decide, READ_ONLY_REASON, type RuledVerdict, type verdictOf } from './permissions.ts'
 import type { Activity } from './activity.ts'
+import { runningChildren } from './workers.ts'
 import { isToggled } from './composer-toggles.ts'
 import {
   editsAnywhere,
@@ -47,6 +48,7 @@ import {
   type MemoryMessage,
   type QueuedMessage,
   type Session,
+  type SessionOptions,
   type Upload,
 } from './shared.ts'
 import { messageOf } from './util.ts'
@@ -115,6 +117,12 @@ export type TurnDeps = {
   turnSent?: (chat: Chat, sent: SentInput) => void
   // What Kothar and extensions do on their own (activity.ts): permission answers, how extensions changed a turn.
   activity?: Activity
+  /** How many of one chat's children may run at once (Settings → Workers; -1: no limit). Absent: no limit. */
+  workerLimit?: () => number
+  // The engine's built-in tools for a chat's session (engine-tools.ts). Absent: the adapter's own defaults.
+  engineToolsFor?: (chat: Chat, engine: string) => Pick<SessionOptions, 'tools' | 'noTools'>
+  // The engine said which built-in tools its session has.
+  toolsListed?: (engine: string, names: string[]) => void
 }
 
 // What the core hands on of a turn as its session opens (kind 'turn'), or of a message steered into it ('steer'), for
@@ -138,6 +146,9 @@ export type SentInput =
       kotharMcp: boolean
       mcpServers: string[]
       images: number
+      // The engine's own tools turned off for the turn (Settings → Engines → Tools), by its names; none: every one,
+      // by a master switch. Absent for an engine whose tools Kothar can't switch.
+      engineTools?: { off: string[]; none?: true }
     }
   | { kind: 'steer'; turn: string; text: string; engine: string }
 
@@ -346,9 +357,13 @@ export function openTurns(deps: TurnDeps) {
   const finishTurn = (chat: Chat, error?: string) => {
     const parent = chat.info.worker && !chat.info.quiet ? parentOf(chat) : undefined
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, error)))
+    showReport(chat, error)
     if (chat.queue.length) reportErrors(() => sendQueue(chat))
     // Workers are there for one task: once the lead has their reply, they go. The reply lives on in the lead's log.
-    if (chat.info.worker && chat.status === 'idle') removeChats(familyOf(chat))
+    if (chat.info.worker && chat.status === 'idle') {
+      removeChats(familyOf(chat))
+      startWaitingWorkers(chat.info.parentId)
+    }
   }
 
   // A write for an engine event failed. If the chat's folder is gone, its session stops and it goes idle; either way
@@ -372,7 +387,9 @@ export function openTurns(deps: TurnDeps) {
     if (!chat.info.worker || !chats.has(chat.info.id)) return
     const parent = chat.info.quiet ? undefined : parentOf(chat)
     if (parent) reportErrors(() => enqueue(parent, reportOf(chat, `its folder ${chat.dir} is gone`)))
+    showReport(chat, `its folder ${chat.dir} is gone`)
     removeChats(familyOf(chat))
+    startWaitingWorkers(chat.info.parentId)
   }
 
   const reportErrors = (run: () => void) => {
@@ -381,6 +398,16 @@ export function openTurns(deps: TurnDeps) {
     } catch (error) {
       broadcast({ type: 'error', message: messageOf(error) })
     }
+  }
+
+  // A quiet worker that shows its report (ChatInfo.showReport): logged in its parent's transcript for the user, as a
+  // quiet report that neither queues for the parent's agent nor wakes it.
+  const showReport = (chat: Chat, error?: string) => {
+    if (!chat.info.quiet || !chat.info.showReport) return
+    const parent = parentOf(chat)
+    if (!parent) return
+    const { text, report } = reportOf(chat, error)
+    reportErrors(() => append(parent, { at: now().toISOString(), type: 'worker.report', text, ...report, quiet: true }))
   }
 
   const reportOf = (chat: Chat, error?: string) => {
@@ -416,7 +443,7 @@ export function openTurns(deps: TurnDeps) {
   // A turn's input is the worker reports and the message it started with, logged together at its start.
   const retry = (chat: Chat) => {
     // A message steered into the turn isn't what started it.
-    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || e.type === 'worker.report'
+    const isInput = (e: ChatEntry) => (e.type === 'user.message' && !e.midTurn) || (e.type === 'worker.report' && !e.quiet)
     const end = chat.entries.findLastIndex(isInput)
     if (end < 0) throw new Error(`${chat.info.name} has no message to send again`)
     const together = (e?: ChatEntry) => e !== undefined && isInput(e) && e.at === chat.entries[end]!.at
@@ -742,7 +769,7 @@ export function openTurns(deps: TurnDeps) {
       folders: folderPlaces,
       ...(readOnly && { readOnly }),
     })
-    const events = sessionEvents(chat, permissionsOf)
+    const events = sessionEvents(chat, adapter.id, permissionsOf)
     liveEvents.set(chat, events)
     try {
       chat.mcpToken = zoomable ? grantMcp(chat.info.id) : undefined
@@ -763,6 +790,7 @@ export function openTurns(deps: TurnDeps) {
         ...(thinking && { thinking }),
         ...(jail && { sandbox: jail }),
         ...(readOnly && { readOnly: true }),
+        ...deps.engineToolsFor?.(chat, adapter.id),
       }
       chat.account = accounts.activeOf(adapter.id)
       chat.runModel = model
@@ -786,6 +814,7 @@ export function openTurns(deps: TurnDeps) {
           kotharMcp: !!kotharMcp,
           mcpServers: mcpServers.map((server) => server.name),
           images: images?.length ?? 0,
+          ...(options.tools && { engineTools: { off: options.tools.off, ...(options.noTools && { none: true as const }) } }),
         })
       }
       if (sent && !sent.continued) recordTurnChanges(chat, sent, readOnly)
@@ -803,7 +832,7 @@ export function openTurns(deps: TurnDeps) {
   // Handles the events one session sends for chat: tools tracked for the turn summary, text streamed and saved, steers,
   // limits, questions, and permission requests answered by the core's rules, then extensions, else the user. Events
   // from any other session than ref.session (an older turn's, or one that never became the chat's) are dropped.
-  const sessionEvents = (chat: Chat, permissionsOf: () => Parameters<typeof verdictOf>[1]) => {
+  const sessionEvents = (chat: Chat, engine: string, permissionsOf: () => Parameters<typeof verdictOf>[1]) => {
     const ref: { session?: Session } = {}
     // Where each tool sits in chat.turn.tools, counting from 1.
     const toolIds = new Map<string, number>()
@@ -821,6 +850,7 @@ export function openTurns(deps: TurnDeps) {
       if (chat.session !== ref.session) return
       const at = now().toISOString()
       for (const extension of watchersOf('onEvent')) callExtension(extension, () => extension.onEvent!(detailOf(chat), event, contextOf(extension)))
+      if (event.type === 'tools.listed') return deps.toolsListed?.(engine, event.names)
       if (event.type === 'tool.started') {
         const { name, kind, summary, path } = event
         chat.turn?.tools.push({ name, kind, summary, ...(path !== undefined && { path }) })
@@ -967,11 +997,38 @@ export function openTurns(deps: TurnDeps) {
     }
   }
 
+  // A worker that hasn't started while its parent already runs as many children as Settings → Workers allows: its
+  // first message waits in its queue, and it starts as soon as one of them is done (startWaitingWorkers).
+  const waitsForSlot = (chat: Chat) => {
+    if (!chat.info.worker || chat.turns > 0 || chat.info.parentId === undefined) return false
+    const limit = deps.workerLimit?.() ?? -1
+    return limit !== -1 && runningChildren(chat.info.parentId, chats.values()) >= limit
+  }
+
+  // Starts the workers waiting for a slot, oldest first, while the limit allows: below parentId, or below every chat.
+  const startWaitingWorkers = (parentId?: string) => {
+    const waiting = [...chats.values()].filter(
+      (c) => c.info.worker && c.status === 'idle' && c.turns === 0 && c.queue.length > 0 && (parentId === undefined || c.info.parentId === parentId),
+    )
+    for (const chat of waiting) {
+      if (isQuitting() || waitsForSlot(chat) || !chats.has(chat.info.id)) continue
+      reportErrors(() => sendQueue(chat))
+    }
+  }
+
   const enqueue = (chat: Chat, message: Omit<QueuedMessage, 'id'>) => {
     if (isQuitting()) throw new Error('Kothar is quitting')
     checkActive(chat)
-    if (chat.status === 'idle') return sendQueue(chat, message)
+    if (chat.status === 'idle' && !waitsForSlot(chat)) return sendQueue(chat, message)
+    const waits = chat.status === 'idle'
     setQueue(chat, [...chat.queue, { id: randomBytes(4).toString('hex'), ...message }])
+    if (waits && chat.info.parentId !== undefined) {
+      const parentId = chat.info.parentId
+      deps.activity?.emit(parentId, () => ({
+        kind: 'worker',
+        title: `${chat.info.name} waits to start: this chat already runs as many workers as Settings → Workers allows`,
+      }))
+    }
   }
 
   const sendMessage = (chat: Chat, rawText: unknown, uploads: unknown, steering = false) => {
@@ -1087,6 +1144,7 @@ export function openTurns(deps: TurnDeps) {
 
   return {
     requestPermission,
+    startWaitingWorkers,
     send,
     sendMessage,
     enqueue,

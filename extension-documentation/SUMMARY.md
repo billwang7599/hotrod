@@ -7,6 +7,7 @@ The sidebar order of these pages. Each line links a page; indented lines sit und
 - [Using extensions](using-extensions.md)
 - [Quick start](quick-start.md)
 - [Extension anatomy](anatomy.md)
+- [Working with other extensions](working-together.md)
 - API reference
   - [The extension object](reference/extension.md)
   - [Settings and setup](reference/settings.md)
@@ -14,6 +15,7 @@ The sidebar order of these pages. Each line links a page; indented lines sit und
   - [Panels and commands](reference/panels.md)
   - [Events and hooks](reference/events.md)
   - [The host](reference/host.md)
+  - [Depending on other extensions](reference/dependencies.md)
   - [The manifest and uses](reference/manifest.md)
   - [Types](reference/types.md)
 - [Examples](examples.md)

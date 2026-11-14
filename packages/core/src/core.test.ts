@@ -19,9 +19,8 @@ import type { LimitReached, Extension, ExtensionChat, ExtensionHost, ExtensionSe
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createFakeAdapter, FAKE_DEFAULTS, FAKE_MODELS, FAKE_THINKING, type FakeStep } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
-import { CHECKOUT_RULES, FOLDER_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
+import { CHECKOUT_RULES, FOLDER_RULES, NO_COMMITS_RULES, openCore, WRITE_RULES, type Core } from './core.ts'
 import { LOCK_FILE } from './garage-lock.ts'
-import { WORKERS_EXTENSION } from './workers.ts'
 import { openModels, snapLevel, SUMMARY_MODELS } from './models.ts'
 import { localMachine } from './machine.ts'
 import { WINDOW_MAX_CHARS } from './memory.ts'
@@ -397,9 +396,11 @@ describe('chats', () => {
     expect(chatOf(t.core, 'aaaa0003')).toMatchObject({ parentId: 'aaaa0001', worker: true, role: 'workers' })
     expect(chatOf(t.core, 'aaaa0003')).not.toHaveProperty('subagent')
     expect(t.core.modelLists().workers).toMatchObject([{ engine: 'fake', model: FAKE_DEFAULTS.defaultModel }])
-    expect(t.core.extensions().find((m) => m.id === WORKERS_EXTENSION.id)).toMatchObject({ enabled: false, values: { limit: 2 } })
+    // The Subagents switch became the Workers extension's, which is Settings → Workers now: off lets no agent start one.
+    expect(t.core.workers()).toMatchObject({ start: false, limit: 2 })
     const settings = JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))
-    expect(settings.extensions).toEqual({ workers: { enabled: false, limit: 2 } })
+    expect(settings.extensions).toEqual({})
+    expect(settings.workers).toEqual({ start: false, limit: 2 })
     expect(settings).not.toHaveProperty('mods')
     expect(settings.models).not.toHaveProperty('subagents')
     const lead = chatOf(t.core, 'aaaa0001')!
@@ -776,12 +777,46 @@ describe('worktrees', () => {
 
   it("ends the turn with git's error when a folder can't be checked out", async () => {
     const t = setup(textScript)
-    const empty = tempDir()
-    git(empty, 'init', '-q')
-    const chat = createChat(t, { name: 'App', folders: [empty] })
+    const broken = tempDir()
+    writeFileSync(join(broken, '.git'), `gitdir: ${join(broken, 'missing')}\n`)
+    const chat = createChat(t, { name: 'App', folders: [broken] })
     expect(await sessionOf(t, chat.id)).toBeUndefined()
     const end = entriesOf(t.core, chat.id).at(-1)
-    expect(end).toMatchObject({ type: 'turn.completed', error: expect.stringContaining(`Couldn't check out ${empty}`) })
+    expect(end).toMatchObject({ type: 'turn.completed', error: expect.stringContaining(`Couldn't check out ${broken}`) })
+  })
+
+  it('uses a repo with no commits yet as a plain folder, and checks it out after its first commit', async () => {
+    const t = setup(textScript)
+    const empty = tempDir()
+    git(empty, 'init', '-q', '-b', 'main')
+    writeFileSync(join(empty, 'notes.md'), 'not committed\n')
+    const chat = createChat(t, { name: 'App', folders: [empty] })
+    t.handle({ type: 'context.get', chatId: chat.id })
+    const reply = t.replies.findLast((m) => m.type === 'chat.context')
+    const item = reply?.type === 'chat.context' ? reply.items.find((i) => i.path === empty) : undefined
+    expect(item).toMatchObject({ mode: 'edit', unborn: true })
+    expect(item).not.toHaveProperty('git')
+
+    const options = await sessionOf(t, chat.id)
+    expect(entriesOf(t.core, chat.id).at(-1)).not.toHaveProperty('error')
+    expect(options?.cwd).toBe(join(t.garage, 'work', chat.id))
+    expect(options?.extraDirs).toContain(empty)
+    expect(options?.sandbox?.writable).toContain(empty)
+    expect(options?.instructions).toContain(`${NO_COMMITS_RULES}\n- ${empty}`)
+    expect(options?.instructions).toContain(`- ${empty}: Edit in place. Write in it directly.`)
+    expect(options?.instructions).not.toContain(CHECKOUT_RULES)
+    expect(chatOf(t.core, chat.id)?.worktrees).toBeUndefined()
+    expect(git(empty, 'worktree', 'list')).not.toContain(t.garage)
+
+    git(empty, 'add', '-A')
+    git(empty, 'commit', '-q', '-m', 'first')
+    const tree = join(t.garage, 'work', chat.id, basename(empty))
+    const after = await sessionOf(t, chat.id)
+    expect(after?.cwd).toBe(tree)
+    expect(after?.instructions).toContain(`${CHECKOUT_RULES}\n- ${empty}: ${tree} (branch kothar/app)`)
+    expect(after?.instructions).not.toContain(NO_COMMITS_RULES)
+    expect(chatOf(t.core, chat.id)?.worktrees).toEqual({ [empty]: { path: tree, branch: 'kothar/app', from: 'main' } })
+    expect(readFileSync(join(tree, 'notes.md'), 'utf8')).toBe('not committed\n')
   })
 
   it('ends the turn at once on Stop while a checkout is being made, and starts no engine', async () => {
@@ -3824,9 +3859,9 @@ describe('extensions', () => {
   }
   const savedExtensions = (garage: string) => JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8')).extensions
 
-  it('lists every extension with its switch and declared defaults, the workers extension on', () => {
+  it('lists every extension with its switch and declared defaults; workers are the core’s, not one of them', () => {
     const t = setup(textScript, tempDir(), TEST_STOP_GRACE_MS, [tester])
-    expect(t.core.extensions()).toEqual([infoOf(tester, true), infoOf(WORKERS_EXTENSION, true)])
+    expect(t.core.extensions()).toEqual([infoOf(tester, true)])
   })
 
   it('saves switches and values flat in settings.json, broadcasts each and keeps them across a restart', () => {
@@ -3886,12 +3921,20 @@ describe('extensions', () => {
     expect(t.messages.at(-1)).toEqual({ type: 'extension.updated', extension: infoOf(tester, true) })
   })
 
-  it('reads the workers switch and limit saved before extensions had declarations', () => {
+  it('moves what the Workers extension saved to Settings → Workers', () => {
     const garage = tempDir()
-    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { workers: { enabled: true, limit: -1 } } }))
-    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.extensions()).toEqual([
-      infoOf(WORKERS_EXTENSION, true, { ...defaultsOf(WORKERS_EXTENSION), limit: -1 }),
-    ])
+    const edit = 'Start a worker per failing test.'
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { workers: { enabled: true, limit: -1, instructions: edit } } }))
+    const { core } = setup(textScript, garage, TEST_STOP_GRACE_MS, [])
+    expect(core.extensions()).toEqual([])
+    expect(core.workers()).toMatchObject({ start: true, limit: -1, instructions: { text: edit, edited: true } })
+    expect(JSON.parse(readFileSync(join(garage, 'settings.json'), 'utf8'))).toMatchObject({ extensions: {}, workers: { limit: -1 } })
+  })
+
+  it('turns a saved Workers limit of 0 into agents not starting workers, at the default limit', () => {
+    const garage = tempDir()
+    writeFileSync(join(garage, 'settings.json'), JSON.stringify({ extensions: { workers: { enabled: true, limit: 0 } } }))
+    expect(setup(textScript, garage, TEST_STOP_GRACE_MS, []).core.workers()).toMatchObject({ start: false, limit: 4 })
   })
 
   it("lists an extension that didn't load, off with why, and won't turn it on or change its saved switch", () => {
@@ -3909,7 +3952,6 @@ describe('extensions', () => {
     cores.push(core)
     expect(core.extensions()).toEqual([
       infoOf(tester, true),
-      infoOf(WORKERS_EXTENSION, true),
       { id: 'browser', name: 'browser', description: '', enabled: false, settings: [], values: {}, loadError },
     ])
     expect(() => core.handle({ type: 'extension.setEnabled', extensionId: 'browser', enabled: true }, () => {})).toThrow(loadError)

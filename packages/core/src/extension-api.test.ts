@@ -430,17 +430,73 @@ describe('a wait as the turn ends', () => {
     expect(t.chat(space).status).toBe('idle')
     expect(t.chat(space).queue).toEqual([])
     expect(() => t.host().createChat({ name: 'Odd', quiet: true })).toThrow('Only a child chat (with parentId) can be quiet')
+    expect(() => t.host().createChat({ name: 'Odd', parentId: space, showReport: true })).toThrow('Only a quiet child chat can show its report')
+
+    // showReport: the reply is logged in the parent's transcript too, quietly, and still doesn't wake it.
+    const shown = t.host().createChat({ name: 'Shown', parentId: space, quiet: true, showReport: true })
+    t.host().send(shown.id, 'Task')
+    await until(() => !t.core.chats().some((c) => c.id === shown.id))
+    expect(replies).toEqual(['Quiet: Done', 'Shown: Done'])
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toEqual([
+      expect.objectContaining({ name: 'Shown', chatId: shown.id, text: 'Done', quiet: true }),
+    ])
+    expect(t.chat(space).status).toBe('idle')
+    expect(t.chat(space).queue).toEqual([])
+  })
+})
+
+describe('start a worker', () => {
+  it('starts one with a task exactly as spawn_worker does: named after it, sent it, and it reports and wakes its parent', async () => {
+    const t = withHost()
+    const space = t.create()
+    const worker = t.host().createChat({ parentId: space, task: 'Count the files in the repo' })
+    expect(t.core.chats().find((c) => c.id === worker.id)?.name).toBe('Count the files in the repo')
+    await until(() => t.prompts.includes('Count the files in the repo'))
+    await until(() => !t.core.chats().some((c) => c.id === worker.id))
+    await until(() => t.chat(space).status === 'idle' && t.chat(space).entries.some((e) => e.type === 'worker.report'))
+    // The report wakes the parent: it runs a turn of its own on it.
+    await until(() => t.prompts.length >= 2)
+    expect(t.chat(space).entries.filter((e) => e.type === 'worker.report')).toHaveLength(1)
+  })
+
+  it('refuses a task without a parent, or one that isn’t text', () => {
+    const t = withHost()
+    const space = t.create()
+    expect(() => t.host().createChat({ name: 'Odd', task: 'Go' })).toThrow('Only a worker (with parentId) takes a task')
+    expect(() => t.host().createChat({ parentId: space, task: '  ' })).toThrow('A worker’s task is text')
+  })
+
+  it('counts its workers against Settings → Workers, queuing the rest until a slot frees', async () => {
+    const t = withHost()
+    t.handle({ type: 'workers.set', limit: 1 })
+    const space = t.create()
+    const a = t.host().createChat({ parentId: space, task: 'First', quiet: true })
+    const b = t.host().createChat({ parentId: space, task: 'Second', quiet: true })
+    expect(t.core.chats().filter((c) => c.parentId === space && c.status !== 'idle').length).toBeLessThanOrEqual(1)
+    await until(() => !t.core.chats().some((c) => c.id === a.id || c.id === b.id))
+    expect(t.prompts).toEqual(expect.arrayContaining(['First', 'Second']))
   })
 })
 
 describe('the host', () => {
+  it('says whether a chat keeps context: spaces and their workers do, an extension’s own chat and its workers don’t', () => {
+    const t = withHost({ chats: [{ id: 'own', name: 'Own', instructions: '' }] })
+    const space = t.create()
+    const worker = t.host().createChat({ name: 'Helper', parentId: space, quiet: true })
+    const ownWorker = t.host().createChat({ name: 'Own helper', parentId: 'own', quiet: true })
+    expect(t.host().chat(space)?.keepsContext).toBe(true)
+    expect(t.host().chat(worker.id)?.keepsContext).toBe(true)
+    expect(t.host().chat('own')).toMatchObject({ extension: 'test', keepsContext: false })
+    expect(t.host().chat(ownWorker.id)?.keepsContext).toBe(false)
+  })
+
   it('lists and reads chats', async () => {
     const t = withHost()
     const id = t.create('Alpha')
     await t.send(id, 'Hi')
     const host = t.host()
     expect(host.chats().map((c: ChatDetail) => c.name)).toContain('Alpha')
-    expect(host.chat(id)).toMatchObject({ id, name: 'Alpha', status: 'idle', archived: false, folders: [] })
+    expect(host.chat(id)).toMatchObject({ id, name: 'Alpha', status: 'idle', archived: false, keepsContext: true, folders: [] })
     expect(host.chat('nope')).toBeUndefined()
     expect(host.read(id).map((e) => e.type)).toEqual(['user.message', 'turn.started', 'text.completed', 'turn.completed'])
     expect(host.read(id, { last: 1 }).map((e) => e.type)).toEqual(['turn.completed'])
@@ -562,6 +618,60 @@ describe('the host', () => {
     expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: '' } })).toThrow('needs a name')
     expect(() => t.host().note(id, 'x', { panel: 'info', action: { name: 'a', value: 'x'.repeat(5000) } })).toThrow('at most 4000')
     expect(() => t.host().note(id, 'x', { card: { title: ' ' } })).toThrow('needs a title')
+  })
+
+  it('notes a live card the extension draws, redrawn live, whose buttons come back to it', async () => {
+    const counts = new Map<string, number>()
+    const t = withHost({
+      noteViews: [
+        {
+          id: 'progress',
+          render: (key) => ({ type: 'text', text: `${key}: ${counts.get(key) ?? 0}` }),
+          onAction: (action, key) => void counts.set(key, (counts.get(key) ?? 0) + (action.name === 'add' ? 1 : 0)),
+        },
+      ],
+      panels: [{ id: 'info', title: 'Info', render: () => ({ type: 'empty', text: '' }) }],
+    })
+    const id = t.create()
+    t.host().note(id, 'Counting', { view: { id: 'progress', key: 'a' } })
+    expect(t.chat(id).entries.findLast((e) => e.type === 'extension.note')).toMatchObject({
+      text: 'Counting',
+      extension: 'test',
+      view: { id: 'progress', key: 'a' },
+    })
+    t.handle({ type: 'context.get', chatId: id })
+    expect([...t.messages, ...t.replies].findLast((m) => m.type === 'chat.extensions' && m.chatId === id)).toMatchObject({ noteViews: [{ extension: 'test', id: 'progress' }] })
+    const drawn = () => t.replies.findLast((m) => m.type === 'extension.noteView')
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'progress', key: 'a' })
+    expect(drawn()).toMatchObject({ chatId: id, extension: 'test', noteView: 'progress', key: 'a', view: { type: 'text', text: 'a: 0' } })
+    // An action, then the chat's extensions draw again, so the window asks for the card again.
+    const before = t.messages.filter((m) => m.type === 'chat.extensions').length
+    await t.handle({ type: 'extension.noteView.action', chatId: id, extension: 'test', noteView: 'progress', key: 'a', action: { name: 'add' } })
+    expect(t.messages.filter((m) => m.type === 'chat.extensions').length).toBe(before + 1)
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'progress', key: 'a' })
+    expect(drawn()).toMatchObject({ view: { text: 'a: 1' } })
+    await t.handle({ type: 'extension.noteView.get', chatId: id, extension: 'test', noteView: 'nope', key: 'a' })
+    expect(drawn()).toMatchObject({ noteView: 'nope', error: 'Test extension has no note view "nope"' })
+    expect(() => t.host().note(id, 'x', { view: { id: 'nope', key: 'a' } })).toThrow('has no note view "nope"')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: '' } })).toThrow('1 to 200 characters')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: 'a' }, card: { title: 'T' } })).toThrow('a card of its own')
+    expect(() => t.host().note(id, 'x', { view: { id: 'progress', key: 'a' }, panel: 'info' })).toThrow('a card of its own')
+  })
+
+  it('keeps a dock with tab: false out of the tabs, and only a dock', () => {
+    const t = withHost({
+      panels: [
+        { id: 'doc', title: 'Doc', placement: 'dock', tab: false, render: () => ({ type: 'empty', text: '' }) },
+        { id: 'list', title: 'List', tab: false, render: () => ({ type: 'empty', text: '' }) },
+      ],
+    })
+    const id = t.create()
+    t.handle({ type: 'context.get', chatId: id })
+    const listed = [...t.messages, ...t.replies].findLast((m) => m.type === 'chat.extensions' && m.chatId === id)
+    expect(listed?.type === 'chat.extensions' && listed.panels).toEqual([
+      { extension: 'test', id: 'doc', title: 'Doc', placement: 'dock', tab: false },
+      { extension: 'test', id: 'list', title: 'List' },
+    ])
   })
 
   it('runs commands through the Machine', async () => {

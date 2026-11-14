@@ -1,4 +1,4 @@
-// The few Chrome DevTools Protocol calls the Browser extension makes itself, outside Playwright: which tabs are open,
+// The few Chrome DevTools Protocol calls the hand-off makes, apart from the browser tools (client.ts): which tabs are open,
 // moving cookies across a relaunch, bringing a window forward, closing the browser. Over the browser's own HTTP
 // endpoint and one WebSocket at a time, with Node's built-in fetch and WebSocket.
 

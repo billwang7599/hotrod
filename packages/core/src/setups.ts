@@ -108,7 +108,10 @@ export function cleaned(raw: Record<string, unknown>): Setup {
   if (instructions.length > MAX_SETUP_INSTRUCTIONS) {
     throw new Error(`A setup's instructions are at most ${MAX_SETUP_INSTRUCTIONS} characters`)
   }
-  const extensionsOff = [...new Set(off as string[])]
+  // Workers became part of the core: an older setup that left the Workers extension out now says workers: false.
+  const extensionsOff = [...new Set(off as string[])].filter((id) => id !== 'workers')
+  const workers = raw.workers === false || (off as string[]).includes('workers') ? false : undefined
+  if (raw.workers !== undefined && raw.workers !== false && raw.workers !== true) throw new Error('workers must be true or false')
   return {
     id,
     name,
@@ -116,6 +119,7 @@ export function cleaned(raw: Record<string, unknown>): Setup {
     ...(model !== undefined && { model }),
     ...(thinking !== undefined && { thinking }),
     ...(extensionsOff.length && { extensionsOff }),
+    ...(workers === false && { workers }),
     ...(instructions && { instructions }),
   }
 }

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Regenerates the app icon's PNG and ICNS, and the UI's PNG favicon, from their SVGs. macOS only (iconutil).
-# Run from anywhere: packages/desktop/scripts/build-icons.sh. Set CHROME if Playwright's own Chromium isn't installed.
+# Run from anywhere: packages/desktop/scripts/build-icons.sh. Set CHROME if Google Chrome isn't in /Applications.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 assets="$here/../assets"

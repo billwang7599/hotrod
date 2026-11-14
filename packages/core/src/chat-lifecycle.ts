@@ -28,7 +28,14 @@ import {
 } from './shared.ts'
 
 // What createChat takes: a new space from the UI or an extension, or (parentId and worker) a worker below a chat.
-export type ChatSpec = NewChat & { parentId?: string; worker?: boolean; role?: ModelRole; setup?: string; quiet?: boolean }
+export type ChatSpec = NewChat & {
+  parentId?: string
+  worker?: boolean
+  role?: ModelRole
+  setup?: string
+  quiet?: boolean
+  showReport?: boolean
+}
 
 export type ChatLifecycleDeps = {
   chats: Map<string, Chat>
@@ -144,7 +151,9 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
     const pin = spec.engine === undefined ? undefined : models.pinOn(spec.engine, role)
     const engine = spec.engine ?? models.engineFor(role, setup)
     if (parent) deps.checkActive(parent)
-    if (parent?.info.worker) throw new Error('A worker cannot start chats')
+    // An agent's worker can't start workers itself (spawn_worker isn't offered to it), but an extension it uses can,
+    // one level down, so research it runs doesn't wait for the slot its own worker holds. No deeper.
+    if (parent?.info.worker && deps.parentOf(parent)?.info.worker) throw new Error("A worker's worker cannot start chats")
     const folders = [...new Set((spec.folders ?? []).map((path) => checkPath(path, 'folders', deps.home)))]
     const files = [...new Set((spec.files ?? []).map((path) => checkPath(path, 'files', deps.home)))]
     let id = randomBytes(4).toString('hex')
@@ -159,6 +168,7 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
         role,
         parentMessages: parentMessages.length,
         ...(spec.quiet === true && { quiet: true as const }),
+        ...(spec.quiet === true && spec.showReport === true && { showReport: true as const }),
       }),
       folders,
       files,
@@ -178,10 +188,11 @@ export function openChatLifecycle(deps: ChatLifecycleDeps) {
   }
 
   // A chat below another, for one task: what spawn_worker and an extension's host.createChat with a parentId both make.
-  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole; quiet?: boolean }) => {
+  const createChild = (parentId: string, spec: NewChat & { role?: ModelRole; quiet?: boolean; showReport?: boolean }) => {
     if (spec.folders?.length || spec.files?.length) throw new Error('A child chat takes its folders from its space')
     if (spec.role !== undefined && !MODEL_ROLES.includes(spec.role)) throw new Error(`Unknown role "${spec.role}"`)
-    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role, quiet: spec.quiet === true })
+    const quiet = spec.quiet === true
+    return createChat({ name: spec.name, engine: spec.engine, parentId, worker: true, role: spec.role, quiet, showReport: quiet && spec.showReport === true })
   }
 
   const renameChat = (chat: Chat, name: unknown) => {

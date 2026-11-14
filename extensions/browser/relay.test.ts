@@ -7,6 +7,7 @@ import { until as waitUntil } from '@kothar/core/test-wait'
 import { createAgent, parseCode } from './chrome-extension/agent.js'
 import type { ChatDetail, ExtensionHost, ExtensionTool, ExtensionWait } from '@kothar/extension-api'
 import browser, { createBrowserExtension, HAND_OFF_TOOL, SHOW_TOOL, YOUR_CHROME } from './index.ts'
+import { CdpClient, Pages } from './client.ts'
 import { extensionId, EXTENSION_DIR, NOT_CONNECTED, type Relay, startRelay } from './relay.ts'
 
 const dirs: string[] = []
@@ -124,7 +125,7 @@ async function paired(options: { origin?: string } = {}) {
   return s
 }
 
-// Playwright's side: a DevTools client on the space's endpoint.
+// A DevTools client on the space's endpoint, as Kothar's browser tools connect.
 async function cdpClient(relay: Relay, space: string) {
   const version = await (await fetch(`${relay.cdpUrl(space)}/json/version/`)).json()
   const ws = new WebSocket(version.webSocketDebuggerUrl)
@@ -305,6 +306,22 @@ it("a popup from an agent's tab joins its group, and Chrome's events reach the s
   expect(theirs.groupId).toBe(-1)
 })
 
+it("Kothar's own CDP client drives a space's tabs through the relay as it does its own Chrome", async () => {
+  const { relay, fake } = await paired()
+  const client = await CdpClient.connect(relay.cdpUrl('sales'))
+  cleanups.push(() => client.close())
+  const pages = new Pages(client)
+  await pages.start()
+  expect(pages.list()).toEqual([])
+  const tab = await pages.create('https://example.com/')
+  expect(pages.list()).toHaveLength(1)
+  const tabId = [...fake.tabs.values()].find((t) => t.url === 'https://example.com/')!.id
+  expect(tab.targetId).toBe(`T${tabId}`)
+  const { result } = await client.send<{ result: { value: string } }>('Runtime.evaluate', { expression: 'location.href' }, tab.sessionId)
+  expect(result.value).toBe('https://example.com/')
+  await expect(client.send('Storage.getCookies')).rejects.toThrow("isn't allowed in your own Chrome")
+})
+
 it("refuses browser-wide calls that would read or change the user's own browser", async () => {
   const { relay } = await paired()
   const cdp = await cdpClient(relay, 'sales')
@@ -358,7 +375,7 @@ async function yourChrome() {
   const defaults = Object.fromEntries(browser.settings!.map((setting) => [setting.key, setting.default]))
   const values = { ...defaults, profile: YOUR_CHROME }
   const launches: unknown[] = []
-  const { extension } = createBrowserExtension({
+  const { extension, cdpUrl } = createBrowserExtension({
     launch: () => async (given) => {
       launches.push(given)
       throw new Error('launched')
@@ -375,7 +392,7 @@ async function yourChrome() {
     processesChanged: () => {},
     storage: { dir },
   } as unknown as ExtensionHost
-  const space: ChatDetail = { id: 'sales', name: 'Sales', engine: 'fake', status: 'running', archived: false, folders: [], files: [], createdAt: '' } as ChatDetail
+  const space: ChatDetail = { id: 'sales', name: 'Sales', engine: 'fake', status: 'running', archived: false, keepsContext: true, folders: [], files: [], createdAt: '' } as ChatDetail
   chats.push(space)
   await extension.onStart!({ values, host })
   cleanups.push(() => extension.onStop!({ values, host }))
@@ -383,10 +400,7 @@ async function yourChrome() {
   const agent = createAgent({ chrome: fake.chrome, WebSocket: socketWith(ORIGIN), setTimer: () => 0 })
   cleanups.push(() => agent.unpair())
   const view = () => JSON.stringify(extension.settingsView!.render({ values, host }))
-  const endpoint = () => {
-    const { args } = extension.mcpServers!({ chat: { id: 'sales', name: 'Sales', engine: 'fake' }, workDir: dir, sandboxed: true, values })[0]!
-    return args![args!.indexOf('--cdp-endpoint') + 1]!
-  }
+  const endpoint = () => cdpUrl('sales')
   const tool = (name: string) => extension.tools!.find((t) => t.name === name) as ExtensionTool
   return { extension, values, host, space, waits, fake, agent, view, endpoint, tool, launches }
 }
@@ -402,11 +416,11 @@ it('Your Chrome: Settings shows the setup steps and code, and pairing turns it C
   expect(view()).not.toContain('Load unpacked')
 })
 
-it("Your Chrome: agents' Playwright gets the space's endpoint on the relay, and no browser is launched", async () => {
-  const { endpoint, agent, view, launches, fake } = await yourChrome()
+it("Your Chrome: the browser tools get the space's endpoint on the relay, and no browser is launched", async () => {
+  const { endpoint, agent, view, launches, fake, tool, space, values, host } = await yourChrome()
   await agent.pair(/KOTHAR:\d+:[\w-]+/.exec(view())![0])
   await until(() => view().includes('"Connected"'))
-  const url = endpoint()
+  const url = await endpoint()
   const port = /KOTHAR:(\d+):/.exec(view())![1]
   expect(url).toMatch(new RegExp(`^http://127\\.0\\.0\\.1:${port}/[\\w-]+/sales$`))
   const version = await (await fetch(`${url}/json/version/`)).json()
@@ -417,6 +431,8 @@ it("Your Chrome: agents' Playwright gets the space's endpoint on the relay, and 
   expect((await answer).result.targetId).toMatch(/^T\d+$/)
   ws.close()
   expect([...fake.groups.values()][0]).toMatchObject({ title: 'Kothar · Sales', color: 'blue' })
+  // The agent's browser_tabs reaches the same tab through the relay.
+  expect(String(await tool('browser_tabs').run({ action: 'list' }, { caller: space, values, host }))).toBe('0: https://example.com')
   expect(launches).toEqual([])
 })
 
@@ -426,7 +442,7 @@ it("Your Chrome: show_browser focuses the space's group and waits for Done, whic
   await until(() => view().includes('"Connected"'))
   // No tabs yet: the agent hears to open the page first.
   await expect(tool(SHOW_TOOL).run({ reason: 'Look' }, { caller: space, values, host })).rejects.toThrow(/no tabs/)
-  const version = await (await fetch(`${endpoint()}/json/version/`)).json()
+  const version = await (await fetch(`${await endpoint()}/json/version/`)).json()
   const ws = new WebSocket(version.webSocketDebuggerUrl)
   await new Promise((resolve) => ws.once('open', resolve))
   const made = new Promise((resolve) => ws.once('message', resolve))

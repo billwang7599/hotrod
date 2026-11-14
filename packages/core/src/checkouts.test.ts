@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { freeName, openCheckouts, ownWorkDirOf } from './checkouts.ts'
+import { freeName, hasNoCommits, openCheckouts, ownWorkDirOf } from './checkouts.ts'
 import { localMachine } from './machine.ts'
 import type { ChatInfo, Worktree } from './shared.ts'
 
@@ -121,6 +121,38 @@ describe('checkoutOf', () => {
     await expect(checkoutsFor().checkoutOf(spaceAt(workDir), notRepo, workDir, false)).rejects.toThrow(
       `Couldn't check out ${notRepo} in the work folder`,
     )
+  })
+})
+
+describe('hasNoCommits', () => {
+  it('is true only for a repo whose branch has no commit yet, in a worktree or with packed refs too', () => {
+    const empty = tempDir()
+    git(empty, 'init', '-q', '-b', 'main')
+    expect(hasNoCommits(empty)).toBe(true)
+    writeFileSync(join(empty, 'a.txt'), 'a\n')
+    git(empty, 'add', '-A')
+    git(empty, 'commit', '-q', '-m', 'first')
+    expect(hasNoCommits(empty)).toBe(false)
+    git(empty, 'pack-refs', '--all')
+    expect(existsSync(join(empty, '.git', 'refs', 'heads', 'main'))).toBe(false)
+    expect(hasNoCommits(empty)).toBe(false)
+    // A linked worktree's .git is a file, and its refs live in the main repo.
+    const linked = join(tempDir(), 'linked')
+    git(empty, 'worktree', 'add', '-q', '-b', 'other', linked)
+    expect(hasNoCommits(linked)).toBe(false)
+    // Detached at a commit.
+    git(empty, 'checkout', '-q', '--detach')
+    expect(hasNoCommits(empty)).toBe(false)
+  })
+
+  it('is false for a plain folder, a broken .git and an unborn branch beside committed ones', () => {
+    expect(hasNoCommits(tempDir())).toBe(false)
+    const broken = tempDir()
+    writeFileSync(join(broken, '.git'), 'gitdir: /nowhere\n')
+    expect(hasNoCommits(broken)).toBe(false)
+    const repo = gitRepo(join(tempDir(), 'repo'))
+    git(repo, 'checkout', '-q', '--orphan', 'fresh')
+    expect(hasNoCommits(repo)).toBe(true)
   })
 })
 

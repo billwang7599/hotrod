@@ -1,4 +1,5 @@
 import type {
+  ToolCapability,
   ModelRole as ApiModelRole,
   Answers,
   Attachment,
@@ -24,6 +25,7 @@ export type {
   MemoryMessage,
   MessageKind,
   Question,
+  ToolCapability,
   ToolKind,
 } from '@kothar/extension-api'
 
@@ -115,6 +117,43 @@ export type SessionOptions = {
   // The turn may read but change nothing (an extension's TurnOptions): an engine with a read-only mode starts in it.
   // Kothar's sandbox and permission answers enforce it either way.
   readOnly?: boolean
+  // The engine's built-in tools, by its own names, as Settings → Engines → Tools has them (engine-tools.ts): off ones
+  // the engine must not offer, on ones it must (some engines leave a tool out unless named). Names the adapter
+  // doesn't know may be in either list. Only for adapters with `tools`.
+  tools?: { off: string[]; on: string[] }
+  // Every built-in tool off (the Engine tools master switch): only MCP tools, Kothar's and extensions', are left.
+  noTools?: boolean
+}
+
+// Where an engine's built-in tool sits by default (Settings → Engines → Tools):
+// - core: what the engine works with (commands, edits, reads, searches); on.
+// - replaced: Kothar has its own version (workers for subagents, say); off while Kothar's version is on, else on.
+// - outside: acts where Kothar can't see, stop or log it (schedules, notifications, publishing); off.
+export type ToolGroup = 'core' | 'replaced' | 'outside'
+
+// One of an engine's built-in tools as its adapter knows it. on: its default when it isn't the group's (a tool the
+// engine itself leaves out unless named, or one Kothar has always kept off).
+export type EngineToolSpec = { name: string; capability?: ToolCapability; group: ToolGroup; on?: boolean }
+
+// One engine tool as Settings shows it (engine-tools.ts). defaultOn: what it is without the user's choice; saved: the
+// user chose (on is that choice). replacedBy: who stands in for it while it's off by default, such as Workers. isNew:
+// the engine reported it and its adapter doesn't know it.
+export type EngineToolRow = {
+  name: string
+  capability?: ToolCapability
+  group: ToolGroup
+  isNew?: true
+  defaultOn: boolean
+  on: boolean
+  saved?: true
+  replacedBy?: string
+}
+
+// Settings → Engines → Tools. enabled: the master switch for every engine. Per engine whose tools can be switched: its
+// own master switch and its tools; the per-tool choices stay as saved while a master is off.
+export type EngineToolsSettings = {
+  enabled: boolean
+  engines: { engine: string; name: string; enabled: boolean; tools: EngineToolRow[] }[]
 }
 
 export type ImageInput = { mimeType: string; base64: string }
@@ -169,6 +208,9 @@ export interface Adapter {
   kotharMcp?: boolean
   // Its sessions have steer, so the UI can say Enter steers.
   steering?: boolean
+  // The engine's built-in tools it knows, which Kothar can switch on and off per session (SessionOptions.tools,
+  // noTools). Without it, the engine's tools can't be switched.
+  tools?: EngineToolSpec[]
   accounts?: {
     status(machine: Machine, accountDir?: string): Promise<AccountStatus>
     login(machine: Machine, accountDir: string, emit: (event: LoginEvent) => void, choice?: AccountChoice): LoginFlow
@@ -232,6 +274,9 @@ export type ChatInfo = PermissionSwitches & {
   parentMessages?: number
   // A child an extension made with quiet: its reply goes to the extension's onTurnCompleted, not its parent's queue.
   quiet?: true
+  // With quiet: its reply is also logged in its parent's transcript as a worker's report (quiet there too), for the
+  // user to read, without being queued for the parent's agent or waking it.
+  showReport?: true
   folders: string[]
   files: string[]
   // The engine the chat runs on. With `model` set, the two are the chat's own pick and stay put; without it, the core
@@ -277,6 +322,8 @@ export type Setup = {
   model?: string
   thinking?: ThinkingLevel
   extensionsOff?: string[]
+  // false: chats on this setup can't start workers themselves (no spawn_worker); absent: they follow Settings → Workers.
+  workers?: false
   instructions?: string
 }
 
@@ -358,6 +405,10 @@ export type PromptInfo = {
   updatedDefault?: true
 }
 
+// Settings → Workers: whether agents may start workers (spawn_worker), how many one chat runs at once (-1: no limit;
+// extensions' workers count too), and the instructions chats that may start them get.
+export type WorkersSettings = { start: boolean; limit: number; instructions: PromptInfo }
+
 export type ExtensionInfo = {
   id: string
   name: string
@@ -375,6 +426,12 @@ export type ExtensionInfo = {
   prompts?: PromptInfo[]
   // It adds instructions the user can't edit: an instructions hook (or a memory's) with no 'instructions' prompt.
   fixedInstructions?: boolean
+  // The extensions it can't run without (Extension.requires), and, while one of them is off, why it doesn't run
+  // ("Needs the Browser extension"): the switch shows greyed out with it.
+  requires?: string[]
+  blocked?: string
+  // Settings greyed out because an extension they need is off, by key, with why (ExtensionSetting.requires).
+  blockedSettings?: Record<string, string>
   // A built-in extension's uses, read from the fields it sets, for its page (a community one's are community.uses).
   uses?: ExtensionUse[]
   // A community extension: installed in the garage from the marketplace or a folder, and what it says it uses. running:
@@ -443,6 +500,9 @@ export type ContextItem = {
   binary?: boolean
   // Folders only: a git repo, checked out in the work folder whatever its mode.
   git?: true
+  // Folders only: a git repo with no commits yet. It isn't checked out (git isn't set): it has a mode like any folder
+  // until its first commit.
+  unborn?: true
   // Folders that aren't git repos: how agents may write in it, and why they can't when Kothar refuses the mode.
   mode?: FolderMode
   blocked?: string
@@ -498,7 +558,11 @@ export type PanelTab = {
   placement?: 'tab' | 'popup' | 'dock'
   shortcut?: string
   launcher?: boolean
+  // A dock kept out of the right sidebar's tabs (ExtensionPanel.tab false).
+  tab?: false
 }
+// One of an extension's live transcript cards (ExtensionNoteView) the chat can draw now.
+export type NoteViewInfo = { extension: string; id: string }
 export type CommandInfo = { extension: string; id: string; label: string; hint?: string }
 // An extension's button on the chat's messages (ExtensionMessageAction), and the entries it marks.
 export type MessageActionInfo = {
@@ -511,6 +575,16 @@ export type MessageActionInfo = {
   activeHint?: string
   kinds: ('user' | 'work' | 'talk')[]
   marked: number[]
+}
+// An extension's folded row under the chat's messages (ExtensionMessageDetail), and the entries that get it (all of its
+// kinds when absent).
+export type MessageDetailInfo = {
+  extension: string
+  id: string
+  label: string
+  hint?: string
+  kinds: ('user' | 'work' | 'talk')[]
+  entries?: number[]
 }
 // An extension's switch in the chat's composer (ExtensionComposerToggle), and whether it's on in the chat.
 export type ComposerToggleInfo = {
@@ -568,6 +642,10 @@ export type ClientMessage =
   | { type: 'extension.command'; chatId: string; extension: string; command: string }
   // One of an extension's message actions, on the message at entry in the chat's log.
   | { type: 'extension.message.action'; chatId: string; extension: string; action: string; entry: number }
+  // Draws one of an extension's message details for the message at entry; replies with extension.detail.
+  | { type: 'extension.detail.get'; chatId: string; extension: string; detail: string; entry: number }
+  | { type: 'extension.noteView.get'; chatId: string; extension: string; noteView: string; key: string }
+  | { type: 'extension.noteView.action'; chatId: string; extension: string; noteView: string; key: string; action: ExtensionAction }
   // One of an extension's composer toggles, turned on or off in the chat.
   | { type: 'extension.toggle'; chatId: string; extension: string; toggle: string; on: boolean }
   | { type: 'extension.wait.answer'; chatId: string; extension: string; button: string }
@@ -589,6 +667,16 @@ export type ClientMessage =
   | { type: 'extension.setValue'; extensionId: string; key: string; value: string | number | boolean }
   // Saves the user's edit of one of an extension's prompts; without text (or with the default), back to the default.
   | { type: 'extension.prompt.set'; extensionId: string; promptId: string; text?: string }
+  // Settings → Workers. text undefined: the instructions go back to their default.
+  | { type: 'workers.set'; start?: boolean; limit?: number }
+  // Settings → Engines → Tools: a master switch (every engine's without engine), one tool (on absent: back to its
+  // default), or every tool of an engine back to its default.
+  | { type: 'engineTools.setEnabled'; engine?: string; enabled: boolean }
+  | { type: 'engineTools.setTool'; engine: string; tool: string; on?: boolean }
+  | { type: 'engineTools.reset'; engine: string }
+  | { type: 'workers.prompt.set'; text?: string }
+  // Settings → Prompts: one of Kothar's own prompts (core-prompts.ts). text undefined: back to its default.
+  | { type: 'corePrompt.set'; id: string; text?: string }
   | { type: 'extension.install'; extensionId: string }
   | { type: 'extension.cancelInstall'; extensionId: string }
   // Draws the extension's settings view again (the page opened), answered with extension.updated.
@@ -669,6 +757,10 @@ export type CoreMessage =
       modelLists: ModelLists
       setups: Setup[]
       memory: MemorySettings
+      workers: WorkersSettings
+      // Absent from an older core.
+      engineTools?: EngineToolsSettings
+      corePrompts: PromptInfo[]
       workFolder: WorkFolder
       themes: ThemeFile[]
       installed: InstalledItem[]
@@ -697,9 +789,15 @@ export type CoreMessage =
       // Absent: none.
       messageActions?: MessageActionInfo[]
       // Absent: none.
+      messageDetails?: MessageDetailInfo[]
+      // Absent: none.
       toggles?: ComposerToggleInfo[]
+      // Absent: none.
+      noteViews?: NoteViewInfo[]
     }
   | { type: 'extension.panel'; chatId: string; extension: string; panel: string; view?: ExtensionView; error?: string }
+  | { type: 'extension.detail'; chatId: string; extension: string; detail: string; entry: number; view?: ExtensionView; error?: string }
+  | { type: 'extension.noteView'; chatId: string; extension: string; noteView: string; key: string; view?: ExtensionView; error?: string }
   | { type: 'context.file'; path: string; text: string }
   | { type: 'context.defaults'; defaults: Record<ContextSection, boolean> }
   // An extension that's new to the list (a community extension just installed) is added.
@@ -713,6 +811,9 @@ export type CoreMessage =
   | { type: 'setup.saved'; setup: Setup }
   | { type: 'setup.refused'; error: string }
   | { type: 'memory.updated'; memory: MemorySettings }
+  | { type: 'workers.updated'; workers: WorkersSettings }
+  | { type: 'engineTools.updated'; engineTools: EngineToolsSettings }
+  | { type: 'corePrompts.updated'; prompts: PromptInfo[] }
   | { type: 'workFolder.updated'; workFolder: WorkFolder }
   // The marketplace's entries, or why they couldn't be fetched (offline, say).
   | { type: 'marketplace.catalog'; entries?: MarketEntry[]; error?: string }

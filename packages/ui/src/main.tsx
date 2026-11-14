@@ -371,6 +371,9 @@ function App() {
               modelLists={state.modelLists}
               setups={state.setups}
               setupSave={state.setupSave}
+              workers={state.workers}
+              engineTools={state.engineTools}
+              corePrompts={state.corePrompts}
               workFolder={state.workFolder}
               chooseWorkFolder={() => setChangingWorkFolder(true)}
               market={market}
@@ -411,6 +414,7 @@ function App() {
                 extensionUi={state.extensionUi}
                 extensions={state.extensions}
                 panelViews={state.panelViews}
+                detailViews={state.detailViews}
                 terminalErrors={state.terminalErrors}
                 contextDefaults={state.contextDefaults}
                 modelLists={state.modelLists}

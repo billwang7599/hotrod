@@ -29,7 +29,7 @@ The built-in extensions today:
 | Memory | Yes | Every chat remembers its whole conversation, with older messages as summaries. Off, a fresh session sees only the latest messages that fit. |
 | Workers | Yes | Leads can hand a task to a worker chat, which reports back when it ends. |
 | Processes | Yes | Agents can run dev servers and watchers that keep going between messages. Adds a Processes tab. |
-| Browser | No | Agents browse the web with Playwright in the background, one browser per space, on a profile of Kothar's own, in your own Chrome through the Kothar extension, or on a copy of one of yours. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
+| Browser | No | Agents browse the web in the background with Kothar's own browser tools, one browser per space, on a profile of Kothar's own or in your own Chrome through the Kothar extension. When a page needs you, or the agent wants to show you something, it opens in a window and the agent carries on when you click Done. |
 | Git | No | A Changes tab for spaces with git folders: branches, changed files, diffs and pull requests, kept current while agents work. |
 | Account rotation | No | When an account hits its usage limit, switch to the next saved account and carry on. |
 | Notes | Yes | Your own Markdown notes, as in Obsidian, global or per space, in a popup over the chat (⌘⇧N). Agents reach them with tools when you ask. |
@@ -37,7 +37,7 @@ The built-in extensions today:
 | Plan | Yes | A **Plan first** chip beside the message box, for coding sessions. While it's on, the chat is read only: Kothar's sandbox and permission answers refuse edits and commands that change anything, on every engine, and it plans on your Planning models if you've set some. The agent hands in a plan (goal, files, steps, risks, tests) and the amber bar asks you to approve, edit or cancel it, as Deep Research does with its plan. Edit closes the bar and opens the plan in the Plan tab, where **Approve and start** saves and approves it. Approve turns the chip off and starts the work; the Plan tab ticks steps off as the agent goes. Its page in Settings hides the chip, and can stop requiring a tests step. |
 | Reconnect | Yes | When a turn ends because the connection dropped or the engine's service was down, wait for it to come back and continue the turn. |
 | Skills | Yes | Saved instructions for kinds of task, in the Agent Skills format (a folder with a SKILL.md), the same on every engine. Agents see a one-line list of the skills that are on and read one when a task fits. Its page in Settings lists them, turns each on or off, and imports more from a folder, a .zip or .skill file, a GitHub link, or the skills folders of Claude Code, Codex and pi. Skills from GitHub start off, so you can read them first. |
-| Inspector | Yes | **See what was sent** on each of your messages, and a **Sent** tab: everything Kothar handed the engine for that turn, labelled. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
+| Inspector | Yes | A folded **What was sent** row under each of your messages: everything Kothar handed the engine for that turn, labelled. Its **Activity** tab lists what Kothar and extensions did on their own. Its page in Settings sets how many turns each chat keeps. See [Inspector](#inspector). |
 | Deep Research | Yes | Long, multi-source research that ends in a cited report. Turn on **Deep research** in a chat's composer, use **New research** (⌘⇧D), or ask the agent. You approve a plan of sub-questions, workers search and read the web, and every claim in the report cites a quote Kothar found on its page. |
 | MCP servers | Yes | Connect MCP servers (GitHub, Linear, Notion, a filesystem server, …) to your chats, on every engine. Kothar connects to them itself and offers their tools as its own, so keys never reach an engine and every call is asked for and recorded. Pick from a catalog or add your own in its page in Settings; switch one off for a chat in its MCP tab. See [MCP servers](#mcp-servers). |
 
@@ -133,8 +133,9 @@ up the settings page") and the agent makes it with a tool instead of pasting it 
 
 The Inspector shows what Kothar actually sends the engine, so nothing it adds is hidden from you.
 
-- **See what was sent:** hover one of your messages and click the eye. What went out with it opens beside the chat;
-  **Older** and **Newer** step through the turns kept. The **Sent** tab in the right sidebar shows the latest turn.
+- **What was sent:** under each of your messages, a folded **What was sent** row. Click it to see what went out with
+  that message, in the chat itself; click again to fold it. It's drawn only when you open it, and a message older than
+  the turns kept has no row.
 - **Sections, in the order they were sent,** each labelled by who it's from: **Kothar core** (where agents may write,
   folder modes, checkouts), **Context** (your AGENTS.md files, files and the setup), each **extension** by name, the
   conversation so far (from Memory, or Kothar's own window), **You** (your message, noted if an extension rewrote it),
@@ -266,12 +267,11 @@ or the address of a remote server (Streamable HTTP, or SSE for an address ending
 
 ### Browser: your profile, in the background
 
-**Which browser.** Settings → Extensions → Browser → **Browser** picks what runs Kothar's own profile: **Google
-Chrome (installed)**, the default, or **Bundled Chromium** (Playwright's Chrome for Testing, installed from the same
-page). Chrome runs on a profile of Kothar's own per space (`<data folder>/extensions/browser/chrome-profiles/<space>/`),
-never your everyday Chrome profile, its cookies or its tabs. Without Chrome installed, the bundled Chromium runs, and
-the settings page says so. The two keep separate folders, since Chrome refuses a profile a newer version last opened,
-so switching starts the other one logged out (the old folder stays until you switch back or delete the space).
+**Which browser.** Kothar's own profile runs on the browser you have installed: Google Chrome first (then Chrome Beta
+or Canary), else Edge, Brave, Arc or Chromium. Kothar installs no browser of its own; with none of these, the settings
+page says to install Chrome. Chrome runs on a profile of Kothar's own per space
+(`<data folder>/extensions/browser/chrome-profiles/<space>/`; another browser's is `<browser>-profiles/`), never your
+everyday Chrome profile, its cookies or its tabs.
 
 **Signing in.** Google, and some other sites, refuse to sign you in on a browser that software controls. So signing
 in happens in a plain window: **Sign in…** in a chat's General tab or on the Browser row in Processes, and an agent's
@@ -280,9 +280,10 @@ Kothar's attached, on the agent's tabs. Sign in, then click **Done** (or quit th
 browser goes on in the background on the same profile, signed in, with the tabs the window had. Kothar can't see into
 that window, so closing its last window doesn't end it on macOS; Done or quitting does.
 
-**Which profile.** Settings → Extensions → Browser → **Profile** lists **Kothar's own** (the default: a profile per
-space that starts logged out), every profile of the Chrome, Chrome Beta or Canary, Brave, Edge, Arc and Chromium you
-have installed, and **Other folder…** for a profile folder you name. New profiles show up the next time the page opens.
+**Which profile.** Settings → Extensions → Browser → **Profile** offers **Kothar's own** (the default: a profile per
+space that starts logged out; **Sign in…** logs it in) and **Your Chrome (Kothar extension)**. Kothar never copies
+your own browser profiles: Google signs you out in a copy. A copy picked in an older Kothar becomes Kothar's own, and
+the copies it made (`<data folder>/extensions/browser/mirrors/`) are deleted when the extension starts.
 
 **Your own Chrome.** Pick **Your Chrome (Kothar extension)** in **Profile** and agents browse in the Chrome you use
 every day, with your logins, Google included, and nothing copied. No browser of Kothar's starts. Setting it up once:
@@ -305,24 +306,6 @@ from the extension itself, so web pages can't connect. **New code** on the setti
 disconnects the extension until you paste the new one. If Kothar isn't running, or the extension isn't paired, an
 agent's browser calls say so, and it asks you instead.
 
-**How your profile is used.** Never in place: your browser keeps running untouched, and its profile folder is only
-read. When a space's browser starts, Kothar copies the profile's login state into a folder of its own
-(`<data folder>/extensions/browser/mirrors/<space>/`) and runs that browser's own app on the copy:
-
-- Copied: cookies, site storage (Local Storage, IndexedDB, Session Storage) and saved passwords and autofill (Login
-  Data, Web Data). A single site's IndexedDB over 200 MB is left out, and the settings page says which.
-- Not copied: history, bookmarks, extensions, open tabs, and the browser's own settings and sign-in (Preferences), so
-  the agents' browser doesn't open your startup pages or sync.
-- On macOS your browser encrypts cookies and passwords with a key in your login Keychain ("Chrome Safe Storage" and
-  the like) that only its own app may read without asking. Running the copy on that same app reads it with no prompt.
-  A copy run on any other browser would see no cookies, so a folder must belong to an installed browser.
-- The copy is made again each time a space's browser starts from closed (on its first browse, after it closed for
-  being idle, or after **Refresh logins now**). A hand-off to you in a window keeps the copy it's on. Logins made only
-  in the agents' browser are kept in memory across an idle close, and go when Kothar quits; to keep one, log in in your
-  own browser.
-- Each space's copy goes when the space is deleted. **Refresh logins now** closes the browsers running in the
-  background, so the next browse takes a fresh copy.
-
 **In the background.** Agents' browsers run headless: no window, no Dock icon, and they never take focus, so you can
 keep working in other apps. They say they're Chrome rather than headless Chrome, which some sites turn away, and they
 don't tell pages they're automated (`navigator.webdriver`). Nothing fakes a fingerprint beyond that.
@@ -333,9 +316,19 @@ browser** and **Done** (with a notification if you're away from Kothar), and Don
 where you left it. You can look at any time: **Show browser** in a chat's General tab,
 or **Show** on the Browser row in Processes; **Hide** puts it back.
 
-**What agents get.** Playwright's browser tools, less four they rarely need (`browser_run_code_unsafe`, which runs any
-code in Playwright's own process, `browser_emulate_media`, `browser_drop` and `browser_resize`): 21 tools, about 17,000
-characters (roughly 5,000 tokens) in each session that has the browser.
+**What agents get.** Seven tools of Kothar's own, about 2,900 characters (roughly 800 tokens) in each session that
+has the browser: `browser_open` (a URL, or back, forward, reload), `browser_snapshot` (the page as short lines with
+refs such as `e12`, in parts of about 12,000 characters, or only what changed), `browser_act` (click, hover, check,
+select, upload, press a key), `browser_type`, `browser_tabs`, `browser_screenshot`, and `browser_cdp`, which sends a raw
+Chrome DevTools Protocol command to the agent's own tab for what the others can't do. Each chat in a space keeps its
+own tab. Every call is listed in the chat's Activity, and **Ask before each browser action** asks before each one.
+
+`browser_cdp` reaches only the agent's own tab and its frames. Kothar refuses, whatever you say: reading or changing
+cookies (they hold your logins), clearing a site's data, site permissions, closing or crashing the browser, other tabs
+and browser contexts (the whole `Target` domain), anything about the computer (`SystemInfo`) and downloads to a folder
+of the agent's choosing. Reading the page and acting on it as you could (DOM, script in the page, input, navigation,
+screenshots, its own network traffic) runs without asking. Anything else, such as intercepting requests or ignoring
+certificate errors, asks you with a card showing the command. Uploading a file always asks.
 
 ## Community extensions
 

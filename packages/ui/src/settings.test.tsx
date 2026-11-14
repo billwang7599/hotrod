@@ -12,6 +12,8 @@ import {
   type ModelLists,
   type ExtensionInfo,
   type SetupState,
+  type PromptInfo,
+  type WorkersSettings,
   type WorkFolder,
 } from '@kothar/core/shared'
 import type { ExtensionSetting } from '@kothar/extension-api'
@@ -98,7 +100,11 @@ test('shows a refusal that arrives after choosing, and picks with the desktop pi
   expect(sent.at(-1)).toEqual({ type: 'workFolder.set', path: '/picked' })
 })
 
-function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
+function renderSettings(
+  workFolder: WorkFolder,
+  sent: ClientMessage[] = [],
+  more: { page?: SettingsPage; workers?: WorkersSettings; corePrompts?: PromptInfo[] } = {},
+) {
   act(() =>
     root.render(
       <LazyMotion features={domAnimation} strict>
@@ -106,7 +112,9 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
           <Tooltip.Provider>
             <SettingsDialog
               open
-              page="work"
+              page={more.page ?? 'work'}
+              workers={more.workers}
+              corePrompts={more.corePrompts}
               openPage={() => {}}
               close={() => {}}
               engines={[]}
@@ -126,6 +134,40 @@ function renderSettings(workFolder: WorkFolder, sent: ClientMessage[] = []) {
   )
   return sent
 }
+
+test('Settings → Workers: agents’ switch, the limit for every child, and the instructions as an editable prompt', () => {
+  const workers: WorkersSettings = {
+    start: true,
+    limit: 4,
+    instructions: { id: 'instructions', label: 'When to start workers', where: 'instructions', default: 'Delegate.', text: 'Delegate.' },
+  }
+  const sent = renderSettings(workFolder, [], { page: 'workers', workers })
+  expect([...dialog().querySelectorAll('h2')].map((h) => h.textContent)).toContain('Workers')
+  expect(dialog().querySelector('#prompt-workers-instructions')).not.toBeNull()
+  act(() => dialog().querySelector<HTMLButtonElement>('button[aria-label="Let agents start workers"]')!.click())
+  const limit = dialog().querySelector<HTMLInputElement>('input[aria-label="Max running per chat"]')!
+  type(limit, '2')
+  act(() => limit.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(sent).toEqual([
+    { type: 'workers.set', start: false },
+    { type: 'workers.set', limit: 2 },
+  ])
+  // Not an extension any more: it isn't on the extensions page.
+  expect([...dialog().querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toContain('Workers')
+})
+
+test('Settings → Prompts edits Kothar’s own prompts, each where the Inspector’s Edit link scrolls to', () => {
+  const combine: PromptInfo = { id: 'combine', label: 'What you can use', where: 'instructions', default: 'Combine them.', text: 'Combine them.' }
+  const sent = renderSettings(workFolder, [], { page: 'prompts', corePrompts: [combine] })
+  const box = dialog().querySelector<HTMLElement>('#prompt-kothar-combine')!.querySelector('textarea')!
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+  act(() => {
+    setter.call(box, 'Mix them.')
+    box.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  act(() => box.dispatchEvent(new FocusEvent('focusout', { bubbles: true })))
+  expect(sent).toEqual([{ type: 'corePrompt.set', id: 'combine', text: 'Mix them.' }])
+})
 
 test('Settings → Work folder sets the default of each permission every chat follows', () => {
   expect(PERMISSION_SWITCHES).toContain('autoFetch')
@@ -475,6 +517,30 @@ test('an extension with nothing to set gets no page; one with settings gets the 
   expect(toggle.getAttribute('aria-checked')).toBe('true')
   act(() => toggle.click())
   expect(sent).toEqual([{ type: 'extension.setEnabled', extensionId: 'plain', enabled: false }])
+})
+
+test('a setting that needs an extension that is off is greyed out and says which; so is an extension that requires one', () => {
+  const shown = { key: 'shown', label: 'Show as workers', type: 'boolean', default: false, requires: 'workers' } satisfies ExtensionSetting
+  const depth = { key: 'depth', label: 'Depth', type: 'number', default: 1 } satisfies ExtensionSetting
+  const extension: ExtensionInfo = {
+    id: 'research',
+    name: 'Research',
+    description: '',
+    enabled: true,
+    settings: [shown, depth],
+    values: { shown: false, depth: 1 },
+    blockedSettings: { shown: 'Needs the Workers extension' },
+  }
+  renderExtensions([extension], 'extension:research')
+  const toggle = dialog().querySelector('[aria-label="Show as workers"]') as HTMLButtonElement
+  expect(toggle.disabled).toBe(true)
+  expect([...dialog().querySelectorAll('[data-testid="extension-blocked"]')].map((e) => e.textContent)).toEqual(['Needs the Workers extension'])
+  expect((dialog().querySelector('input[aria-label="Depth"]') as HTMLInputElement).disabled).toBe(false)
+
+  renderExtensions([{ ...extension, enabled: false, blocked: 'Needs the Workers extension', blockedSettings: undefined }], 'extensions')
+  const main = dialog().querySelector('[aria-label="Research"]') as HTMLButtonElement
+  expect(main.disabled).toBe(true)
+  expect(dialog().textContent).toContain('Needs the Workers extension')
 })
 
 test("an off extension with settings keeps its page, saying to turn it on, and its settings stay hidden", () => {

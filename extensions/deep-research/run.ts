@@ -33,7 +33,7 @@ export type Ports = {
   fetchPage: (url: string, signal: AbortSignal) => Promise<{ body: string; contentType: string }>
   // One sub-question, researched by a worker. Resolves with its reply when it's done, stopped or failed.
   investigate: (run: Run, prompt: string, label: string, signal: AbortSignal) => Promise<Investigation>
-  // The run changed: the Research tab draws again.
+  // The run changed: its card in the chat and the Research tab draw again.
   changed: (run: Run) => void
 }
 
@@ -202,7 +202,7 @@ export function openResearch(ports: Ports) {
     }
   }
 
-  // Waits for the user's go-ahead: the wait bar on the chat whose turn asked (the tool), or the Research tab alone.
+  // Waits for the user's go-ahead: the wait bar on the chat whose turn asked (the tool), or the run's card alone.
   const approval = (entry: Live, waitOn: string | undefined): Promise<Decision> => {
     const { run } = entry
     run.phase = 'awaiting'
@@ -221,12 +221,8 @@ export function openResearch(ports: Ports) {
       }
       if (waitOn) {
         const count = run.subQuestions.length
+        // The plan itself is in the run's card in the chat, where Edit opens it.
         host.wait(waitOn, planWait(run.question, count))
-        try {
-          host.showPanel(waitOn, 'research')
-        } catch {
-          // No tab to show; the bar still asks.
-        }
       }
     })
   }
@@ -424,18 +420,7 @@ export function openResearch(ports: Ports) {
     run.endedAt = host.now().toISOString()
     save(run)
     live.delete(run.id)
-    // An artifact posts its own card in the chat; one card per report is enough.
-    if (run.report?.kind !== 'artifact') {
-      try {
-        host.note(run.chatId, summary, {
-          panel: 'research',
-          action: { name: 'open', value: run.id },
-          card: { title: short(run.question, 120), badge: run.partial ? 'Partial research' : 'Research', detail: `${cited.length} source${cited.length === 1 ? '' : 's'}` },
-        })
-      } catch {
-        // The chat went.
-      }
-    }
+    // The run's card in the chat (posted as it started) turns into the report's link now, so no note here.
     return {
       status: run.partial ? 'partial' : 'done',
       question: run.question,
@@ -506,7 +491,7 @@ export function openResearch(ports: Ports) {
     },
     /**
      * Plans, asks (unless askFirst is off), researches and writes the report. waitOn: the chat whose running turn shows
-     * the plan bar; without it the plan waits in the Research tab.
+     * the plan bar; without it the plan waits in the run's card.
      */
     async execute(runId: string, options: { askFirst: boolean; waitOn?: string }): Promise<Outcome> {
       const entry = live.get(runId)
@@ -593,10 +578,10 @@ export function planFromText(text: string, sources: string[] = []): Plan | undef
 /** What the plan bar says, and its buttons. */
 export function planWait(question: string, count: number): ExtensionWait {
   return {
-    text: `Research plan for "${short(question, 80)}": ${count} sub-question${count === 1 ? '' : 's'}, in the Research tab. Start it?`,
+    text: `Research plan for "${short(question, 80)}": ${count} sub-question${count === 1 ? '' : 's'}, in its card in the chat. Start it?`,
     buttons: [
       { id: 'start', label: 'Start', primary: true, closes: true, hint: 'Research the plan as it is' },
-      { id: 'edit', label: 'Edit', closes: true, hint: 'Change the sub-questions in the Research tab, then start' },
+      { id: 'edit', label: 'Edit', closes: true, hint: 'Change the sub-questions in its card, then start' },
       { id: 'cancel', label: 'Cancel', closes: true, hint: 'Don’t research this' },
     ],
   }

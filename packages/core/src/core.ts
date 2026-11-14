@@ -8,7 +8,10 @@ import { openChatSetups, openSetups } from './setups.ts'
 import { openChatLifecycle } from './chat-lifecycle.ts'
 import { openActivity } from './activity.ts'
 import { openKotharMcp, summaryOf } from './kothar-mcp.ts'
-import { WORKERS_EXTENSION, workersFor } from './workers.ts'
+import { agentStartsWorkers, openWorkers, workerInstructionsFor } from './workers.ts'
+import { openEngineTools, type Provided } from './engine-tools.ts'
+import type { ToolCapability } from './shared.ts'
+import { firstSentence, openCorePrompts, toolboxText, type ToolboxGroup } from './core-prompts.ts'
 import { openInstructionParts, PARENT_VIEW_FILE } from './instruction-parts.ts'
 import { windowView } from './memory.ts'
 import { type Fetch, openMarketplace } from './marketplace.ts'
@@ -57,7 +60,7 @@ import { messageOf } from './util.ts'
 import { openTurns, UNSANDBOXED_NEEDS_EDIT_ANYWHERE } from './turn.ts'
 
 // Kept here too, for code that imports them from the core.
-export { CHECKOUT_RULES, FOLDER_RULES, WRITE_RULES } from './instructions.ts'
+export { CHECKOUT_RULES, FOLDER_RULES, NO_COMMITS_RULES, WRITE_RULES } from './instructions.ts'
 
 export const STOP_GRACE_MS = 60_000
 // A chat's own files, which extensions' chat storage can't touch.
@@ -133,7 +136,7 @@ function assembleCore(options: {
   }
   checkEngine(defaultEngine)
   const { extensions, extensionChats, builtInIds, community, imported, reinstalled } = gatherExtensions(
-    [...(options.extensions ?? []), WORKERS_EXTENSION],
+    options.extensions ?? [],
     options.community ?? [],
   )
   const marketplace = openMarketplace({
@@ -163,12 +166,36 @@ function assembleCore(options: {
   // A community extension's own switch: off until the user turns it on, whatever it says.
   const ownSwitch = (extension: Extension) => settings.extensions?.[extension.id]?.enabled === true
   // Whether an extension runs: a community extension only while community extensions are on too.
-  const isOn = (extension: Extension) => {
+  const switchedOn = (extension: Extension) => {
     const saved = settings.extensions?.[extension.id]?.enabled
     if (community.has(extension.id)) return communityOn() && saved === true
     return typeof saved === 'boolean' ? saved : extension.enabledByDefault
   }
-  const extensionValues = (extension: Extension) => valuesOf(extension, settings.extensions?.[extension.id])
+  // Whether an extension runs: its switch is on (switchedOn), and so is every extension it requires, all the way down.
+  // A loop of requires runs none of them.
+  const runs = (extension: Extension, seen: ReadonlySet<string>): boolean => {
+    if (!switchedOn(extension)) return false
+    if (!extension.requires?.length) return true
+    if (seen.has(extension.id)) return false
+    const next = new Set([...seen, extension.id])
+    return extension.requires.every((id) => {
+      const needed = extensions.find((m) => m.id === id)
+      return needed !== undefined && runs(needed, next)
+    })
+  }
+  const isOn = (extension: Extension) => runs(extension, new Set())
+  const isOnById = (id: string) => {
+    const extension = extensions.find((m) => m.id === id)
+    return extension !== undefined && isOn(extension)
+  }
+  // Why something that needs the extension with this id can't be used now, or undefined while it runs.
+  const neededBy = (id: string) => {
+    if (isOnById(id)) return undefined
+    const name = extensions.find((m) => m.id === id)?.name ?? brokenExtensions.find((m) => m.id === id)?.id ?? id
+    return `Needs the ${name} extension`
+  }
+  const extensionValues = (extension: Extension) =>
+    valuesOf(extension, settings.extensions?.[extension.id], extension.settings, isOnById)
   const detected = new Map<string, Omit<EngineInfo, 'id' | 'enabled'>>()
   const isEnabled = (engine: string) => settings.engines[engine] === true
   const engineInfo = (id: string): EngineInfo => {
@@ -249,6 +276,31 @@ function assembleCore(options: {
       setEngine: (chat, engine) => updateChat(chat, { engine }),
       showRun: (chat) => broadcast({ type: 'chat.updated', chat: withRun(chat) }),
     })
+  // Kothar's own named prompts, edited in Settings → Prompts (core-prompts.ts).
+  const corePrompts = openCorePrompts({ settings, saveSettings, broadcast })
+  // Settings → Workers: part of the core (workers.ts).
+  const workers = openWorkers({ settings, saveSettings, broadcast, changed: () => startWaitingWorkers() })
+  // Settings → Engines → Tools: engines' own tools, switched from Kothar (engine-tools.ts).
+  // What Kothar has its own version of, for a chat (or, for Settings, anywhere): workers stand in for engines'
+  // subagents everywhere, since extensions start workers even where agents may not; then each extension that's on and
+  // declares what it replaces.
+  const providedFor = (chat?: Chat): Provided => {
+    const provided = new Map<ToolCapability, string>([['subagents', 'Workers']])
+    for (const extension of extensions) {
+      if (!extension.replaces?.length || !(chat ? isOnFor(extension, chat) : isOn(extension))) continue
+      for (const capability of extension.replaces) if (!provided.has(capability)) provided.set(capability, extension.name)
+    }
+    return provided
+  }
+  const engineTools = openEngineTools({
+    garage,
+    settings,
+    saveSettings,
+    adapterFor,
+    adapters: () => adapters,
+    provided: () => providedFor(),
+    broadcast,
+  })
   const prompts = openPrompts({
     settings,
     saveSettings,
@@ -286,6 +338,8 @@ function assembleCore(options: {
     chainOf: (chat) => chainOf(chat),
     updateChat: (chat, change) => updateChat(chat, change),
     promptsOf: prompts.infoOf,
+    needs: neededBy,
+    switchedOn,
   })
   const saveChat = ({ info, dir, context }: Chat) => saveChatFile(dir, info, context)
   // A chat as the UI gets it: its saved info plus what it runs now, which the core alone works out.
@@ -389,6 +443,8 @@ function assembleCore(options: {
   const stopExtension = (extension: Extension) => {
     if (!startedExtensions.delete(extension.id)) return
     callExtension(extension, () => extension.onStop?.(contextOf(extension)))
+    // What it shared with host.provide goes, and those that use it hear.
+    dropProvided(extension)
   }
   // The extension that provides memory: the first that's on with one. Without it, the core's window.
   const memoryExtension = (chat?: Chat) => extensions.find((extension) => isOnFor(extension, chat) && extension.memory)
@@ -448,6 +504,7 @@ function assembleCore(options: {
       status: chat.status,
       archived: chat.info.archived,
       ...(chat.info.extension && { extension: chat.info.extension, mod: chat.info.extension }),
+      keepsContext: !chainOf(chat)[0]!.info.extension,
       folders: chat.info.folders,
       files: chat.info.files,
       createdAt: chat.info.createdAt,
@@ -540,8 +597,8 @@ function assembleCore(options: {
       }
     },
     roleOwnerOf: (chat) => extensionChatOf(chat)?.extension.id,
-    isOnFor,
-    valuesOf: extensionValues,
+    workerInstructions: (chat) => workerInstructionsFor(chat, workers, setupOf(chat)),
+    toolbox: (chat) => toolboxOf(chat),
     detailOf: (chat) => detailOf(chat),
     memoryExtension,
     watchersOf: (hook, chat) => watchersOf(hook, chat),
@@ -565,6 +622,7 @@ function assembleCore(options: {
     stopSession,
     whenAllStopped,
     requestPermission,
+    startWaitingWorkers,
   } = openTurns({
     garage,
     home,
@@ -611,9 +669,12 @@ function assembleCore(options: {
     instructionPartsOf,
     turnSent: (chat, input) => turnSent(chat, input),
     activity,
+    workerLimit: () => workers.limit(),
+    engineToolsFor: (chat, engine) => engineTools.sessionFor(engine, providedFor(chat)),
+    toolsListed: (engine, names) => engineTools.record(engine, names),
   })
 
-  const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf } = openExtensionHosts<Chat>({
+  const { hostFor, contextOf, forgetHost, stopSpawned, toolsOf, dropProvided } = openExtensionHosts<Chat>({
     garage,
     home,
     now,
@@ -668,7 +729,7 @@ function assembleCore(options: {
   })
 
   // Extension panels and commands: which a chat gets, and the views of panels the UI has asked for.
-  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, runMessageAction, flipToggle, forgetChat } =
+  const { extensionsOf, panelOf, openPanel, panelAction, refreshExtension, answerWait, checkWait, runCommand, runMessageAction, renderDetail, renderNoteView, noteViewAction, flipToggle, forgetChat } =
     openPanels({
       extensions,
       extensionFor,
@@ -769,6 +830,9 @@ function assembleCore(options: {
       shownState,
       setWait,
       extensionsOf,
+      needs: neededBy,
+      callExtension,
+      contextOf,
     })
 
   const setModel = (chat: Chat, engine?: string, model?: string, thinking?: string) => {
@@ -871,7 +935,10 @@ function assembleCore(options: {
       return idle ? 'sent' : steers ? 'steered' : 'queued'
     },
     stop: (chatId) => interrupt(chatFor(chatId), false),
-    workers: (chatId?: string) => workersFor(chatId === undefined ? undefined : chats.get(chatId), { isOnFor, extensionInfo }),
+    workers: (chatId: string) => {
+      const chat = chats.get(chatId)
+      return { enabled: !!chat && agentStartsWorkers(chat, workers, setupOf(chat)), limit: workers.limit() }
+    },
     extensionTools: (chatId: string) =>
       extensions
         .filter((extension) => isOnFor(extension, chats.get(chatId)))
@@ -884,6 +951,30 @@ function assembleCore(options: {
           })),
         ),
   })
+
+  // "What you can use" (core-prompts.ts): the tools the chat's session is offered over Kothar's MCP server, grouped by
+  // Kothar's own and each extension's, with what each extension is for, after the nudge to combine them. Made from
+  // extensions' names and descriptions, so a community extension is listed like a built-in one.
+  const toolboxOf = (chat: Chat) => {
+    const offered: { name: string; extension?: string }[] = mcp.toolsFor(chat.info.id)
+    const own = offered.filter((tool) => !tool.extension).map((tool) => tool.name)
+    const groups: ToolboxGroup[] = []
+    const starts = own.includes('spawn_worker')
+    if (starts) {
+      groups.push({
+        name: 'Workers',
+        about: 'hand a whole task to a new chat below this one, which works while you talk and reports back.',
+        tools: ['spawn_worker', ...(own.includes('stop_chat') ? ['stop_chat'] : [])],
+      })
+    }
+    const reach = ['list_chats', 'read_chat', 'send_message', ...(starts ? [] : ['stop_chat'])].filter((name) => own.includes(name))
+    if (reach.length) groups.push({ name: 'Chats', about: 'read and message the chats this one can reach.', tools: reach })
+    for (const extension of extensions) {
+      const tools = offered.filter((tool) => tool.extension === extension.id).map((tool) => tool.name)
+      if (tools.length) groups.push({ name: extension.name, about: firstSentence(extension.description), tools })
+    }
+    return groups.length ? toolboxText(corePrompts.textOf('combine'), groups) : undefined
+  }
 
   // What a turn's session was sent, labelled (sent.ts), for each extension that watches (onTurnSent). Built only when
   // one does, so a turn costs nothing extra otherwise.
@@ -941,6 +1032,9 @@ function assembleCore(options: {
     setPermissionDefault,
     setTerminal,
     setMemory,
+    workers,
+    engineTools,
+    corePrompts,
     models,
     followModels,
     saveSetup,
@@ -955,9 +1049,16 @@ function assembleCore(options: {
     setSpaceValue,
     runCommand,
     runMessageAction,
+    renderDetail,
+    renderNoteView,
+    noteViewAction,
     flipToggle,
     answerWait,
-    setExtensionEnabled,
+    // Settings → Engines → Tools shows which extension stands in for a tool, so it hears the switch too.
+    setExtensionEnabled: (extension, enabled) => {
+      setExtensionEnabled(extension, enabled)
+      if (extension.replaces?.length) engineTools.changed()
+    },
     setExtensionValue,
     setPrompt: prompts.set,
     install,
@@ -1013,6 +1114,9 @@ function assembleCore(options: {
     modelLists: models.lists,
     setups: jobSetups.list,
     memory: () => settings.memory ?? {},
+    workers: workers.info,
+    engineTools: engineTools.info,
+    corePrompts: corePrompts.info,
     chats: () => shownChats().map(shownState),
     workFolder,
     setWorkFolder,

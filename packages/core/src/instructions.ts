@@ -2,6 +2,8 @@
 // (asking extensions, reading files) and this only orders and formats them, so it can be tested alone.
 import { folderLines, type FolderPlace } from './folder-modes.ts'
 import type { ContextItem } from './shared.ts'
+import { WORKERS_PROMPT } from './workers.ts'
+import { corePromptLink } from './core-prompts.ts'
 
 export const WRITE_RULES =
   'You can write files only in your work folder and in attached folders set to Edit in place. Every other folder ' +
@@ -12,6 +14,10 @@ export const FOLDER_RULES =
 export const CHECKOUT_RULES =
   'Each git folder in your context is checked out in your work folder on a branch of its own, from its last ' +
   "commit, so changes the user hasn't committed aren't in it. Work and commit in the checkout:"
+
+export const NO_COMMITS_RULES =
+  "These git folders have no commits yet, so Kothar hasn't checked them out: use them as the folder modes below " +
+  'say. Each is checked out in your work folder from the first message after its first commit:'
 
 export type InstructionCheckout = { folder: string; path: string; branch: string }
 
@@ -25,7 +31,10 @@ export type InstructionParts = {
   folders: FolderPlace[]
   // What extensions add (Extension.instructions), already trimmed, in extension order.
   extensions: string[]
-  // The Workers extension's instructions, for a chat that may start workers.
+  // "What you can use": what the chat can use from Kothar and each extension, and the nudge to combine them
+  // (core-prompts.ts), for a session with Kothar's tools.
+  toolbox?: string
+  // Settings → Workers' instructions, for a chat that may start workers.
   workers?: string
   // The memory extension's instructions, already trimmed.
   memory: string[]
@@ -55,10 +64,12 @@ export type InstructionSection = {
   label: string
   text: string
   extension?: string
+  // Where the user edits this core text: a Settings page, with #anchor (kothar:settings/<this>).
+  settings?: string
 }
 
 export const instructionSections = (parts: InstructionParts): InstructionSection[] => {
-  const { role, workDir, checkouts, folders, extensions, workers, memory, parentView, setup, items } = parts
+  const { role, workDir, checkouts, folders, toolbox, extensions, workers, memory, parentView, setup, items } = parts
   const core = (label: string, text: string): InstructionSection => ({ source: 'core', label, text })
   const from = (extension: string | undefined, label: string, text: string): InstructionSection =>
     extension ? { source: 'extension', label, text, extension } : core(label, text)
@@ -69,9 +80,15 @@ export const instructionSections = (parts: InstructionParts): InstructionSection
     ...(checkouts.length
       ? [core('Git checkouts', [CHECKOUT_RULES, ...checkouts.map((c) => `- ${c.folder}: ${c.path} (branch ${c.branch})`)].join('\n'))]
       : []),
+    ...(folders.some((f) => f.unborn)
+      ? [core('Git folders without commits', [NO_COMMITS_RULES, ...folders.flatMap((f) => (f.unborn ? [`- ${f.path}`] : []))].join('\n'))]
+      : []),
     ...(folders.length ? [core('Folder modes', [FOLDER_RULES, ...folderLines(folders)].join('\n'))] : []),
+    ...(toolbox ? [{ ...core('What you can use', toolbox), settings: corePromptLink('combine') }] : []),
     ...extensions.map((text, i) => from(ids[i], 'Instructions', text)),
-    ...(workers !== undefined ? [from('workers', 'When to start workers', workers)] : []),
+    ...(workers !== undefined
+      ? [{ ...core('Workers: when to start workers', workers), settings: `${WORKERS_PROMPT.page}#prompt-${WORKERS_PROMPT.page}-${WORKERS_PROMPT.id}` }]
+      : []),
     ...memory.map((text) => from(parts.sources?.memory, 'How to read the memory', text)),
     ...(parentView ? [core("Parent chat's memory at launch", `Your parent chat's memory when it started you:\n\n${parentView}`)] : []),
     // The setup's instructions come just before the context items, so the user's own AGENTS.md files read last.

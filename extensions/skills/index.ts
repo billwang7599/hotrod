@@ -148,6 +148,8 @@ export function createSkillsExtension(options: SkillsOptions = {}): Extension {
     description:
       'Saved instructions for particular kinds of task, in the Agent Skills format (a folder with a SKILL.md). Agents on every engine see a one-line list and read a skill when a task fits it.',
     enabledByDefault: true,
+    // Engines' own skill tools read the engine's skills, which Kothar's clean sessions leave out; these are Kothar's.
+    replaces: ['skills'],
     prompts: [
       {
         id: 'index',

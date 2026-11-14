@@ -98,6 +98,12 @@ test("a folder holding Kothar's data says why it stays read only, with no picker
   render([{ ...docs, blocked: "it holds Kothar's own data, which agents never write" }])
   expect(modeSelect('/docs')).toBeNull()
   expect(host.textContent).toContain("Read only, since it holds Kothar's own data")
+  // The long reason takes the room left beside "Mode" and wraps there, so the label never gets squeezed under it.
+  const reason = [...host.querySelectorAll('span')].find((s) => s.textContent?.startsWith('Read only, since'))!
+  const label = [...reason.parentElement!.children].find((s) => s.textContent === 'Mode')!
+  expect(label.className).toContain('shrink-0')
+  expect(reason.className).toContain('min-w-0')
+  expect(reason.className).toContain('flex-1')
 })
 
 test('an archived chat shows the mode but cannot change it', () => {

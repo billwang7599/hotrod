@@ -168,3 +168,11 @@ test('a kothar:settings link opens that Settings page at its anchor, and is plai
   show({ type: 'link', text: 'Site', url: 'https://example.com' })
   expect(host.querySelector('a')?.getAttribute('href')).toBe('https://example.com')
 })
+
+test("a card's long title wraps instead of being cut short, and its badges wrap under it in a narrow panel", () => {
+  const title = 'Permission answered for a command that reaches the network: curl https://example.com/a/long/path'
+  show({ type: 'card', title, open: false, badges: [{ text: 'Kothar' }, { text: 'Allowed' }, { text: '12:00:00' }], children: [] })
+  const shown = [...host.querySelectorAll('span')].find((s) => s.textContent === title)!
+  expect(shown.className).not.toContain('truncate')
+  expect(shown.parentElement!.parentElement!.className).toContain('flex-wrap')
+})

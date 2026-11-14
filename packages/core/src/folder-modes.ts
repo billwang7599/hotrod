@@ -10,7 +10,7 @@ export const HOLDS_KOTHAR_DATA = "it holds Kothar's own data, which agents never
 export const MODE_SETTING = "its mode in the chat's Context panel"
 
 /** A folder of a turn as its session sees it: a mode, or a git folder's checkout. where: the checkout's or copy's path. */
-export type FolderPlace = { path: string; mode: FolderMode | 'checkout'; where?: string; blocked?: string }
+export type FolderPlace = { path: string; mode: FolderMode | 'checkout'; where?: string; blocked?: string; unborn?: true }
 
 /** A folder's mode for a chat, from its chain nearest first: its own pick, else the nearest chat above's. */
 export const modeOf = (nearestFirst: Pick<ChatInfo, 'folderModes'>[], path: string): FolderMode =>
@@ -30,8 +30,10 @@ export const checkMode = (mode: unknown): FolderMode => {
 
 /** The turn's folders that aren't git repos, from its context items that are on. A blocked folder is read only. */
 export const placesOf = (items: ContextItem[]): FolderPlace[] =>
-  items.flatMap(({ section, enabled, git, path, mode = DEFAULT_FOLDER_MODE, blocked }) =>
-    section !== 'folders' || !enabled || git ? [] : [{ path, mode: blocked ? 'readOnly' : mode, ...(blocked && { blocked }) }],
+  items.flatMap(({ section, enabled, git, path, mode = DEFAULT_FOLDER_MODE, blocked, unborn }) =>
+    section !== 'folders' || !enabled || git
+      ? []
+      : [{ path, mode: blocked ? 'readOnly' : mode, ...(blocked && { blocked }), ...(unborn && { unborn }) }],
   )
 
 export const editableOf = (places: FolderPlace[]) => places.filter((p) => p.mode === 'edit').map((p) => p.path)

@@ -22,8 +22,8 @@ module.exports = {
   electronVersion: require('electron/package.json').version,
   copyright: 'Copyright © Bill Wang',
   directories: { app: 'build/app', output: 'release', buildResources: 'assets' },
-  // Plain files: the core imports the built-in extensions' TypeScript at startup, and the Browser extension hands
-  // Chromium its extension folder and runs Playwright's CLI from disk, none of which work from inside an asar archive.
+  // Plain files: the core imports the built-in extensions' TypeScript at startup, and the Browser extension shows Chrome
+  // its extension folder to load from disk, neither of which works from inside an asar archive.
   asar: false,
   // Nothing native to rebuild; the staged node_modules is already exactly what ships.
   npmRebuild: false,

@@ -61,8 +61,9 @@ what each session gets at its start. See the [Introduction](introduction.md#what
 
 ## Can an extension add a worker under a space?
 
-Yes. `host.createChat` with `parentId` makes a child chat, made just as the built-in Workers extension makes a worker.
-See [Child chats](reference/host.md#child-chats). The host sets no limit on how many run, so set one of your own.
+Yes. `host.createChat` with `parentId` makes a worker, just as `spawn_worker` does. Workers are part of Kothar, so it
+needs no other extension. It counts toward the user's limit in Settings → Workers, and one over it waits for a slot. See
+[Child chats](reference/host.md#start-a-worker).
 
 ## GitHub says the request limit is used up
 

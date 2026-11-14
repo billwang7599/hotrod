@@ -240,7 +240,8 @@ function Card({ node, act }: { node: Extract<ExtensionView, { type: 'card' }>; a
   const [open, setOpen] = useState(node.open ?? true)
   return (
     <div className="flex flex-col rounded-lg border bg-bg px-10 py-8 shadow-raised">
-      <div className="flex min-w-0 items-center gap-6">
+      {/* Wraps instead of cutting the title short: in a narrow panel the badges go to the next line. */}
+      <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-4">
         <button
           className="group flex min-w-0 items-center gap-6 text-left font-semibold"
           aria-expanded={open}
@@ -248,7 +249,7 @@ function Card({ node, act }: { node: Extract<ExtensionView, { type: 'card' }>; a
           onClick={() => setOpen(!open)}
         >
           <Chevron />
-          <span className="truncate">{node.title}</span>
+          <span className="min-w-0 [overflow-wrap:anywhere]">{node.title}</span>
         </button>
         <Badges badges={node.badges} />
       </div>

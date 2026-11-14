@@ -104,11 +104,11 @@ export const MIME: Record<string, string> = { html: 'text/html', svg: 'image/svg
 export const fileOf = (artifact: Pick<Artifact, 'type' | 'language'>, version: number) => `v${version}.${extensionOf(artifact)}`
 export const pathOf = (artifact: Artifact, version = latest(artifact).n) => join(artifact.dir, fileOf(artifact, version))
 
-/** A chat's space: the top of its chain (workers share their space's artifacts). Home keeps no files, so none. */
+/** A chat's space: the top of its chain (workers share their space's artifacts). A chat that keeps no context (Home) has none. */
 export function spaceOf(host: ExtensionHost, chatId: string): ChatDetail | undefined {
   let chat = host.chat(chatId)
   for (let i = 0; chat?.parentId !== undefined && i < 32; i++) chat = host.chat(chat.parentId)
-  return chat && !chat.extension ? chat : undefined
+  return chat?.keepsContext ? chat : undefined
 }
 
 export const needSpace = (host: ExtensionHost, chatId: string) => {

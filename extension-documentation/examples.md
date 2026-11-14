@@ -132,32 +132,35 @@ Its manifest would list `events`, `accounts` and `sendMessages`.
 
 [Source](https://github.com/billwang7599/kothar/blob/main/extensions/browser/index.ts)
 
-Browser gives agents Playwright's MCP server, attached to one headless browser per space that the extension itself
-runs: the user's installed Google Chrome (or Playwright's Chromium) on a profile of its own, or a copy of one of the
-user's profiles on that browser's own app.
+Browser gives agents a few browser tools of its own, which speak the Chrome DevTools Protocol to one headless browser
+per space that the extension itself runs: the user's installed Google Chrome (or Edge, Brave, Arc or Chromium) on a
+profile of its own per space, or the user's own Chrome through a Chrome extension of Kothar's.
 Parts worth copying:
 
-- **`onStart` and `onStop`** start and stop a small local HTTP endpoint. `mcpServers` gives Playwright MCP that
-  address as `--cdp-endpoint`, and the browser launches (with `host.spawn`) only when an agent first browses. It
-  stays between messages, so tabs and logins do, and stops when the space has been idle a while, the extension is turned
-  off, or Kothar quits.
+- **Tools of its own instead of an MCP server.** `tools` lists `browser_open`, `browser_snapshot`, `browser_act`,
+  `browser_type`, `browser_tabs`, `browser_screenshot` and `browser_cdp`, about 800 tokens in all. They connect through
+  a small local HTTP endpoint that `onStart` and `onStop` start and stop, and the browser launches (with `host.spawn`)
+  only when an agent first browses. It stays between messages, so tabs and logins do, and stops when the space has
+  been idle a while, the extension is turned off, or Kothar quits. `browser_screenshot` sets `result: 'mcp'` to return
+  a picture.
+- **A raw escape hatch, with rules.** `browser_cdp` sends any DevTools command to the agent's own tab, checked first
+  (`safety.ts`): browser-wide and cookie commands are refused, page reads and interaction run, and the rest ask the
+  user with [`host.requestPermission`](reference/host.md), which shows the method and its parameters.
 - **A tool that waits for the user.** `ask_user_in_browser` relaunches the space's profile as a plain window (no
   remote debugging, so sites like Google let the user sign in) on the same tabs, then calls
   [`host.wait`](reference/host.md#waiting-for-the-user) with **Open browser** and **Done** buttons and waits.
   `onWaitAction` ends the hand-off, and the tool returns the tabs the browser reopens from the profile's saved session.
   `show_browser` relaunches in a window Kothar still reads over DevTools, for showing the user something.
-- **Settings that depend on the machine.** `settings` is a getter, so the Profile picker lists the browser profiles
-  installed now; `settingsView` adds a readout of where logins come from and a **Refresh logins now** button, and
-  `onSettingsChanged` closes the background browsers when the profile changes.
+- **Settings that depend on the machine.** `settingsView` says which installed browser runs Kothar's own profile (or
+  to install Chrome), or, for your own Chrome, the setup steps and pairing code; `onSettingsChanged` closes the
+  background browsers when the profile changes, and `migrateSettings` turns choices that no longer exist into ones
+  that do.
 - **Commands.** **Show browser**, **Sign in…** and **Hide browser** in the General tab, each `shown` only when it
   applies.
-- **Filtering an MCP server's tools.** Playwright MCP runs behind a small stdio filter (`mcp-filter.ts`) that drops
-  tools from `tools/list` and refuses calls to them, since its `--caps` flag only adds whole groups.
 - **A Processes row.** [`processes`](reference/host.md#processes-rows) lists the space's browser while it runs, with
   **Show** (take it over at any time; **Hide** puts it back) and **Stop**, and `host.processesChanged` redraws the
   tab when it changes.
-- **`setup`** is ready when Google Chrome is installed; otherwise it checks for Playwright's Chromium and installs it,
-  reporting download progress with `report`.
+- **`setup`** is ready when a Chromium-family browser is installed; with none, it says to install Google Chrome.
 
 **The pattern:** keep what the agent needs running in the extension, not in the session, so it outlives each turn; let
 the user see it in Processes, and hand it to them with a wait when the agent can't go on alone.

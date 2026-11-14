@@ -131,6 +131,7 @@ async function start(options: { logMaxBytes?: number } = {}) {
     lastView,
     terminals,
     terminal,
+    messages,
     host: () => host!,
   }
 }
@@ -228,6 +229,41 @@ describe('the tools', () => {
     await expect(t.tool('start_process', { command: 'sleep 300' })).rejects.toThrow(/already running/)
     await expect(t.tool('start_process', { command: 'sleep 9', name: 'web' })).rejects.toThrow(/already running/)
     await expect(t.tool('read_output', { id: 'p9' })).rejects.toThrow(/No process "p9"/)
+  })
+
+  it("with notify: 'exit', wake the chat that started it with its exit code and last lines, once it exits", async () => {
+    const t = await start()
+    const sentTo = (chatId: string) =>
+      t.messages.flatMap((m) =>
+        m.type === 'chat.entry' && m.chatId === chatId && m.entry.type === 'user.message' ? [m.entry.text] : [],
+      )
+    const started = await t.tool(
+      'start_process',
+      { command: 'echo first; sleep 0.6; echo last; exit 2', name: 'ci', notify: 'exit' },
+      'sub001',
+    )
+    expect(started.status).toBe('running')
+    await until(() => sentTo('sub001').length > 0)
+    expect(sentTo('sub001')).toEqual([
+      '[Process "ci" (p1) exited with code 2: echo first; sleep 0.6; echo last; exit 2]\n\nIts last lines:\n\nfirst\nlast',
+    ])
+    expect(sentTo(t.spaceId)).toEqual([])
+    expect(t.messages.some((m) => m.type === 'chat.status' && m.chatId === 'sub001' && m.status === 'running')).toBe(true)
+  })
+
+  it("with notify: 'exit', say nothing when someone stopped it, nor without notify; refuse another notify", async () => {
+    const t = await start()
+    const sent = () => t.messages.filter((m) => m.type === 'chat.entry' && m.entry.type === 'user.message')
+    await t.tool('start_process', { command: 'sleep 300', name: 'long', notify: 'exit' })
+    await t.tool('stop_process', { id: 'long' })
+    await t.tool('start_process', { command: 'exit 1', name: 'quiet' })
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(sent()).toEqual([])
+    await expect(t.tool('start_process', { command: 'true', notify: 'always' })).rejects.toThrow(/notify/)
+  })
+
+  it('stand in for engines’ own background shells', () => {
+    expect(createProcessesExtension().extension.replaces).toEqual(['background-shell'])
   })
 
   it('belong to the space: a worker’s process is the lead’s to see and stop', async () => {
@@ -546,7 +582,7 @@ it("lists other extensions' rows, such as the Browser's, with their buttons, whi
     refresh: (chatId: string) => void refreshed.push(chatId),
   } as unknown as ExtensionHost
   const context = { values: {}, host }
-  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   // The tab shows for a space with no processes of its own, once another extension lists one.
   expect(panel.shown!(chat, context)).toBe(true)
   const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
@@ -580,7 +616,7 @@ it("says inline why another extension's button failed", async () => {
     refresh: () => {},
   } as unknown as ExtensionHost
   const context = { values: {}, host }
-  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, folders: [], files: [], createdAt: '' }
+  const chat = { id: 's1', name: 'S', engine: 'fake', status: 'idle' as const, archived: false, keepsContext: true, folders: [], files: [], createdAt: '' }
   await panel.onAction!({ name: 'extension', value: { extension: 'browser', key: 'browser', action: 'open' } }, chat, context)
   const view = (await panel.render(chat, context)) as Extract<ExtensionView, { type: 'stack' }>
   expect(view.children).toContainEqual({ type: 'text', text: 'Browser is off', tone: 'error', small: true })

@@ -16,7 +16,7 @@ import WebSocket from 'ws'
 import { createFakeAdapter } from './adapters/fake.ts'
 import { sandboxingMachine } from './adapters/test-machine.ts'
 import { openCore } from './core.ts'
-import { WORKER_INSTRUCTIONS, WORKERS_EXTENSION } from './workers.ts'
+import { WORKER_INSTRUCTIONS } from './workers.ts'
 import { startServer } from './server.ts'
 import {
   BAD_TOKEN_CLOSE_CODE,
@@ -124,7 +124,8 @@ it('sends a snapshot, then broadcasts to every client', async () => {
     accounts: [{ engine: 'fake', active: 'default' }],
     modelLists: { chat: [], planning: [], searching: [], workers: [] },
     memory: {},
-    extensions: [expect.objectContaining({ id: WORKERS_EXTENSION.id, enabled: true, values: { limit: expect.any(Number), instructions: WORKER_INSTRUCTIONS } })],
+    extensions: [],
+    workers: { start: true, limit: 4, instructions: { id: 'instructions', text: WORKER_INSTRUCTIONS, default: WORKER_INSTRUCTIONS } },
   })
 
   expect(a.messages[0]).not.toHaveProperty('projects')
@@ -485,16 +486,14 @@ it("runs an extension's tool, whose host makes a top-level chat and starts it, s
 
 const handleOn = (core: ReturnType<typeof openCore>) => (m: Parameters<typeof core.handle>[0]) =>
   core.handle(m, () => {})
-const workersOn = (core: ReturnType<typeof openCore>, limit?: number) => {
-  handleOn(core)({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: true })
-  if (limit !== undefined) handleOn(core)({ type: 'extension.setValue', extensionId: WORKERS_EXTENSION.id, key: 'limit', value: limit })
-}
+const workersOn = (core: ReturnType<typeof openCore>, limit?: number) =>
+  handleOn(core)({ type: 'workers.set', start: true, ...(limit !== undefined && { limit }) })
 const chatIn = (core: ReturnType<typeof openCore>, id: string) => core.chats().find((c) => c.id === id)!
 
-it('lets every user chat spawn workers while the extension is on, up to the limit of running ones', async () => {
+it('lets every user chat spawn workers while agents may start them, up to the limit of running ones', async () => {
   const { core, garage, sessions, post, tool, json, send } = await startHeld()
   const handle = handleOn(core)
-  handle({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: false })
+  handle({ type: 'workers.set', start: false })
   const workshop = send('main', 'hi').options.kotharMcp!.token
   expect((await (await post(workshop, 'spawn_worker', { task: 'x' })).json()).error.message).toBe(
     'Tool spawn_worker not found',
@@ -526,7 +525,7 @@ it('lets every user chat spawn workers while the extension is on, up to the limi
 
   expect(await tool(lead, 'spawn_worker', { task: 'More' })).toEqual({
     isError: true,
-    text: 'This chat already has 1 workers running; the limit is 1',
+    text: expect.stringContaining('This chat already has 1 workers running (yours and any its extensions started); the limit is 1.'),
   })
   sessions.at(-1)!.end('Done')
   expect((await json(lead, 'spawn_worker', { task: 'More' })).chatId).not.toBe(chatId)
@@ -536,8 +535,7 @@ it('lets every user chat spawn workers while the extension is on, up to the limi
 it('tells a chat that can spawn workers the saved worker instructions, or the default when blank', async () => {
   const { core, sessions, send } = await startHeld()
   workersOn(core)
-  const setInstructions = (value: string) =>
-    handleOn(core)({ type: 'extension.setValue', extensionId: WORKERS_EXTENSION.id, key: 'instructions', value })
+  const setInstructions = (text: string) => handleOn(core)({ type: 'workers.prompt.set', text })
   setInstructions('Spawn one worker per failing test.')
   const custom = send('main', 'hi').options.instructions
   expect(custom).toContain('Spawn one worker per failing test.')
@@ -787,9 +785,9 @@ const childExtension: Extension = {
   ],
 }
 
-it("lets an extension start a child chat as spawn_worker does, with the Workers extension off: frozen view, report, removal", async () => {
+it("lets an extension start a child chat as spawn_worker does, with agents kept from starting workers: frozen view, report, removal", async () => {
   const { core, garage, json, tool, send, sessionOf } = await startHeld({ extensions: [mainExtension, childExtension] })
-  handleOn(core)({ type: 'extension.setEnabled', extensionId: WORKERS_EXTENSION.id, enabled: false })
+  handleOn(core)({ type: 'workers.set', start: false })
   const parent = send('main', 'Plan the release')
   const token = parent.options.kotharMcp!.token
   const { chatId } = await json(token, 'delegate', { task: 'Check the changelog', spec: { role: 'searching' } })
@@ -800,11 +798,15 @@ it("lets an extension start a child chat as spawn_worker does, with the Workers 
   // Its tool isn't offered to a child, and no memory extension is on, so the child has no Kothar MCP server at all.
   expect(child.options.kotharMcp).toBeUndefined()
 
-  // A child takes its folders from its space, and can't have children of its own.
+  // A child takes its folders from its space. An extension can start one below it (so research a worker runs doesn't
+  // wait for the slot that worker holds), but no deeper.
   const refused = await tool(token, 'delegate', { task: 'More', spec: { folders: [garage] } })
   expect(refused).toEqual({ isError: true, text: 'A child chat takes its folders from its space' })
-  const grandchild = await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId } })
-  expect(grandchild).toEqual({ isError: true, text: 'A worker cannot start chats' })
+  const grandchild = JSON.parse((await tool(token, 'delegate', { task: 'Deeper', spec: { parentId: chatId, quiet: true } })).text).chatId
+  expect(chatIn(core, grandchild)).toMatchObject({ parentId: chatId, worker: true })
+  const deepest = await tool(token, 'delegate', { task: 'Deepest', spec: { parentId: grandchild } })
+  expect(deepest).toEqual({ isError: true, text: "A worker's worker cannot start chats" })
+  sessionOf(grandchild).end('Deeper done')
   expect((await tool(token, 'delegate', { task: 'Odd', spec: { role: 'boss' } })).text).toBe('Unknown role "boss"')
 
   child.end('Checked')

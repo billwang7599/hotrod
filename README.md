@@ -65,9 +65,15 @@ What works today:
 - **Spaces:** a folder becomes a space whose lead agent streams its replies, tool calls and permission requests. Chats
   survive a restart.
 - **Home:** a personal assistant that sees every space and can make new ones.
-- **Workers:** a lead can hand tasks to workers that run beside it.
+- **Workers:** a lead can hand tasks to workers that run beside it, and extensions start them for their own work. They're
+  part of Kothar, not an extension: Settings → Workers sets whether agents may start them, how many one chat runs at
+  once (every worker counts, an extension's too; more wait for a slot), and the instructions agents get about them.
+- **Extensions that work together:** each session is told what it can use (Kothar's tools and every extension's, one
+  line each, made from their names and descriptions) and to combine them on its own, such as handing a deep research
+  run to a worker. Workers get the same tools as their lead. The intro is editable in Settings → Prompts.
 - **Memory:** every chat has its own.
-- **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees.
+- **Sandboxing (macOS):** agents work in a sandboxed work folder, with git folders checked out as worktrees. A repo with no commits yet is used as a plain folder, with its mode, until
+  its first commit.
 - **Folder modes:** each attached folder that isn't a git repo has a mode, picked in the Context panel. **Edit in
   place** (the default) lets the sandbox write in the folder itself, though logins, keys and `.env` files in it still
   ask. **Work on a copy** copies it into the work folder once, and **Copy changes back** shows what the agents changed
@@ -75,6 +81,13 @@ What works today:
   keeps agents out. A folder holding Kothar's own data is always read only. Each session's instructions list every
   folder with its mode, and a refused edit names the setting that would allow it.
 - **Permissions:** switches decide what runs without asking.
+- **Engine tools:** Settings → Engines lists every built-in tool of Claude Code, pi and OpenCode, each with a switch,
+  core ones included. Tools Kothar has its own version of (subagents, background shells, skills, plan modes) and
+  tools that act out of Kothar's sight (schedules, notifications, publishing) are off by default; commands, edits,
+  reads and searches stay on. The **Engine tools** master switch, and one per engine, turn every built-in tool off,
+  leaving the agent only Kothar's tools; your per-tool choices come back when it's on again. What was sent says which
+  tools were off for each message. Processes' `start_process` can wake the agent when a command exits, in place of
+  Claude Code's Monitor.
 - **File links:** a path in a chat that exists in its folders, checkouts or work folder is a link. Click opens it in
   your editor at its line (Settings → Work folder → Open files with: the system's default app, VS Code, Cursor,
   Windsurf, Zed, Sublime Text or a command of your own); right-click opens a terminal at its folder, shows it in
@@ -89,7 +102,7 @@ What works today:
   `deep_research` tool). Plan adds a **Plan first** chip to the composer: the chat is read only (enforced by the
   sandbox and Kothar's permission answers, on every engine) until you approve the plan the agent hands in, and the
   Plan tab ticks its steps off as the work goes. Inspector shows what Kothar actually sent the engine for each message
-  (See what was sent, beside the chat, and a Sent tab), each part labelled by who it's from, with Edit links to the
+  (a folded What was sent row under each of your messages), each part labelled by who it's from, with Edit links to the
   extension prompts behind it; extensions' prompts and tool descriptions are editable on their Settings pages. Its
   Activity tab lists what Kothar and extensions do on their own: model calls, permission answers and the rule behind
   each, workers, retries and account switches.

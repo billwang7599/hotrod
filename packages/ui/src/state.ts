@@ -13,6 +13,8 @@ import type {
   ChatStatus,
   CommandInfo,
   MessageActionInfo,
+  MessageDetailInfo,
+  NoteViewInfo,
   ComposerToggleInfo,
   ContextItem,
   ContextSection,
@@ -22,6 +24,9 @@ import type {
   ModelLists,
   Run,
   Setup,
+  WorkersSettings,
+  EngineToolsSettings,
+  PromptInfo,
   ExtensionInfo,
   PanelTab,
   QueuedMessage,
@@ -70,7 +75,16 @@ export type Item =
   | { kind: 'error'; text: string }
   // extension and panel: clicking the note opens that extension's panel, then sends it action. card: drawn as a card,
   // kept in view when the turn's steps fold.
-  | { kind: 'note'; text: string; extension?: string; panel?: string; action?: ExtensionAction; card?: ExtensionNoteCard }
+  // view: a live card the extension draws (ExtensionNoteView).
+  | {
+      kind: 'note'
+      text: string
+      extension?: string
+      panel?: string
+      action?: ExtensionAction
+      card?: ExtensionNoteCard
+      view?: { id: string; key: string }
+    }
 
 // Thinking as it streams in: never logged, but kept with the entries so items can be rebuilt from them.
 type Shown = ChatEntry | { type: 'thinking.shown'; text: string }
@@ -102,6 +116,12 @@ export type State = {
   extensions: ExtensionInfo[]
   modelLists: ModelLists
   setups: Setup[]
+  // Settings → Workers; absent until the core's snapshot arrives.
+  workers?: WorkersSettings
+  // Settings → Engines → Tools; absent until the core's snapshot arrives.
+  engineTools?: EngineToolsSettings
+  // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
+  corePrompts?: PromptInfo[]
   workFolder: WorkFolder
   // Installed marketplace themes; absent until the core's snapshot arrives.
   themes?: ThemeFile[]
@@ -129,6 +149,9 @@ export type State = {
   extensionUis: Record<string, ExtensionUi>
   // The views of the panels chats have opened (panelKey). Stale: borrowed from the last chat until this chat's arrives.
   panelViews: Record<string, PanelView>
+  // The views of message details the user unfolded (detailKey): chat, extension, detail and entry; and of extensions'
+  // live cards in transcripts (noteViewKey).
+  detailViews: Record<string, PanelView>
   // Why Open in Terminal last failed, by terminalKey; a later success clears it.
   terminalErrors: Record<string, string>
   toasts: { id: number; message: string }[]
@@ -140,7 +163,9 @@ export type ExtensionUi = {
   panels: PanelTab[]
   commands: CommandInfo[]
   messageActions?: MessageActionInfo[]
+  messageDetails?: MessageDetailInfo[]
   toggles?: ComposerToggleInfo[]
+  noteViews?: NoteViewInfo[]
   stale?: true
 }
 
@@ -171,6 +196,7 @@ export const initialState: State = {
   contexts: {},
   extensionUis: {},
   panelViews: {},
+  detailViews: {},
   terminalErrors: {},
   toasts: [],
   nextToastId: 1,
@@ -279,10 +305,16 @@ function applyEntry(items: Item[], entry: Shown, logged?: number): Item[] {
       return entry.error ? [...settled, { kind: 'error', text: entry.error }] : settled
     }
     case 'extension.note': {
-      const { text, extension, panel, action, card } = entry
+      const { text, extension, panel, action, card, view } = entry
       return [
         ...items,
-        { kind: 'note', text, ...(extension && panel && { extension, panel, ...(action && { action }) }), ...(card && { card }) },
+        {
+          kind: 'note',
+          text,
+          ...(extension && panel && { extension, panel, ...(action && { action }) }),
+          ...(card && { card }),
+          ...(extension && view && { extension, view }),
+        },
       ]
     }
     // The turn's error or an extension's note says it.
@@ -336,7 +368,10 @@ const asking = (item: Item) => item.kind === 'question' && item.outcome === 'pen
 
 // The last turn folds too unless `unfoldLast`; it never folds while a permission request in it waits. A question
 // waiting for an answer is never folded away: it shows after the folded steps, like the reply. Answered ones fold.
-const carded = (item: Item) => item.kind === 'note' && item.card !== undefined
+const carded = (item: Item) => item.kind === 'note' && (item.card !== undefined || item.view !== undefined)
+
+/** The key a live transcript card's view is kept under in state.detailViews (beside message details'). */
+export const noteViewKey = (chatId: string, extension: string, view: string, key: string) => `${chatId}/note/${extension}/${view}/${key}`
 
 export function foldSteps(items: Item[], unfoldLast: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
@@ -412,8 +447,16 @@ function follow(before: State, state: State): State {
 function forget(state: State): State {
   const ids = new Set(state.chats.map((c) => c.id))
   const kept = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).filter(([id]) => ids.has(id)))
-  const views = Object.entries(state.panelViews).filter(([key]) => ids.has(key.slice(0, key.indexOf('/'))))
-  return { ...state, contexts: kept(state.contexts), extensionUis: kept(state.extensionUis), panelViews: Object.fromEntries(views) }
+  const live = ([key]: [string, unknown]) => ids.has(key.slice(0, key.indexOf('/')))
+  const views = Object.entries(state.panelViews).filter(live)
+  const details = Object.entries(state.detailViews).filter(live)
+  return {
+    ...state,
+    contexts: kept(state.contexts),
+    extensionUis: kept(state.extensionUis),
+    panelViews: Object.fromEntries(views),
+    detailViews: Object.fromEntries(details),
+  }
 }
 
 function reduceAll(state: State, action: Action): State {
@@ -429,6 +472,9 @@ function reduceAll(state: State, action: Action): State {
         extensions: action.extensions,
         modelLists: action.modelLists,
         setups: action.setups ?? [],
+        workers: action.workers,
+        ...(action.engineTools && { engineTools: action.engineTools }),
+        corePrompts: action.corePrompts,
         workFolder: action.workFolder,
         themes: action.themes,
         installed: action.installed,
@@ -499,8 +545,16 @@ function reduceAll(state: State, action: Action): State {
       return { ...state, contexts, ...(chatId === state.selectedId && { context: { chatId, items } }) }
     }
     case 'chat.extensions': {
-      const { chatId, panels, commands, messageActions, toggles } = action
-      const extensionUi = { chatId, panels, commands, ...(messageActions && { messageActions }), ...(toggles && { toggles }) }
+      const { chatId, panels, commands, messageActions, messageDetails, toggles, noteViews } = action
+      const extensionUi = {
+        chatId,
+        panels,
+        commands,
+        ...(messageActions && { messageActions }),
+        ...(messageDetails && { messageDetails }),
+        ...(toggles && { toggles }),
+        ...(noteViews && { noteViews }),
+      }
       const extensionUis = { ...state.extensionUis, [chatId]: extensionUi }
       return { ...state, extensionUis, ...(chatId === state.selectedId && { extensionUi }) }
     }
@@ -508,6 +562,16 @@ function reduceAll(state: State, action: Action): State {
       const { view, error } = action
       const key = panelKey(action.chatId, action.extension, action.panel)
       return { ...state, panelViews: { ...state.panelViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
+    }
+    case 'extension.detail': {
+      const { view, error } = action
+      const key = `${action.chatId}/${action.extension}/${action.detail}/${action.entry}`
+      return { ...state, detailViews: { ...state.detailViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
+    }
+    case 'extension.noteView': {
+      const { view, error } = action
+      const key = noteViewKey(action.chatId, action.extension, action.noteView, action.key)
+      return { ...state, detailViews: { ...state.detailViews, [key]: { ...(view && { view }), ...(error && { error }) } } }
     }
     case 'context.file': {
       const withText = (items: ContextItem[]) => items.map((i) => (i.path === action.path ? { ...i, text: action.text } : i))
@@ -539,6 +603,12 @@ function reduceAll(state: State, action: Action): State {
     }
     case 'memory.updated':
       return state
+    case 'workers.updated':
+      return { ...state, workers: action.workers }
+    case 'engineTools.updated':
+      return { ...state, engineTools: action.engineTools }
+    case 'corePrompts.updated':
+      return { ...state, corePrompts: action.prompts }
     case 'workFolder.updated':
       return { ...state, workFolder: action.workFolder }
     case 'themes.updated':

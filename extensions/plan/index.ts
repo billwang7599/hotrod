@@ -204,8 +204,8 @@ const planOn = (host: ExtensionHost, chatId: string) => {
   }
 }
 
-// Only chats the user types in: not an extension's own chat (Home), not workers.
-const isUsersChat = (chat: Pick<ChatDetail, 'extension' | 'worker'>) => !chat.extension && !chat.worker
+// Chats with a space to plan changes in, that the user types in: not one that keeps no context (Home), not workers.
+const isUsersChat = (chat: Pick<ChatDetail, 'keepsContext' | 'worker'>) => chat.keepsContext && !chat.worker
 
 const waitText = (plan: Plan) =>
   `Plan ready: ${plan.goal.length > 90 ? plan.goal.slice(0, 89) + '…' : plan.goal} (${plan.steps.length} step${plan.steps.length === 1 ? '' : 's'}), in the Plan tab. Approve it?`
@@ -368,6 +368,9 @@ export function createPlanExtension(): Extension {
       'while it works out a plan, then you approve, edit or cancel it, and the Plan tab ticks off its steps as the ' +
       'work goes on.',
     enabledByDefault: true,
+    // Engines' own plan modes (Claude Code's EnterPlanMode and ExitPlanMode) work out of Kothar's sight; Plan first is
+    // Kothar's, on every engine.
+    replaces: ['plan-mode'],
     prompts: PROMPTS,
     settings: [
       {
@@ -501,7 +504,7 @@ export function createPlanExtension(): Extension {
       {
         id: TAB,
         title: 'Plan',
-        shown: (chat) => !chat.extension,
+        shown: (chat) => chat.keepsContext,
         render: view,
         onAction(action, chat, { host, values }) {
           if (chat.worker) return

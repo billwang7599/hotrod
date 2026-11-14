@@ -41,6 +41,9 @@ export default heartbeat
 
 Background work has no hook to throw from, so report failures with [`host.error`](host.md#errors).
 
+`onDependencyChanged({ id, enabled }, context)` is called when an extension this one depends on is turned on or off.
+See [Depending on other extensions](dependencies.md#ondependencychanged).
+
 ## Chats
 
 | Hook | Called when |

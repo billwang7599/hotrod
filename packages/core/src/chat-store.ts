@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import type { ModelSettings } from './models.ts'
 import type { ChatEntry, ChatInfo, ContextSection, PermissionSwitches } from './shared.ts'
 import { renameChatFile, renameEntry, renameSettings } from './vocab-move.ts'
+import type { SavedEngineTools } from './engine-tools.ts'
+import { moveWorkersSettings, type SavedWorkers } from './workers.ts'
 
 export type Settings = PermissionSwitches &
   ModelSettings & {
@@ -24,6 +26,12 @@ export type Settings = PermissionSwitches &
     editorCommand?: string
     // The user's edits of extensions' prompts, by extension and prompt id (prompts.ts).
     prompts?: Record<string, Record<string, { text: string; base: string }>>
+    // Settings → Workers (workers.ts).
+    workers?: SavedWorkers
+    // The user's edits of Kothar's own prompts (core-prompts.ts), by id.
+    corePrompts?: Record<string, { text: string; base: string }>
+    // Settings → Engines → Tools: the master switches and each engine's tool choices (engine-tools.ts).
+    engineTools?: SavedEngineTools
   }
 
 /** The garage's settings.json, read once; save writes the same object back. Older names are renamed and saved. */
@@ -31,7 +39,8 @@ export function openSettings(garage: string) {
   const file = join(garage, 'settings.json')
   const settings: Settings = { engines: {}, ...readJson(file) }
   const save = () => writeFileSync(file, JSON.stringify(settings, null, 2) + '\n')
-  if (renameSettings(settings)) save()
+  const renamed = renameSettings(settings)
+  if (moveWorkersSettings(settings) || renamed) save()
   return { settings, save }
 }
 
@@ -82,7 +91,9 @@ export const readChat = (dir: string, fallback: ChatInfo, declared?: { name: str
 export const quitMidTurn = (entries: ChatEntry[]) => {
   const lastTurnEvent = entries.findLast((e) => ['turn.started', 'turn.completed', 'session.ended'].includes(e.type))
   const lastType = entries.at(-1)?.type
-  return lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastType === 'worker.report'
+  const last = entries.at(-1)
+  const lastReport = last?.type === 'worker.report' && last.quiet !== true
+  return lastTurnEvent?.type === 'turn.started' || lastType === 'user.message' || lastReport
 }
 
 export const readJson = (file: string) => (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {})

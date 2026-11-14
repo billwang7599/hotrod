@@ -89,6 +89,7 @@ type ChatProps = {
   extensionUi?: State['extensionUi']
   extensions?: State['extensions']
   panelViews?: State['panelViews']
+  detailViews?: State['detailViews']
   terminalErrors?: State['terminalErrors']
   contextDefaults: Record<ContextSection, boolean>
   modelLists?: ModelLists
@@ -318,6 +319,9 @@ export function Chat(props: ChatProps) {
     connected,
     send,
     messageActions: props.extensionUi?.chatId === chat.id ? (props.extensionUi.messageActions ?? NO_ACTIONS) : NO_ACTIONS,
+    messageDetails: props.extensionUi?.chatId === chat.id ? props.extensionUi.messageDetails : undefined,
+    detailViews: props.detailViews,
+    noteViews: props.extensionUi?.chatId === chat.id ? props.extensionUi.noteViews : undefined,
     ...(viewOnly && space !== chat && { space, select: props.select }),
     openChat: (chatId: string) => {
       const select = props.select

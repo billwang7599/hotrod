@@ -5,10 +5,13 @@ import type {
   ContextSection,
   EngineAccounts,
   EngineInfo,
+  EngineToolsSettings,
   ExtensionInfo,
   ModelLists,
   RestartState,
   Setup,
+  PromptInfo,
+  WorkersSettings,
   WorkFolder,
 } from '@kothar/core/shared'
 import type { Market } from '../marketplace.tsx'
@@ -21,6 +24,12 @@ export type PageProps = {
   modelLists: ModelLists
   setups?: Setup[]
   setupSave?: { count: number; id?: string; error?: string }
+  // Settings → Workers; absent until the core's snapshot arrives.
+  workers?: WorkersSettings
+  // Settings → Engines → Tools; absent until the core's snapshot arrives (or from an older core).
+  engineTools?: EngineToolsSettings
+  // Kothar's own prompts (Settings → Prompts); absent until the core's snapshot arrives.
+  corePrompts?: PromptInfo[]
   workFolder: WorkFolder
   chooseWorkFolder: () => void
   connected: boolean

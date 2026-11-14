@@ -34,9 +34,14 @@ after it cover each group in detail.
 | `panels` | Tabs in the right sidebar | [Panels and commands](panels.md#panels) |
 | `commands` | Actions in a chat's General tab | [Panels and commands](panels.md#commands) |
 | `messageActions` | Buttons on each message in the transcript, such as Pin | [Panels and commands](panels.md#message-actions) |
+| `messageDetails` | Folded rows under messages in the transcript, drawn when opened, such as What was sent | [Panels and commands](panels.md#message-details) |
+| `noteViews` | Live cards in the transcript, drawn and updated by the extension, such as a research run's progress | [Panels and commands](panels.md#live-cards) |
 | `composerToggles` | On/off chips in a chat's composer, kept per chat, such as Deep research | [Panels and commands](panels.md#composer-toggles) |
 | `chats` | Chats of the extension's own | [Chats](#chats), below |
 | `memory` | What each session sees of its chat's history | [Tools, MCP servers, instructions and memory](agents.md#memory) |
+| `optionalDependencies`, `requires`, `onDependencyChanged` | Working with another extension: features that turn on with it, or not running without it | [Depending on other extensions](dependencies.md) |
+| `provides` | Capability names it shares an API under, for others to get with `host.use` | [Capabilities](dependencies.md#capabilities-provide-and-use) |
+| `replaces` | Engines' own built-in tools it stands in for, turned off while it's on | [Replacing engines' tools](../working-together.md#replacing-engines-own-tools) |
 | `onStart`, `onStop` | Start and stop background work | [Events and hooks](events.md#background-work) |
 | `onChatCreated`, `onChatRemoved`, `onChatArchived`, `onSpaceRemoved`, `onStatusChanged`, `onTurnStarted`, `onTurnCompleted`, `onSessionEnded`, `onEvent`, `onLimitReached` | Hooks that react to chats as they run | [Events and hooks](events.md) |
 | `onPermissionRequested` | A policy that answers permission requests | [Events and hooks](events.md#onpermissionrequested) |
