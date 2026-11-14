@@ -39,8 +39,9 @@ export const BROWSER_INSTRUCTIONS =
   'Browser (the browser_* tools): open a page with browser_open and read it from the snapshot it returns; act on it ' +
   'with browser_act and browser_type by the refs in the snapshot (e12), and each returns only what changed. A long ' +
   'page comes in parts: call browser_snapshot with the cursor it gives. Take a screenshot only when how it looks ' +
-  "matters. browser_cdp sends a DevTools command to your tab for what the other tools can't do. Close the tabs you " +
-  'opened when you are done with them. The browser runs in the background and keeps ' +
+  "matters. browser_cdp sends a DevTools command to your tab for what the other tools can't do. You get a tab of your " +
+  "own; other chats in this space have theirs, so leave tabs browser_tabs marks as another chat's alone. Close the " +
+  'tabs you opened when you are done with them. The browser runs in the background and keeps ' +
   `its tabs and logins between messages. When a page needs the user (a login, CAPTCHA, 2FA, payment, or anything ` +
   `you shouldn't do for them), call ${HAND_OFF_TOOL} instead of asking them for passwords or codes. To show them ` +
   `something on a page, call ${SHOW_TOOL}.`
@@ -52,7 +53,7 @@ export const HAND_OFF_DESCRIPTION =
   'the browser, or send you a message). Then the browser goes back to the background with their tabs and logins, and ' +
   'this returns the open tabs. Cookies, logins and site storage carry over both ways, but anything typed into a form ' +
   "and not submitted is lost, so ask before filling a form you can't finish. Afterwards your earlier page references " +
-  'are gone: take a browser_snapshot first.'
+  'are gone: take a browser_snapshot first. If another chat is waiting on the user in the browser, this waits its turn.'
 
 export const SHOW_DESCRIPTION =
   "Shows this space's browser to the user so they can look at something: a page, a result, a problem you want them " +
@@ -262,6 +263,12 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
   // What each waiting chat's agent asked for (ask_user_in_browser or show_browser), and the window it was last notified
   // about, so each window that opens for an agent notifies once.
   const asked = new Map<string, string>()
+  // Each space's line of hand-offs (its last one's end), and the chats waiting in a line, by how to drop each.
+  const handOffs = new Map<string, Promise<void>>()
+  const queued = new Map<string, Set<() => void>>()
+  const dropQueued = (chatId: string) => {
+    for (const drop of queued.get(chatId) ?? []) drop()
+  }
   const notified = new Map<string, string>()
 
   const changed = (spaceId: string) => {
@@ -461,19 +468,42 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       if (!spaceId || !endpoints) throw new Error('This chat has no browser')
       if (usesExtension()) return await inYourChrome(spaceId, caller.id, reason, name)
       const browser = browserOf(spaceId)
-      if (browser.waitingChat && browser.waitingChat !== caller.id) {
-        throw new Error('Another chat in this space is waiting on the user in the browser; try again after')
-      }
-      asked.set(caller.id, name)
-      activityOf(caller.id, plain ? 'Handed the browser to you in a plain window' : 'Showed you the browser', `Why: ${reason}`)
-      const result = await (plain ? browser.signIn(reason, caller.id) : browser.handOff(reason, caller.id))
-      activityOf(caller.id, 'Took the browser back', resultText(result))
-      asked.delete(caller.id)
-      notified.delete(caller.id)
+      // One hand-off at a time per space: a chat that asks while another waits on the user waits its turn, and its
+      // window opens when that one is done. Stopping the chat meanwhile drops it from the line.
+      const before = handOffs.get(spaceId) ?? Promise.resolve()
+      let release!: () => void
+      let drop!: () => void
+      const turn = new Promise<void>((resolve) => (release = resolve))
+      const line = before.then(() => turn)
+      handOffs.set(spaceId, line)
       try {
-        host?.endWait(caller.id)
-      } catch {}
-      return resultText(result)
+        if (browser.waitingChat && browser.waitingChat !== caller.id) {
+          activityOf(caller.id, 'Waiting for the browser', 'Another chat in this space is waiting on the user in it')
+        }
+        const dropped = await Promise.race([
+          before.then(() => false),
+          new Promise<boolean>((resolve) => {
+            drop = () => resolve(true)
+            queued.set(caller.id, (queued.get(caller.id) ?? new Set()).add(drop))
+          }),
+        ])
+        if (dropped) return 'The chat was stopped while waiting for its turn with the browser; nothing was shown to the user.'
+        asked.set(caller.id, name)
+        activityOf(caller.id, plain ? 'Handed the browser to you in a plain window' : 'Showed you the browser', `Why: ${reason}`)
+        const result = await (plain ? browser.signIn(reason, caller.id) : browser.handOff(reason, caller.id))
+        activityOf(caller.id, 'Took the browser back', resultText(result))
+        asked.delete(caller.id)
+        notified.delete(caller.id)
+        try {
+          host?.endWait(caller.id)
+        } catch {}
+        return resultText(result)
+      } finally {
+        queued.get(caller.id)?.delete(drop)
+        if (!queued.get(caller.id)?.size) queued.delete(caller.id)
+        release()
+        if (handOffs.get(spaceId) === line) handOffs.delete(spaceId)
+      }
     },
   })
 
@@ -649,6 +679,7 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
       const closing = endpoints
       endpoints = undefined
       for (const end of chromeWaits.values()) end('stopped')
+      for (const chatId of [...queued.keys()]) dropQueued(chatId)
       const relayClosing = relayStarting
       relayStarting = undefined
       relay = undefined
@@ -725,7 +756,10 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     onStatusChanged(chat: ChatDetail, status) {
-      if (status === 'stopping' || status === 'idle') chromeWaits.get(chat.id)?.('stopped')
+      if (status === 'stopping' || status === 'idle') {
+        chromeWaits.get(chat.id)?.('stopped')
+        dropQueued(chat.id)
+      }
       const spaceId = spaceIdOf(chat.id)
       if (!spaceId) return
       const browser = browsers.get(spaceId)
@@ -735,13 +769,17 @@ export function createBrowserExtension(options: BrowserExtensionOptions = {}) {
     },
 
     onChatArchived(chat, archived) {
-      if (archived) browserTools.forget(chat.id)
+      if (archived) {
+        browserTools.forget(chat.id)
+        dropQueued(chat.id)
+      }
       if (archived && chat.parentId === undefined) void stopSpace(chat.id)
     },
 
     // The space's profiles, logins with them, go with the space, and a copy of the user's left from before.
     onChatRemoved(chat) {
       browserTools.forget(chat.id)
+      dropQueued(chat.id)
       if (chat.parentId !== undefined || !host) return
       const folders = [...profileFolders(chat.id), join(mirrors(), chat.id)]
       void Promise.resolve(stopSpace(chat.id)).finally(() => {

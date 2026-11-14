@@ -226,11 +226,54 @@ describe('browser tools', () => {
     const list = String(await t.call('browser_tabs', { action: 'list' }))
     expect(list.split('\n')).toHaveLength(2)
     expect(list).toMatch(/^0: \(yours\) /)
-    await t.call('browser_tabs', { action: 'switch', tab: 1 })
-    expect(t.sent('Target.activateTarget')[0]!.params).toEqual({ targetId: 'T2' })
-    await t.call('browser_tabs', { action: 'close', tab: 1 })
-    expect(t.sent('Target.closeTarget')[0]!.params).toEqual({ targetId: 'T2' })
+    expect(list.split('\n')[1]).toMatch(/^1: \(another chat's\) /)
+    await t.call('browser_open', { url: 'https://third.test/', newTab: true })
+    await t.call('browser_tabs', { action: 'switch', tab: 0 })
+    expect(t.sent('Target.activateTarget')[0]!.params).toEqual({ targetId: 'T1' })
+    await t.call('browser_tabs', { action: 'close', tab: 2 })
+    expect(t.sent('Target.closeTarget')[0]!.params).toEqual({ targetId: 'T3' })
     await expect(t.call('browser_tabs', { action: 'switch', tab: 7 })).rejects.toThrow('No tab 7')
+  })
+
+  it('runs two chats side by side in one space, each on its own tab, and keeps them off each other’s', async () => {
+    const t = await setup()
+    // Both at once: neither waits for the other, and they never share a tab.
+    await Promise.all([t.call('browser_open', { url: 'https://shop.test/' }), t.call('browser_open', { url: 'https://other.test/' }, 'worker')])
+    expect(new Set(t.sent('Page.navigate').map((c) => c.sessionId))).toEqual(new Set(['S1', 'S2']))
+    // One connection to the space's browser, shared, not one per chat.
+    expect(t.sent('Target.setAutoAttach').filter((c) => !c.sessionId)).toHaveLength(1)
+    const mine = t.sent('Page.navigate').find((c) => c.params.url === 'https://shop.test/')!.sessionId
+    const theirs = mine === 'S1' ? 'S2' : 'S1'
+    const theirsAt = theirs === 'S1' ? 0 : 1
+    // The same ref clicks in each chat's own tab.
+    await Promise.all([t.call('browser_act', { ref: 'e4', action: 'click' }), t.call('browser_act', { ref: 'e4', action: 'click' }, 'worker')])
+    const clicks = t.sent('Input.dispatchMouseEvent').filter((c) => c.params.type === 'mousePressed').map((c) => c.sessionId)
+    expect(new Set(clicks)).toEqual(new Set([mine, theirs]))
+
+    // The other chat's tab is refused, without force, and nothing is sent.
+    await expect(t.call('browser_tabs', { action: 'switch', tab: theirsAt })).rejects.toThrow(`Tab ${theirsAt} is another chat's tab`)
+    await expect(t.call('browser_tabs', { action: 'close', tab: theirsAt })).rejects.toThrow('force: true')
+    expect(t.sent('Target.activateTarget')).toHaveLength(0)
+    expect(t.sent('Target.closeTarget')).toHaveLength(0)
+
+    // With force the tab is this chat's, and the other chat goes on in a new tab rather than sharing it.
+    await t.call('browser_tabs', { action: 'switch', tab: theirsAt, force: true })
+    const list = String(await t.call('browser_tabs', { action: 'list' }))
+    expect(list).toContain(`${theirsAt}: (yours) `)
+    expect(list).not.toContain("another chat's")
+    await t.call('browser_open', { url: 'https://again.test/' }, 'worker')
+    expect(t.sent('Page.navigate').at(-1)!.sessionId).not.toBe(theirs)
+
+    // A forced close frees the tab for the chat that had it too: its next call gets a tab of its own.
+    const workerTab = t.sent('Page.navigate').at(-1)!.sessionId
+    const workerAt = String(await t.call('browser_tabs', { action: 'list' }, 'worker')).split('\n').findIndex((l) => l.includes('(yours)'))
+    await expect(t.call('browser_tabs', { action: 'close', tab: workerAt })).rejects.toThrow("another chat's tab")
+    await t.call('browser_tabs', { action: 'close', tab: workerAt, force: true })
+    expect(t.sent('Target.closeTarget')).toHaveLength(1)
+    await t.call('browser_open', { url: 'https://last.test/' }, 'worker')
+    const last = t.sent('Page.navigate').at(-1)!.sessionId
+    expect(last).not.toBe(workerTab)
+    expect(last).not.toBe(theirs)
   })
 
   it('takes a screenshot of the view, an element or the whole page, as a picture', async () => {
