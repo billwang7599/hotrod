@@ -60,8 +60,12 @@ export function createBrowserTools(options: ToolsOptions) {
 
   const connect = async (spaceId: string): Promise<Connection> => {
     const endpoint = await options.endpointOf(spaceId)
-    const known = await connections.get(spaceId)?.catch(() => undefined)
+    const pending = connections.get(spaceId)
+    const known = await pending?.catch(() => undefined)
     if (known && !known.client.closed && known.endpoint === endpoint) return known
+    // Another chat started a connection while this one waited: share it, so two chats in a space never connect twice
+    // (each with its own tabs and refs).
+    if (connections.get(spaceId) !== pending) return connect(spaceId)
     known?.client.close()
     const made = (async () => {
       const client = await CdpClient.connect(endpoint)
@@ -422,10 +426,14 @@ export function createBrowserTools(options: ToolsOptions) {
     ),
     tool(
       'browser_tabs',
-      "The space's tabs: list them, switch yours to one, or close one (by its number in the list).",
-      { action: { type: 'string', enum: ['list', 'switch', 'close'] }, tab: { type: 'integer', minimum: 0 } },
+      "The space's tabs: list them, switch yours to one, or close one (by its number in the list). Another chat's tab is refused unless force: true, which takes it from that chat.",
+      {
+        action: { type: 'string', enum: ['list', 'switch', 'close'] },
+        tab: { type: 'integer', minimum: 0 },
+        force: { type: 'boolean', description: "Switch to or close a tab another chat is using; that chat gets another tab" },
+      },
       ['action'],
-      (input) => `${input.action}${input.tab !== undefined ? ` ${input.tab}` : ''}`,
+      (input) => `${input.action}${input.tab !== undefined ? ` ${input.tab}` : ''}${input.force ? ' (force)' : ''}`,
       async (input, { caller }) => {
         const spaceId = options.spaceIdOf(caller.id)
         if (!spaceId) throw new Error('This chat has no browser')
@@ -435,6 +443,12 @@ export function createBrowserTools(options: ToolsOptions) {
         if (action !== 'list') {
           const page = list[Number(input.tab)]
           if (!page) throw new Error(`No tab ${input.tab}: list the tabs first`)
+          const holders = [...current].filter(([chat, id]) => id === page.targetId && chat !== caller.id).map(([chat]) => chat)
+          if (holders.length && input.force !== true) {
+            throw new Error(`Tab ${input.tab} is another chat's tab: use your own, open a new one, or pass force: true to take it from that chat`)
+          }
+          // Taken from the other chat: its next call gets a free tab or a new one, so two chats never drive one tab.
+          for (const chat of holders) current.delete(chat)
           if (action === 'switch') {
             current.set(caller.id, page.targetId)
             await connection.pages.prepare(page)
@@ -448,10 +462,12 @@ export function createBrowserTools(options: ToolsOptions) {
           }
         }
         const mine = current.get(caller.id)
+        const taken = new Set(current.values())
         const rows = await Promise.all(
           connection.pages.list().map(async (page, i) => {
             const { url, title } = await connection.pages.describe(page)
-            return `${i}: ${page.targetId === mine ? '(yours) ' : ''}${title ? `${title} — ` : ''}${url}`
+            const whose = page.targetId === mine ? '(yours) ' : taken.has(page.targetId) ? "(another chat's) " : ''
+            return `${i}: ${whose}${title ? `${title} — ` : ''}${url}`
           }),
         )
         return rows.join('\n') || '(no tabs)'

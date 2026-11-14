@@ -423,21 +423,67 @@ it('ends the wait at once when the user closes the window or messages, though th
   expect(await call).toContain('The user closed the browser window.')
 })
 
-it('times out a hand-off nobody answers, and lets only one chat in a space wait at a time', async () => {
+it('times out a hand-off nobody answers', async () => {
   const fakes = fakeBrowsers()
   const { extension } = createBrowserExtension({ launch: () => fakes.launch, ops: fakes.ops, pollMs: 10, handOffMs: 50, ...CHROME })
   const h = fakeHost(tempDir('kothar-browser-extension-'))
   await extension.onStart!({ values: defaults, host: h.host })
   cleanups.push(() => extension.onStop!({ values: defaults, host: h.host }))
   const space = h.chat('space')
-  const worker = h.chat('worker', { parentId: 'space', worker: true })
   const tool = extension.tools!.find((t) => t.name === HAND_OFF_TOOL)!
   const call = tool.run({ reason: 'Pay' }, { caller: space, values: defaults, host: h.host })
   await until(() => h.waits.has('space'))
-  await expect(
-    Promise.resolve(tool.run({ reason: 'Me too' }, { caller: worker, values: defaults, host: h.host })),
-  ).rejects.toThrow('Another chat in this space is waiting')
   expect(String(await call)).toContain('did not finish in time')
+})
+
+it('queues two chats’ hand-offs in one space: the second waits its turn, then gets its own window and answer', async () => {
+  const { extension, tool, chat, waits, host, fakes } = await startedExtension()
+  const space = chat('space')
+  const worker = chat('worker', { parentId: 'space', worker: true })
+  const context = { values: defaults, host }
+  const first = Promise.resolve(tool.run({ reason: 'Pay' }, { caller: space, values: defaults, host }))
+  await until(() => waits.get('space')?.text === 'Browser: Pay')
+  const second = Promise.resolve(tool.run({ reason: 'Solve the CAPTCHA' }, { caller: worker, values: defaults, host }))
+  let secondDone = false
+  void second.then(() => (secondDone = true))
+  await new Promise((r) => setTimeout(r, 50))
+  // The first chat keeps the window: its bar and reason stay, and the worker has no bar yet.
+  expect(waits.get('space')?.text).toBe('Browser: Pay')
+  expect(waits.has('worker')).toBe(false)
+  expect(secondDone).toBe(false)
+  // The worker's bar can't end the first chat's hand-off.
+  await extension.onWaitAction!(worker, { button: 'done' }, context)
+  expect(waits.has('space')).toBe(true)
+  const windows = fakes.launched.filter((b) => !b.launch.headless).length
+
+  // Done for the first: it hears it, and the worker's window opens next, for the worker.
+  await extension.onWaitAction!(space, { button: 'done' }, context)
+  expect(String(await first)).toContain('The user is done.')
+  await until(() => waits.get('worker')?.text === 'Browser: Solve the CAPTCHA')
+  expect(waits.has('space')).toBe(false)
+  expect(fakes.launched.filter((b) => !b.launch.headless).length).toBe(windows + 1)
+  expect(secondDone).toBe(false)
+  await extension.onWaitAction!(worker, { message: 'did it' }, context)
+  expect(String(await second)).toContain('The user sent you a message')
+})
+
+it('drops a queued hand-off whose chat stops before its turn, and never shows it', async () => {
+  const { extension, tool, chat, waits, host } = await startedExtension()
+  const space = chat('space')
+  const worker = chat('worker', { parentId: 'space', worker: true })
+  const context = { values: defaults, host }
+  const first = Promise.resolve(tool.run({ reason: 'Pay' }, { caller: space, values: defaults, host }))
+  await until(() => waits.has('space'))
+  const second = Promise.resolve(tool.run({ reason: 'Me too' }, { caller: worker, values: defaults, host }))
+  await new Promise((r) => setTimeout(r, 20))
+  extension.onStatusChanged!(worker, 'stopping', context)
+  expect(String(await second)).toContain('stopped while waiting for its turn')
+  // The first chat's hand-off goes on, and after it no window opens for the stopped worker.
+  expect(waits.get('space')?.text).toBe('Browser: Pay')
+  await extension.onWaitAction!(space, { button: 'done' }, context)
+  expect(String(await first)).toContain('The user is done.')
+  await new Promise((r) => setTimeout(r, 50))
+  expect(waits.has('worker')).toBe(false)
 })
 
 it('opens on demand from Processes, refuses agents while the user has it, and stops', async () => {
